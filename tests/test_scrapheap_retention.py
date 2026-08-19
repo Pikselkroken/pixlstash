@@ -25,7 +25,7 @@ import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
-from sqlalchemy import event, text
+from sqlalchemy import event
 
 from pixlstash.db_models import (
     DeletedFileLog,
@@ -47,6 +47,7 @@ from pixlstash.tasks.scrapheap_retention_purge_finder import (
 from pixlstash.tasks.scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.utils import wipe_tables
 
 # The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
 # positive assertion vacuous. See tests/authz_guard.py.
@@ -100,15 +101,14 @@ def server():
 def reset_vault(server):
     """Wipe pictures/folders/ledger and reset retention config between tests."""
 
-    def _wipe(session: Session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        for model in _RESET_TABLES:
-            session.exec(delete(model))
+    def _wipe_identity(session: Session):
         session.exec(delete(User))
         session.commit()
-        session.exec(text("PRAGMA foreign_keys = ON"))
 
-    server.vault.db.run_task(_wipe)
+    # Two databases now: pictures and the ledger live in the vault, the user
+    # lives in the hub.
+    server.vault.db.run_task(wipe_tables, _RESET_TABLES)
+    server.hub_engine.run_task(_wipe_identity)
     image_root = server.vault.image_root
     db_basenames = {"vault.db", "vault.db-wal", "vault.db-shm", "vault.db-journal"}
     for entry in os.listdir(image_root):
@@ -1354,6 +1354,18 @@ def test_a_confirmation_expires(server, tmp_path, monkeypatch):
     for pic_id, path in made:
         assert _get_picture(server, pic_id) is not None
         assert os.path.isfile(path)
+
+
+def test_a_confirmation_is_bound_to_library_generation():
+    """The same numeric picture id in another vault is never authorised."""
+    confirmations = scrapheap_service.ScrapheapDeleteConfirmations()
+    token = confirmations.issue([1], 1, library_uuid="library-a", generation=7)
+
+    accepted, _reason = confirmations.redeem(
+        token, [1], library_uuid="library-b", generation=8
+    )
+
+    assert accepted is False
 
 
 def test_the_auto_purge_needs_no_confirmation(server, tmp_path):

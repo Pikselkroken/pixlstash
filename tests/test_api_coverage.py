@@ -60,7 +60,7 @@ def test_logout_clears_session():
         resp = client.get("/check-session")
         assert resp.status_code == 401
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -72,7 +72,7 @@ def test_check_session_unauthenticated():
         resp = client.get("/check-session")
         assert resp.status_code == 401
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -96,7 +96,7 @@ def test_api_token_lifecycle():
         assert resp.status_code == 200
         assert not any(t["id"] == token_id for t in resp.json())
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -108,7 +108,7 @@ def test_get_user_config():
         assert resp.status_code == 200
         assert isinstance(resp.json(), dict)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -123,7 +123,7 @@ def test_patch_user_config():
         assert resp.status_code == 200
         assert resp.json().get("theme_mode") == "dark"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -144,7 +144,7 @@ def test_initial_telemetry_choice_is_one_atomic_config_patch():
         for key, value in choice.items():
             assert config[key] is value
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -177,7 +177,7 @@ def test_decline_then_delayed_opt_in_stays_out_of_new_cohort(monkeypatch):
         assert opt_in.status_code == 200
         assert marked == [server.server_config_path]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -198,7 +198,7 @@ def test_patch_user_config_penalised_tags_wakes_workers_without_error():
         assert penalised.get("artifact") == 3
         assert penalised.get("blurry") == 3
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -236,7 +236,7 @@ def test_smart_score_stats_refresh_after_picture_change_event():
         assert second_map.get("Unscored", 0) == 0
         assert second_map.get("4-5", 0) >= 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -316,7 +316,7 @@ def test_get_watch_folders():
         assert "watch_folders" in data
         assert isinstance(data["watch_folders"], list)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -332,7 +332,7 @@ def test_get_sort_mechanisms():
         stack_time = next(item for item in data if item["key"] == "STACK_UPDATED_AT")
         assert stack_time["description"] == "Recently changed stacks"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -352,7 +352,7 @@ def test_sort_stability():
         ids2 = [p["id"] for p in resp2.json()]
         assert ids1 == ids2
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -373,7 +373,7 @@ def test_filter_pictures_by_tag():
         assert len(pics) == 1
         assert pics[0]["id"] == pic_id
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -389,7 +389,7 @@ def test_picture_metadata_fields():
         assert data.get("id") == pic_id
         assert "format" in data
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -403,7 +403,7 @@ def test_thumbnail_returns_image():
         assert resp.status_code == 200
         assert "image" in resp.headers.get("content-type", "")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -431,7 +431,7 @@ def test_add_remove_tag_to_picture():
         tags_after = resp.json().get("tags", [])
         assert not any(t["tag"] == "mytesttag" for t in tags_after)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -450,7 +450,7 @@ def test_patch_picture_with_tags_key_does_not_500():
         tags = client.get(f"/pictures/{pic_id}/tags").json().get("tags", [])
         assert {t["tag"] for t in tags} == {"alpha", "beta"}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -469,7 +469,7 @@ def test_get_all_tags_with_counts():
         assert matching, "Expected tag not found in /tags response"
         assert matching[0]["count"] >= 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -493,7 +493,7 @@ def test_bulk_tag_fetch():
         assert pic_id1 in returned_ids
         assert pic_id2 in returned_ids
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -510,6 +510,6 @@ def test_patch_picture_score():
         assert resp.status_code == 200
         assert resp.json()["score"] == 7
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

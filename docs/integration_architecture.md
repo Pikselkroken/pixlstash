@@ -445,7 +445,7 @@ On `401 Unauthorized`, the client calls `logout()` automatically — **except**:
 - The probe endpoint `/users/me/auth` (used to test credentials without side-effects).
 - Requests made under a share token (a 401 just means that endpoint is outside the token's scope).
 
-All frontend code **must** route HTTP traffic through this client; bypassing it skips auth, share-token injection, and 401 handling. The only legitimate bypass is direct `<img src>`, which uses `appendShareToken()` to preserve the share token.
+All frontend code **must** route HTTP traffic through this client; bypassing it skips auth, share-token injection, and 401 handling. The only legitimate bypass is direct `<img src>`. Such a URL **must** be built from `API_BASE_URL`, since the `/api/v1` prefix is added by the request interceptor that only Axios requests reach; without it the request lands on the SPA fallback, which answers 200 with HTML rather than an error. It also passes through `appendShareToken()` wherever the resource is reachable under a share token — which is most of them, but not the shelf's own (a model icon is `OWNER_ONLY`, a training-run sample `LOCAL_OWNER_ONLY`), where a share token could never resolve anyway.
 
 ---
 
@@ -553,7 +553,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. |
+| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. Machine events (carry neither): `vram_oom`. |
 | `event` | string | Backend `EventType.name`; diagnostic only, not part of the behavioural contract. |
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
@@ -571,6 +571,7 @@ Per-type payload specifics (all carry the envelope fields above):
 | `tags_changed` | Tags or tag predictions changed | `picture_ids: number[]` | Bump `wsTagUpdate` so affected grid cards re-render |
 | `descriptions_changed` | Picture descriptions/captions changed | `picture_ids: number[]` | Refresh affected descriptions |
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
+| `vram_oom` | A GPU task ran out of VRAM: emitted before each retry, then once more to close the sequence | `attempt` (the attempt this frame is about, 1-based), `max_attempts`, `gave_up`, `recovered`, `task_type` (diagnostic only) | One keyed notice (`vram-oom`), updated in place by the later frames. Exactly one closing frame: `recovered` (that attempt succeeded) or `gave_up` (the sequence ended without the work). **`gave_up` with `attempt < max_attempts` is an early stop** — the task died of something else, or the app is shutting down — and the SPA promises no later retry for it; only an exhausted sequence says the work will be tried again. The retry frames carry an explicit timeout longer than the backend's pause, or the card would expire between frames and stop coalescing. |
 | `snapshot_created` / `snapshot_deleted` | Vault snapshot created or deleted | snapshot info (id, kind, …) | Refresh the snapshots panel |
 | `restore_started` / `restore_completed` / `restore_failed` | Vault restore lifecycle | restore info | Drive the restore progress/result UI |
 

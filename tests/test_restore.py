@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import stat
 import threading
 from datetime import datetime, timedelta, timezone
 import shutil
@@ -13,7 +14,7 @@ from contextlib import closing
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import delete, select
+from sqlmodel import Session, create_engine, delete, select
 
 from pixlstash.db_models import (
     Character,
@@ -36,12 +37,14 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.services import scrapheap_service
 from pixlstash.utils.snapshot_compression import (
     compress_snapshot,
     materialize_snapshot,
 )
+from tests.utils import delete_characters, delete_projects, wipe_tables
 
 
 @pytest.fixture(scope="module")
@@ -60,32 +63,31 @@ def server():
 def clean_db(server):
     """Wipe all relevant tables and snapshot files before each test."""
 
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        # Likeness pipeline rows are populated by restore_full (via
-        # ensure_all), so they accumulate across tests. Without an
-        # explicit wipe — FKs are OFF here, so CASCADE doesn't fire —
-        # they orphan and collide with the next test's replay.
-        session.exec(delete(PictureLikeness))
-        session.exec(delete(PictureLikenessQueue))
-        session.exec(delete(PictureLikenessFrontier))
-        session.exec(delete(PictureProjectMember))
-        session.exec(delete(CharacterProjectMember))
-        session.exec(delete(PictureSetProjectMember))
-        session.exec(delete(PictureSetMember))
-        session.exec(delete(Face))
-        session.exec(delete(Tag))
-        session.exec(delete(DeletedFileLog))
-        session.exec(delete(Picture))
-        session.exec(delete(ReferenceFolder))
-        session.exec(delete(PictureSet))
-        session.exec(delete(Project))
-        session.exec(delete(Character))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            # Likeness pipeline rows are populated by restore_full (via
+            # ensure_all), so they accumulate across tests. Without an
+            # explicit wipe — FKs are OFF for the wipe, so CASCADE doesn't
+            # fire — they orphan and collide with the next test's replay.
+            PictureLikeness,
+            PictureLikenessQueue,
+            PictureLikenessFrontier,
+            PictureProjectMember,
+            CharacterProjectMember,
+            PictureSetProjectMember,
+            PictureSetMember,
+            Face,
+            Tag,
+            DeletedFileLog,
+            Picture,
+            ReferenceFolder,
+            PictureSet,
+            Project,
+            Character,
+        ],
+    )
 
     cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):
@@ -231,6 +233,85 @@ def test_full_restore_reverts_mutation(server):
     assert restored_pic.description == "before", (
         f"Expected description 'before' after restore, got '{restored_pic.description}'"
     )
+
+
+def test_the_location_guard_is_released_before_the_restore_swap(server, monkeypatch):
+    """No open guard fd may survive to the ``os.replace`` of ``vault.db``.
+
+    Windows refuses to replace a file the process holds an open handle on
+    (WinError 5), so the guard retained for POSIX lock-lifetime (the WAL
+    split-brain fix) must be released inside the swap's exclusive section,
+    strictly after ``engine.dispose()``. Linux performs that replace happily
+    with the fd open, which is exactly why this regression reached CI: no
+    Linux test could fail on it. This pins the invariant Linux CAN see —
+    at the moment of the replace, the guard is gone.
+    """
+    _create_file(server, "guarded.jpg")
+    _add_picture(server, filename="guarded.jpg", description="x")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    live_db = server.vault.db._db_path
+    # This fixture's vault takes the unregistered branch (vault.py, no
+    # hub-registered library), which carries NO guard — leaving the test
+    # vacuously green with or without the release (the revert-check caught
+    # that). Arm the guard exactly as a registered-library open does, so the
+    # invariant is exercised against the state the corruption fix created.
+    if server.vault.db._location_guard is None:
+        server.vault.db._location_guard = TrustedSQLiteLocation.open(live_db)
+    assert server.vault.db._location_guard is not None
+
+    guard_state_at_replace = []
+    real_replace = os.replace
+
+    def observing_replace(src, dst, *args, **kwargs):
+        if str(dst) == str(live_db):
+            guard_state_at_replace.append(
+                getattr(server.vault.db, "_location_guard", None)
+            )
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", observing_replace)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert guard_state_at_replace, "the swap never replaced the live database"
+    assert guard_state_at_replace == [None], (
+        "an open location-guard fd survived to os.replace; "
+        "that is WinError 5 on Windows"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_full_restore_leaves_live_db_owner_only_under_group_umask(server):
+    """A successful restore must not loosen the live database's mode.
+
+    ``VACUUM INTO`` creates the snapshot at 0644 & ~umask and ``copy2``
+    preserves that mode, so under the Debian/Ubuntu umask 002 the swapped-in
+    ``vault.db`` used to come out group-writable — and the trusted-location
+    check then refused it at the next startup, bricking the library.
+    """
+    _create_file(server, "perm.jpg")
+    pic = _add_picture(server, filename="perm.jpg")
+
+    old_umask = os.umask(0o002)
+    try:
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+        report = server.vault.restore_service.restore_full(cp.id)
+    finally:
+        os.umask(old_umask)
+
+    assert not report.errors, f"Restore errors: {report.errors}"
+    live_db = os.path.join(server.vault.image_root, "vault.db")
+    assert stat.S_IMODE(os.lstat(live_db).st_mode) == 0o600
+
+    # Reopens cleanly: this guard is the exact check that refuses a
+    # group-writable vault.db at the next startup.
+    guard = TrustedSQLiteLocation.open(live_db)
+    guard.close()
+
+    # And the re-created engine still serves reads.
+    assert _get_picture(server, pic.id) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -630,7 +711,7 @@ def test_restore_existing_picture_set_replaces_project_memberships_exactly(serve
 def test_root_entity_membership_projects_are_restore_dependencies(server):
     """A deleted project referenced only by the root join is preflighted."""
     from pixlstash.services.project_membership_service import set_character_projects
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     def _setup(session):
         project = Project(name="root-membership-dependency")
@@ -646,16 +727,7 @@ def test_root_entity_membership_projects_are_restore_dependencies(server):
     char_id, project_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_project(session):
-        session.exec(
-            delete(CharacterProjectMember).where(
-                CharacterProjectMember.character_id == char_id
-            )
-        )
-        session.exec(delete(Project).where(Project.id == project_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_project)
+    server.vault.db.run_task(delete_projects, [project_id])
 
     with pytest.raises(MissingDependenciesError) as exc_info:
         server.vault.restore_service.restore_resource(cp.id, "character", char_id)
@@ -743,7 +815,7 @@ def test_concurrent_restore_rejected_with_409(server):
     """
     import threading
 
-    from pixlstash.services.restore_service import RestoreInProgressError
+    from pixlstash.services.restore import RestoreInProgressError
 
     _create_file(server, "concurrent.jpg")
     _add_picture(server, filename="concurrent.jpg", description="v1")
@@ -852,6 +924,44 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
             "_upgrade_snapshot_schema must add columns introduced by later "
             f"migrations; got columns: {sorted(cols_after)}"
         )
+    finally:
+        shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_restore_schema_scratch_removes_portable_identity(server):
+    """Every full/preview/resource restore consumes the same sanitized scratch."""
+    marker = "RESTORE-PORTABLE-SECRET-f342"
+    snapshot = server.vault.snapshot_service.create_snapshot("MANUAL")
+    work_dir = tempfile.mkdtemp(prefix="pixlstash_test_restore_identity_")
+    plain = os.path.join(work_dir, "identity-bearing.sqlite")
+    materialize_snapshot(
+        os.path.join(server.vault.image_root, snapshot.relative_path), plain
+    )
+    identity_engine = create_engine(f"sqlite:///{plain}")
+    try:
+        with Session(identity_engine) as session:
+            from pixlstash.db_models import User
+
+            session.add(
+                User(
+                    username=f"user-{marker}",
+                    password_hash=f"password-{marker}",
+                    hidden_tags=f'["{marker}"]',
+                )
+            )
+            session.commit()
+    finally:
+        identity_engine.dispose()
+
+    upgraded = server.vault.restore_service._upgrade_snapshot_schema(plain)
+    try:
+        with closing(sqlite3.connect(upgraded)) as connection:
+            for table in ("user", "usertoken", "guest_session", "guest_score"):
+                assert connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone() == (0,)
+        assert marker.encode() not in open(upgraded, "rb").read()
     finally:
         shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -1068,7 +1178,7 @@ def test_restore_resource_picture_with_missing_character_raises_without_confirm(
     service must refuse to write anything and raise
     ``MissingDependenciesError`` carrying the missing character ids.
     """
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "with_char.jpg")
     pic = _add_picture(server, filename="with_char.jpg")
@@ -1094,13 +1204,9 @@ def test_restore_resource_picture_with_missing_character_raises_without_confirm(
     alice_id = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    # Live: user deletes the character (Face.character_id cascades to NULL
-    # in the live DB but the snapshot still has the reference).
-    def _delete_char(session):
-        session.exec(delete(Character).where(Character.id == alice_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    # Live: user deletes the character (the delete route nulls Face.character_id
+    # in the live DB, but the snapshot still has the reference).
+    server.vault.db.run_task(delete_characters, [alice_id])
 
     # Default call refuses with MissingDependenciesError.
     with pytest.raises(MissingDependenciesError) as exc_info:
@@ -1148,11 +1254,7 @@ def test_restore_resource_picture_confirm_restores_missing_character(server):
     bob_id = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_char(session):
-        session.exec(delete(Character).where(Character.id == bob_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    server.vault.db.run_task(delete_characters, [bob_id])
 
     report = server.vault.restore_service.restore_resource(
         cp.id,
@@ -1180,7 +1282,7 @@ def test_restore_resource_picture_confirm_restores_missing_character(server):
 def test_restore_batch_unions_missing_dependencies_across_items(server):
     """The batch path must collect the union of missing parents across all
     items and raise once with the combined dict, not item-by-item."""
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "batch_a.jpg")
     _create_file(server, "batch_b.jpg")
@@ -1219,11 +1321,7 @@ def test_restore_batch_unions_missing_dependencies_across_items(server):
     c1_id, c2_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_both(session):
-        session.exec(delete(Character))
-        session.commit()
-
-    server.vault.db.run_task(_delete_both)
+    server.vault.db.run_task(delete_characters)
 
     resources = [
         {"type": "picture", "id": pa.id},
@@ -1278,11 +1376,7 @@ def test_restore_batch_confirm_restores_all_missing_parents_once(server):
     c1_id, c2_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_both(session):
-        session.exec(delete(Character))
-        session.commit()
-
-    server.vault.db.run_task(_delete_both)
+    server.vault.db.run_task(delete_characters)
 
     resources = [
         {"type": "picture", "id": pc.id},
@@ -1484,7 +1578,7 @@ def test_restore_resource_picture_with_missing_picture_set_raises_without_confir
     in live. Restoring the picture references the missing set; un-confirmed
     must raise MissingDependenciesError carrying the set id and write nothing.
     """
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "in_set.jpg")
     pic = _add_picture(server, filename="in_set.jpg")
@@ -1574,7 +1668,7 @@ def test_restore_resource_picture_with_missing_project_raises_without_confirm(
     """A snapshot picture belongs to a Project (via PictureProjectMember) that
     was later deleted in live. Un-confirmed restore must raise with the
     missing project id and write nothing."""
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "in_proj.jpg")
     pic = _add_picture(server, filename="in_proj.jpg")
@@ -1776,7 +1870,7 @@ def test_missing_deps_refusal_emits_started_then_failed(server):
     """A dependency-refusal restore emits STARTED then a terminal FAILED
     (so the client clears activeJob), never COMPLETED."""
     from pixlstash.event_types import EventType
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "evt_dep.jpg")
     pic = _add_picture(server, filename="evt_dep.jpg")
@@ -1801,11 +1895,7 @@ def test_missing_deps_refusal_emits_started_then_failed(server):
     char_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _del(session):
-        session.exec(delete(Character).where(Character.id == char_id))
-        session.commit()
-
-    server.vault.db.run_task(_del)
+    server.vault.db.run_task(delete_characters, [char_id])
 
     events = _capture_restore_events(server)
     with pytest.raises(MissingDependenciesError):
@@ -3812,16 +3902,7 @@ def test_restore_resource_rebuilds_entity_project_membership(server):
     char_id, project_ids = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_char(session):
-        session.exec(
-            delete(CharacterProjectMember).where(
-                CharacterProjectMember.character_id == char_id
-            )
-        )
-        session.exec(delete(Character).where(Character.id == char_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    server.vault.db.run_task(delete_characters, [char_id])
 
     report = server.vault.restore_service.restore_resource(
         cp.id,
@@ -3911,7 +3992,14 @@ def _add_tokens_stamped_before_the_reset(conn) -> None:
     # The owner row the server creates on start-up is already in the snapshot;
     # hang the tokens off it rather than building one with every NOT NULL
     # settings column this table carries.
-    user_id = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()[0]
+    user_row = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()
+    if user_row is None:
+        # Identity no longer lives in vault snapshots. Foreign keys are off on
+        # this raw snapshot-editing connection, so an orphan id is enough to
+        # model the portable legacy credential rows restore must erase.
+        user_id = 1
+    else:
+        user_id = user_row[0]
     for token_id, scope in ((1, "ALL"), (2, "READ")):
         conn.execute(
             "INSERT INTO usertoken "
@@ -3938,13 +4026,14 @@ def _add_guest_rows(conn) -> None:
     ]
     conn.execute(
         "INSERT INTO guest_session "
-        "(session_id, token_id, created_at, last_active_at, cookie_token) "
-        "VALUES ('sess-1', 2, '2026-01-01 00:00:00', '2026-01-01 00:00:00', NULL)"
+        "(session_id, token_public_id, created_at, last_active_at, cookie_token) "
+        "VALUES ('sess-1', 'public-2', '2026-01-01 00:00:00', "
+        "'2026-01-01 00:00:00', NULL)"
     )
     conn.execute(
         "INSERT INTO guest_score "
-        "(session_id, token_id, picture_id, score, scored_at) "
-        "VALUES ('sess-1', 2, ?, 4, '2026-01-01 00:00:00')",
+        "(session_id, token_public_id, picture_id, score, scored_at) "
+        "VALUES ('sess-1', 'public-2', ?, 4, '2026-01-01 00:00:00')",
         (picture_id,),
     )
 
@@ -4084,7 +4173,10 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     service = server.vault.restore_service
     original_swap = service._swap_database
-    original_clear = service._clear_api_tokens
+    # The hub owns the token rows now, so the vault-side task that runs in the
+    # queue gap is the guest-state clear. It is the same position in the restore
+    # sequence the token clear used to occupy.
+    original_clear = service._clear_guest_state
     entered_queue_gap = threading.Event()
     release_token_clear = threading.Event()
 
@@ -4098,7 +4190,7 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
         return original_clear(session)
 
     monkeypatch.setattr(service, "_swap_database", _assert_gate_then_swap)
-    monkeypatch.setattr(service, "_clear_api_tokens", _blocked_token_clear)
+    monkeypatch.setattr(service, "_clear_guest_state", _blocked_token_clear)
 
     outcome = {}
 

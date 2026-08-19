@@ -107,8 +107,8 @@ from pixlstash.db_models.tag import Tag, is_tag_sentinel
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK as ID_CHUNK
 from pixlstash.services.dedup_tier_service import (
-    ID_CHUNK,
     DedupScope,
     DedupTier,
     prune_stale_groups_in_session,

@@ -19,7 +19,7 @@ export function entityBelongsToProject(entity, projectId) {
 }
 
 /** Toggle one membership without disturbing any of the entity's other projects. */
-export function toggleEntityProjectId(entity, projectId) {
+function toggleEntityProjectId(entity, projectId) {
   const wanted = Number(projectId);
   const current = getEntityProjectIds(entity);
   return current.includes(wanted)

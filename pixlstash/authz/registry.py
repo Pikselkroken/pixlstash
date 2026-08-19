@@ -43,7 +43,7 @@ only). The CI guardrail's audit allowlist burns to zero as this table fills.
 
 from __future__ import annotations
 
-from pixlstash.authz.policy import AccessPolicy, RoutePolicy
+from pixlstash.authz.policy import AccessPolicy, LibraryAccessMode, RoutePolicy
 
 # Short aliases keep the table scannable in one screen.
 _PUBLIC = AccessPolicy.PUBLIC
@@ -72,28 +72,43 @@ _LIST_AWARE = RoutePolicy(_LIST, scope_aware=True)
 ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── App-level / public (auth-excluded in AUTH_EXCLUDED_*) ───────────────
     ("GET", "/"): RoutePolicy(
-        _PUBLIC, justification="Frontend SPA index; auth-excluded; no owner data"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Frontend SPA index; auth-excluded; no owner data",
     ),
     ("GET", "/version"): RoutePolicy(
-        _PUBLIC, justification="Health/version probe; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Health/version probe; auth-excluded",
     ),
     ("GET", "/scalar"): RoutePolicy(
-        _PUBLIC, justification="API docs UI; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="API docs UI; auth-excluded",
     ),
     ("GET", "/favicon.ico"): RoutePolicy(
-        _PUBLIC, justification="Static favicon; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Static favicon; auth-excluded",
     ),
     ("GET", "/docs"): RoutePolicy(
-        _PUBLIC, justification="Swagger UI; auth-excluded (/docs/ prefix)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Swagger UI; auth-excluded (/docs/ prefix)",
     ),
     ("GET", "/docs/oauth2-redirect"): RoutePolicy(
-        _PUBLIC, justification="Swagger oauth2 redirect; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Swagger oauth2 redirect; auth-excluded",
     ),
     ("GET", "/openapi.json"): RoutePolicy(
-        _PUBLIC, justification="OpenAPI schema; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="OpenAPI schema; auth-excluded",
     ),
     ("GET", "/{full_path:path}"): RoutePolicy(
         _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
         justification=(
             "Frontend SPA fallback serving the static shell/assets; returns no "
             "owner resource data. NEEDS REVIEW: this template is not statically "
@@ -103,25 +118,36 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         ),
     ),
     ("GET", "/api/v1/check-session"): RoutePolicy(
-        _PUBLIC, justification="Session status probe; auth-excluded (/check-session)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Session status probe; auth-excluded (/check-session)",
     ),
     ("GET", "/api/v1/login"): RoutePolicy(
-        _PUBLIC, justification="Registration-status probe; auth-excluded (/login)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Registration-status probe; auth-excluded (/login)",
     ),
     ("POST", "/api/v1/login"): RoutePolicy(
         _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
         justification="Password login / first-owner claim; auth-excluded (/login)",
     ),
     ("POST", "/api/v1/logout"): RoutePolicy(
-        _PUBLIC, justification="Logout; auth-excluded (/logout)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Logout; auth-excluded (/logout)",
     ),
     ("GET", "/share/{token_slug}"): RoutePolicy(
         _PUBLIC,
         justification="Share-link landing; resolves its own token; auth-excluded (/share/ prefix)",
     ),
     # ── App-level authenticated, no per-object data ─────────────────────────
-    ("GET", "/api/v1/network/info"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/protected"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/network/info"): RoutePolicy(
+        _ANY, library_access=LibraryAccessMode.HUB_ONLY
+    ),
+    ("GET", "/api/v1/protected"): RoutePolicy(
+        _ANY, library_access=LibraryAccessMode.HUB_ONLY
+    ),
     # ── config.py (user account + server-config) ────────────────────────────
     ("GET", "/api/v1/users/me/config"): RoutePolicy(
         _OWNER,
@@ -158,6 +184,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/users/me/auth"): RoutePolicy(
         _OWNER,
+        # Library-independent (2026-08-01): identity lives in the hub, so "who
+        # am I" is the same answer whichever library is active, and it returns
+        # no library content. Without this exemption a token stamped for a
+        # non-active library could not even discover why it was being refused.
+        library_independent=True,
         justification=(
             "Owner account state (owner username + has_password). F-c hardening "
             "rider (decided 2026-07-21): tightened any_token -> owner_only so a "
@@ -249,6 +280,271 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
+    # ── libraries.py (the hub/vault split; multi-library plan §11 q3/q4) ─────
+    ("GET", "/api/v1/libraries"): RoutePolicy(
+        _OWNER,
+        # Library-independent: returns the registry, not library content, and
+        # cannot reach another library's data. It must keep answering while a
+        # token is being refused or a switch is in flight, or the tab could not
+        # explain either.
+        library_independent=True,
+        justification=(
+            "Registry read. OWNER_ONLY rather than LOCAL_OWNER_ONLY (CSO ruling "
+            "2026-08-01, plan §11 q3) so the Settings tab renders for any owner; "
+            "the host information it would otherwise leak (folder paths, the CLI "
+            "hint) is omitted for a non-local caller by the handler instead of "
+            "the whole route being denied. Returns no per-object data."
+        ),
+    ),
+    ("POST", "/api/v1/libraries/active"): RoutePolicy(
+        _LOCAL,
+        library_independent=True,
+        library_access=LibraryAccessMode.SWITCH_WRITER,
+        justification=(
+            "§16.3 locality tier, but NOT for the usual reason: this route takes "
+            "a registry uuid, never a caller-supplied host path, so it is not the "
+            "path-authority class. It is local-only because switching resets "
+            "every connected client's session and takes the outgoing library's "
+            "share links offline: authority over OTHER principals' state, which "
+            "is what the locality tier is buying. Loopback/LAN/Tailscale all "
+            "pass, so a phone on Tailscale is unaffected; a genuinely remote "
+            "owner needs allow_remote_host_ops. "
+            "NOT a confidentiality pivot (corrected 2026-08-07). The original "
+            "CSO ruling of 2026-08-01 and plan §11 q4 justified this tier as "
+            "stopping one stolen token from reaching every library by switching. "
+            "That was true when written, against a design where owner tokens "
+            "were unpinned. The library pin landed afterwards and closes it "
+            "independently: a token stamped for a non-active library is refused "
+            "on every data route (auth.py), and minting is pinned too, so a "
+            "thief who switches locks themselves out of the library they had "
+            "and gains nothing in the new one. Keep the tier for the disruption "
+            "reason above; do not re-derive it from the pivot."
+        ),
+    ),
+    # ── model_shelf.py (the model shelf's reads; shelf plan B5) ──────────────
+    # OWNER_ONLY on the DEFAULT library pin. ``library_independent`` is left at
+    # False on purpose even though ``model`` lives in the hub: these routes join
+    # hub content to the active vault's ``adapter_attachment`` rows, so they DO
+    # return library content and a token stamped for another library must not
+    # reach them. Scoped by omission, exactly as §16.1 intends.
+    #
+    # Accepted residual (shelf plan B5, stated in the PR): an owner token pinned
+    # to library A sees machine-level model filenames, including ones only ever
+    # used in library B. That is inherent to the hub holding models while tokens
+    # are pinned per library; there is no cross-principal leak in a single-owner
+    # product, and the attachment names stay per-vault.
+    ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
+    # The one shelf read that is NOT on the owner_only tier. Every other one
+    # surfaces host paths but takes none, which is why they stayed there; this
+    # one returns the **raw bytes** of a file inside a registered model folder,
+    # which is the GET .../runs/{run_name}/samples/{filename} class exactly —
+    # reads inside a registered host root, writes nothing, and is a new
+    # capability rather than a narrower view of the metadata beside it. It takes
+    # no host path at all (a sha256 the scanner already registered is the whole
+    # input), so it is on this tier for the authority it exercises, not for what
+    # it accepts. Loopback/LAN/Tailscale covers the case the route exists for —
+    # a generator on the owner's own network — and a genuinely remote one needs
+    # allow_remote_host_ops, which is the safe default direction.
+    ("GET", "/api/v1/adapters/{sha256}/file"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 serves the raw bytes of a model file out of a registered model folder — the same read-inside-a-registered-root authority as model-folders/{folder_id}/runs/{run_name}/samples/{filename}, and a new capability rather than a subset of GET /adapters, which serves metadata only. Takes no host path: the sha256 addresses a row the scanner wrote, the join is contained, and only a `present` copy is served; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
+    # The assignment path. OWNER_ONLY, same pin: it WRITES the active vault's
+    # adapter_attachment rows, so a token stamped for another library must not
+    # reach it. Not LOCAL_OWNER_ONLY — it names a hash and two row ids, never a
+    # host path, so it is not the §16.3 filesystem-authority class.
+    ("PUT", "/api/v1/adapters/{sha256}/attachments"): RoutePolicy(_OWNER),
+    # The verb layer (F3). OWNER_ONLY on the same default library pin as the
+    # reads above, and NOT the §16.3 locality tier the folder mutators carry:
+    # both take a list of hub `model.id`s and write or delete hub rows, they
+    # take no host path, and neither touches the filesystem — Forget drops
+    # database rows and never unlinks a file. `PATCH /models` is the shelf's
+    # only inline non-authz guard (it refuses a correction the hub's CHECK
+    # constraints would reject) and that is a data check, not a scope one.
+    ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The shelf's sixth verb, and the one route on this block that spawns a
+    # process on the host's desktop. Same authority — and same red-line tier —
+    # as POST /pictures/{id}/open-location: what it can do is bounded by what
+    # the file manager can do, which is everything the owner's session can, so
+    # a LAN or Tailscale caller must never reach it and no flag may say
+    # otherwise. It takes no host path (a hub `model.id`, joined to the folder
+    # the scanner recorded and contained), which is why the tier is about the
+    # spawn rather than the input.
+    ("POST", "/api/v1/models/{model_id}/open-location"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: opens a model's folder in the host file manager (open_in_file_manager → os.startfile/open/xdg-open — the same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
+    # The base-model field's completion list. OWNER_ONLY on the same default
+    # pin as the rest of the shelf, and NOT ANY_TOKEN: it returns per-object
+    # data — the distinct `base_model` strings recorded on this machine's model
+    # rows — even though the shipped labels beside them are a constant.
+    ("GET", "/api/v1/models/base-models"): RoutePolicy(_OWNER),
+    # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
+    # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
+    # rescan take — or walk — a caller-supplied host path, which is the
+    # reference-folders class exactly, so they carry the §16.3 locality tier.
+    ("GET", "/api/v1/model-folders"): RoutePolicy(_OWNER),
+    # OWNER_ONLY, not the §16.3 tier the mutators carry, and the difference is
+    # deliberate. It takes no caller-supplied path, reads no file content and
+    # walks nothing: it stats the folders that are ALREADY registered, whose
+    # paths GET /model-folders returns to this same token. What it adds over
+    # that is the mount point (a prefix of a path the caller can already read)
+    # and the drive's size. Putting it on LOCAL_OWNER_ONLY would strip the
+    # capacity meter from a remote owner for no disclosure that route does not
+    # already make, and over-blocking is its own regression.
+    ("GET", "/api/v1/model-folders/devices"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/model-folders"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder create; takes a caller-supplied host path, same class as reference-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PATCH", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder update; sets the Docker bind host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder delete; drops a registered host path and tombstones its location rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/rescan"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks a registered host path and reads every model file under it — the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
+    # The strongest filesystem authority the shelf has: this block writes new
+    # files into a registered host folder and unlinks files out of another one.
+    # The read (GET) is on the same tier rather than OWNER_ONLY because it is
+    # the control surface of that operation — how a move is watched, next to the
+    # DELETE that stops one — so a caller who may not start a move may not
+    # observe or steer one either. It is NOT because the filenames are otherwise
+    # unreachable: a remote owner is 200 on GET /adapters, which already serves
+    # locations[].folder_path and locations[].relpath for every copy. (The
+    # earlier "barred from every route that could produce them" reasoning was
+    # false and was corrected in the B7 sign-off.)
+    ("POST", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 writes model files into a registered host folder and unlinks them from another — strictly more filesystem authority than reference-folders/move-pictures, which is already on this tier; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 the control surface of an in-flight host-filesystem move — how one is watched, beside the DELETE that stops one — so the tier that alone can start a move is the tier that may observe and steer it; not a secrecy claim about the relpaths, which GET /adapters already serves",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/relocate"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 takes a caller-supplied host path and moves every file a folder PixlStash owns into it, then unlinks the originals — the reference-folders/{folder_id}/relocate class with the file movement of POST /model-moves; the managed store and (since #905) PixlStash's own download folder, whose new location is recorded for every downloader; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # ── model_icons.py (shelf plan, the sixth verb) ────────────────────────
+    # OWNER_ONLY, not the §16.3 locality tier. The icon store lives beside the
+    # hub and is written and read by PixlStash alone: no route here takes,
+    # walks or serves a caller-supplied host path. The GET serves bytes, but
+    # they are bytes PixlStash put there itself under a name it computed, which
+    # is categorically not the ai-toolkit sample route's "read inside a folder
+    # the owner registered".
+    ("POST", "/api/v1/models/{model_id}/icon"): RoutePolicy(
+        _OWNER,
+        justification="Stores an uploaded image in the hub's own icon store and points the caller's own model at it; no host path taken; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/model-icons/{sha256}"): RoutePolicy(
+        _OWNER,
+        justification="Serves one icon PixlStash itself stored, addressed by the content hash it computed; the path segment is validated as a digest and contained against the icon directory; owner only",
+    ),
+    ("POST", "/api/v1/models/icons/clear"): RoutePolicy(
+        _OWNER,
+        justification="Clears the icon column on the caller's own models; writes one hub column and no filesystem; POST blocked for READ tokens; owner only",
+    ),
+    # ── model_stacks.py (shelf plan F5) ────────────────────────────────────
+    # OWNER_ONLY and deliberately NOT the §16.3 locality tier its shelf
+    # neighbours sit on: not one of these routes touches the host filesystem.
+    # Detection reads `model` rows the scan already wrote, and applying, fusing,
+    # unstacking, covering and releasing a member write hub columns, so there is
+    # no host path taken, walked, written or unlinked. They surface
+    # folder ids, never paths — the same reason the shelf's other read routes
+    # stayed owner_only while the folder mutators moved to the locality tier.
+    ("GET", "/api/v1/model-stacks/proposals"): RoutePolicy(
+        _OWNER,
+        justification="Dry run over the caller's own shelf; reads hub rows only, writes nothing, takes no host path; owner only",
+    ),
+    ("POST", "/api/v1/model-stacks"): RoutePolicy(
+        _OWNER,
+        justification="Collapses the owner's own models into a stack, optionally fusing stacks it absorbs; writes hub columns only, no filesystem access; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/model-stacks/{stack_id}"): RoutePolicy(
+        _OWNER,
+        justification="Breaks up one of the owner's own stacks; clears two hub columns and deletes the adapter_stack row, touching no file on disk; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/model-stacks/{stack_id}/cover"): RoutePolicy(
+        _OWNER,
+        justification="Chooses which member covers one of the owner's own stacks; renumbers stack_position in the hub, touching no file on disk; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/model-stacks/{stack_id}/members/{model_id}"): RoutePolicy(
+        _OWNER,
+        justification="Releases one member of one of the owner's own stacks; clears two hub columns and may delete the emptied adapter_stack row, touching no file on disk; DELETE blocked for READ tokens; owner only",
+    ),
+    # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
+    # The listing walks a registered output root; the import writes into one
+    # registered folder and may unlink from another. Neither takes a host path:
+    # the import names a run *inside* a registered folder and the server joins
+    # and contains it.
+    ("GET", "/api/v1/model-folders/{folder_id}/runs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it — the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    (
+        "GET",
+        "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+    ): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing — the same authority class as model-folders/{folder_id}/rescan. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-imports"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The imported previews, read back off the shelf. NOT owner_only, and the
+    # plan that asked for them said owner_only on the grounds that they are
+    # addressed by a row id with no host path crossing the wire. That is exactly
+    # the argument the matrix records as **not** the argument: GET
+    # /adapters/{sha256}/file takes no host path either and is on this tier,
+    # because what decides the tier is the authority exercised — reading bytes
+    # out of a folder the owner registered — not what the route accepts. The
+    # listing walks one directory inside that folder and reports names of files
+    # PixlStash never registered, which is rescan's authority in miniature; the
+    # byte route is the sample route beside it with the run replaced by a shelf
+    # row. Both are kept on one tier so a caller who cannot fetch a preview is
+    # not handed a list of them.
+    ("GET", "/api/v1/models/{model_id}/samples"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered — rescan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/models/{model_id}/samples/{filename}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 serves raw image bytes out of a registered model folder — GET /adapters/{sha256}/file's authority class exactly, and the shelf-side twin of model-folders/{folder_id}/runs/{run_name}/samples/{filename}. Takes no host path (a model.id addresses a row the importer wrote), which per the 2026-08-11 correction is not the argument for owner_only. Two containment joins, not one: the samples directory against the registered folder path, because a symlinked <stem>_samples would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would let ../alice.safetensors through; the extension is allowlisted so nothing but an image is served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # ── model_files.py (shelf plan F6, `Add file`; §16.3 host-capability) ──
+    # The one shelf route that READS a caller-supplied host path — the loose
+    # file it copies is by definition in a folder nobody registered — and it
+    # writes into a registered folder. Both halves are already on this tier
+    # (POST /model-folders takes a path, POST /model-moves writes files), so it
+    # is on it for both. It never unlinks: the source is the owner's own file.
+    ("POST", "/api/v1/model-files"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 takes a caller-supplied host path, copies that file into a registered host folder and registers it — the POST /model-folders path-taking class carrying the file writing of POST /model-moves, minus the unlink; the read is bounded to one regular .safetensors file and the write is contained against the destination folder; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The unlink half (#933), and the shelf's only destructive verb. Takes no
+    # host path — the ids address rows the scanner wrote — but it REMOVES the
+    # owner's files, which is the unlink of POST /model-moves without the copy
+    # that justifies it, so it sits on the same tier as every other shelf route
+    # that writes the host filesystem.
+    ("POST", "/api/v1/model-files/delete"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders — the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder — lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) — and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
@@ -380,7 +676,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/impossible-tags/restore"): _LIST_AWARE,
     ("GET", "/api/v1/tags"): _LIST_AWARE,
     # ── pictures: owner-only surfaces ───────────────────────────────────────
-    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
+    # Retargeted ANY_TOKEN -> OWNER_ONLY on 2026-08-15 (#326), for the reason
+    # its tagger sibling was: every field is verbatim text out of a plugin's
+    # own class body, half of them from a .py file the owner dropped in, and
+    # the only thing the list drives (POST /pictures/plugins/{name}) a READ
+    # token cannot call. Leaving it any_token while retargeting GET /taggers
+    # would have been the same argument reaching two answers.
+    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(
+        _OWNER,
+        justification="Image plugin list; third-party plugin text, and the run endpoint beside it is owner-only",
+    ),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
     # Import status is NOT ANY_TOKEN: the completed payload carries per-object
     # data (``results[].picture_id``, ``results[].file`` the vault-relative
@@ -449,6 +754,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/scrapheap/delete-preview"): RoutePolicy(
         _OWNER,
         justification="Returns protected reference-original file paths; owner only",
+    ),
+    # PICTURE_SCOPED, like every other per-picture mutation on this surface, and
+    # shaped exactly like ("DELETE", "/api/v1/pictures") above. The in-place
+    # write is a metadata-only EXIF-orientation splice: the entropy-coded pixel
+    # stream is copied through byte for byte, the whole prior state is one
+    # enumerated value 1–8, so the operation is exactly reversible by the
+    # ordinary undo machinery (§21.5) — and a file on a reference folder is
+    # refused at the sink and reported ``unsupported`` rather than rewritten.
+    # None of that is a destructive edit of someone else's original, so a
+    # write-enabled grant that already reaches the picture is the right level.
+    # READ tokens never arrive here at all: the auth middleware refuses a
+    # non-GET from a READ token unless the path is in READ_SAFE_POST_PATHS, and
+    # this one deliberately is not — that is what makes "write-enabled" the
+    # operative condition and leaves the gate to answer "reaches this picture".
+    # The gate resolves body_ids element by element and raises on the first id
+    # out of scope, before the handler runs, so a mixed batch is refused whole
+    # and rotates nothing. (#950)
+    ("POST", "/api/v1/pictures/rotate"): RoutePolicy(
+        _PIC,
+        body_ids="picture_ids",
+        justification="In-place rotate splices only the EXIF orientation (pixels byte-identical, exactly reversible, reference-folder files refused at the sink), so a write-enabled picture-scoped grant is the right level. READ tokens are refused earlier by the middleware: POST not in READ_SAFE. Gate loops enforce_picture_scope over every id",
     ),
     # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
     ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
@@ -1065,7 +1391,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/tagger-runs"): RoutePolicy(_ANY),
     # ── taggers.py ──────────────────────────────────────────────────────────
-    ("GET", "/api/v1/taggers"): RoutePolicy(_ANY),
+    # Retargeted ANY_TOKEN -> OWNER_ONLY on 2026-08-15 (#326). Two reasons, and
+    # the first is the owner's own data: `settings` is this user's saved
+    # tagger_settings run through fill_defaults, so a plugin declaring a
+    # "string" parameter — which the plugin guide blesses — puts whatever the
+    # owner typed into it (a model path, a prompt) in front of every share-link
+    # holder. The second is that every other field is verbatim third-party text
+    # from a plugin's own class body. Nothing is lost: tagging and captioning
+    # are POSTs, which a READ token cannot make, so the list only ever rendered
+    # controls a non-owner could not use.
+    ("GET", "/api/v1/taggers"): RoutePolicy(
+        _OWNER,
+        justification="Plugin list + the caller's own tagger_settings; owner only — a scoped or READ token cannot run a tagger anyway",
+    ),
+    # The plugin folders and the load failures both came off GET /taggers so
+    # this tier could hold them: the folders are host paths under the owner's
+    # home directory, a load-failure message is exception text from third-party
+    # code that can carry any path it was reaching for, and that route is
+    # ANY_TOKEN, so every share-link holder was reading both. Local, not merely
+    # owner, because a host path is the §16.3 disclosure class — and nothing is
+    # lost remotely, since acting on either means editing a file in that folder.
+    ("GET", "/api/v1/taggers/plugin-diagnostics"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk and returns plugin import errors carrying host paths; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/taggers/{name}/download"): RoutePolicy(
         _OWNER,
         justification="Download tagger plugin; POST blocked for READ tokens; owner only",

@@ -4,10 +4,13 @@ and on an upgrade from the pre-snapshots (v1.4.1) schema with real data."""
 import contextlib
 import hashlib
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+
+from sqlmodel import text
 
 
 _MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "pixlstash")
@@ -38,7 +41,18 @@ def test_alembic_upgrade_head_fresh_db():
         assert os.path.isfile(db_path), "Database file was not created"
 
 
-def test_alembic_downgrade_one_step():
+def test_alembic_downgrade_and_reupgrade_multi_library_lane():
+    """The multi-library lane unwinds off develop's head and comes back cleanly.
+
+    The lane is linear on top of ``0096_add_picture_is_video``, so downgrading
+    to that revision unwinds every migration above it at once. Round-tripping
+    keeps each ``downgrade()`` honest, and asserting a single stamped revision
+    in both directions catches a lane that silently re-merges into more than
+    one head.
+
+    The head is read back from the tree rather than named, so adding a
+    migration does not break this test.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
@@ -48,10 +62,41 @@ def test_alembic_downgrade_one_step():
             f"alembic upgrade head failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
         )
 
-        down = _run_alembic(["downgrade", "-1"], db_url, _MIGRATIONS_DIR)
-        assert down.returncode == 0, (
-            f"alembic downgrade -1 failed:\nstdout: {down.stdout}\nstderr: {down.stderr}"
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            head = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert len(head) == 1, f"the lane must resolve to exactly one head, got {head}"
+
+        down = _run_alembic(
+            ["downgrade", "0096_add_picture_is_video"],
+            db_url,
+            _MIGRATIONS_DIR,
         )
+        assert down.returncode == 0, (
+            "alembic downgrade below the multi-library lane failed:\n"
+            f"stdout: {down.stdout}\nstderr: {down.stderr}"
+        )
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            revisions = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert revisions == {"0096_add_picture_is_video"}
+
+        reup = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert reup.returncode == 0, (
+            f"alembic re-upgrade failed:\nstdout: {reup.stdout}\nstderr: {reup.stderr}"
+        )
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            revisions = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert revisions == head
 
 
 def test_alembic_upgrade_from_v1_4_1_preserves_data():
@@ -481,15 +526,28 @@ def _seed_pre_reset_rows(db_path):
             created_at="2026-01-01 00:00:00",
         )
         _insert_minimal_row(conn, "picture", id=1, file_path="seed.jpg")
+        guest_session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(guest_session)")
+        }
+        token_column = (
+            "token_id" if "token_id" in guest_session_columns else "token_public_id"
+        )
+        token_value = 1 if token_column == "token_id" else "seed-public-id"
         conn.execute(
-            "INSERT INTO guest_session "
-            "(session_id, token_id, created_at, last_active_at, cookie_token) "
-            "VALUES ('sess-1', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'ck-1')"
+            f"INSERT INTO guest_session (session_id, {token_column}, created_at, "
+            "last_active_at, cookie_token) VALUES (?, ?, ?, ?, ?)",
+            (
+                "sess-1",
+                token_value,
+                "2026-01-01 00:00:00",
+                "2026-01-01 00:00:00",
+                "ck-1",
+            ),
         )
         conn.execute(
-            "INSERT INTO guest_score "
-            "(id, session_id, token_id, picture_id, score, scored_at) "
-            "VALUES (1, 'sess-1', 1, 1, 4, '2026-01-01 00:00:00')"
+            f"INSERT INTO guest_score (id, session_id, {token_column}, picture_id, "
+            "score, scored_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "sess-1", token_value, 1, 4, "2026-01-01 00:00:00"),
         )
         conn.commit()
 
@@ -665,6 +723,7 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
 # ---------------------------------------------------------------------------
 
 _REVISION_BEFORE_PUBLIC_ID = "0089_add_dedupverdict_reopen_batch_id"
+_REVISION_PUBLIC_ID = "0090_add_usertoken_public_id"
 # The three indexes the table already carried. They are asserted after the
 # migration because dropping and re-creating the table (the ``AUTOINCREMENT``
 # route that was rejected in favour of this additive column) would have taken
@@ -680,6 +739,12 @@ _PRE_EXISTING_TOKEN_INDEXES = {
 def _usertoken_shape(db_path):
     """Return the rows, indexes and foreign keys of ``usertoken``."""
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        guest_session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(guest_session)")
+        }
+        guest_token_column = (
+            "token_id" if "token_id" in guest_session_columns else "token_public_id"
+        )
         return {
             "rows": conn.execute(
                 "SELECT id, token_hash, public_id FROM usertoken ORDER BY id"
@@ -692,10 +757,10 @@ def _usertoken_shape(db_path):
                 "PRAGMA foreign_key_list(usertoken)"
             ).fetchall(),
             "guest_session": conn.execute(
-                "SELECT session_id, token_id FROM guest_session"
+                f"SELECT session_id, {guest_token_column} FROM guest_session"
             ).fetchall(),
             "guest_score": conn.execute(
-                "SELECT id, token_id FROM guest_score"
+                f"SELECT id, {guest_token_column} FROM guest_score"
             ).fetchall(),
         }
 
@@ -739,7 +804,7 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
                 )
             conn.commit()
 
-        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        result = _run_alembic(["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR)
         assert result.returncode == 0, (
             f"alembic upgrade head failed:\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
@@ -775,8 +840,10 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
         ]
 
         # The guest rows still resolve against their token.
-        assert shape["guest_session"] == [("sess-1", 1)]
-        assert shape["guest_score"] == [(1, 1)]
+        expected_guest_token = shape["guest_session"][0][1]
+        assert expected_guest_token in (1, "seed-public-id")
+        assert shape["guest_session"] == [("sess-1", expected_guest_token)]
+        assert shape["guest_score"] == [(1, expected_guest_token)]
 
 
 def test_0090_public_id_uniqueness_is_enforced():
@@ -831,7 +898,10 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         db_url = f"sqlite:///{db_path}"
 
         assert (
-            _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR).returncode == 0
+            _run_alembic(
+                ["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+            ).returncode
+            == 0
         )
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
             conn.execute("PRAGMA foreign_keys = OFF")
@@ -859,7 +929,9 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         assert stamped.returncode == 0, (
             f"stamp back failed:\nstdout: {stamped.stdout}\nstderr: {stamped.stderr}"
         )
-        replayed = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        replayed = _run_alembic(
+            ["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+        )
         assert replayed.returncode == 0, (
             "re-running 0090 over an already-migrated database must be a no-op, "
             f"not an error:\nstdout: {replayed.stdout}\nstderr: {replayed.stderr}"
@@ -867,6 +939,54 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         assert _usertoken_shape(db_path)["rows"] == before, (
             "a replay must not reissue public ids to tokens that already have one"
         )
+
+
+def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
+    """The hub split removes stale integer token references from each vault."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+        before = _run_alembic(
+            ["upgrade", "0098_add_library_settings"], db_url, _MIGRATIONS_DIR
+        )
+        assert before.returncode == 0, before.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DROP TABLE guest_score")
+            conn.execute("DROP TABLE guest_session")
+            conn.execute(
+                "CREATE TABLE guest_session (session_id TEXT PRIMARY KEY, "
+                "token_id INTEGER NOT NULL, created_at TEXT NOT NULL, "
+                "last_active_at TEXT NOT NULL, cookie_token TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE guest_score (id INTEGER PRIMARY KEY, session_id TEXT "
+                "NOT NULL, token_id INTEGER NOT NULL, picture_id INTEGER NOT NULL, "
+                "score INTEGER NOT NULL, scored_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO guest_session VALUES "
+                "('legacy', 1, '2026-01-01', '2026-01-01', 'cookie')"
+            )
+            conn.execute(
+                "INSERT INTO guest_score VALUES (1, 'legacy', 1, 1, 4, '2026-01-01')"
+            )
+            conn.commit()
+
+        result = _run_alembic(
+            ["upgrade", "0099_guest_tables_reference_token_public_id"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert result.returncode == 0, result.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            for table in ("guest_session", "guest_score"):
+                columns = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                assert "token_public_id" in columns
+                assert "token_id" not in columns
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
 
 
 def test_the_migration_chain_has_exactly_one_head():
@@ -973,3 +1093,239 @@ def test_alembic_0094_adds_telemetry_consent_columns_defaulting_off():
             )
         finally:
             conn.close()
+
+
+_E2E_FIXTURE = os.path.join(_PROJECT_ROOT, "test-data", "images", "vault.db")
+
+
+def test_a_populated_library_upgrades_through_the_picture_table_rebuild():
+    """A vault with rows must survive migration 0080's rebuild of ``picture``.
+
+    ``op.batch_alter_table`` is the only way SQLite can drop a column: it
+    copies the table, ``DROP``s the original and renames. The vault engine runs
+    with ``PRAGMA foreign_keys=ON`` (``database.init_database``), so that
+    ``DROP`` raises "FOREIGN KEY constraint failed" as soon as any row
+    references the table — which is every real library, and the committed e2e
+    fixture. It brought the whole `e2e` lane down: the server could not boot.
+
+    A fresh database has nothing referencing ``picture``, so `upgrade head` on
+    an empty file passes either way; only a populated upgrade catches this.
+    The fixture is used because it is the artefact that actually failed, and
+    the e2e job already treats its absence as a coverage failure.
+
+    Goes through ``VaultDatabase`` deliberately: the standalone
+    ``PIXLSTASH_DB_URL`` path builds its engine from ``alembic.ini`` with no
+    connect listener, so FK enforcement is off there and the defect is
+    invisible.
+    """
+    from pixlstash.database import VaultDatabase
+
+    assert os.path.isfile(_E2E_FIXTURE), (
+        f"committed e2e fixture missing at {_E2E_FIXTURE}"
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        shutil.copyfile(_E2E_FIXTURE, db_path)
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0]
+        assert before > 0, "fixture must carry pictures for this to mean anything"
+
+        db = VaultDatabase(db_path)
+        try:
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                after = conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0]
+                # The rebuild copies rows; losing them would be the other
+                # failure mode of suspending enforcement around it.
+                assert after == before
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                assert violations == []
+
+            # Enforcement must be back on for the connection the app then uses;
+            # a suspension that leaked would disable it for the whole session.
+            enabled = db.run_immediate_read_task(
+                lambda session: session.exec(text("PRAGMA foreign_keys")).one()[0]
+            )
+            assert enabled == 1
+        finally:
+            db.close()
+
+
+def test_a_library_carrying_dangling_rows_still_opens():
+    """Orphan rows that predate the run must not stop a library opening.
+
+    ``PRAGMA foreign_key_check`` reports the whole database, and
+    ``command.upgrade`` runs on every vault open, so a guard that refuses any
+    violation refuses one it did not cause — permanently, with no repair path.
+    Rows written before their FK existed, or by any path with enforcement off,
+    are exactly that. The committed fixture already ships some (``guest_score``
+    -> ``usertoken``); migration 0093 clears those, so this adds one that
+    survives to head.
+
+    Goes through ``VaultDatabase`` because that is where it bites: the vault
+    engine runs with enforcement on, so the guard is active there.
+    """
+    from pixlstash.database import VaultDatabase
+
+    assert os.path.isfile(_E2E_FIXTURE), (
+        f"committed e2e fixture missing at {_E2E_FIXTURE}"
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        shutil.copyfile(_E2E_FIXTURE, db_path)
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(conn, "quality", id=999999, picture_id=999999)
+            conn.commit()
+            assert conn.execute("PRAGMA foreign_key_check").fetchall(), (
+                "the row must be an actual violation for this to test anything"
+            )
+
+        db = VaultDatabase(db_path)
+        try:
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                survived = conn.execute(
+                    "SELECT COUNT(*) FROM quality WHERE picture_id = 999999"
+                ).fetchone()[0]
+                # Left alone, not quietly repaired: deleting rows to satisfy a
+                # check the run did not fail is its own kind of data loss.
+                assert survived == 1
+        finally:
+            db.close()
+
+
+_BREAKING_MIGRATION = '''"""Orphan a character by deleting its project (test fixture only)."""
+
+from alembic import op
+
+revision = "9999_break_a_foreign_key"
+down_revision = "{head}"
+branch_labels = None
+depends_on = None
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
+
+def upgrade() -> None:
+    op.execute("DELETE FROM project WHERE id = 1")
+
+
+def downgrade() -> None:
+    op.execute("INSERT INTO project (id, name) VALUES (1, 'orphan-maker')")
+'''
+
+
+def _database_at_head_with_a_character_in_a_project(db_path):
+    """Upgrade *db_path* to head and give it one valid character -> project row."""
+    result = _run_alembic(["upgrade", "head"], f"sqlite:///{db_path}", _MIGRATIONS_DIR)
+    assert result.returncode == 0, (
+        f"alembic upgrade head failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        _insert_minimal_row(conn, "project", id=1, name="orphan-maker")
+        _insert_minimal_row(conn, "character", id=1, name="orphan", project_id=1)
+        conn.commit()
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == [], (
+            "the seed rows must be valid, or the guard has nothing new to catch"
+        )
+
+
+@contextlib.contextmanager
+def _migration_tree_that_breaks_a_foreign_key(db_path):
+    """A copy of the real migration tree with one FK-breaking migration on top."""
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        head = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+
+    with tempfile.TemporaryDirectory() as tree:
+        shutil.copytree(
+            os.path.join(_MIGRATIONS_DIR, "migrations"),
+            os.path.join(tree, "migrations"),
+        )
+        shutil.copyfile(
+            os.path.join(_MIGRATIONS_DIR, "alembic.ini"),
+            os.path.join(tree, "alembic.ini"),
+        )
+        with open(
+            os.path.join(tree, "migrations", "versions", "9999_break_a_foreign_key.py"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(_BREAKING_MIGRATION.format(head=head))
+        yield tree
+
+
+def test_a_migration_that_orphans_a_row_is_refused_and_the_run_rolled_back():
+    """Suspending enforcement must not let a migration ship a broken database.
+
+    The vault path is the one that can be prevented rather than merely
+    reported: Alembic runs on the caller's open connection, so nothing is
+    committed until ``_run_migrations`` says so, and the guard rejects the run
+    before that happens.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    from pixlstash.database import create_configured_engine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        _database_at_head_with_a_character_in_a_project(db_path)
+
+        with _migration_tree_that_breaks_a_foreign_key(db_path) as tree:
+            config = Config(os.path.join(tree, "alembic.ini"))
+            config.set_main_option("script_location", os.path.join(tree, "migrations"))
+            config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+
+            engine = create_configured_engine(db_path)
+            try:
+                with engine.connect() as conn:
+                    # database._run_migrations inspects the schema first, which
+                    # leaves the transaction open and hands Alembic an external
+                    # one. Reproduce that, or the rollback under test is not
+                    # the one production gets.
+                    conn.exec_driver_sql("SELECT 1")
+                    assert conn.in_transaction()
+                    config.attributes["connection"] = conn
+
+                    raised = None
+                    try:
+                        command.upgrade(config, "head")
+                    except RuntimeError as exc:
+                        raised = exc
+                    assert raised is not None, "the broken migration was accepted"
+                    assert "introduced dangling foreign keys" in str(raised)
+            finally:
+                engine.dispose()
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM project WHERE id = 1").fetchone()[0]
+                == 1
+            ), "the rejected migration's delete was committed anyway"
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert (
+                conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+                != "9999_break_a_foreign_key"
+            )
+
+
+def test_the_standalone_engine_refuses_a_broken_foreign_key_too():
+    """The guard must not be gated on enforcement having been on.
+
+    ``alembic.ini`` builds its own engine with no connect listener, so SQLite
+    leaves foreign keys off there — and that is the snapshot upgrade path
+    (``services/restore/schema_upgrade``), the one migration input that did not
+    come from this process. It cannot roll back (each migration commits as it
+    goes, with no external transaction), but it must still refuse: its caller
+    discards the scratch file it was upgrading.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        _database_at_head_with_a_character_in_a_project(db_path)
+
+        with _migration_tree_that_breaks_a_foreign_key(db_path) as tree:
+            result = _run_alembic(["upgrade", "head"], f"sqlite:///{db_path}", tree)
+
+        assert result.returncode != 0, (
+            f"the broken migration was accepted:\nstdout: {result.stdout}"
+        )
+        assert "introduced dangling foreign keys" in result.stderr, result.stderr

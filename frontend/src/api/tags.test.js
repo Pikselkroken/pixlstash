@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   // Same shape as the real helper: the header only exists when the caller is
   // part of a gesture, so an ordinary call still sends no config at all.
@@ -44,8 +45,8 @@ describe("api/tags", () => {
 
   it("addPictureTag POSTs the tag and returns the picture's tag list", async () => {
     apiClient.post.mockResolvedValue({ data: { tags: [{ id: 1 }] } });
-    const result = await addPictureTag(42, "hat", { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/pictures/42/tags", {
+    const result = await addPictureTag(42, "hat");
+    expect(apiClient.post).toHaveBeenCalledWith("/pictures/42/tags", {
       tag: "hat",
     });
     expect(result.tags).toEqual([{ id: 1 }]);

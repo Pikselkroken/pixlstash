@@ -388,7 +388,6 @@ async function clearGuestSession() {
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     border-color 0.12s,
     background 0.12s,
@@ -458,10 +457,6 @@ async function clearGuestSession() {
   background: rgba(var(--v-theme-accent), 0.1);
   color: rgb(var(--v-theme-accent));
 }
-.thumb-layout-opt:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
 .thumb-layout-opt.disabled,
 .thumb-layout-opt:disabled {
   opacity: 0.45;
@@ -495,7 +490,6 @@ async function clearGuestSession() {
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     border-color 0.12s,
     background 0.12s,

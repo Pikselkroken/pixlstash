@@ -75,6 +75,7 @@ import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import WordmarkLogo from "../WordmarkLogo.vue";
+import { errorDetail } from "../../utils/apiError";
 
 defineProps({
   tokenError: { type: String, default: null },
@@ -101,7 +102,7 @@ async function submitLogin() {
     await login(username.value, password.value); // Call the centralised login function
   } catch (err) {
     console.error("Login failed:", err);
-    error.value = err.response?.data?.detail || err.message || "Login failed.";
+    error.value = errorDetail(err) || err.message || "Login failed.";
   }
 }
 
@@ -215,10 +216,7 @@ const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
 .password-toggle {
   position: absolute;
   right: 0.5rem;
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  cursor: pointer;
   font-size: var(--text-lg);
   line-height: 1;
   padding: var(--space-2);
@@ -245,11 +243,9 @@ form {
   gap: var(--space-2);
   padding: var(--space-3);
   font-size: var(--text-md);
-  border: none;
   border-radius: var(--radius-sm);
   background-color: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  cursor: pointer;
 }
 
 /* Pending is not disabled: the login button only ever goes disabled because a

@@ -25,7 +25,7 @@ from pixlstash.db_models import (
     SortMechanism,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
@@ -68,8 +68,6 @@ class ImagePluginListResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     plugins: list = []
-    plugin_errors: list = []
-    plugin_dirs: dict = {}
 
 
 class PicturePluginRunResponse(BaseModel):
@@ -318,6 +316,7 @@ def register_routes(router, server):
         comfyui_lora: list[str] = Query(None),
         min_score: int = Query(None),
         max_score: int = Query(None),
+        unscored: bool = Query(False),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
@@ -632,6 +631,7 @@ def register_routes(router, server):
             [
                 min_score is not None,
                 max_score is not None,
+                unscored,
                 tag,
                 rejected_tag,
                 tag_confidence_above,
@@ -648,6 +648,7 @@ def register_routes(router, server):
                 deleted_only: bool,
                 min_score_value,
                 max_score_value,
+                unscored_value,
                 tags_filter_value,
                 tags_rejected_filter_value,
                 tags_confidence_above_filter_value,
@@ -663,6 +664,7 @@ def register_routes(router, server):
                 query = PredicateFilter(
                     min_score=min_score_value,
                     max_score=max_score_value,
+                    unscored=unscored_value,
                     comfyui_models_filter=comfyui_models_filter_value,
                     comfyui_loras_filter=comfyui_loras_filter_value,
                     tags_filter=tags_filter_value,
@@ -679,6 +681,7 @@ def register_routes(router, server):
                 only_deleted,
                 min_score,
                 max_score,
+                unscored,
                 tag or None,
                 rejected_tag or None,
                 tag_confidence_above or None,
@@ -932,6 +935,7 @@ def register_routes(router, server):
             format_filter=format_filter,
             min_score=min_score,
             max_score=max_score,
+            unscored=_predicate_filter.unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

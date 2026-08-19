@@ -15,8 +15,8 @@ import { mount } from "@vue/test-utils";
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
   return {
-  onSessionReset: () => () => {},
-  sessionContext: { value: null },
+    onSessionReset: () => () => {},
+    sessionContext: { value: null },
     apiClient: {
       get: vi.fn().mockResolvedValue({ data: {} }),
       post: vi.fn().mockResolvedValue({ data: {} }),
@@ -32,6 +32,7 @@ import Toolbar from "./Toolbar.vue";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 // Vuetify is not installed in the test app; v-menu is stubbed with the two
 // behaviours the toolbar relies on (activator slot props carry the toggle,
@@ -148,16 +149,50 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
+describe("Toolbar — narrow-screen composition", () => {
+  it("offers a real navigation control when the sidebar is forced into a drawer", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.sidebarForcedHidden = true;
+    const wrapper = mountToolbar();
+
+    const trigger = wrapper.get('[aria-label="Open library navigation"]');
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+
+    await trigger.trigger("click");
+    expect(sidebar.sidebarVisible).toBe(true);
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+  });
+
+  it("keeps toolbar height and grid offset on the same narrow-width ladder", async () => {
+    const { readFileSync } = await import("node:fs");
+    const toolbar = readFileSync(
+      `${process.cwd()}/src/components/panels/Toolbar.vue`,
+      "utf8",
+    );
+    const grid = readFileSync(
+      `${process.cwd()}/src/components/views/ImageGrid.css`,
+      "utf8",
+    );
+
+    for (const height of [96, 112]) {
+      expect(toolbar).toContain(`height: ${height}px`);
+      expect(grid).toContain(`--selbar-height: ${height}px`);
+    }
+  });
+});
+
 describe("Toolbar — the shell band's one box recipe", () => {
   // jsdom computes no layout, so rendered heights cannot be asserted; what
   // CAN be pinned is the coupling itself. `.selection-bar-overlay` is the
-  // point of truth for the 36px band recipe and `.dq-toolbar` copies it —
-  // the drift this guards against: the dq bar shipped with `min-height` +
-  // vertical padding on a content-box, which rendered 41px next to the
-  // grid's exact 36px once the 32px app-wide tail buttons landed.
+  // point of truth for the 36px band recipe and `.dq-toolbar` and
+  // `.shelf-toolbar` copy it — the drift this guards against: the dq bar
+  // shipped with `min-height` + vertical padding on a content-box, which
+  // rendered 41px next to the grid's exact 36px once the 32px app-wide tail
+  // buttons landed, and the shelf bar shipped at `--bar-height` (48px), which
+  // stepped the whole content area 12px on every switch to /models.
   // (Tokenising the shipped 36px is a recorded lead-designer follow-up;
   // until then this test is the shared source of truth.)
-  it("both bars declare the identical height-determining recipe", async () => {
+  it("every view bar declares the identical height-determining recipe", async () => {
     const { readFileSync } = await import("node:fs");
     // Vitest serves modules from a virtual scheme, so the SFC sources are
     // read relative to the frontend/ working directory instead.
@@ -181,26 +216,72 @@ describe("Toolbar — the shell band's one box recipe", () => {
       "src/components/views/DuplicateQueue.vue",
       ".dq-toolbar",
     );
+    const shelf = blockOf(
+      "src/components/views/ModelShelf.vue",
+      ".shelf-toolbar",
+    );
 
-    for (const block of [grid, dq]) {
+    for (const block of [grid, dq, shelf]) {
       expect(block).toContain("height: 36px");
       expect(block).toContain("box-sizing: border-box");
       // min-height + vertical padding is exactly the recipe that drifted.
       expect(block).not.toContain("min-height");
       expect(block).toMatch(/padding: 0 var\(--space-\d\)/);
+      // And every bar paints the chrome surface, not the page. The shelf bar
+      // painted nothing, so `.shelf`'s `background` showed through and the
+      // strip read as page rather than chrome. (The grid bar's `rgba(…, .95)`
+      // is allowed: it is absolutely positioned over the scrolling grid.)
+      //
+      // EVERY background declaration in the block is checked, not merely that
+      // one of them matches: a `toMatch` alone passes on a block that paints
+      // the token and then overrides it with `transparent` on the next line,
+      // which is the shipped defect itself.
+      const paints = block.match(/background:[^;]*/g) ?? [];
+      expect(paints).toHaveLength(1);
+      expect(paints[0]).toMatch(/rgba?\(var\(--v-theme-toolbar\)/);
     }
 
     // The RIGHT insets must be the same token: the app-wide tail is a stable
     // anchor only if its icons land at the identical distance from the edge
-    // in every view. (The dq bar's LEFT inset may differ — it aligns with the
-    // queue's own content gutter.) Shorthand forms accepted: `0 X` (right =
-    // X) and `0 R 0 L` (right = first var).
+    // in every view. (The dq and shelf bars' LEFT insets may differ — each
+    // aligns with its own view's content gutter.) Shorthand forms accepted:
+    // `0 X` (right = X) and `0 R 0 L` (right = first var).
     const rightInset = (block) => {
       const match = block.match(/padding:\s*0\s+var\((--space-\d)\)/);
       expect(match).toBeTruthy();
       return match[1];
     };
     expect(rightInset(dq)).toBe(rightInset(grid));
+    expect(rightInset(shelf)).toBe(rightInset(grid));
+
+    // Two of the three bars LEAD with an identity (the queue's count, the
+    // shelf's title) and each carries a quieter count beneath it. They read as
+    // one bar in two contexts only if that pair is one size and one ink: the
+    // shelf shipped its title at --text-xl, a 22px view heading that does not
+    // sit in a 36px band, and its count at a third alpha.
+    const decl = (block, property) => {
+      const match = block.match(new RegExp(`${property}:\\s*([^;]+);`));
+      expect(match, `${property} in ${block.slice(0, 24)}`).toBeTruthy();
+      return match[1].trim();
+    };
+    const qtitle = blockOf(
+      "src/components/views/DuplicateQueue.vue",
+      ".qtitle",
+    );
+    const qsub = blockOf("src/components/views/DuplicateQueue.vue", ".qsub");
+    const shelfTitle = blockOf(
+      "src/components/views/ModelShelf.vue",
+      ".shelf-title",
+    );
+    const shelfSub = blockOf(
+      "src/components/views/ModelShelf.vue",
+      ".shelf-sub",
+    );
+
+    expect(decl(shelfTitle, "font-size")).toBe(decl(qtitle, "font-size"));
+    expect(decl(shelfTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
+    expect(decl(shelfSub, "font-size")).toBe(decl(qsub, "font-size"));
+    expect(decl(shelfSub, "color")).toBe(decl(qsub, "color"));
   });
 });
 
@@ -254,9 +335,11 @@ describe("Toolbar — Recently changed stacks", () => {
 });
 
 describe("Toolbar — the canonical app-wide tail", () => {
-  // The decision record: EVERY toolbar ends [separator][UndoControl]
-  // [TbGlobalActions]; the ⋯ (amendment #2) is NOT part of the tail — a
-  // burger stands at the end of the group it collapses, the left action run.
+  // The decision record: every toolbar that writes the operation log ends
+  // [separator][UndoControl][TbGlobalActions] (the model shelf does not write
+  // it and carries no undo, amendment #4); the ⋯ (amendment #2) is NOT part of
+  // the tail — a burger stands at the end of the group it collapses, the left
+  // action run.
   it("orders the tail separator → UndoControl → TbGlobalActions", () => {
     const wrapper = mountToolbar();
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
@@ -301,9 +384,9 @@ describe("Toolbar — the canonical app-wide tail", () => {
     expect(wrapper.find(".bar-separator--gap-guard").exists()).toBe(false);
     // No rule leads the right group: its first element child is a control.
     const right = wrapper.find(".selection-bar-right").element;
-    expect(
-      right.firstElementChild.classList.contains("bar-separator"),
-    ).toBe(false);
+    expect(right.firstElementChild.classList.contains("bar-separator")).toBe(
+      false,
+    );
   });
 
   it("mounts UndoControl exactly once — the left-group copy is gone", () => {
@@ -426,13 +509,11 @@ describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
   // The controls the amendment pinned OUT of the burger stay first-class.
   it("keeps Review and the global pair as visible controls", () => {
     const wrapper = mountToolbar();
+    expect(wrapper.find('button[title="Review and fix tags"]').exists()).toBe(
+      true,
+    );
     expect(
-      wrapper.find('button[title="Review and fix tags"]').exists(),
-    ).toBe(true);
-    expect(
-      wrapper
-        .find('button[title="Review and fix tags"]')
-        .classes(),
+      wrapper.find('button[title="Review and fix tags"]').classes(),
     ).not.toContain("tb-fold-700");
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,

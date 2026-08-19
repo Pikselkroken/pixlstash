@@ -2,6 +2,21 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
+        <button
+          v-if="sidebarStore.sidebarForcedHidden"
+          class="bar-btn bar-btn--icon tb-mobile-nav"
+          type="button"
+          :aria-expanded="sidebarStore.sidebarVisible"
+          aria-label="Open library navigation"
+          title="Open library navigation"
+          @click="sidebarStore.revealSidebar()"
+        >
+          <v-icon size="20">mdi-menu</v-icon>
+        </button>
+        <div
+          v-if="sidebarStore.sidebarForcedHidden"
+          class="bar-separator tb-mobile-nav-separator"
+        ></div>
         <!-- ── Sort split-button ──────────────────────────────────── -->
         <v-menu
           v-model="gbSortMenuOpen"
@@ -210,8 +225,9 @@
         </v-menu>
         <!-- Undo/redo moved to the right-side app-wide tail (see below): the
              canonical [separator][UndoControl][TbGlobalActions] cluster is
-             identical in every view, so the position learned here holds in
-             Duplicates too. -->
+             identical in every view that writes the operation log, so the
+             position learned here holds in Duplicates too. (The model shelf
+             writes none and carries no undo — amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -248,7 +264,6 @@
             </button>
           </template>
           <GbFilterPanel
-            :backend-url="props.backendUrl"
             :selected-character="props.selectedCharacter"
             :all-pictures-id="props.allPicturesId"
             :open="gbFilterMenuOpen"
@@ -478,7 +493,6 @@
             </button>
           </template>
           <TbImportPanel
-            :backend-url="props.backendUrl"
             :open="tbImportMenuOpen"
             :default-project-id="projectStore.selectedProjectId"
             @local-import="
@@ -514,7 +528,6 @@
             </button>
           </template>
           <TbComfyPanel
-            :backend-url="props.backendUrl"
             :open="tbComfyuiMenuOpen"
             @run-grid="
               emit('comfyui-run-grid', $event);
@@ -603,7 +616,8 @@
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
         <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
-             The canonical toolbar tail, identical in every view:
+             The canonical toolbar tail, identical in every view that writes
+             the operation log (not the model shelf, amendment #4):
              [separator] [UndoControl] [TbGlobalActions]. The rule is
              required AND stays at every width (it mirrors the Duplicates
              bar's D-S2): proximity alone cannot separate identical 32px
@@ -624,7 +638,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
@@ -632,6 +646,7 @@ import { useExportStore } from "../../stores/useExportStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
@@ -650,8 +665,7 @@ const props = defineProps({
   selectedCharacter: String,
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
 });
 
@@ -703,6 +717,7 @@ const exportStore = useExportStore();
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const projectStore = useProjectStore();
+const sidebarStore = useSidebarStore();
 
 // Stack time belongs to the stack-deck lens, not to loose pictures. Keep it
 // visibly special while that lens is active and absent everywhere else. A
@@ -719,10 +734,7 @@ const filteredSortOptions = computed(() =>
 );
 
 watch(
-  [
-    () => filterStore.stackStateFilter,
-    () => sortStore.selectedSort,
-  ],
+  [() => filterStore.stackStateFilter, () => sortStore.selectedSort],
   ([stackState, selectedSort]) => {
     if (
       stackState !== "stacked" &&
@@ -1007,7 +1019,8 @@ watch(
 );
 
 watch(gbViewMenuOpen, (isOpen) => {
-  if (isOpen) gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
+  if (isOpen)
+    gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
 });
 
 function gbCommitSize() {
@@ -1118,9 +1131,9 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   container-type: inline-size;
   /* Two names on one container: `selbar` for this bar's own ladder, and the
-     shared `toolbar` name that UndoControl, TbGlobalActions and the overflow
-     write their scoped @container rules against — so the shared chrome
-     degrades identically here and in the Duplicates bar (`dqbar toolbar`). */
+     shared `toolbar` name that UndoControl and the overflow write their
+     scoped @container rules against — so the shared chrome degrades
+     identically here and in the Duplicates bar (`dqbar toolbar`). */
   container-name: selbar toolbar;
 }
 .selection-bar-content {
@@ -1148,31 +1161,11 @@ const gbCollapseAllStacksDisabled = computed(
    Grid Bar – Sort / Filter / View buttons and panels
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Bar buttons ──────────────────────────────────────────────────────────── */
-.bar-split-button {
-  display: flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-/* Open state: the whole split button adopts the panel fill + border so it reads
-   as one object with its menu (the caret bridges the gap). */
-.bar-split-button--open {
-  border-color: rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-panel));
-}
-
-.bar-split-button--open .bar-split-toggle,
-.bar-split-button--open .bar-split-menu {
-  background: transparent;
-}
-
-.bar-split-button--open .bar-btn-chevron {
-  transform: rotate(180deg);
-  transition: transform var(--dur-1) var(--ease-standard);
-}
+/* The `.bar-*` family itself now lives unscoped in App.css, next to the
+   `.bar-btn--open` state that was already there. It is shared chrome: the model
+   shelf's toolbar uses the same classes, and a scoped rule cannot cross a
+   component boundary, so every `.bar-btn` outside this file rendered unstyled.
+   Only the toolbar's own overrides stay here. */
 
 /* ── Search menu (icon trigger → popover with input + recent searches) ─────── */
 .gb-search-panel {
@@ -1210,14 +1203,11 @@ const gbCollapseAllStacksDisabled = computed(
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-panel));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 .gb-recent-row:hover {
@@ -1240,115 +1230,6 @@ const gbCollapseAllStacksDisabled = computed(
 }
 .gb-recent-row:hover .gb-recent-apply {
   color: rgba(var(--v-theme-on-panel), 0.7);
-}
-
-.bar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
-  cursor: pointer;
-  font-size: var(--text-base);
-  font-family: inherit;
-  /* Icons and labels take the sidebar's treatment: the toolbar-text token
-     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
-     hover/active — so the toolbar and sidebar chrome read as one strip. */
-  color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
-  /* A transparent 1px border is reserved so the open state (which colours the
-     border) does not change the box size and make the button jump. */
-  border: 1px solid transparent;
-  box-sizing: border-box;
-  height: 32px;
-  white-space: nowrap;
-  position: relative;
-}
-
-.bar-btn:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.bar-btn--active {
-  color: rgb(var(--v-theme-primary));
-}
-
-.bar-btn--boxed {
-  border-radius: var(--radius-sm);
-}
-
-/* Icon-only bar button */
-.bar-btn--icon {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.bar-btn-label {
-  max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-}
-
-.bar-btn-prefix {
-  font-size: var(--text-sm);
-  opacity: var(--opacity-text-secondary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.bar-split-toggle {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  padding-right: var(--space-2);
-}
-
-.bar-split-menu {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-}
-
-/* Wrapper so the filter-count badge can overlay the icon without affecting
-   layout (the badge is absolutely positioned within this). */
-.bar-icon-badge-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-/* Small count badge, overlaid on the top-right of the filter icon. Absolutely
-   positioned so it never changes the size of the button or shifts the chevron
-   and the buttons that follow it. */
-.bar-filter-badge {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  padding: 0 var(--space-2);
-  min-width: 15px;
-  height: 15px;
-  text-align: center;
-  line-height: 15px;
-  pointer-events: none;
-}
-
-.bar-separator {
-  width: 1px;
-  height: 24px;
-  background: rgba(var(--v-theme-on-background), 0.2);
-  margin: 0 var(--space-2);
-  align-self: center;
-  flex-shrink: 0;
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
@@ -1381,8 +1262,6 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .gb-sort-migration-open {
-  border: none;
-  background: transparent;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
@@ -1391,30 +1270,20 @@ const gbCollapseAllStacksDisabled = computed(
   font-weight: var(--weight-semibold);
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 
 .gb-sort-migration-dismiss {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
   border-radius: var(--radius-sm);
   padding: var(--space-1);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
 }
 
 .gb-sort-migration-open:hover,
 .gb-sort-migration-dismiss:hover {
   background: var(--hover-wash);
-}
-
-.gb-sort-migration-open:focus-visible,
-.gb-sort-migration-dismiss:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 .gb-sort-search-note {
@@ -1442,14 +1311,11 @@ const gbCollapseAllStacksDisabled = computed(
      rather than forcing a horizontal scrollbar. */
   min-width: 0;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-panel));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -1556,26 +1422,6 @@ const gbCollapseAllStacksDisabled = computed(
   }
 }
 
-.bar-btn-sort-type {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-  flex-shrink: 1;
-  /* The current selection reads at full strength against the muted "Sort:". */
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.bar-btn-sort-secondary {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-  flex-shrink: 1;
-}
-
 /* Stack time is conditional on the stacked lens. The small filter glyph makes
    that narrower availability visible without turning the row into warning
    copy; the native title gives mouse users the precise rule, while aria-label
@@ -1648,6 +1494,50 @@ const gbCollapseAllStacksDisabled = computed(
   }
   .tb-row-600 {
     display: flex;
+  }
+}
+
+/* Once the command groups no longer fit side by side, recompose them as two
+   deliberate shell bands instead of squeezing, clipping, or hiding core
+   actions. Fine-pointer narrow windows keep the 48px desktop band; coarse
+   pointers get 56px rows so every target clears the touch floor. */
+@media (max-width: 640px) {
+  .selection-bar-overlay {
+    height: 96px;
+    padding-right: max(var(--space-2), env(safe-area-inset-right));
+    padding-left: max(var(--space-2), env(safe-area-inset-left));
+  }
+
+  .selection-bar-content {
+    height: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .selection-bar-left,
+  .selection-bar-right {
+    width: 100%;
+    height: 50%;
+    min-width: 0;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+
+  .selection-bar-left {
+    overflow: hidden;
+  }
+
+  .selection-bar-right {
+    justify-content: flex-end;
+    margin-left: 0;
+    border-top: 1px solid rgb(var(--v-theme-divider));
+  }
+}
+
+@media (max-width: 640px) and (hover: none) and (pointer: coarse) {
+  .selection-bar-overlay {
+    height: 112px;
   }
 }
 </style>

@@ -32,24 +32,17 @@ from pixlstash.utils.service.smart_score_invalidation import (
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
 
-# SQLite caps bound variables per statement (~999); a multi-select is usually small, but
-# chunk the id lists to stay safe.
-_ID_CHUNK = 900
 
 # Filter kinds the clear understands (mirrors the live predicate in PredicateFilter).
 # "object" is the description-driven signal (face-independent), cleared the same way.
 VALID_FILTERS = ("no_face", "no_humans", "object")
-
-
-def _chunks(seq: list, size: int = _ID_CHUNK):
-    for i in range(0, len(seq), size):
-        yield seq[i : i + size]
 
 
 def clear_in_session(
@@ -89,7 +82,7 @@ def _clear_tags_in_session(
 ) -> list[tuple[int, str]]:
     """Remove the filter-implied tags and record a NEG per removed tag. No commit."""
     removed: list[tuple[int, str]] = []
-    for chunk in _chunks(list(picture_ids)):
+    for chunk in chunked(list(picture_ids)):
         faced = set(
             session.exec(
                 select(Face.picture_id).where(

@@ -677,7 +677,7 @@ def _character_scope_picture_ids(session: Session, character_id: str) -> set[int
     ``"UNASSIGNED"`` means a picture that has at least one face whose
     ``character_id`` is NULL and *no* face assigned to any character — the same
     EXISTS/NOT-EXISTS clause used by the picture-scoring queries (see
-    ``pixlstash.picture_scoring``). A numeric id matches pictures having a Face
+    ``pixlstash.scoring``). A numeric id matches pictures having a Face
     with that ``character_id``.
     """
     base = (

@@ -122,6 +122,7 @@ from pixlstash.services.set_lock_service import (
     partition_stackable_members,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK as ID_CHUNK
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -283,7 +284,6 @@ when the computation failed (the repo's failed-metric sentinel). Same neutral
 principle as :data:`COVER_SMART_SCORE_NEUTRAL`, at the midpoint of the
 metric's typical 0-0.5 range (see ``Quality.calculate_quality_score``)."""
 
-ID_CHUNK = 900
 """SQLite bound-variable safety margin for ``IN`` loads."""
 
 
@@ -580,21 +580,22 @@ class CandidateMember:
     perceptual_hash: Optional[str] = None
     thumbnail_width: Optional[int] = None
     thumbnail_height: Optional[int] = None
+    orientation: Optional[int] = None
     tag_count: int = 0
     smart_score: Optional[float] = None
     sharpness: Optional[float] = None
 
     @property
     def thumbnail_version(self) -> str:
-        """The ``?v=`` token the queue's thumbnail URLs must carry.
+        """The ``?v=`` version the queue's thumbnail URLs must carry.
 
         Same value and same semantics as the batch-thumbnail endpoint's — both
-        call :meth:`ImageUtils.thumbnail_cache_token`. Without it a thumbnail
+        call :meth:`ImageUtils.thumbnail_cache_version`. Without it a thumbnail
         regenerated mid-triage would keep painting the stale cached bitmap in the
         queue, because the queue's URL would never change.
         """
-        return ImageUtils.thumbnail_cache_token(
-            self.thumbnail_width, self.thumbnail_height
+        return ImageUtils.thumbnail_cache_version(
+            self.thumbnail_width, self.thumbnail_height, self.orientation
         )
 
     @property
@@ -1096,6 +1097,7 @@ def load_candidates(
                 Picture.perceptual_hash,
                 Picture.thumbnail_width,
                 Picture.thumbnail_height,
+                Picture.orientation,
                 Picture.smart_score,
             ).where(Picture.id.in_(chunk), Picture.deleted.is_(False))
         ).all()
@@ -1116,7 +1118,8 @@ def load_candidates(
                 perceptual_hash=row[12],
                 thumbnail_width=row[13],
                 thumbnail_height=row[14],
-                smart_score=row[15],
+                orientation=row[15],
+                smart_score=row[16],
             )
         tag_rows = session.exec(
             select(Tag.picture_id, func.count(Tag.id))
@@ -1243,6 +1246,7 @@ def load_stack_facts(
                 Picture.created_at,
                 Picture.thumbnail_width,
                 Picture.thumbnail_height,
+                Picture.orientation,
             ).where(Picture.stack_id.in_(chunk), Picture.deleted.is_(False))
         ).all()
         for (
@@ -1253,19 +1257,26 @@ def load_stack_facts(
             created_at,
             thumbnail_width,
             thumbnail_height,
+            orientation,
         ) in rows:
             rows_by_stack[int(stack_id)].append(
                 _stack_member_order_key(picture_id, stack_position, score, created_at)
             )
-            thumbnails[int(picture_id)] = (thumbnail_width, thumbnail_height)
+            thumbnails[int(picture_id)] = (
+                thumbnail_width,
+                thumbnail_height,
+                orientation,
+            )
     facts: dict[int, StackFacts] = {}
     for stack_id, keys in rows_by_stack.items():
         member_ids = tuple(int(key[-1]) for key in sorted(keys))
-        width, height = thumbnails.get(member_ids[0], (None, None))
+        width, height, orientation = thumbnails.get(member_ids[0], (None, None, None))
         facts[stack_id] = StackFacts(
             stack_id=stack_id,
             member_ids=member_ids,
-            leader_thumbnail_version=ImageUtils.thumbnail_cache_token(width, height),
+            leader_thumbnail_version=ImageUtils.thumbnail_cache_version(
+                width, height, orientation
+            ),
         )
     return facts
 

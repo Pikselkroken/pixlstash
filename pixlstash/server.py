@@ -1,11 +1,13 @@
 import gc
 import uvicorn
 import os
+import sqlite3
 import json
 import re
 import socket
 import asyncio
 import threading
+from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from platformdirs import user_config_dir
 
@@ -42,8 +44,31 @@ from pixlstash.openapi_custom import (
 from pixlstash.ssl_setup import SslSetupMixin
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
-from pixlstash.services import scrapheap_service
+from pixlstash.services import library_settings_service, scrapheap_service
+from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
+from pixlstash.startup_permissions import mkdir_private
+from pixlstash.hub.bootstrap import (
+    bootstrap_hub,
+    registered_vault_path,
+)
+from pixlstash.hub.registry import LibraryRegistry
+from pixlstash.services.library_switch_service import LibrarySwitchService
+from pixlstash.services.library_generation_coordinator import (
+    LibraryGenerationCoordinator,
+)
+from pixlstash.services.builtin_caches import (
+    declare_huggingface_cache,
+    declare_insightface_packs,
+    huggingface_cache_dir,
+    insightface_models_dir,
+)
+from pixlstash.services.builtin_models import (
+    builtin_model_dir,
+    declare_builtin_models,
+)
+from pixlstash.services.managed_model_store import ensure_managed_folder
 from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
@@ -79,6 +104,14 @@ from pixlstash.routes.import_folders import (
     create_router as create_import_folders_router,
 )
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
+from pixlstash.routes.libraries import create_router as create_libraries_router
+from pixlstash.routes.model_files import create_router as create_model_files_router
+from pixlstash.routes.model_folders import create_router as create_model_folders_router
+from pixlstash.routes.model_imports import create_router as create_model_imports_router
+from pixlstash.routes.model_moves import create_router as create_model_moves_router
+from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
+from pixlstash.routes.model_icons import create_router as create_model_icons_router
+from pixlstash.routes.model_stacks import create_router as create_model_stacks_router
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
@@ -204,6 +237,15 @@ class Server(
             override. When set (e.g. by a test), it replaces the
             ``insightface_model_pack`` value from the persisted config for all
             Server instances. ``None`` means use the config value.
+        DEFAULT_DECLARE_MODEL_ROOTS: Whether start-up declares the model roots
+            PixlStash owns. ``False`` in the test suite, where it is the only
+            way to keep the shelf's contents machine-independent: those roots
+            are machine-global by design, so a Server on a temp config dir would
+            otherwise describe whichever engines the developer's home happens to
+            hold (``test_workers_api`` caught it as ``assert 3 == 0``). Pointing
+            them at a temp directory instead is no longer an option — since #905
+            the downloaders read the same accessor, so a temp directory means
+            every engine is downloaded again.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -212,6 +254,7 @@ class Server(
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
     DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
+    DEFAULT_DECLARE_MODEL_ROOTS: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -258,11 +301,33 @@ class Server(
             )
         return False
 
-    # install_type telemetry: exactly these three values may ever be reported.
+    # install_type telemetry: exactly these values may ever be reported.
     # "docker" is the reliable signal, "pip" the default, "other" the explicit
     # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
     # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "electron", "other")
+    #
+    # "dev" is a declaration, not a detection: a machine that sets it is ours,
+    # and the metrics collector subtracts that bucket from the active-install
+    # figure whatever version it happens to be running. Without it a development
+    # checkout was only excluded by *inferring* from its unpublished version,
+    # which silently stopped working the day pre-releases started counting as
+    # real users. Every consumer of this value has to know the bucket, so the
+    # list is mirrored in three other places -- see
+    # tests/test_install_type_buckets.py, which fails if they drift.
+    INSTALL_TYPES = ("docker", "pip", "electron", "other", "dev")
+
+    #: Marks the host as a development machine, whatever channel it runs.
+    #:
+    #: Needed because ``PIXLSTASH_INSTALL_TYPE`` is not only a telemetry label:
+    #: the exact value ``electron`` is a runtime switch, gating ``cookie_secure``,
+    #: the loopback listener in :meth:`run` and the external-listener startup
+    #: check. The desktop shell therefore has to keep declaring ``electron`` even
+    #: when a developer's environment says ``dev``, and it sets this instead so
+    #: the machine can still be labelled ours without changing how it runs.
+    #:
+    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``); a
+    #: developer running a *bundled* desktop build can export it by hand.
+    DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
 
     @staticmethod
     def detect_install_type() -> str:
@@ -270,6 +335,9 @@ class Server(
 
         Resolution order:
 
+        0. :data:`DEV_MACHINE_ENV_VAR` — declares the *machine* rather than the
+           channel, so it outranks everything below it. Reported as ``dev``,
+           which the metrics collector subtracts from active installs.
         1. ``PIXLSTASH_INSTALL_TYPE`` override — if set to one of the allowed
            values it wins outright, letting an installer declare its channel
            (e.g. ``other`` for the Windows build) without a code change. An
@@ -280,6 +348,15 @@ class Server(
 
         The return value is guaranteed to be a member of ``INSTALL_TYPES``.
         """
+        dev_marker = os.environ.get(Server.DEV_MACHINE_ENV_VAR, "").strip().lower()
+        if dev_marker in {"1", "true", "yes", "on"}:
+            logger.info(
+                "%s=%r declares a development machine; reporting install_type='dev'.",
+                Server.DEV_MACHINE_ENV_VAR,
+                dev_marker,
+            )
+            return "dev"
+
         override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
         if override:
             if override in Server.INSTALL_TYPES:
@@ -303,6 +380,7 @@ class Server(
         self,
         server_config_path,
         path_map: dict[str, str] | None = None,
+        legacy_identity_prompt=None,
     ):
         """
         Initialize the Server instance.
@@ -311,13 +389,16 @@ class Server(
             server_config_path (str): Path to the server-only config file.
             path_map: Optional dict mapping host path prefixes to their
                 container equivalents. Set by the ``--path-map`` CLI arg.
+            legacy_identity_prompt: Optional callable passed straight through
+                to :func:`bootstrap_hub`, asked to authorize a detected but
+                unprepared legacy vault instead of requiring
+                ``pixlstash-cli libraries prepare-legacy-identity`` first.
         """
         # Ensure garbage collection before starting server to free up memory.
         # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
         gc.collect()
 
         self._server_config_path = server_config_path
-
         self.path_mapper = PathMapper(path_map)
 
         # Before init_server_config, deliberately: ensure_install_identity reads
@@ -373,32 +454,92 @@ class Server(
 
         register_heif_opener()
 
-        _startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
-        _force_cpu = (
-            Server.DEFAULT_FORCE_CPU
-            if Server.DEFAULT_FORCE_CPU is not None
-            else _startup_forced_cpu
+        # The hub decides which library opens, not server config. On a first run
+        # it registers configured image_root as library 1, but never treats the
+        # config or the vault's mere presence as identity-import authority. Only
+        # the desktop preparer's durable hub operation can authorize that copy.
+        # From then on the registry's active row wins.
+        # The hub sits beside server-config.json rather than at a fixed platform
+        # path, so it follows ``--server-config`` wherever it points. That is
+        # what the plan specifies (the hub location *is* the config-dir decision,
+        # issue #168), and it means a test or an alternate deployment gets its
+        # own hub instead of reaching into the user's real one.
+        hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
+        self._hub_bootstrap = bootstrap_hub(
+            self._server_config["image_root"],
+            hub_path,
+            legacy_identity_prompt=legacy_identity_prompt,
         )
-        self.vault = Vault(
-            image_root=self._server_config["image_root"],
-            description=User().description,
-            server_config_path=self._server_config_path,
-            path_mapper=self.path_mapper,
-            disable_background_workers=self._server_config.get(
-                "disable_background_workers", False
-            ),
-            force_cpu=bool(_force_cpu),
-            fast_captions=Server.DEFAULT_FAST_CAPTIONS,
-            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
-            insightface_model_pack=self._server_config.get(
-                "insightface_model_pack", "buffalo_l"
-            ),
-            scrapheap_retention_days=scrapheap_service.read_retention_days(
-                self._server_config
-            ),
-            scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
-                self._server_config
-            ),
+        self.hub = self._hub_bootstrap.hub
+        self.library_registry = LibraryRegistry(self.hub)
+        # Exactly one managed model folder always exists, created on first run
+        # beside the hub. Without it a fresh install has nowhere to drop or
+        # import a model into, so drag-in would be impossible; see
+        # services/managed_model_store.py for why it is `managed` rather than a
+        # seeded `user` folder nobody is allowed to remove.
+        ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
+        # The three roots PixlStash's models live in, declared rather than
+        # scanned. Off in the test suite: they are machine-global, so a Server
+        # on a temp config dir would otherwise describe whichever engines the
+        # developer's home happens to hold.
+        if Server.DEFAULT_DECLARE_MODEL_ROOTS:
+            # PixlStash's own engines: we downloaded them, so we know what they
+            # are without reading a header — and half of them are ONNX or `.pt`,
+            # which the scanner does not yield at all. Cheap: existence checks
+            # and a handful of upserts, no hashing.
+            try:
+                declare_builtin_models(self.hub, builtin_model_dir())
+            except (sqlite3.Error, OSError) as exc:
+                # The shelf losing its engine rows is not a reason to refuse to
+                # start; everything else on it still works. `OSError` as well as
+                # the database errors: the declaration walks a machine-global
+                # directory that may be unreadable, on a different mount, or
+                # gone, and this comment promised non-critical while the handler
+                # only covered half of what the call can raise.
+                logger.error(
+                    "Could not declare the built-in model folder (%s); "
+                    "PixlStash's own engines will not be listed on the shelf "
+                    "this session.",
+                    exc,
+                )
+            # The other two roots models land in. Same deal as above and same
+            # failure policy: each is declared independently so one unreadable
+            # root cannot cost the shelf the other two.
+            for label, resolve, declare in (
+                (
+                    "InsightFace packs",
+                    insightface_models_dir,
+                    declare_insightface_packs,
+                ),
+                ("HuggingFace cache", huggingface_cache_dir, declare_huggingface_cache),
+            ):
+                try:
+                    folder_path = resolve()
+                    if folder_path:
+                        declare(self.hub, folder_path)
+                except (sqlite3.Error, OSError) as exc:
+                    logger.error(
+                        "Could not declare the %s (%s); it will not be listed "
+                        "on the shelf this session.",
+                        label,
+                        exc,
+                    )
+        if self._hub_bootstrap.migrated:
+            logger.info(
+                "First run after the hub/vault split: identity now lives in %s",
+                self.hub.path,
+            )
+
+        self.vault = self.build_vault(
+            registered_vault_path(
+                self.hub,
+                self._hub_bootstrap.library,
+                self._hub_bootstrap,
+            )
+        )
+        self._hub_bootstrap.library = (
+            self.library_registry.by_uuid(self._hub_bootstrap.library.uuid)
+            or self._hub_bootstrap.library
         )
 
         self._ws_clients = []
@@ -406,12 +547,26 @@ class Server(
         self._ws_loop = None
         self.vault.add_event_listener(self.handle_vault_event)
 
+        # Identity comes from the hub, never from the active vault. Pointing this
+        # at ``self.vault.db`` would mean switching library switches *who you
+        # are*: the owner would be logged out, or logged into whatever user row
+        # the other library happened to carry.
         self.auth = AuthService(
-            self.vault.db,
+            self._hub_bootstrap.engine,
             self._server_config,
             self._server_config_path,
             logger,
         )
+        # Tokens are stamped with the library that is active when they are
+        # minted. Resolved through the registry on every mint rather than
+        # captured here, so a token minted after a library switch belongs to the
+        # library the user is actually looking at.
+        self.auth.library_uuid_provider = self._active_library_uuid
+        # Guest sessions are per-library and stay in the vault, so the auth
+        # service needs a handle on it as well as on the hub. Re-pointed when
+        # the active library changes.
+        self.auth.vault_db = self.vault.db
+
         # A full restore swaps the database file underneath the running server,
         # which invalidates the token cache and every in-memory session. Give
         # the restore path a way to reach the auth service so it can clear them
@@ -430,34 +585,14 @@ class Server(
         # owner session so the local window opens straight into the library.
         # No-op for every other install type (env var unset).
         self.auth.seed_desktop_session()
-        if self._user and self._user.description is not None:
-            self.vault.set_description(self._user.description)
-        self.vault.set_keep_models_in_memory(
-            getattr(self._user, "keep_models_in_memory", True)
-        )
-        effective_vram_gb = (
-            Server.DEFAULT_MAX_VRAM_GB
-            if Server.DEFAULT_MAX_VRAM_GB is not None
-            else getattr(self._user, "max_vram_gb", None)
-        )
-        self.vault.set_max_vram_usage_gb(effective_vram_gb)
-        # Initialise tagger_settings from the stored JSON (fills defaults for any
-        # missing plugin entries so the engine always has a complete config).
-        if self._user is not None:
-            import json as _json
-            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
-
-            raw_settings = getattr(self._user, "tagger_settings", None)
-            if raw_settings:
-                try:
-                    parsed = _json.loads(raw_settings)
-                except (ValueError, TypeError):
-                    parsed = {}
-            else:
-                parsed = {}
-            filled = get_tagger_plugin_manager().fill_defaults(parsed)
-            self.vault.set_tagger_settings(filled)
+        self.apply_user_settings_to_vault(self.vault)
+        self.reconcile_library_settings(self.vault)
         self.vault.start()
+
+        # Owns replacing the vault when the active library changes, and the
+        # state requests are refused in while that is happening.
+        self.library_coordinator = LibraryGenerationCoordinator(self)
+        self.library_switch = LibrarySwitchService(self)
 
         self.api = FastAPI(
             title="PixlStash API",
@@ -467,6 +602,7 @@ class Server(
             lifespan=self.lifespan,
             redoc_url=None,
         )
+
         # CORS: always allow localhost/127.0.0.1 on any port plus the machine's
         # own LAN IP (any port) so the Vite dev server works over LAN without
         # any extra configuration. Additional origins can be added via cors_origins.
@@ -509,6 +645,11 @@ class Server(
         # any undeclared/dead route). Consumes the same route walk as the CI
         # coverage-matrix guardrail so the two can never disagree.
         self.authz.enforce_startup(self.api)
+        from pixlstash.middleware.library_admission import LibraryAdmissionMiddleware
+
+        # Added last so Starlette makes it outermost: its lease begins before
+        # authentication and ends only after the final ASGI body frame.
+        self.api.add_middleware(LibraryAdmissionMiddleware, server=self)
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -588,11 +729,186 @@ class Server(
         # Allow use as a context manager for robust cleanup
         return self
 
+    def _close_active_vault(self) -> None:
+        """Close the vault and remove generation-bound temporary artifacts."""
+        vault = getattr(self, "vault", None)
+        if vault is None:
+            return
+        image_root = vault.image_root
+        try:
+            vault.close()
+        finally:
+            library_switch = getattr(self, "library_switch", None)
+            if library_switch is not None:
+                library_switch._clear_generation_retained_state(image_root)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if hasattr(self, "vault"):
+        self.close()
+
+    def close(self) -> None:
+        """Close the vault AND the hub.
+
+        The one supported teardown outside a ``with`` block. Closing only the
+        vault (``server.vault.close()``) leaks the hub's SQLite connection —
+        harmless on POSIX, where an open file can still be unlinked, but fatal
+        on Windows, where TemporaryDirectory cleanup then fails with a sharing
+        violation on ``hub.db``. That leak was every remaining failure in
+        backend-windows shard 2 once the earlier startup defects were fixed.
+        """
+        if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
-            self.vault.close()
+            self._close_active_vault()
+        self._close_hub()
         gc.collect()
+
+    def request_fatal_shutdown(self) -> None:
+        """Ask every programmatic listener to exit after fatal vault loss."""
+        self._fatal_shutdown_requested = True
+        for listener in getattr(self, "_uvicorn_servers", ()):
+            listener.should_exit = True
+
+    def apply_user_settings_to_vault(self, vault: Vault) -> None:
+        """Push the owner's stored settings onto *vault*.
+
+        Shared by startup and by switching library. The settings live in the hub
+        and so survive a switch; the vault they are applied to does not, which is
+        why this has to run again for every vault the process opens.
+        """
+        if self._user and self._user.description is not None:
+            vault.set_description(self._user.description)
+        vault.set_keep_models_in_memory(
+            getattr(self._user, "keep_models_in_memory", True)
+        )
+        effective_vram_gb = (
+            Server.DEFAULT_MAX_VRAM_GB
+            if Server.DEFAULT_MAX_VRAM_GB is not None
+            else getattr(self._user, "max_vram_gb", None)
+        )
+        vault.set_max_vram_usage_gb(effective_vram_gb)
+        # Initialise tagger_settings from the stored JSON (fills defaults for any
+        # missing plugin entries so the engine always has a complete config).
+        if self._user is not None:
+            import json as _json
+            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+            raw_settings = getattr(self._user, "tagger_settings", None)
+            if raw_settings:
+                try:
+                    parsed = _json.loads(raw_settings)
+                except (ValueError, TypeError):
+                    parsed = {}
+            else:
+                parsed = {}
+            filled = get_tagger_plugin_manager().fill_defaults(parsed)
+            vault.set_tagger_settings(filled)
+
+    def reconcile_library_settings(self, vault: Vault, library=None) -> None:
+        """Repair scores this library missed while it was closed.
+
+        Changing the penalised-tag weights invalidates cached smart scores in
+        whichever library is open at the time. A library that was closed then
+        never finds out, and nothing revisits it, because a NULL score is the
+        only signal that a recompute is owed. Opening the library is the one
+        moment that question is answerable, so it is asked here.
+
+        The comparison is against a keyed hash: the library stores no settings,
+        only a fingerprint, and the key lives in the hub. Penalised and hidden
+        tags say what someone collects and what they hide, and a library folder
+        is made to be copied and handed to other people.
+        """
+        # The library is passed explicitly by the switch path, which reconciles
+        # *before* it marks the target active: reading "the active library" there
+        # would return the one being closed, and key the fingerprint with the
+        # wrong salt.
+        library = library or self.library_registry.active_library()
+        if library is None:
+            return
+        try:
+            penalised = smart_score_penalised_tags(
+                getattr(self._user, "smart_score_penalised_tags", None),
+                DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+            )
+            library_settings_service.reconcile_settings_fingerprint(
+                vault.db, library.settings_salt, penalised
+            )
+        except Exception:
+            # A failed reconcile leaves scores as they were, which is the state
+            # the library was already in. Never worth failing a startup or a
+            # switch over.
+            logger.exception(
+                "Could not reconcile the settings fingerprint for library %s",
+                library.name,
+            )
+
+    def build_vault(self, image_root: str) -> Vault:
+        """Construct (but do not start) a Vault over *image_root*.
+
+        Shared by startup and by switching library, so a vault opened by a
+        switch is configured exactly like one opened at boot. Anything that
+        diverges here is a bug that only shows up after the first switch, which
+        is the hardest kind to find.
+        """
+        startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
+        force_cpu = (
+            Server.DEFAULT_FORCE_CPU
+            if Server.DEFAULT_FORCE_CPU is not None
+            else startup_forced_cpu
+        )
+        return Vault(
+            image_root=image_root,
+            description=User().description,
+            server_config_path=self._server_config_path,
+            path_mapper=self.path_mapper,
+            disable_background_workers=self._server_config.get(
+                "disable_background_workers", False
+            ),
+            force_cpu=bool(force_cpu),
+            fast_captions=Server.DEFAULT_FAST_CAPTIONS,
+            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
+            insightface_model_pack=self._server_config.get(
+                "insightface_model_pack", "buffalo_l"
+            ),
+            scrapheap_retention_days=scrapheap_service.read_retention_days(
+                self._server_config
+            ),
+            scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
+                self._server_config
+            ),
+        )
+
+    def _active_library_uuid(self):
+        """Return the active library's uuid, for stamping newly minted tokens."""
+        library = self.library_registry.active_library()
+        return library.uuid if library else None
+
+    @property
+    def library_generation(self) -> int:
+        """Ephemeral context fence for async work spanning a library switch."""
+        service = getattr(self, "library_switch", None)
+        return service.generation if service is not None else 0
+
+    @property
+    def hub_engine(self):
+        """The database identity lives in, which is the hub and not the vault.
+
+        Anything reading or writing the user or its tokens goes through this.
+        Reaching for ``vault.db`` instead would work against whichever library
+        happens to be active, which is precisely the bug the split removes.
+        """
+        return self._hub_bootstrap.engine
+
+    def _close_hub(self):
+        """Release the hub connection and its engine, if they were opened.
+
+        Separate from the vault's teardown because the two have different
+        lifetimes: switching library closes and reopens the vault while the hub
+        stays open for the life of the process.
+        """
+        bootstrap = getattr(self, "_hub_bootstrap", None)
+        if bootstrap is None:
+            return
+        bootstrap.engine.close()
+        bootstrap.hub.close()
 
     def run(self):
         self._shutdown_on_lifespan = True
@@ -634,11 +950,25 @@ class Server(
             print(
                 f"[SSL] Running with SSL: keyfile={self._server_config.get('ssl_keyfile')}, certfile={self._server_config.get('ssl_certfile')}"
             )
+        # Keep the concrete listener handle so a fatal post-retirement switch
+        # failure can terminate the process just as it does in Electron's
+        # multi-listener path. ``uvicorn.run`` hides that handle.
+        listener = uvicorn.Server(uvicorn.Config(self.api, **uvicorn_kwargs))
+        self._uvicorn_servers = [listener]
         try:
-            uvicorn.run(self.api, **uvicorn_kwargs)
+            listener.run()
+        except KeyboardInterrupt:
+            # Ctrl-C is how a foreground server is stopped, not a crash, so it
+            # must not print a traceback. ``uvicorn.run()`` swallows this for
+            # exactly that reason; constructing the listener above to keep its
+            # handle opts out of that wrapper, so the suppression has to be
+            # repeated here. SIGTERM is unaffected either way: uvicorn captures
+            # it, sets ``should_exit`` and returns normally.
+            logger.info("Interrupted; shutting down.")
         finally:
-            if hasattr(self, "vault"):
-                self.vault.close()
+            if getattr(self, "vault", None) is not None:
+                self._close_active_vault()
+            self._close_hub()
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -719,12 +1049,15 @@ class Server(
         if was_set_by_us:
             self._ws_loop = None
         if self._shutdown_on_lifespan and hasattr(self, "vault"):
-            self.vault.close()
+            self._close_active_vault()
 
     @staticmethod
     def init_server_config(server_config_path):
         config_dir = os.path.dirname(server_config_path)
-        os.makedirs(config_dir, exist_ok=True)
+        # This directory contains the hub credential store. A plain makedirs()
+        # becomes 0775 under Linux's common umask 0002, after which the SQLite
+        # guard correctly refuses the directory the app itself just created.
+        mkdir_private(Path(config_dir))
 
         # SSL certs are always stored in the platform user-config dir so they
         # stay in a consistent, writable location regardless of where the
@@ -1231,6 +1564,49 @@ class Server(
             create_import_folders_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_libraries_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        # No router-level ``tags=``: every route in this module declares
+        # ``tags=["model_shelf"]`` itself, and FastAPI concatenates the two into
+        # a duplicated tag that reaches OpenAPI and the generated route table.
+        self.api.include_router(
+            create_model_shelf_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_folders_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_moves_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_imports_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_files_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_stacks_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_icons_router(self),
+            prefix=API_V1_PREFIX,
             dependencies=gate,
         )
         self.api.include_router(

@@ -132,8 +132,8 @@ export function buildOverlayPipArgs(
  *    torch 2.11.0+cu128). pip is free to put a satisfying setuptools in the
  *    overlay instead, which is the long-standing installed state anyway.
  * Constraints files also reject direct references (`pkg @ url` / local paths —
- * e.g. the pixlstash wheel and the spaCy model) and option/comment lines, so
- * only plain `name==version` pins survive.
+ * e.g. the pixlstash wheel) and option/comment lines, so only plain
+ * `name==version` pins survive.
  */
 export function filterConstraintsFreeze(frozen: string): string {
   const drop = /^(torch|torchvision|onnxruntime|onnxruntime-gpu|setuptools|pip|wheel)(==|@|\s|$)/i;
@@ -161,6 +161,8 @@ export interface OverlayFallbackHooks {
   notify: (message: string) => void;
   /** Diagnostic logging; defaults to console.error. */
   log?: (message: string) => void;
+  /** False when the failure is unrelated to the accelerator. */
+  shouldFallback?: (error: unknown) => boolean;
 }
 
 /**
@@ -188,6 +190,7 @@ export async function launchWithOverlayFallback(
     await hooks.start(accel);
   } catch (e) {
     if (accel === null) throw e; // bundled env failed — nothing to fall back to
+    if (hooks.shouldFallback?.(e) === false) throw e;
     const log = hooks.log ?? ((m: string) => console.error(m));
     log(
       `[overlay-fallback] backend startup failed with the ${accel} overlay active; ` +

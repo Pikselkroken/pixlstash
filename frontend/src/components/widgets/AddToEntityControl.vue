@@ -18,7 +18,8 @@
       type="button"
       :disabled="disabled"
       :aria-expanded="menuOpen"
-      aria-haspopup="true"
+      aria-haspopup="listbox"
+      :aria-controls="listboxId"
       :aria-label="config.ariaLabel"
       @click.stop="toggleMenu"
     >
@@ -29,18 +30,18 @@
       }}</v-icon>
     </button>
 
-    <Teleport :disabled="!floatMenu" to="body">
+    <Teleport :disabled="!floating" to="body">
       <div
         ref="menuRef"
         class="ate-menu"
-        role="menu"
         :style="menuStyle"
         :class="{
           open: menuOpen,
           flyout: placement === 'right',
           'force-dark': forceDark,
-          'ate-menu--floating': floatMenu,
+          'ate-menu--floating': floating,
         }"
+        @keydown="onMenuKeydown"
       >
         <div class="ate-search">
           <v-icon size="14">mdi-magnify</v-icon>
@@ -48,8 +49,8 @@
             ref="searchInputRef"
             v-model="searchQuery"
             type="text"
+            :aria-label="config.searchLabel"
             :placeholder="config.searchPlaceholder"
-            @keydown.escape.stop.prevent="closeMenu"
             @keydown.enter.prevent="onSearchEnter"
           />
         </div>
@@ -71,7 +72,6 @@
               { 'ate-item--disabled': createDisabled },
             ]"
             type="button"
-            role="menuitem"
             :disabled="createDisabled"
             @click.stop="requestCreate"
           >
@@ -81,40 +81,62 @@
           <div v-else-if="filteredItems.length === 0" class="ate-empty">
             {{ config.emptyText }}
           </div>
-          <button
-            v-for="item in filteredItems"
-            :key="item.key"
-            :class="[
-              'ate-item',
-              {
-                'ate-item--disabled': isItemDisabled(item),
-                'ate-item--checked':
-                  !isFace && getItemState(item) === 'checked',
-              },
-            ]"
-            type="button"
-            :role="isFace ? 'menuitemradio' : 'menuitem'"
-            :aria-checked="isFace ? isFaceItemSelected(item) : undefined"
-            :disabled="isItemDisabled(item)"
-            :title="isItemLocked(item) ? 'This set is locked' : undefined"
-            @click.stop="toggleItem(item)"
+          <!-- Only the entity rows are the listbox. The loading / empty / create
+               states above are not options and must stay outside it, or a screen
+               reader counts them as choosable entries. -->
+          <div
+            :id="listboxId"
+            role="listbox"
+            :aria-label="config.listLabel"
+            :aria-multiselectable="isMultiSelect ? 'true' : undefined"
           >
-            <v-icon size="16" class="ate-item-check">
-              {{ getItemGlyph(item) }}
-            </v-icon>
-            <span class="ate-item-name">{{ item.name }}</span>
-            <span v-if="isSet" class="ate-item-meta">
-              <v-icon v-if="isItemLocked(item)" size="14" class="ate-item-lock"
-                >mdi-lock-outline</v-icon
-              >
+            <button
+              v-for="item in filteredItems"
+              :key="item.key"
+              :class="[
+                'ate-item',
+                {
+                  'ate-item--disabled': isItemDisabled(item),
+                  'ate-item--checked':
+                    !isFace && getItemState(item) === 'checked',
+                },
+              ]"
+              type="button"
+              role="option"
+              :aria-selected="getAriaSelected(item)"
+              :disabled="isItemDisabled(item)"
+              :title="isItemLocked(item) ? 'This set is locked' : undefined"
+              @click.stop="toggleItem(item)"
+            >
+              <v-icon size="16" class="ate-item-check">
+                {{ getItemGlyph(item) }}
+              </v-icon>
+              <span class="ate-item-name">{{ item.name }}</span>
+              <!-- Partial membership is carried as text folded into the
+                   accessible name ("Vacation 2024, partially applied"), which
+                   is announced far more reliably than aria-checked="mixed" on
+                   an option. -->
               <span
-                v-else-if="isLastUsedItem(item)"
-                class="ate-item-shortcut"
-                title="Press A to add to this set"
-                >A</span
+                v-if="!isFace && getItemState(item) === 'partial'"
+                class="visually-hidden"
+                >, partially applied</span
               >
-            </span>
-          </button>
+              <span v-if="isSet" class="ate-item-meta">
+                <v-icon
+                  v-if="isItemLocked(item)"
+                  size="14"
+                  class="ate-item-lock"
+                  >mdi-lock-outline</v-icon
+                >
+                <span
+                  v-else-if="isLastUsedItem(item)"
+                  class="ate-item-shortcut"
+                  title="Press A to add to this set"
+                  >A</span
+                >
+              </span>
+            </button>
+          </div>
         </div>
 
         <!-- Pinned create affordance (character only, allowCreate hosts
@@ -129,7 +151,6 @@
               { 'ate-item--disabled': createDisabled },
             ]"
             type="button"
-            role="menuitem"
             :disabled="createDisabled"
             @click.stop="requestCreate"
           >
@@ -138,7 +159,12 @@
           </button>
         </div>
 
-        <div v-if="statusMessage" class="ate-status">
+        <div
+          v-if="statusMessage"
+          class="ate-status"
+          role="status"
+          aria-live="polite"
+        >
           {{ statusMessage }}
         </div>
       </div>
@@ -156,7 +182,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import {
   getPictureSetMembership,
   addPictureToSet,
@@ -169,7 +195,8 @@ import {
   removeCharacterFaces,
 } from "../../api/characters";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
-
+import { errorDetail } from "../../utils/apiError";
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   // 'set' | 'project' | 'character' | 'face'.
   //
@@ -182,8 +209,36 @@ const props = defineProps({
   // overlay menu because the `.ate-*` skin is scoped to this file, and one
   // create rule has to serve both call sites.
   type: { type: String, required: true },
-  backendUrl: { type: String, required: true },
-  pictureIds: { type: Array, default: () => [] },
+  backendUrl: { type: String, default: () => API_BASE_URL },
+  // The subjects the tri-state is computed across. Named for what it is rather
+  // than for pictures, because the model shelf attaches ADAPTERS through this
+  // same picker (shelf plan F3) and an adapter is not a picture.
+  //
+  // `required` on purpose, and it is the only protection that works here: every
+  // call site stubs this component in its tests, so a binding that goes missing
+  // would land in `$attrs` with no warning, leave this list empty, and make the
+  // menu open with every row unchecked and every click a no-op. Vue warns for a
+  // missing REQUIRED prop; it says nothing about an unknown attribute. Face
+  // mode has no subject list and passes `[]`.
+  subjectIds: { type: Array, required: true },
+  // Membership supplied by the host: `item.key -> Set<string>` of subject ids.
+  //
+  // Supplying it is the single switch into host-driven mode. The internal
+  // readers below answer "which of these PICTURES are in each entity", which
+  // only the picture hosts can ask; the model shelf already has every adapter's
+  // attachments on the rows it drew, so it hands them straight in and no read
+  // happens at all. Null keeps the picture path exactly as it was.
+  membership: { type: Object, default: null },
+  // Emit the intent and write nothing. Not a new behaviour: `face` has always
+  // worked this way and so has `project`, which emits `selected` and updates
+  // optimistically. This names it so a fourth host can ask for it, and so the
+  // two existing cases stop reading as special.
+  //
+  // Supplying `membership` implies it. A host that owns the data owns the
+  // writes; "your membership, my API calls" is a combination with no meaning
+  // and no caller, and leaving it representable is how it eventually gets
+  // written by accident.
+  hostOwnsWrites: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
@@ -215,7 +270,9 @@ const props = defineProps({
   // Host layout, not entity type, decides this, which is why it is a prop and
   // not tied to `type === "face"`. Incompatible with `placement="right"`: the
   // `.ate--flyout` rules position the menu at `left: 100%` of the root, which
-  // has no meaning once the node has left its parent.
+  // has no meaning once the node has left its parent. That is now ENFORCED and
+  // not merely stated — see `floating`, which drops the request rather than
+  // honouring a pair with no coherent behaviour.
   floatMenu: { type: Boolean, default: false },
   // Face mode only: which face the menu acts on, and who it currently shows.
   faceId: { type: [String, Number], default: null },
@@ -230,6 +287,8 @@ const emit = defineEmits([
   "create",
   "assign",
   "unassign",
+  "attach",
+  "detach",
 ]);
 
 // --- Type-derived helpers ---
@@ -239,13 +298,22 @@ const isCharacter = computed(() => props.type === "character");
 const isFace = computed(() => props.type === "face");
 // Both people modes list characters and can offer the create row.
 const listsPeople = computed(() => isCharacter.value || isFace.value);
+// A picture can be in many sets and carry many characters, but it has exactly
+// one project and a face has exactly one person — so only the first two are a
+// multi-selectable listbox.
+const isMultiSelect = computed(() => isSet.value || isCharacter.value);
 
+// `searchLabel` and `listLabel` are the accessible names for the search box and
+// the option list. They are separate from the placeholder because a placeholder
+// is not a label: it disappears as soon as the user types.
 const config = computed(() => {
   if (isSet.value) {
     return {
       icon: "mdi-folder-plus",
       ariaLabel: "Set",
       searchPlaceholder: "Search sets...",
+      searchLabel: "Search sets",
+      listLabel: "Sets",
       loadingText: "Loading sets...",
       emptyText: "No sets found",
     };
@@ -255,6 +323,8 @@ const config = computed(() => {
       icon: "mdi-briefcase-edit-outline",
       ariaLabel: "Set project",
       searchPlaceholder: "Search projects...",
+      searchLabel: "Search projects",
+      listLabel: "Projects",
       loadingText: "Loading projects...",
       emptyText: "No projects found",
     };
@@ -264,6 +334,8 @@ const config = computed(() => {
       icon: "mdi-account-outline",
       ariaLabel: "Assign this face to a person",
       searchPlaceholder: "Search people...",
+      searchLabel: "Search people",
+      listLabel: "People",
       loadingText: "Loading people...",
       emptyText: "No people found",
     };
@@ -272,6 +344,8 @@ const config = computed(() => {
     icon: "mdi-account-plus",
     ariaLabel: "Set character",
     searchPlaceholder: "Search characters...",
+    searchLabel: "Search characters",
+    listLabel: "Characters",
     loadingText: "Loading characters...",
     emptyText: "No characters found",
   };
@@ -293,7 +367,34 @@ const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
 const statusMessage = ref("");
-const membersById = ref({}); // key: item.key → Set<string> of picture IDs
+const membersById = ref({}); // key: item.key → Set<string> of subject IDs
+
+/**
+ * The membership in play: the host's when it supplied one, else what was read.
+ *
+ * Resolved once so no reader has to remember which mode it is in, and so the
+ * host's map cannot be half-applied — every consumer of membership goes through
+ * this.
+ */
+const effectiveMembers = computed(() => props.membership ?? membersById.value);
+
+/**
+ * Whether this control writes, or only announces.
+ *
+ * `face` and `project` were already announce-only before the flag existed, so
+ * they are listed here rather than converted: the behaviour is unchanged and
+ * the flag simply has three users on its first day instead of one.
+ */
+const writesAreHosted = computed(
+  () =>
+    props.hostOwnsWrites ||
+    Boolean(props.membership) ||
+    isFace.value ||
+    isProject.value,
+);
+// The trigger's aria-controls target. Several of these controls sit in one menu,
+// so the id has to be per-instance.
+const listboxId = useId();
 // Membership is a live per-selection read, so until it lands we know which
 // entities exist but not which ones this selection is already in. Toggling is
 // held back until then; the list itself renders immediately.
@@ -317,6 +418,20 @@ const picturesWithFaces = ref(new Set());
 const flyoutFlipped = ref(false);
 const flyoutClickedOpen = ref(false);
 
+/**
+ * Whether the menu actually floats, which is `floatMenu` MINUS the combination
+ * it cannot serve.
+ *
+ * The prop doc has said "incompatible with `placement="right"`" since it was
+ * written, and saying it was not enough: the model shelf's row context menu
+ * passed both, and the flyout came out below the row it hangs off and outside
+ * the `.ate` root it hovers off, so reaching for it fired `mouseleave` and shut
+ * it. Refused here rather than at each call site — the guard belongs where all
+ * of them route through, and a combination that is documented as meaningless
+ * should not be representable.
+ */
+const floating = computed(() => props.floatMenu && props.placement !== "right");
+
 // Dynamic max-height so the menu never runs off the bottom of the screen: measure
 // the menu's top in the viewport and cap its height to what's left below it. The
 // inner .ate-list scrolls; the search box and status stay pinned. Recomputed on
@@ -332,9 +447,15 @@ const MENU_MIN_HEIGHT_PX = 140;
 
 function sizeMenu() {
   nextTick(() => {
+    // A flyout's SIDE is as viewport-dependent as its height, and this is the
+    // function the `resize` and capture-phase `scroll` listeners call — so a
+    // menu that is already open follows the window rather than keeping the side
+    // it was opened on. Hover cannot stand in for this: a keyboard user never
+    // fires one, and that is the case the flip used to depend on entirely.
+    measureFlyoutSide();
     const el = menuRef.value;
     if (!el) return;
-    if (!props.floatMenu) {
+    if (!floating.value) {
       const top = el.getBoundingClientRect().top;
       const avail = window.innerHeight - top - 12;
       menuStyle.value = {
@@ -392,9 +513,9 @@ const baseUrl = computed(() =>
 // means "address the API relatively", which is what a missing prop implies.
 const apiOpts = computed(() => ({ baseUrl: baseUrl.value || "" }));
 
-// --- Normalised picture IDs ---
+// --- Normalised subject IDs ---
 const normalisedPictureIds = computed(() =>
-  (Array.isArray(props.pictureIds) ? props.pictureIds : [])
+  (Array.isArray(props.subjectIds) ? props.subjectIds : [])
     .map((id) => String(id))
     .filter(Boolean),
 );
@@ -490,15 +611,30 @@ function getItemGlyph(item) {
   return "mdi-checkbox-blank-outline";
 }
 
+// The option's ARIA state. `aria-selected` is what a listbox option is expected
+// to expose; `aria-checked` (and "mixed" least of all) is not reliably announced
+// on one, so partial membership is carried as text in the row instead. "false"
+// for a partial row is not a lie: clicking it adds the rest of the selection,
+// exactly like an unchecked row, because only "checked" removes.
+function getAriaSelected(item) {
+  if (isFace.value) return isFaceItemSelected(item) ? "true" : "false";
+  return getItemState(item) === "checked" ? "true" : "false";
+}
+
 function getItemState(item) {
   const ids = normalisedPictureIds.value;
   if (!ids.length) return "unchecked";
-  const members = membersById.value?.[item.key];
+  const members = effectiveMembers.value?.[item.key];
   if (!members || members.size === 0) return "unchecked";
 
-  const relevantIds = isCharacter.value
-    ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
-    : ids;
+  // The face narrowing is a PICTURE rule — a picture with no face cannot be a
+  // character member — so it must not survive into host-driven mode. Left in,
+  // it would filter the shelf's adapter ids against a set that never contains
+  // them, and every row would read `unchecked` however many were attached.
+  const relevantIds =
+    isCharacter.value && !props.membership
+      ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
+      : ids;
   if (!relevantIds.length) return "unchecked";
 
   const matched = relevantIds.filter((id) => members.has(String(id))).length;
@@ -565,6 +701,10 @@ function toggleMenu() {
     } else if (!menuOpen.value) {
       flyoutClickedOpen.value = true;
       openMenu();
+      // Deliberate activation (click, Enter, Space) puts the caret in the search
+      // box, same as the default placement. Hover-open goes through
+      // onFlyoutMouseenter instead and never moves focus.
+      nextTick(() => searchInputRef.value?.focus());
       document.addEventListener("pointerdown", handleOutsideClick, true);
     }
     return;
@@ -577,8 +717,31 @@ function toggleMenu() {
   }
 }
 
+/**
+ * Which side a flyout opens on, measured off the trigger.
+ *
+ * 185px is the flyout's fixed width (`.ate--flyout .ate-menu`), and 8px is the
+ * same keep-off distance `sizeMenu` uses. It used to live in
+ * `onFlyoutMouseenter` alone, so a flyout opened from the KEYBOARD near the
+ * right edge kept the last measurement — `false` on the first open — and
+ * painted off-screen with nothing to clamp it.
+ *
+ * Three callers, and each covers a case the others cannot: `openMenu`
+ * synchronously, so the first paint is already on the correct side; `sizeMenu`,
+ * which is what the `resize` / `scroll` listeners call, so an open menu follows
+ * the window; and `onFlyoutMouseenter`, which is the only one that sees a hover
+ * of an already-open menu.
+ */
+function measureFlyoutSide() {
+  if (props.placement !== "right") return;
+  const rect = rootRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  flyoutFlipped.value = rect.right + 185 > window.innerWidth - 8;
+}
+
 function openMenu() {
   menuOpen.value = true;
+  measureFlyoutSide();
   // Stale-while-revalidate, both halves fired without awaiting: the list is
   // already on screen from the store's cache, and revalidating on open is the
   // only invalidation a share/scoped session gets (the ws stream is owner-only).
@@ -594,6 +757,11 @@ function openMenu() {
 }
 
 function closeMenu() {
+  // Whoever was driving the menu from the keyboard is about to lose their focus
+  // holder, so hand it back to the trigger instead of dropping it on <body>.
+  // Guarded on focus actually being inside: a hover-out or a click elsewhere
+  // must not yank focus away from wherever the user just went.
+  const returnFocus = menuRef.value?.contains(document.activeElement) ?? false;
   menuOpen.value = false;
   searchQuery.value = "";
   window.removeEventListener("resize", sizeMenu);
@@ -603,17 +771,82 @@ function closeMenu() {
     flyoutClickedOpen.value = false;
   }
   if (props.placement !== "right") {
-    searchInputRef.value?.blur();
     document.removeEventListener("pointerdown", handleOutsideClick, true);
   }
+  if (returnFocus) focusTrigger();
+}
+
+// --- Keyboard ownership ---
+// Navigation lives here rather than in each host's roving-focus query: with
+// `floatMenu` the menu is teleported to <body>, so a host keydown listener never
+// sees these keys at all. Order is [search box, ...enabled rows]; no wrapping, so
+// ArrowUp off the first row lands back in the search box.
+function navigableItems() {
+  const menu = menuRef.value;
+  if (!menu) return [];
+  // Options only. The create rows share `.ate-item` but sit outside the listbox
+  // on purpose, and they are actions rather than choices, so they keep their
+  // normal Tab order instead of joining this roving focus.
+  const rows = Array.from(
+    menu.querySelectorAll('[role="option"]:not([disabled])'),
+  );
+  const input = searchInputRef.value;
+  return input ? [input, ...rows] : rows;
+}
+
+function onMenuKeydown(event) {
+  if (!menuOpen.value) return;
+  const key = event.key;
+  const inSearch = event.target === searchInputRef.value;
+
+  if (key === "Escape") {
+    // The first Escape dismisses this list only. Hosts that also watch Escape
+    // (the grid context menu) exempt events originating inside `.ate-menu`, so
+    // the menu behind us survives and takes the second press.
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    return;
+  }
+
+  // "Back" in the flyout idiom. Inside the search box only at caret start, so
+  // it stays a text-editing key while there is text to move through.
+  if (key === "ArrowLeft" && props.placement === "right") {
+    if (
+      inSearch &&
+      !(event.target.selectionStart === 0 && event.target.selectionEnd === 0)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    return;
+  }
+
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return;
+  // Home/End keep their text-editing meaning while the caret is in the search box.
+  if (inSearch && (key === "Home" || key === "End")) return;
+  const items = navigableItems();
+  if (!items.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const rows = items.filter((el) => el !== searchInputRef.value);
+  const current = items.indexOf(document.activeElement);
+  let target;
+  if (key === "Home") target = rows[0];
+  else if (key === "End") target = rows[rows.length - 1];
+  else if (key === "ArrowDown")
+    target = items[Math.min(current + 1, items.length - 1)];
+  else target = items[Math.max(current - 1, 0)];
+  target?.focus();
 }
 
 function onFlyoutMouseenter() {
   if (props.placement !== "right" || props.disabled) return;
-  if (rootRef.value) {
-    const rect = rootRef.value.getBoundingClientRect();
-    flyoutFlipped.value = rect.right + 185 > window.innerWidth - 8;
-  }
+  // Re-measured on a hover of an ALREADY-open menu too, which is the one case
+  // `openMenu` cannot cover: the window may have been resized under it.
+  measureFlyoutSide();
   if (menuOpen.value) return;
   openMenu();
 }
@@ -642,6 +875,12 @@ function handleOutsideClick(event) {
 async function fetchMembers() {
   const ids = normalisedPictureIds.value;
   const requestKey = normalisedIdsKey.value;
+  // Host-driven: the membership arrived as a prop, so there is nothing to read
+  // and the picture readers would not understand these ids anyway.
+  if (props.membership) {
+    membershipLoaded.value = true;
+    return;
+  }
   if (!props.backendUrl || !ids.length) {
     membersById.value = {};
     picturesWithFaces.value = new Set();
@@ -724,7 +963,7 @@ async function readCharacterMembers(ids) {
  */
 function reportToggleFailure(e, fallback) {
   const status = e?.response?.status;
-  const detail = e?.response?.data?.detail || e?.message || String(e);
+  const detail = errorDetail(e) || e?.message || String(e);
   console.warn(
     `[AddToEntityControl] ${props.type} assignment failed (status=${status ?? "n/a"}):`,
     e,
@@ -743,9 +982,56 @@ async function toggleItem(item) {
     selectFacePerson(item);
     return;
   }
+  if (isProject.value) {
+    toggleProject(item);
+    return;
+  }
+  // Announce-only: the host holds the API. The payload carries the resolved
+  // intent rather than the raw click, because only this component knows whether
+  // a partially-applied entity resolves up (it does) and therefore which
+  // subjects still need writing.
+  if (writesAreHosted.value) {
+    announceToggle(item);
+    return;
+  }
   if (isSet.value) await toggleSet(item);
-  else if (isProject.value) toggleProject(item);
   else await toggleCharacter(item);
+}
+
+/**
+ * Emit what a click means, for a host that owns the writes.
+ *
+ * `attach` / `detach` rather than `added` / `removed`: those two are already
+ * spoken for by the picture modes, carry `pictureIds`, and are forwarded
+ * verbatim into grid stores. A new name keeps this addition from reaching any
+ * existing listener.
+ */
+function announceToggle(item) {
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return;
+  const members = effectiveMembers.value?.[item.key];
+  const state = getItemState(item);
+  if (state === "checked") {
+    emit("detach", {
+      entityType: props.type,
+      entityId: item.id,
+      subjectIds: ids,
+    });
+  } else {
+    // Partial resolves UP, the same rule the writing paths apply: only the
+    // subjects that are not already in get written, and nothing is detached.
+    const missing = members
+      ? ids.filter((id) => !members.has(String(id)))
+      : ids;
+    if (!missing.length) return;
+    emit("attach", {
+      entityType: props.type,
+      entityId: item.id,
+      entityName: item.name,
+      subjectIds: missing,
+    });
+  }
+  closeMenu();
 }
 
 // Face mode performs no writes: the host owns the face-level API calls and its
@@ -815,7 +1101,7 @@ async function toggleSet(item) {
     // server again rather than patching the shared cache from here.
     entityLists.invalidate(["sets"], { baseUrl: baseUrl.value });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? "Already in set"
       : reportToggleFailure(
@@ -960,7 +1246,7 @@ async function addToLastSet() {
     scheduleStatusClear();
     return { success: true, setName: item.name };
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? `Already in ${item.name}`
       : reportToggleFailure(e, "Failed to add");
@@ -1013,7 +1299,6 @@ defineExpose({
 .ate-btn {
   background-color: rgba(var(--v-theme-surface), 0.85);
   color: rgb(var(--v-theme-on-surface));
-  border: none;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   display: inline-flex;
@@ -1021,7 +1306,6 @@ defineExpose({
   gap: var(--space-2);
   font-size: var(--text-sm);
   line-height: 1.4;
-  cursor: pointer;
 }
 
 .ate--force-dark .ate-btn {
@@ -1040,7 +1324,6 @@ defineExpose({
 
 .ate-btn:hover {
   filter: brightness(1.75);
-  border: none;
 }
 
 .ate-label {
@@ -1070,7 +1353,14 @@ defineExpose({
   transition:
     opacity var(--dur-1) var(--ease-standard),
     transform var(--dur-1) var(--ease-standard);
-  z-index: 6;
+  /* `--z-dropdown` (300), which is the token's own definition: "menus,
+     popovers, tooltips anchored to a control". It was a bare `6`, which is
+     BELOW `--z-sticky` (100) — so anywhere this menu opens over a sticky
+     header it rendered behind it. Found on the model shelf, where the picker
+     sits in the selection bar and the folder group headers are sticky; the bug
+     was in this shared component, so every caller with a sticky neighbour had
+     it. */
+  z-index: var(--z-dropdown);
 }
 
 /* Floating mode (opt-in, see the `floatMenu` prop): the node has been teleported
@@ -1172,13 +1462,10 @@ defineExpose({
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
   text-align: left;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);
@@ -1322,7 +1609,10 @@ defineExpose({
   box-shadow: var(--elevation-3);
   font-size: var(--text-xs);
   line-height: 1.2;
-  z-index: 12;
+  /* Above the menu it belongs to, which just moved to `--z-dropdown`. Kept as
+     a relative expression rather than a second bare number so the two cannot
+     drift apart again. */
+  z-index: calc(var(--z-dropdown) + 1);
   pointer-events: none;
 }
 

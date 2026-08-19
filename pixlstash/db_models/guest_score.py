@@ -12,7 +12,8 @@ class GuestScore(SQLModel, table=True):
         id: Auto-incrementing primary key.
         session_id: FK to the GuestSession that submitted this score.  Cascades
             on session deletion.
-        token_id: Denormalized FK to the share token; allows the owner to query
+        token_public_id: Denormalised reference to the share token by public
+            id (not an FK: the token lives in the hub); lets the owner query
             all scores across all sessions for a given token without a join
             through guest_session.  Cascades on token deletion.
         picture_id: The rated picture.  Cascades on picture deletion.
@@ -36,10 +37,13 @@ class GuestScore(SQLModel, table=True):
             index=True,
         )
     )
-    token_id: int = Field(
+    # Denormalised reference to the share token, by public id rather than by
+    # integer foreign key. Tokens live in the hub since the hub/vault split and
+    # guest scores stay per-vault, so there is no cross-database FK to be had;
+    # see the same note on :class:`~pixlstash.db_models.guest_session.GuestSession`.
+    token_public_id: str = Field(
         sa_column=Column(
-            Integer,
-            ForeignKey("usertoken.id", ondelete="CASCADE"),
+            String(64),
             nullable=False,
             index=True,
         )

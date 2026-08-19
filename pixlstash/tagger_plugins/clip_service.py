@@ -38,7 +38,11 @@ class ClipService:
         self._model = None
         self._preprocess = None
         self._tokenizer = None
-        self._lock = threading.Lock()
+        # Reentrant, and held by ``unload`` as well as ``ensure_ready``: the
+        # load side was already serialised, but ``aggressive_unload`` could
+        # still drop the model out from under an in-flight load, freeing device
+        # memory the loader was writing into. See test_model_unload_race.py.
+        self._lock = threading.RLock()
 
     def is_loaded(self) -> bool:
         """Return True when the model is ready for inference."""
@@ -57,10 +61,11 @@ class ClipService:
                 self._load()
 
     def unload(self) -> None:
-        """Release model memory."""
-        self._model = None
-        self._preprocess = None
-        self._tokenizer = None
+        """Release model memory, waiting for any in-flight load to finish."""
+        with self._lock:
+            self._model = None
+            self._preprocess = None
+            self._tokenizer = None
 
     def _load(self) -> None:
         import open_clip

@@ -20,6 +20,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick, h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: {
@@ -36,12 +37,6 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 
-globalThis.ResizeObserver = class {
-  constructor(_callback) {}
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 const VIcon = {
   name: "v-icon",

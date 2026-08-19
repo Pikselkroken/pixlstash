@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlstash.db_models.face import Face
-from pixlstash.picture_scoring import compute_character_likeness_for_faces
+from pixlstash.scoring import compute_character_likeness_for_faces
 from pixlstash.server import Server
 from pixlstash.services import operation_log_service
 from tests.test_server import random_images

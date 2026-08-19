@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  defineAsyncComponent,
   nextTick,
   onBeforeUnmount,
   onMounted,
@@ -8,9 +9,10 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
+import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
-import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
+import { isReadOnly, sessionContext } from "./utils/apiClient";
 import { getInstallId } from "./api/telemetry";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
@@ -24,6 +26,10 @@ import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
 import { useNoticeStore } from "./stores/useNoticeStore";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "./stores/useLibrariesStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -40,6 +46,7 @@ import { useSidebarRefresh } from "./composables/useSidebarRefresh";
 import { useViewportLayout } from "./composables/useViewportLayout";
 import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
+import { libraryDocumentTitle } from "./utils/libraryChrome";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -47,15 +54,26 @@ import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import DuplicateQueue from "./components/views/DuplicateQueue.vue";
-import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
+import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
+import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
-const BACKEND_URL = API_BASE_URL;
+
+// These surfaces are mutually exclusive with the primary grid (or explicitly
+// opened on demand), so keep their heavier feature code out of app startup.
+const DuplicateQueue = defineAsyncComponent(() =>
+  import("./components/views/DuplicateQueue.vue"),
+);
+const ModelShelf = defineAsyncComponent(() =>
+  import("./components/views/ModelShelf.vue"),
+);
+const ReviewSessionsOverlay = defineAsyncComponent(() =>
+  import("./components/views/ReviewSessionsOverlay.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -69,6 +87,11 @@ const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const operationStore = useOperationStore();
+const librariesStore = useLibrariesStore();
+const librarySwitchStore = useLibrarySwitchStore();
+const { activeLibrary } = storeToRefs(librariesStore);
+const { overlayOpen: librarySwitchOverlayOpen } =
+  storeToRefs(librarySwitchStore);
 const noticeStore = useNoticeStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
@@ -123,6 +146,8 @@ const error = ref(null);
 // route back into the stores is useViewStore's job, not this one's.
 const {
   isDuplicatesView,
+  isModelsView,
+  handleSelectModels,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -180,7 +205,6 @@ useWindowFileImport({ sidebarRef });
 
 const {
   handleViewProject,
-  handleUpdateSelectedSort,
   handleStackStatsUpdate,
   handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
@@ -189,7 +213,6 @@ const {
 } = useAppSettingsHandlers({
   gridContainer,
   statsSidebarRef,
-  onNavigated: () => closeSidebarIfMobile(),
   pushAppRoute,
 });
 
@@ -265,6 +288,18 @@ const activeCategoryLabel = computed(() => {
   }
   return "All Pictures";
 });
+
+const activeLibraryName = computed(() =>
+  isReadOnly.value ? "" : (activeLibrary.value?.name ?? ""),
+);
+
+watch(
+  activeLibraryName,
+  (name) => {
+    document.title = libraryDocumentTitle(name, isReadOnly.value);
+  },
+  { immediate: true },
+);
 
 function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
@@ -374,6 +409,7 @@ onMounted(async () => {
   // Snapshots are owner-only (full unscoped access); READ / share sessions
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
+    await librariesStore.refresh();
     snapshotsStore.fetchSnapshots();
     // Seed the undo stack so the toolbar control is correctly enabled on the
     // first frame. This read establishes the "already seen" watermark, so the
@@ -454,23 +490,36 @@ defineExpose({
 });
 </script>
 <template>
-  <v-app>
+  <v-app :inert="librarySwitchOverlayOpen">
     <div ref="appViewportEl" class="app-viewport">
       <TitleBar
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
+        :active-library-name="activeLibraryName"
+        @open-libraries="openSettingsDialog('libraries')"
       />
       <!-- App-level status strip: spans the whole shell above BOTH rails and the
            grid. Thumbnail regeneration repaints grid tiles, sidebar thumbnails
            and the Tasks row alike, so it is not a property of the grid column;
            mounting it inside `.main-area` used to push the stats rail down while
            leaving the left rail alone. -->
-      <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
-      <div class="file-manager">
+      <ThumbnailUpgradeBanner
+        :inert="librarySwitchOverlayOpen"
+        @view-progress="focusTasksTabPanel"
+      />
+      <div
+        class="file-manager"
+        :inert="librarySwitchOverlayOpen"
+        :aria-hidden="librarySwitchOverlayOpen ? 'true' : undefined"
+      >
         <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
              sidebar overlay on hover (or tap, on touch). -->
         <div
-          v-if="sidebarStore.sidebarOverlay && !sidebarStore.sidebarVisible"
+          v-if="
+            sidebarStore.sidebarOverlay &&
+            !sidebarStore.sidebarVisible &&
+            !sidebarStore.sidebarForcedHidden
+          "
           class="sidebar-hover-trigger"
           title="Show sidebar"
           @mouseenter="sidebarStore.revealSidebar()"
@@ -492,7 +541,6 @@ defineExpose({
         >
           <SideBar
             ref="sidebarRef"
-            :backendUrl="BACKEND_URL"
             :installType="installType"
             :dockerVariant="dockerVariant"
             @empty-scrapheap="handleEmptyScrapheapFromSidebar"
@@ -500,12 +548,12 @@ defineExpose({
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
             @select-duplicates="handleSelectDuplicates"
+            @select-models="handleSelectModels"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @open-import-dialog="openImportDialog"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
             @update:check-for-updates="handleUpdateCheckForUpdates"
@@ -535,7 +583,6 @@ defineExpose({
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
           :default-project-id="sidebarRef?.currentProjectId ?? null"
-          :backend-url="BACKEND_URL"
           @local-import="handleLocalImport"
           @project-created="refreshSidebar"
         />
@@ -569,14 +616,20 @@ defineExpose({
                 v-if="isDuplicatesView"
                 @open-settings="openSettingsDialog"
               />
+              <!-- The model shelf lists files on this machine rather than
+                   pictures in the library, so like Duplicates it replaces the
+                   grid instead of floating over it, and the grid stays
+                   unmounted while it is open. -->
+              <ModelShelf
+                v-else-if="isModelsView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"
-                :backendUrl="BACKEND_URL"
                 :activeCategoryLabel="activeCategoryLabel"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
-                @update:selected-sort="handleUpdateSelectedSort"
                 @refresh-sidebar="refreshSidebar"
                 @reset-to-all="handleResetToAll"
                 @update:stack-stats="handleStackStatsUpdate"
@@ -615,7 +668,7 @@ defineExpose({
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
-        :backendUrl="BACKEND_URL"
+        :inert="librarySwitchOverlayOpen"
         @close="reviewSessionsStore.overlayOpen = false"
       />
       <!-- The notice surface. LAST child of `.app-viewport` on purpose
@@ -636,11 +689,14 @@ defineExpose({
       }"
       type="button"
       title="Keyboard shortcuts (F1)"
+      :disabled="librarySwitchOverlayOpen"
       @click="shortcutsDialogOpen = true"
     >
       <v-icon size="20">mdi-keyboard</v-icon><span>F1</span>
     </button>
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
+    <ConfirmDialog />
+    <LibrarySwitchOverlay />
   </v-app>
 </template>
 <style src="./App.css"></style>

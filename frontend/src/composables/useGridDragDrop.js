@@ -3,6 +3,7 @@ import {
   extractSupportedImportFilesFromDataTransfer,
   isFileDrag,
   isVideo,
+  setInternalDragPayload,
 } from "../utils/media.js";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
@@ -110,8 +111,10 @@ export function useGridDragDrop(
   function setupMultiExportDrag(event, ids) {
     if (!event?.dataTransfer || !Array.isArray(ids) || ids.length < 2) return;
     try {
-      const dragData = { type: "image-ids", imageIds: ids };
-      event.dataTransfer.setData("application/json", JSON.stringify(dragData));
+      setInternalDragPayload(event.dataTransfer, {
+        type: "image-ids",
+        imageIds: ids,
+      });
     } catch (err) {
       console.error("[ERROR] Failed to set drag data:", err);
     }
@@ -278,10 +281,10 @@ export function useGridDragDrop(
 
   function setDragDataForImageIds(event, imageIds) {
     if (!event?.dataTransfer) return;
-    event.dataTransfer.setData(
-      "application/json",
-      JSON.stringify({ type: "image-ids", imageIds }),
-    );
+    setInternalDragPayload(event.dataTransfer, {
+      type: "image-ids",
+      imageIds,
+    });
   }
 
   function handleThumbnailNativeDragStart(img, event) {

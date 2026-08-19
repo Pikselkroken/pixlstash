@@ -119,9 +119,14 @@ The recurring uppercase label is already a global class. Use it; do not re-roll 
 .section-label { /* in style.css */
   font-size: var(--text-2xs); font-weight: var(--weight-semibold);
   text-transform: uppercase; letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 ```
+The alpha is `0.7` because 11px semibold is **small** text under §4 and owes 4.5:1;
+composited on `surface` it measures 5.94:1 light / 6.65:1 dark. It shipped at `0.5`
+(3.19:1 light) until 2026-08. Do not lower it to restore a "quieter than the body"
+look — an uppercase tracked semibold already separates on case, weight and tracking,
+and a heading below its own hint text is inverted hierarchy, not restraint.
 
 ### Reading text
 Line-height 1.5 for body (`--leading-body`), 1.35 for single-line UI, 1.2 for display.
@@ -378,6 +383,37 @@ Findings to honour:
   4.90 / 5.30. All clear the 3:1 UI floor. Light `success` and `info` were Material
   500s until 2026-07 and measured 2.64 / 2.97 — **below the floor** — which is the
   reason they were deepened to `#2e7d32` and `#1a6ec4`.
+- **A multi-segment meter steps its neutral to the extreme *away* from the canvas**,
+  never to a mid-grey between the accent and the track. The range between the accent
+  and the canvas is not wide enough for two 3:1 steps; the range *past* the accent is.
+  Proven on the model shelf's drive band (#893), whose three segments are `ours` /
+  `other` / `free` and therefore have two adjacencies to keep readable. Composited over
+  `background`, light on `#faf9f7` / dark on `#1b1f24`:
+
+  | pair | light | dark |
+  |---|---|---|
+  | `ours` `#567309` : `other` (`#1c160c` / `#d4c9c1`) | **3.29** | **3.36** |
+  | `other` : `free` (`#e5e3e1` / `#121518`) | **14.03** | **11.28** |
+  | `free` : canvas | 1.22 | 1.11 — *drawn*, not inferred (see below) |
+
+  Three things this pins down, each of which was got wrong first:
+  **(a)** The neutral is what steps per theme, not the accent — `primary` stays the
+  "ours" colour in both, because a legend swatch that is orange in one theme and olive
+  in the other is not one system. **(b)** Dark is stepped *independently*, never a
+  flipped alpha: on a dark canvas an ink alpha can only lighten, so the neutral cannot
+  pass below the olive, and the shipped `rgba(ink, .28)` measured **1.34:1** — the
+  deuteranopia failure that opened the issue. The neutral goes light and the *track*
+  takes the dark end via a `scrim` tint. **(c)** In light the neutral must go past the
+  ink itself: `on-background` tops out at L .0153 and measures 2.95, just under the
+  floor, so the fill is `shadow` `#1c160c` (L .0085).
+  Separating the segments with a hairline instead was rejected: the issue's requirement
+  is a *luminance* separation, and a drawn line is not one — with a quiet mid-grey
+  neutral the pair measures 1.73:1, so in greyscale you would see two segments and be
+  unable to tell which was which.
+  The track is only 1.22 / 1.11 against the canvas, which would make a nearly-empty
+  drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
+  colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
+  line *between two fills* is not.
 - **The eight `on-<status>` values, on their solid fill:** light `on-error` #ffffff
   4.86 · `on-warning` #23211d 4.95 · `on-success` #ffffff 5.13 · `on-info` #ffffff
   5.16; dark, all four `#1b1b1b`: `on-error` 4.68 · `on-warning` 5.53 · `on-success`
@@ -429,10 +465,106 @@ header, toolbar, and stats header to one horizontal band and you respect that ba
 everywhere. The band height is `--bar-height` (48px) in the browser; the desktop
 Electron shell compresses the top strip (title bar `--titlebar-h` 34px, sidebar
 header 36px) so the custom title bar and controls fit — see the overrides in
-`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 40 /
-48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. Unifying them
-onto `--bar-height` is an open reconciliation item; it moves pixels, so it needs
+`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
+40 / 48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. The **three
+view toolbars are the one settled group**: the grid, Duplicates and model-shelf bars
+all sit at 36px, pinned to each other by a guardrail rather than to this token
+(`toolbar-responsive-decisions.md` Amendment #5) — so no view toolbar honours
+`--bar-height` today, deliberately. Unifying the rest onto `--bar-height` is an open
+reconciliation item; it moves pixels, so it needs
 UI/UX sign-off — see §13.)
+
+### 5.1 The row grid (how a list row shares a left edge)
+
+The claim above — *columns of controls share a left edge* — is the one §5 made and
+never enforced. A list row is **four columns**, and the first two are reserved:
+
+```
+[disclosure gutter] [identity mark] [label 1fr] [actions auto]
+   --gutter-glyph      --entity-thumb
+```
+
+**Columns 1 and 2 are never conditional.** A row with no chevron reserves the
+gutter anyway; a row with no thumbnail reserves the identity column anyway. That is
+the whole mechanism: a character with a face photo and one without share a left edge
+because neither column ever collapses. Optional glyphs go `visibility: hidden`, never
+`display: none`, and never `v-if`.
+
+**Depth is a number, not a class.** A row carries `--depth: 0 | 1 | 2` and the grid
+multiplies it:
+
+```css
+padding-inline-start: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
+```
+
+No per-level classes, no `!important` override, no nested wrapper adding padding and
+a margin and a border that sum to an off-grid step.
+
+**The selection rail is always present and always transparent.** Only its colour
+changes on `.active`:
+
+```css
+border-left: 3px solid transparent;   /* base — always */
+.active { border-left-color: var(--active-bar); }
+```
+
+Never add the border on select, and never "compensate" for it with padding. Adding
+3px of border and 8px of padding on `.active` moves the label 3px right; that is a
+bug that has shipped here twice, once under a comment asserting it does not happen.
+
+**Rank is carried by type; depth is carried by indent.** Two rows at different
+ranks must differ in *type* even when they also differ in indent, so neither
+signal is load-bearing on its own. This is not decoration. When a project row and
+the section captions nested under it were set identically (both `--text-2xs`,
+semibold, uppercase), indentation had to signal both containment *and* rank, and
+the only way to make rank legible was a bigger step. Three levels of that pushed
+entity names to 91px in a 240px rail. Two ramp steps of size between project and
+caption is what makes a 16px indent enough.
+
+**Rank is size, weight and tracking. It is never opacity.** A structural label
+must not be dimmer than the content it heads. Dimming the section captions to 0.7
+made them the quietest thing in the column, sitting between a full-strength
+project above and full-strength entity names below, which reads as a hole rather
+than a hierarchy. Chrome recedes by being *smaller*, not by fading.
+
+**A row's caret takes its row's colour and never its own opacity.** When only the
+caption was dimmed, its caret was not, so the caret outshone the label it
+belonged to while the project's caret sat far below its own. Tying a caret to a
+fraction of its label does not fix it either: 0.7 of a 0.7 label is 0.49, which
+measures 2.95:1 against the light sidebar and misses the 3:1 that a disclosure
+glyph owes as a meaningful graphical object (WCAG 1.4.11). Leave both alone.
+
+**The indent step is set by legibility, not by glyph arithmetic.** `--indent-step`
+is 16px because that is the smallest on-grid step that still reads as nesting at
+this density. It is deliberately *not* derived from the glyph column. An earlier
+version set it to `--gutter-glyph + --space-3` = 24px so that one chevron would
+advance exactly one level, and tuned a margin onto the glyph slot to make the sum
+come out. That bought a child's chevron landing precisely under its parent's
+label, which nobody notices, and charged 24px per level for it. Do not tune the
+step and the glyph advance to each other; they answer different questions.
+
+**Why the other two widths.** `--gutter-glyph` is 16px because the sidebar already
+forced every chevron and row icon to 16px with `!important`. `--entity-thumb` is
+24px, promoted from the sidebar's own `--sidebar-thumb-size`.
+
+**Children indent past their parent's glyph, not past its row.** A disclosure
+group's children step in once from the group's own glyph column, so a child's mark
+lands under its parent's label. That is what every file tree does. Do not flatten
+it to save width; take the width out of the step size instead.
+
+**A caption with nothing under it is not a disclosure.** Rendering a disclosure
+affordance for an empty group is wrong whether the chevron is visible or hidden,
+and reserved-but-blank is the worst of the three because the empty box reads as a
+missing glyph. Make the row inert instead: `aria-disabled`, no hover response,
+label at `--opacity-disabled`. The dimmed label is what explains the blank slot.
+Keep the slot reserved so the caption does not shift when the first child
+arrives, and **keep the group's own add action at full strength and operable**,
+because it is the only way out of the empty state.
+
+**Scoped CSS does not cross a component boundary.** A row rendered by a child
+component gets none of the parent's scoped rules, so a recursive tree component must
+consume these tokens itself rather than keep a private copy. Two copies of a row
+style drift, and the copy is where the rail bug survives.
 
 ---
 
@@ -751,8 +883,11 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   and **always behind a confirm** — deletion is irreversible and must never be a
   single mis-click. Secondary actions are quiet (text/`cancel-button`).
 - **One band.** Action bars share `--bar-height` so they line up with the shell's
-  top strip (§5). The current per-component heights (34 / 40 / 48 / 56px) are drift
-  to migrate onto this token; because it moves pixels it is UI/UX-gated.
+  top strip (§5). The current per-component heights (34 / 36 / 40 / 48 / 56px) are
+  drift to migrate onto this token; because it moves pixels it is UI/UX-gated. The
+  36px group is the exception that is already settled: the three **view toolbars**
+  agree with each other at 36px and are guarded there, so they migrate together or
+  not at all.
 - **Empty & the Trash view.** Trash is the picture grid reused with the restore/purge
   bar. Its empty state uses the existing `EmptyTrash.png` art (§9) with a
   `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.

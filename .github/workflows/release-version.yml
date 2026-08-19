@@ -155,6 +155,17 @@ jobs:
               f.write("changed=true\n")
           EOF
 
+      # Run from main's checkout, not release/. Unlike the OpenAPI docs, the
+      # table is a property of main's security policy rather than of the
+      # release's own code, so main always has the current script and a
+      # manual re-run on a tag cut before this landed still works.
+      - name: Update SECURITY.md supported versions
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python main/scripts/update_security_supported_versions.py \
+            main/SECURITY.md "$RELEASE_TAG"
+
       - name: Open pull request with updated website files
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
@@ -181,7 +192,12 @@ jobs:
               bucket active installs by type, and separate our own declared `dev`
               machines from real installs.
               Updated/skipped in lock-step with the legacy `latest-version.json` above.
+            - `SECURITY.md` — the supported-versions table, rewritten so the new
+              minor is the only supported one and the minor it replaces is demoted.
+              Skipped for pre-releases and for anything that is not a newer minor
+              than the table already names.
           add-paths: |
+            SECURITY.md
             website/latest-version.json
             website/latest-version/docker.json
             website/latest-version/pip.json

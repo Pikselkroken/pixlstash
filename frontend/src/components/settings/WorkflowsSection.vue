@@ -13,6 +13,7 @@ import AppInput from "../widgets/AppInput.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsChipGrid from "./SettingsChipGrid.vue";
 import SettingsChip from "./SettingsChip.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -120,7 +121,7 @@ async function saveComfyuiUrl() {
       comfyuiConfigDialogOpen.value = false;
     } catch (e) {
       comfyuiUrlError.value =
-        e?.response?.data?.detail ||
+        errorDetail(e) ||
         e?.message ||
         "Failed to update ComfyUI URL.";
     } finally {
@@ -149,7 +150,7 @@ async function saveComfyuiUrl() {
     }, 1200);
   } catch (e) {
     comfyuiUrlError.value =
-      e?.response?.data?.detail ||
+      errorDetail(e) ||
       e?.message ||
       "Failed to update ComfyUI URL.";
   } finally {
@@ -171,7 +172,7 @@ async function clearComfyuiUrl() {
     comfyuiConfigDialogOpen.value = false;
   } catch (e) {
     comfyuiUrlError.value =
-      e?.response?.data?.detail || e?.message || "Failed to clear ComfyUI URL.";
+      errorDetail(e) || e?.message || "Failed to clear ComfyUI URL.";
   } finally {
     comfyuiUrlLoading.value = false;
   }
@@ -200,8 +201,7 @@ async function deleteWorkflow(workflow) {
     await deleteWorkflowRequest(workflow.name);
     await fetchWorkflowList();
   } catch (e) {
-    workflowListError.value =
-      e?.response?.data?.detail || "Failed to delete workflow.";
+    workflowListError.value = errorDetail(e) || "Failed to delete workflow.";
   }
 }
 
@@ -612,8 +612,7 @@ async function confirmWorkflowImport() {
     workflowImportDialogOpen.value = false;
     await fetchWorkflowList();
   } catch (e) {
-    workflowImportError.value =
-      e?.response?.data?.detail || "Failed to import workflow.";
+    workflowImportError.value = errorDetail(e) || "Failed to import workflow.";
   } finally {
     workflowImportSaving.value = false;
   }

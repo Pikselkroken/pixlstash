@@ -57,61 +57,10 @@ const tasksStore = useTasksStore();
 </script>
 
 <style scoped>
-/* The rules below are the toolbar's own treatment for these controls, moved
-   here with the markup (scoped styles cannot cross the component boundary).
-   Toolbar.vue keeps its copy of .bar-btn for its remaining buttons; a change
-   to the shared look belongs in both places. */
-
-.bar-separator {
-  width: 1px;
-  height: 24px;
-  background: rgba(var(--v-theme-on-background), 0.2);
-  margin: 0 var(--space-2);
-  align-self: center;
-  flex-shrink: 0;
-}
-
-.bar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
-  cursor: pointer;
-  font-size: var(--text-base);
-  font-family: inherit;
-  /* Icons and labels take the sidebar's treatment: the toolbar-text token
-     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
-     hover/active — so the toolbar and sidebar chrome read as one strip. */
-  color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
-  /* A transparent 1px border is reserved so the open state (which colours the
-     border) does not change the box size and make the button jump. */
-  border: 1px solid transparent;
-  box-sizing: border-box;
-  height: 32px;
-  white-space: nowrap;
-  position: relative;
-}
-
-.bar-btn:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.bar-btn--active {
-  color: rgb(var(--v-theme-primary));
-}
-
-/* Icon-only bar button */
-.bar-btn--icon {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
+/* The `.bar-*` family this component's buttons use lives unscoped in App.css.
+   It used to be duplicated here and in Toolbar.vue, under a comment asking
+   whoever changed one to remember the other; the five rules were still
+   byte-identical, and now there is one copy. */
 
 /* App-wide task-activity light on the stats toggle. */
 .tb-stats-btn {

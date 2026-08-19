@@ -59,6 +59,74 @@ class WsBroadcasterMixin:
             logger.warning("Failed to dispatch websocket event: %s", exc)
             coro.close()  # prevent 'coroutine never awaited' ResourceWarning
 
+    async def _close_all_websockets(self) -> None:
+        """Close and forget every connection after publishing a new library."""
+        with self._ws_clients_lock:
+            clients = list(self._ws_clients)
+            self._ws_clients.clear()
+        await self._close_websocket_clients(clients)
+
+    @staticmethod
+    async def _close_websocket_clients(clients) -> None:
+        """Close a group of clients on the event loop that owns their sockets."""
+        for client in clients:
+            try:
+                await client["ws"].close(code=1012, reason="Library switched")
+            except Exception as exc:
+                logger.debug("WebSocket close during library switch failed: %s", exc)
+
+    def claim_websockets_for_switch(self) -> list:
+        """Atomically remove and return the complete pre-publication socket set.
+
+        Called while admission is ``SWITCHING`` and all short registration
+        leases have drained, so no old-generation socket can escape this
+        snapshot. Sockets registered after READY belong to the new generation
+        and are deliberately absent.
+        """
+        with self._ws_clients_lock:
+            clients = list(self._ws_clients)
+            self._ws_clients.clear()
+        return clients
+
+    def close_websocket_snapshot_for_switch(
+        self, clients: list, timeout: float = 5.0
+    ) -> None:
+        """Synchronously close one already-claimed socket generation.
+
+        TestClient can host separate WebSocket sessions on separate event loops,
+        and the ComfyUI proxy can be the only live socket. Keep each connection's
+        owning loop instead of assuming the updates broadcaster's last loop owns
+        them all. Production normally has one uvicorn loop, so this grouping is
+        free there and makes the lifecycle invariant explicit everywhere.
+        """
+        if not clients:
+            return
+
+        clients_by_loop = {}
+        for client in clients:
+            loop = client.get("loop") or self._ws_loop
+            if loop is not None and loop.is_running():
+                clients_by_loop.setdefault(loop, []).append(client)
+            else:
+                logger.debug(
+                    "Forgot a WebSocket without a running owner loop during switch"
+                )
+
+        futures = [
+            asyncio.run_coroutine_threadsafe(
+                self._close_websocket_clients(loop_clients), loop
+            )
+            for loop, loop_clients in clients_by_loop.items()
+        ]
+        for future in futures:
+            future.result(timeout=timeout)
+
+    def close_all_websockets_for_switch(self, timeout: float = 5.0) -> None:
+        """Claim and close every currently tracked socket (fatal-state helper)."""
+        self.close_websocket_snapshot_for_switch(
+            self.claim_websockets_for_switch(), timeout=timeout
+        )
+
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
         return (
             event_type
@@ -71,6 +139,16 @@ class WsBroadcasterMixin:
                 EventType.CHANGED_CHARACTERS,
                 EventType.CHANGED_FACES,
                 EventType.CHANGED_DESCRIPTIONS,
+                # Broadcast to every client regardless of their grid filters:
+                # the library underneath them has been replaced, so their view
+                # describes a library the server no longer serves and their
+                # picture ids mean something else now. A filtered delivery would
+                # leave the clients that happen not to match looking at a stale
+                # library indefinitely.
+                EventType.LIBRARY_SWITCHED,
+                # Machine-level, not view-level: the GPU is full whatever the
+                # client's grid filters are.
+                EventType.VRAM_OOM,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
@@ -180,6 +258,17 @@ class WsBroadcasterMixin:
                 "event": event_type.name,
                 **progress_payload,
             }
+        elif event_type == EventType.VRAM_OOM:
+            info = data if isinstance(data, dict) else {}
+            payload = {
+                "type": "vram_oom",
+                "event": event_type.name,
+                "task_type": str(info.get("task_type") or ""),
+                "attempt": int(info.get("attempt") or 0),
+                "max_attempts": int(info.get("max_attempts") or 0),
+                "gave_up": bool(info.get("gave_up")),
+                "recovered": bool(info.get("recovered")),
+            }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}
             payload = {
@@ -231,6 +320,11 @@ class WsBroadcasterMixin:
             # wanted, would be an additive change here.
             if not client.get("owner"):
                 continue
+            # ComfyUI progress proxy sockets share the switch lifecycle registry
+            # so they are retired too, but they are not subscribers to vault
+            # event envelopes.
+            if not client.get("broadcast", True):
+                continue
             filters = client.get("filters") or {}
             if not self._should_send_ws_update(event_type, filters):
                 continue
@@ -257,26 +351,31 @@ class WsBroadcasterMixin:
 
         @self.api.websocket(f"{API_V1_PREFIX}/ws/updates")
         async def websocket_updates(websocket: WebSocket):
-            # The HTTP auth middleware does not run for WebSocket connections,
-            # so authenticate here BEFORE accepting. Without this, any reachable
-            # client — including a cross-site page via CSWSH, since the browser
-            # auto-attaches the session cookie to the handshake — could
-            # subscribe to live vault activity.
-            if not self.auth.is_websocket_origin_allowed(
-                websocket, self.allow_origins, self.allow_origin_regex
-            ):
-                await websocket.close(code=1008)
-                return
-            ws_auth = self.auth.authenticate_websocket(websocket)
-            if ws_auth is None:
-                await websocket.close(code=1008)
-                return
-            admission_lease = self.auth.register_authenticated_websocket(websocket)
-            if admission_lease is None:
-                await websocket.close(code=1012)
+            lease = self.library_coordinator.acquire_read()
+            if lease is None:
+                await websocket.close(code=1013, reason="Library unavailable")
                 return
             client = None
+            admission_lease = None
             try:
+                # The HTTP auth middleware does not run for WebSocket connections,
+                # so authenticate here BEFORE accepting. Without this, any reachable
+                # client — including a cross-site page via CSWSH, since the browser
+                # auto-attaches the session cookie to the handshake — could
+                # subscribe to live vault activity.
+                if not self.auth.is_websocket_origin_allowed(
+                    websocket, self.allow_origins, self.allow_origin_regex
+                ):
+                    await websocket.close(code=1008)
+                    return
+                ws_auth = self.auth.authenticate_websocket(websocket)
+                if ws_auth is None:
+                    await websocket.close(code=1008)
+                    return
+                admission_lease = self.auth.register_authenticated_websocket(websocket)
+                if admission_lease is None:
+                    await websocket.close(code=1012)
+                    return
                 await websocket.accept()
                 # Always refresh _ws_loop so it tracks the currently-running event loop.
                 # In production (uvicorn) this is always the same loop; in tests each
@@ -286,14 +385,30 @@ class WsBroadcasterMixin:
                 # stream. A resource-scoped / READ token may connect (authenticated)
                 # but is never sent events outside its grant — see
                 # ``_broadcast_ws_event``.
-                client = {
+                candidate = {
                     "ws": websocket,
+                    "loop": asyncio.get_running_loop(),
                     "filters": {},
                     "owner": ws_auth.is_owner,
+                    "broadcast": True,
                     "client_id": None,
                 }
                 with self._ws_clients_lock:
-                    self._ws_clients.append(client)
+                    self._ws_clients.append(candidate)
+                client = candidate
+            finally:
+                # A WebSocket only needs admission through authentication,
+                # acceptance and tracked registration.  Every exit (including
+                # injected accept/lock failures) releases exactly once.
+                self.library_coordinator.release_read(lease)
+            if client is None:
+                # Admission can be granted before a later step in the leased
+                # block fails. The receive loop's ``finally`` never runs on this
+                # path, so release the admission lease here instead.
+                if admission_lease is not None:
+                    self.auth.unregister_authenticated_websocket(admission_lease)
+                return
+            try:
                 while True:
                     message = await websocket.receive_text()
                     if not message:

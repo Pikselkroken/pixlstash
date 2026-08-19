@@ -47,7 +47,7 @@ from pixlstash.utils.service.filter_helpers import (
     narrow_project_fields,
     visible_project_ids,
 )
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
@@ -1034,7 +1034,7 @@ def create_router(server) -> APIRouter:
         responses={200: {"content": {"image/png": {}}}},
     )
     def get_picture_set_thumbnail(id: int, request: Request):
-        thumbnail_cache_version = 16
+        thumbnail_cache_version = 17
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = resolve_path_within(cache_dir, f"picture_set_{id}.png")
@@ -1103,13 +1103,22 @@ def create_router(server) -> APIRouter:
         path_map = server.vault.db.run_immediate_read_task(
             fetch_picture_paths, picture_ids=top_ids
         )
-        target_size = 64
-        work_size = 256
+        # 256, not the 64 this fan was authored at: consumers outside the app
+        # render it far larger than the in-app card. Every pixel constant below
+        # is written as a multiple of `scale`, so the composite is *rendered*
+        # bigger rather than upscaled -- the old code fitted a ~90 px fan into
+        # 64 px, and simply raising the output size alone would have blown that
+        # up instead. `target_size` is derived from `scale` rather than the
+        # reverse because only whole multiples of the authored 64 reproduce the
+        # geometry. Bump `thumbnail_cache_version` above when this changes.
+        scale = 4
+        target_size = 64 * scale
+        work_size = 256 * scale
         card_height = int(target_size * 0.75)
         card_width = max(1, int(card_height * 0.7))
         card_size = (card_width, card_height)
         angles = [20, 5, -20]
-        offsets = [(0, 0), (0, 0), (0, -4)]
+        offsets = [(0, 0), (0, 0), (0, -4 * scale)]
         base = Image.new("RGBA", (work_size, work_size), (0, 0, 0, 0))
         pivot_x = work_size // 2
         pivot_y = work_size // 2
@@ -1124,15 +1133,15 @@ def create_router(server) -> APIRouter:
             mask = Image.new("L", card_size, 0)
             draw = ImageDraw.Draw(mask)
             draw.rounded_rectangle(
-                (0, 0, card_size[0], card_size[1]), radius=6, fill=255
+                (0, 0, card_size[0], card_size[1]), radius=6 * scale, fill=255
             )
             card.putalpha(mask)
             draw = ImageDraw.Draw(card)
             draw.rounded_rectangle(
-                (-2, -2, card_size[0] + 1, card_size[1] + 1),
-                radius=7,
+                (-2 * scale, -2 * scale, card_size[0] + scale, card_size[1] + scale),
+                radius=7 * scale,
                 outline=(170, 170, 170, 255),
-                width=2,
+                width=2 * scale,
             )
             return card
 
@@ -1196,7 +1205,7 @@ def create_router(server) -> APIRouter:
         shadow_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
         shadow_alpha = base.split()[-1]
         shadow_layer.putalpha(shadow_alpha)
-        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=4))
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=4 * scale))
         shadow_tint = Image.new("RGBA", base.size, (0, 0, 0, 90))
         shadow = Image.composite(
             shadow_tint,
@@ -1204,7 +1213,7 @@ def create_router(server) -> APIRouter:
             shadow_layer.split()[-1],
         )
         fan_with_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-        fan_with_shadow.alpha_composite(shadow, (2, 3))
+        fan_with_shadow.alpha_composite(shadow, (2 * scale, 3 * scale))
         fan_with_shadow.alpha_composite(base, (0, 0))
         base = fan_with_shadow
 
@@ -1278,6 +1287,7 @@ def create_router(server) -> APIRouter:
         # Intrinsic tag/confidence query params are parsed by the shared parser; the
         # remaining filters (format/scores/buckets) arrive as typed Query args above.
         _predicate_filter = PredicateFilter.from_query_params(request)
+        unscored = _predicate_filter.unscored
         tags_filter = _predicate_filter.tags_filter
         tags_rejected_filter = _predicate_filter.tags_rejected_filter
         tags_confidence_above_filter = _predicate_filter.tags_confidence_above_filter
@@ -1464,6 +1474,7 @@ def create_router(server) -> APIRouter:
                 stack_leaders_only=deduplicate_stacks,
                 min_score=min_score,
                 max_score=max_score,
+                unscored=unscored,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,

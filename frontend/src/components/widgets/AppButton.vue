@@ -13,8 +13,17 @@
     :title="title"
     :aria-keyshortcuts="keyShortcut"
   >
+    <!-- `icon` overrides `iconLeft` for the rare glyph that is not in mdi (the
+         ai-toolkit mark). Loading still wins over both: a spinner replacing the
+         icon is how this button says it is busy, whichever glyph it wears. -->
+    <span
+      v-if="!loading && $slots.icon"
+      :class="['app-btn__icon', 'app-btn__icon--custom']"
+    >
+      <slot name="icon" :size="size === 'sm' ? 16 : 18" />
+    </span>
     <v-icon
-      v-if="loading || iconLeft"
+      v-else-if="loading || iconLeft"
       :size="size === 'sm' ? 16 : 18"
       :class="['app-btn__icon', { 'mdi-spin': loading }]"
     >
@@ -115,7 +124,6 @@ defineExpose({ focus });
   font-weight: var(--weight-medium);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -143,11 +151,6 @@ defineExpose({ focus });
 .app-btn--icon-only.app-btn--sm {
   width: 23px;
   padding: 0;
-}
-
-.app-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
@@ -231,6 +234,14 @@ defineExpose({ focus });
 
 .app-btn__icon {
   flex-shrink: 0;
+}
+
+/* A slotted glyph is a bare <svg>, which is inline and would sit on the text
+   baseline rather than centred against the label. `<v-icon>` handles this for
+   itself; this box does it for anything else. */
+.app-btn__icon--custom {
+  display: inline-flex;
+  align-items: center;
 }
 
 /* The key-hint badge. currentColor keeps it legible on every variant fill;

@@ -155,6 +155,7 @@ class ListenersMixin:
         self._print_banner(version, banner)
 
         servers = [uvicorn.Server(config) for config in configs]
+        self._uvicorn_servers = servers
         for server in servers:
             # We install one combined signal handler below so a single
             # SIGTERM/SIGINT stops *both* listeners; uvicorn's per-server
@@ -214,5 +215,5 @@ class ListenersMixin:
         try:
             asyncio.run(_serve())
         finally:
-            if hasattr(self, "vault"):
+            if getattr(self, "vault", None) is not None:
                 self.vault.close()

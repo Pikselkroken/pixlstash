@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.9</title>
+    <title>What's New in PixlStash 1.10</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.9: full undo and redo across your library, a dedicated duplicate-review queue, safer stack cleanup, multi-project characters and sets, faster person assignment, and optional privacy-conscious telemetry."
+      content="What's new in PixlStash 1.10: several picture libraries in one installation, a model shelf for your checkpoints and LoRAs, ai-toolkit training run import, a pixlstash-cli command line for backups and plugins, and a start-up check on folder permissions."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -104,6 +104,15 @@
 
       .release-bullets li::marker {
         color: var(--accent-2);
+      }
+
+      .release-bullets code {
+        font-family: var(--mono);
+        font-size: 0.9em;
+        color: var(--accent-2);
+        background: var(--panel-strong);
+        border-radius: 4px;
+        padding: 1px 5px;
       }
 
       .release-hero-media {
@@ -209,6 +218,19 @@
         margin-inline: auto;
       }
 
+      /* Terminal captures and the shelf table are made of small text, so the
+         360px height cap above scales them down to unreadable. Cap the card's
+         width instead of its image height, the same shape as .update-card--video,
+         so the image keeps a legible size without dominating the page. */
+      .update-card--wide {
+        max-width: 900px;
+        margin-inline: auto;
+      }
+
+      .update-card--wide img {
+        max-height: none;
+      }
+
       .update-card--feature {
         display: grid;
         grid-template-columns: 1fr minmax(340px, 1.5fr);
@@ -292,6 +314,18 @@
         margin: 0;
         color: var(--muted);
         line-height: 1.55;
+      }
+
+      /* Same treatment as .step-note code on the upgrade page: a command or
+         literal reads as one unit against the card's muted prose instead of
+         blending into it in the body's plain monospace fallback. */
+      .update-card code {
+        font-family: var(--mono);
+        font-size: 0.9em;
+        color: var(--accent-2);
+        background: var(--panel-strong);
+        border-radius: 4px;
+        padding: 1px 5px;
       }
 
       .release-cta {
@@ -600,132 +634,141 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
+      <!-- ── PixlStash 1.10 ─────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.9</span>
-            <h1>Fix your mistake with one CTRL-Z</h1>
+            <span class="release-kicker">PixlStash 1.10</span>
+            <h1>One PixlStash, several libraries</h1>
             <p>
-              PixlStash 1.9 brings <strong>full undo and redo</strong> across
-              the app. Soft-deletion, tags, descriptions, assignments, moves,
-              and duplicate decisions all join one shared history. Step back
-              through one change or several, then redo them when you change your
-              mind again. Work quickly without making every decision final.
+              PixlStash 1.10 can hold <strong>more than one picture library</strong>
+              and keeps one open at a time. Pictures, tags, scores and snapshots
+              stay with their library, while your account and preferences stay
+              with the installation. The release also adds a model shelf for the
+              checkpoints and LoRAs on your disks, and a command line so backups
+              and plugin installs can run from a script.
             </p>
             <ul class="release-bullets">
               <li>
-                Full undo and redo, including a history menu for stepping back
-                through more than one change. It is database backed and survives
-                server restarts
+                Several picture libraries in one installation, switched from
+                Settings → Libraries. Each keeps its own pictures, tags, scores
+                and snapshots
               </li>
               <li>
-                A dedicated Duplicates view for reviewing, comparing, stacking,
-                or keeping likely copies separate
+                API tokens and share links belong to the library that created
+                them, and Settings warns you before you switch away from live
+                share links
               </li>
               <li>
-                Stack filters and <strong>Keep cover only</strong> for moving
-                unwanted copies to the recoverable Scrapheap
+                A model shelf for the checkpoints and LoRAs in the folders you
+                register, grouped by kind, base model or folder
               </li>
               <li>
-                Characters and picture sets can belong to several projects at
-                the same time
+                Training runs from ai-toolkit are described where they lie, then
+                imported with their sample images
               </li>
               <li>
-                Suggest more pictures of a person, then assign all results or
-                only the ones you select
+                A <code>pixlstash-cli</code> command line for libraries, backups,
+                restores and plugins, so a backup can run from cron
               </li>
               <li>
-                A new Privacy pane with two independent, off-by-default options:
-                update checks and an anonymous install ID
+                The desktop app checks your library folder's permissions at
+                start-up and offers to tighten them
               </li>
             </ul>
           </div>
-          <div class="release-hero-media release-hero-media--contain">
+          <div class="release-hero-media">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotUndoHistory.jpg"
-              alt="PixlStash history showing several recent library changes with Undo and Redo controls"
+              src="assets/ScreenshotLibraries.jpg"
+              alt="PixlStash Settings with two registered picture libraries and the active one marked"
             />
           </div>
         </div>
       </section>
 
       <section class="section-grid">
-        <article class="update-card update-card--video">
-          <video
-            class="zoomable-video"
-            src="assets/DuplicatesReview.mp4"
-            autoplay
-            loop
-            muted
-            playsinline
-            preload="metadata"
-          ></video>
+        <article class="update-card">
           <div class="update-card-body">
-            <h2>Undo reaches whole workflows</h2>
+            <h2>Switching, and what stays behind</h2>
             <p>
-              Use the toolbar, Ctrl+Z and Ctrl+Y on Windows and Linux, or the
-              standard shortcuts on macOS. Soft-deleting pictures, changing tags
-              or descriptions, assigning and moving images, and duplicate
-              decisions all join the same history. Open the history menu when
-              you want to inspect recent work or undo several steps at once. The
-              safety net reaches whole workflows, not just simple field edits,
-              including stacking duplicates or keeping them separate.
+              A library is a folder holding your pictures and their database.
+              PixlStash keeps one open at a time and switches from Settings →
+              Libraries. Your owner account, your preferences and the model shelf
+              belong to the installation and follow you between libraries. API
+              tokens and share links do not: they are pinned to the library that
+              created them, stop working while another library is open, and work
+              again when you switch back. Create a token in each library your
+              scripts use, and expect Settings to tell you before you switch away
+              from a library with live share links.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card update-card--wide">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotModelShelf.jpg"
+            alt="The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns"
+            loading="lazy"
+          />
+          <div class="update-card-body">
+            <h2>A shelf for the models you already have</h2>
+            <p>
+              Register the folders where you keep checkpoints and LoRAs and
+              PixlStash catalogues what is in them: the kind of file, the base
+              model it was trained against, its size, and every folder a copy
+              sits in. Group the shelf by kind, base model, folder or feature,
+              sort it, and narrow it down to what you are looking for. Files are
+              read where they are rather than copied into the library. A drive
+              that is not plugged in says so instead of quietly showing nothing.
             </p>
           </div>
         </article>
       </section>
 
       <section class="section-grid">
-        <article class="update-card update-card--feature">
+        <article class="update-card update-card--wide">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotAiToolkitImport.jpg"
+            alt="The PixlStash Training runs view with three discovered ai-toolkit runs selected for import"
+            loading="lazy"
+          />
           <div class="update-card-body">
-            <h2>A queue for duplicate decisions</h2>
+            <h2>Training runs, described where they lie</h2>
             <p>
-              Duplicates has a permanent place in the sidebar and scans the view
-              you are working in. Each group keeps its candidates together,
-              explains why they match, and lets you compare them full-screen
-              before you stack them or keep them separate. Exact copies are the
-              starting point; optional near-duplicate tiers and a similarity
-              threshold let you decide how far the scan should reach. Decided
-              groups stay available, and Mixed stacks flags existing stacks
-              whose pictures no longer hang together at the chosen threshold.
+              PixlStash reads an ai-toolkit training run from the folder it was
+              written to and describes it without touching a file: the
+              checkpoints it produced, the base model, the rank, and the step
+              each one stopped at. Import the runs you want and their sample
+              images come with them. Versions of one subject group behind a
+              single row, so a character you have trained four times is one entry
+              with its history under it.
             </p>
           </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotDuplicates.jpg"
-              alt="PixlStash Duplicates view with likely copies grouped for review"
-              loading="lazy"
-            />
-          </div>
         </article>
-      </section>
 
-      <section class="section-grid">
-        <article class="update-card update-card--solo">
-          <div class="update-card-media-pair">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotKeepCoverOnly.jpg"
-              alt="PixlStash picture menu with Keep cover only available for a selected stack"
-              loading="lazy"
-            />
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotKeepCoverOnly2.jpg"
-              alt="Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step"
-              loading="lazy"
-            />
-          </div>
+        <article class="update-card update-card--wide">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotCli.jpg"
+            alt="pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes"
+            loading="lazy"
+          />
           <div class="update-card-body">
-            <h2>Clean up stacks without deleting originals</h2>
+            <h2>One command line for the installation</h2>
             <p>
-              Filter any grid to stacked or unstacked pictures. When a stack is
-              settled, Keep cover only previews exactly what will happen, keeps
-              the cover, and moves every other picture in the stack to the
-              Scrapheap. No original is deleted from disk by the action, and you
-              can undo it or restore a picture from the Scrapheap.
+              <code>pixlstash-cli</code> covers the jobs that point PixlStash at
+              folders on your machine: adding and removing libraries, writing and
+              reading back backups, and installing plugins. Every command
+              documents itself, including the exit codes a script needs. Settings
+              → Libraries shows the exact form for your installation with a copy
+              button, and the desktop app can run it too, so
+              <code>PixlStash.AppImage cli libraries list</code> works whether or
+              not the app is open. Settings → Backend → Desktop → Shell command
+              adds a <code>pixlstash</code> command in
+              <code>~/.local/bin</code> for any terminal.
             </p>
           </div>
         </article>
@@ -735,39 +778,18 @@
         <article class="update-card">
           <img
             class="zoomable-image"
-            src="assets/ScreenshotMultiProject.jpg"
-            alt="One PixlStash character assigned to more than one project"
+            src="assets/ScreenshotDeleteLora.jpg"
+            alt="The PixlStash model shelf's right-click menu with Move to Trash highlighted and a tooltip explaining Shift deletes permanently"
             loading="lazy"
           />
           <div class="update-card-body">
-            <h2>One person or set, several projects</h2>
+            <h2>Delete a model from the shelf</h2>
             <p>
-              Characters and picture sets no longer have to be duplicated or
-              moved back and forth when they belong in more than one project.
-              Add the same item to several projects, see its pictures in every
-              one, and remove one membership without disturbing the others.
-              Existing project assignments carry over unchanged.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <video
-            class="zoomable-video"
-            src="assets/SuggestMorePictures.mp4"
-            autoplay
-            loop
-            muted
-            playsinline
-            preload="metadata"
-          ></video>
-          <div class="update-card-body">
-            <h2>Suggest more pictures of a person</h2>
-            <p>
-              Open a person's context menu and ask PixlStash to rank the library
-              by face likeness. Review the result in the grid, adjust the match
-              if needed, then assign every result or just your current selection
-              to that person in one action.
+              Remove a model from the selection pill, the row's right-click menu
+              or the <code>Delete</code> key. Files go to your Trash, or are
+              deleted for good with Shift held. Only your own model folders and
+              PixlStash's own store are touched: a shared cache, or a drive that
+              is not currently plugged in, is refused.
             </p>
           </div>
         </article>
@@ -775,106 +797,91 @@
         <article class="update-card">
           <img
             class="zoomable-image"
-            src="assets/ScreenshotPrivacy.jpg"
-            alt="PixlStash Privacy settings with independent controls for update checks and anonymous install telemetry"
+            src="assets/ScreenshotPermissionRepair.jpg"
+            alt="The PixlStash start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it"
             loading="lazy"
           />
           <div class="update-card-body">
-            <h2>Optional, limited telemetry</h2>
+            <h2>A start-up check on folder permissions</h2>
             <p>
-              The new Privacy pane can send a random anonymous install ID once a
-              day, together with your install type and whether this was a new
-              install. It never includes your images, tags, captions, filenames,
-              searches, or file paths, and the ID can be replaced whenever you
-              like. It is off by default, stays off when you upgrade, and can be
-              turned off again at any time. If you are comfortable enabling it,
-              we hope you will: it gives us a much clearer picture of whether
-              PixlStash remains useful after the download. The
-              <a class="whatsnew-link" href="privacy.html">privacy policy</a>
-              shows the exact message and retention details.
+              If another account on the same computer can write to your library
+              folder, that account could replace your pictures database or read
+              your credentials. The desktop app notices at start-up, lists the
+              folders it wants to change, and offers to fix them. Nothing is
+              moved, renamed or deleted, and your own access is unchanged.
             </p>
           </div>
         </article>
       </section>
 
       <section class="section-grid">
-        <article class="update-card update-card--feature">
-          <div class="update-card-body">
-            <h2>A clear choice when you upgrade</h2>
-            <p>
-              Existing users who already enabled update checks see a one-time
-              explanation of the anonymous install ID. The dialog shows the
-              complete request, explains every field, and makes declining as
-              straightforward as opting in. Nothing about the existing update
-              check changes either way, and the choice remains available in
-              Settings → Privacy.
-            </p>
-          </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotInstallId.jpg"
-              alt="PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number"
-              loading="lazy"
-            />
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid">
-        <article class="update-card">
+        <article class="update-card update-card--wide">
           <img
             class="zoomable-image"
-            src="assets/ScreenshotMixedStacks.jpg"
-            alt="PixlStash Mixed stacks view showing stacks flagged for review"
+            src="assets/ScreenshotCliLibraries.jpg"
+            alt="pixlstash-cli libraries --help listing list, create, attach, detach, relocate, backup, restore, prepare-legacy-identity and rename"
             loading="lazy"
           />
           <div class="update-card-body">
-            <h2>Review stacks that no longer fit</h2>
+            <h2>Backups you can put in cron</h2>
             <p>
-              Mixed stacks finds existing stacks whose pictures fall below your
-              chosen similarity threshold. Compare the members, keep the stack
-              when it is intentional, or separate pictures that do not belong.
+              <code>libraries backup</code> writes one library and its hub to a
+              single archive you can read yourself, your password and API tokens
+              included. <code>libraries restore</code> reads it back into a new
+              folder and makes it the library that opens. Restore needs PixlStash
+              stopped and never overwrites: your current config and hub are moved
+              into a dated <code>pre-restore-</code> folder, and it prints the
+              launch command for both the restored library and the one you had.
             </p>
           </div>
         </article>
 
-        <article class="update-card">
+        <article class="update-card update-card--wide">
           <img
             class="zoomable-image"
-            src="assets/ScreenshotStackFilter.jpg"
-            alt="PixlStash grid filtered to show stacked pictures"
+            src="assets/ScreenshotCliPlugins.jpg"
+            alt="pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences"
             loading="lazy"
           />
           <div class="update-card-body">
-            <h2>Show stacked or unstacked pictures</h2>
+            <h2>Find a plugin by name, and check the one you are writing</h2>
             <p>
-              Filter any grid by stack state to focus on pictures that have
-              already been grouped or find the ones that still need attention.
+              <code>plugins available</code> lists what the plugin repository
+              publishes: name, title, summary, and where they are declared the
+              author and licence, with a star against anything you already have.
+              Add a word to search. Until now the only way to learn a plugin's
+              name was to guess one wrong and read the error.
+              <code>plugins test</code> loads a captioning plugin the way the
+              server does and checks its parameter schema is one the settings
+              screen can draw, so a typo no longer costs a server restart. It
+              imports your file, so that code runs with your permissions: it is a
+              development aid and not a security scanner.
             </p>
           </div>
         </article>
       </section>
+
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Upgrading from 1.8.0 or earlier</h2>
+          <h2>Upgrading to 1.10</h2>
           <p>
-            PixlStash clears every API token as part of the security change
-            released in 1.8.1. Create replacement tokens in Settings, recreate
-            any share links, and enter your public URL and ComfyUI URL again. If
-            you already upgraded to 1.8.1 or later, this has already happened
-            and your current tokens are left alone.
+            The library upgrade is not backwards compatible: once a library has
+            been opened by 1.10, an older version cannot open it again. Back it
+            up first by copying the library folder somewhere safe while
+            PixlStash is stopped. See the
+            <a href="upgrade.html">upgrade guide</a> for the steps for your
+            install type.
           </p>
         </div>
       </article>
 
       <section class="release-cta">
         <div>
-          <h3>Get PixlStash 1.9</h3>
+          <h3>Get PixlStash 1.10</h3>
           <p>
             Download the desktop app for Windows, macOS, or Linux. Or keep using
-            pip, Docker, or the source build.
+            pip, Docker, or the source build, and read the upgrade guide first.
           </p>
         </div>
         <div class="release-cta-actions">
@@ -886,6 +893,300 @@
           >
         </div>
       </section>
+
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release: PixlStash 1.9</span>
+
+        <!-- ── PixlStash 1.9 ──────────────────────────────────────────── -->
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.9</span>
+              <h1>Fix your mistake with one CTRL-Z</h1>
+              <p>
+                PixlStash 1.9 brings <strong>full undo and redo</strong> across
+                the app. Soft-deletion, tags, descriptions, assignments, moves,
+                and duplicate decisions all join one shared history. Step back
+                through one change or several, then redo them when you change your
+                mind again. Work quickly without making every decision final.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  Full undo and redo, including a history menu for stepping back
+                  through more than one change. It is database backed and survives
+                  server restarts
+                </li>
+                <li>
+                  A dedicated Duplicates view for reviewing, comparing, stacking,
+                  or keeping likely copies separate
+                </li>
+                <li>
+                  Stack filters and <strong>Keep cover only</strong> for moving
+                  unwanted copies to the recoverable Scrapheap
+                </li>
+                <li>
+                  Characters and picture sets can belong to several projects at
+                  the same time
+                </li>
+                <li>
+                  Suggest more pictures of a person, then assign all results or
+                  only the ones you select
+                </li>
+                <li>
+                  A new Privacy pane with two independent, off-by-default options:
+                  update checks and an anonymous install ID
+                </li>
+              </ul>
+            </div>
+            <div class="release-hero-media release-hero-media--contain">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotUndoHistory.jpg"
+                alt="PixlStash history showing several recent library changes with Undo and Redo controls"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--video">
+            <video
+              class="zoomable-video"
+              src="assets/DuplicatesReview.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <div class="update-card-body">
+              <h2>Undo reaches whole workflows</h2>
+              <p>
+                Use the toolbar, Ctrl+Z and Ctrl+Y on Windows and Linux, or the
+                standard shortcuts on macOS. Soft-deleting pictures, changing tags
+                or descriptions, assigning and moving images, and duplicate
+                decisions all join the same history. Open the history menu when
+                you want to inspect recent work or undo several steps at once. The
+                safety net reaches whole workflows, not just simple field edits,
+                including stacking duplicates or keeping them separate.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>A queue for duplicate decisions</h2>
+              <p>
+                Duplicates has a permanent place in the sidebar and scans the view
+                you are working in. Each group keeps its candidates together,
+                explains why they match, and lets you compare them full-screen
+                before you stack them or keep them separate. Exact copies are the
+                starting point; optional near-duplicate tiers and a similarity
+                threshold let you decide how far the scan should reach. Decided
+                groups stay available, and Mixed stacks flags existing stacks
+                whose pictures no longer hang together at the chosen threshold.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotDuplicates.jpg"
+                alt="PixlStash Duplicates view with likely copies grouped for review"
+                loading="lazy"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--solo">
+            <div class="update-card-media-pair">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotKeepCoverOnly.jpg"
+                alt="PixlStash picture menu with Keep cover only available for a selected stack"
+                loading="lazy"
+              />
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotKeepCoverOnly2.jpg"
+                alt="Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step"
+                loading="lazy"
+              />
+            </div>
+            <div class="update-card-body">
+              <h2>Clean up stacks without deleting originals</h2>
+              <p>
+                Filter any grid to stacked or unstacked pictures. When a stack is
+                settled, Keep cover only previews exactly what will happen, keeps
+                the cover, and moves every other picture in the stack to the
+                Scrapheap. No original is deleted from disk by the action, and you
+                can undo it or restore a picture from the Scrapheap.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotMultiProject.jpg"
+              alt="One PixlStash character assigned to more than one project"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>One person or set, several projects</h2>
+              <p>
+                Characters and picture sets no longer have to be duplicated or
+                moved back and forth when they belong in more than one project.
+                Add the same item to several projects, see its pictures in every
+                one, and remove one membership without disturbing the others.
+                Existing project assignments carry over unchanged.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <video
+              class="zoomable-video"
+              src="assets/SuggestMorePictures.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <div class="update-card-body">
+              <h2>Suggest more pictures of a person</h2>
+              <p>
+                Open a person's context menu and ask PixlStash to rank the library
+                by face likeness. Review the result in the grid, adjust the match
+                if needed, then assign every result or just your current selection
+                to that person in one action.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotPrivacy.jpg"
+              alt="PixlStash Privacy settings with independent controls for update checks and anonymous install telemetry"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Optional, limited telemetry</h2>
+              <p>
+                The new Privacy pane can send a random anonymous install ID once a
+                day, together with your install type and whether this was a new
+                install. It never includes your images, tags, captions, filenames,
+                searches, or file paths, and the ID can be replaced whenever you
+                like. It is off by default, stays off when you upgrade, and can be
+                turned off again at any time. If you are comfortable enabling it,
+                we hope you will: it gives us a much clearer picture of whether
+                PixlStash remains useful after the download. The
+                <a class="whatsnew-link" href="privacy.html">privacy policy</a>
+                shows the exact message and retention details.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>A clear choice when you upgrade</h2>
+              <p>
+                Existing users who already enabled update checks see a one-time
+                explanation of the anonymous install ID. The dialog shows the
+                complete request, explains every field, and makes declining as
+                straightforward as opting in. Nothing about the existing update
+                check changes either way, and the choice remains available in
+                Settings → Privacy.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotInstallId.jpg"
+                alt="PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number"
+                loading="lazy"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotMixedStacks.jpg"
+              alt="PixlStash Mixed stacks view showing stacks flagged for review"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Review stacks that no longer fit</h2>
+              <p>
+                Mixed stacks finds existing stacks whose pictures fall below your
+                chosen similarity threshold. Compare the members, keep the stack
+                when it is intentional, or separate pictures that do not belong.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotStackFilter.jpg"
+              alt="PixlStash grid filtered to show stacked pictures"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Show stacked or unstacked pictures</h2>
+              <p>
+                Filter any grid by stack state to focus on pictures that have
+                already been grouped or find the ones that still need attention.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Upgrading from 1.8.0 or earlier</h2>
+            <p>
+              PixlStash clears every API token as part of the security change
+              released in 1.8.1. Create replacement tokens in Settings, recreate
+              any share links, and enter your public URL and ComfyUI URL again. If
+              you already upgraded to 1.8.1 or later, this has already happened
+              and your current tokens are left alone.
+            </p>
+          </div>
+        </article>
+
+        <section class="release-cta">
+          <div>
+            <h3>Get PixlStash 1.9</h3>
+            <p>
+              Download the desktop app for Windows, macOS, or Linux. Or keep using
+              pip, Docker, or the source build.
+            </p>
+          </div>
+          <div class="release-cta-actions">
+            <a class="release-btn release-btn-primary" href="install.html"
+              >Download</a
+            >
+            <a class="release-btn release-btn-secondary" href="upgrade.html"
+              >Upgrade guide</a
+            >
+          </div>
+        </section>
+
+        <!-- ── PixlStash 1.8 (previous release) ────────────────────────── -->
+      </div>
 
       <div class="prev-release">
         <span class="prev-release-label">Previous release: PixlStash 1.8</span>

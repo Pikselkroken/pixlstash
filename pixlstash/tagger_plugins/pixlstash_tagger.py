@@ -146,6 +146,12 @@ class PixlStashTaggerService:
         # fp32, so it briefly upcasts the shared model; the lock keeps two
         # localisations from racing on that upcast/restore (see localize_anomaly).
         self._localize_lock = threading.Lock()
+        # Serialises loading against unloading. ``aggressive_unload`` runs from
+        # the idle sweep and from shutdown, neither of which knows a load is in
+        # flight, and dropping the model mid-load frees device memory the loader
+        # is still writing into. Reentrant because ``reload_on_cpu`` calls
+        # ``unload`` from its own failure path. See test_model_unload_race.py.
+        self._load_lock = threading.RLock()
 
     # ------------------------------------------------------------------ #
     # State queries
@@ -256,6 +262,11 @@ class PixlStashTaggerService:
 
     def init(self) -> None:
         """Load the model checkpoint and metadata from disk into memory."""
+        with self._load_lock:
+            self._init_locked()
+
+    def _init_locked(self) -> None:
+        """Do the load. The caller must hold ``_load_lock``."""
         import torch
 
         if not os.path.exists(self._model_path):
@@ -343,12 +354,21 @@ class PixlStashTaggerService:
     def reload_on_cpu(self) -> bool:
         """Move the already-loaded model to CPU, freeing GPU memory.
 
+        Holds the load lock for the same reason :meth:`init` does: the move and
+        dtype conversion rewrite the model in place, and an ``unload`` landing
+        halfway through would free memory the conversion is still using.
+
         Returns:
             True on success, False if the move failed.
         """
         import torch
 
         logger.warning("PixlStash tagger GPU inference failed; reloading on CPU...")
+        with self._load_lock:
+            return self._reload_on_cpu_locked(torch)
+
+    def _reload_on_cpu_locked(self, torch) -> bool:
+        """Do the CPU reload. The caller must hold ``_load_lock``."""
         try:
             if self._model is not None:
                 # Move to CPU *before* converting dtype so that the FP16→FP32
@@ -375,12 +395,17 @@ class PixlStashTaggerService:
             return False
 
     def unload(self) -> None:
-        """Release model memory and clear the transform cache."""
-        self._model = None
-        self._labels = None
-        self._label_to_idx = None
-        self._transform = None
-        self._transform_cache = {}
+        """Release model memory and clear the transform cache.
+
+        Waits for an in-flight load rather than dropping the model underneath
+        it, which would free device memory the loader is still writing into.
+        """
+        with self._load_lock:
+            self._model = None
+            self._labels = None
+            self._label_to_idx = None
+            self._transform = None
+            self._transform_cache = {}
 
     # ------------------------------------------------------------------ #
     # Inference
@@ -1008,6 +1033,7 @@ class PixlStashTaggerPlugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: Produces anomaly/quality tags.
         supports_descriptions: Does not produce captions.
         requires_download: Model must be downloaded on first use.
@@ -1016,6 +1042,11 @@ class PixlStashTaggerPlugin(TaggerPlugin):
     name: str = "pixlstash_tagger"
     display_name: str = "PixlStash Tagger"
     description: str = "Custom anomaly/quality tagger trained for PixlStash — detects blur, artefacts, and content-specific tags."
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license: str = "GPL-3.0-only"
+    models: list[dict[str, str]] = [
+        {"name": "PersonalJeebus/pixlvault-anomaly-tagger", "license": "MIT"},
+    ]
     supports_tags: bool = True
     supports_descriptions: bool = False
     requires_download: bool = True
@@ -1097,20 +1128,6 @@ class PixlStashTaggerPlugin(TaggerPlugin):
     def default_params(self) -> dict:
         """Return ``{name: default}`` from ``parameter_schema``."""
         return {f["name"]: f["default"] for f in self.parameter_schema()}
-
-    def plugin_schema(self) -> dict:
-        """Return JSON-serialisable metadata for this plugin."""
-        return {
-            "name": self.name,
-            "display_name": self.display_name,
-            "description": self.description,
-            "supports_tags": self.supports_tags,
-            "supports_descriptions": self.supports_descriptions,
-            "requires_download": self.requires_download,
-            "parameters": self.parameter_schema(),
-            "downloaded_artifacts": self.list_downloaded_artifacts(),
-            "is_loaded": self.is_loaded(),
-        }
 
     def needs_download(self, parameters=None) -> bool:
         """Return ``True`` if model files are absent or stale."""

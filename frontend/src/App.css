@@ -14,6 +14,14 @@ body {
   box-sizing: border-box;
   border: none;
 }
+
+@supports (height: 100dvh) {
+  body {
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+}
+
 .app-viewport {
   position: fixed;
   inset: 0;
@@ -29,6 +37,17 @@ body {
      so the file manager simply fills the whole viewport. */
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+@supports (height: 100dvh) {
+  .app-viewport {
+    height: 100dvh;
+  }
 }
 
 /* Removed duplicate body rule */
@@ -56,7 +75,6 @@ body {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
-  transition: width 0.2s;
 }
 .main-content {
   flex: 1;
@@ -224,19 +242,6 @@ body {
   z-index: 145;
   background: var(--scrim-drawer);
 }
-/* Same duration and curve as the panel's slide. The scrim's opacity is a proxy
-   for the panel's presence, so the two must not diverge; the panel uses
-   --ease-decelerate in both directions, so this does too. No accelerate-out: on
-   a pure opacity ramp the curve is imperceptible, and a faster leave would
-   strand the panel mid-slide over undimmed content. */
-.backdrop-fade-enter-active,
-.backdrop-fade-leave-active {
-  transition: opacity var(--dur-2) var(--ease-decelerate);
-}
-.backdrop-fade-enter-from,
-.backdrop-fade-leave-to {
-  opacity: 0;
-}
 /* Reduced-motion exception, matching .sidebar-shell.sidebar-overlay above, and
    it must match, because the scrim and the panel are one object. If the panel
    keeps its 200ms slide while the scrim snaps, a full-shell dim appears
@@ -271,10 +276,6 @@ body {
      invisible hit area so hovering the edge still reveals the sidebar. */
   background: transparent;
   cursor: pointer;
-  transition: width 0.15s ease;
-}
-.sidebar-hover-trigger:hover {
-  width: 11px;
 }
 .sidebar-hover-trigger-tab {
   display: flex;
@@ -294,6 +295,21 @@ body {
 .sidebar-hover-trigger:hover .sidebar-hover-trigger-tab {
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
+}
+
+@media (max-width: 640px) {
+  .sidebar-shell.sidebar-overlay {
+    width: min(calc(100vw - var(--space-7)), 320px);
+    max-width: 100%;
+  }
+
+  .sidebar-shell.sidebar-overlay .sidebar {
+    width: 100% !important;
+  }
+
+  .sidebar-shell.sidebar-overlay .sidebar-resize-handle {
+    display: none;
+  }
 }
 
 /* Narrow widths reuse the same auto-hide overlay as the unpinned sidebar (the
@@ -334,24 +350,6 @@ button:focus:not(:focus-visible) {
   box-shadow: none !important;
 }
 
-.media-type-toggle {
-  border-radius: var(--radius-md);
-  margin-left: var(--space-2);
-  display: inline-flex;
-}
-
-.media-type-toggle .v-btn {
-  color: rgb(var(--v-theme-on-secondary)) !important;
-  height: 32px;
-  width: 32px;
-  background-color: rgba(var(--v-theme-surface), 0.3) !important;
-  align-items: center;
-}
-
-.media-type-toggle .v-btn--active {
-  background-color: rgb(var(--v-theme-secondary)) !important;
-  color: rgb(var(--v-theme-on-secondary)) !important;
-}
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
   display: inline-flex;
   align-items: center;
@@ -377,6 +375,122 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-secondary)) !important;
 }
 
+/* -- The selection pill: the floating contextual-action dialect -------------
+   Moved here from `ShelfSelectionBar.vue`'s scoped block, unchanged apart from
+   the name. `<style scoped>` compiles these to `.selbar[data-v-hash]`, which
+   matches only that component's own elements -- so a SECOND consumer of the
+   same object (the ai-toolkit training runs, which dock their own pill in the
+   same strip) renders a bare `<div>`. This is the identical trap the `.bar-btn`
+   family was moved here to escape, for the identical reason; see the note above
+   it. Selectors stay `selbar-`-prefixed, so global scope is contained.
+
+   `.shelf-selbar` became `.selbar` in the move: the object is not the shelf's,
+   it is the product's, and two views now dock one. `.selbar-float` came with it
+   from `ModelShelf.vue` for the same reason -- only the CONTAINER knows where
+   its list ends, which is why it is `position: absolute` against a positioned
+   ancestor and not fixed.
+   ------------------------------------------------------------------------ */
+/* ── The pill ──────────────────────────────────────────────────────────────
+   Positioned by the shelf, which is the only thing that knows where its list
+   ends; this owns the object and not its place. `--elevation-4` and the pill
+   radius are what make it read as floating ABOVE the rows rather than as a
+   docked strip the list stops at. */
+.selbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-pill);
+  box-shadow: var(--elevation-4);
+}
+
+.selbar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.selbar-size {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.selbar-chevron {
+  margin-left: calc(var(--space-1) * -1);
+}
+
+/* Round, 34px, and the hover wash is the only thing that draws a box: a border
+   per verb would make seven of them into a fence. */
+.selbar-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.selbar-btn:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+/* The only verb in the pill that destroys bytes. Colour is the whole signal —
+   no border, no fill — so it reads as one of the row rather than as a second
+   kind of control, and the hover wash is the error colour at the same weight
+   the neutral one uses. */
+.selbar-btn--danger {
+  color: rgb(var(--v-theme-error));
+}
+
+.selbar-btn--danger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
+/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
+   the pointer as the selection grows. The reason is in the `title`. */
+.selbar-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.selbar-sep {
+  width: 1px;
+  height: 22px;
+  background: rgb(var(--v-theme-divider));
+}
+
+.selbar-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--space-5);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+}
+
+.selbar-float > * {
+  pointer-events: auto;
+}
+
 /* Keyboard shortcuts FAB */
 .shortcuts-fab {
   position: fixed;
@@ -392,7 +506,6 @@ button:focus:not(:focus-visible) {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.15s;
   box-shadow: var(--elevation-2);
@@ -469,42 +582,6 @@ kbd {
   line-height: 1.5;
 }
 
-.update-check-dialog {
-  padding: var(--space-3) var(--space-2);
-}
-
-.update-check-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  padding-bottom: var(--space-2);
-}
-
-.update-check-body {
-  color: rgb(var(--v-theme-on-surface));
-  line-height: 1.6;
-}
-
-.update-check-note {
-  font-size: var(--text-sm);
-  opacity: 0.7;
-}
-
-.update-check-actions {
-  justify-content: flex-end;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
-}
-
-/* ── Popup panel base — shared by all floating dropdown/popover panels ─────── */
-.popup-panel {
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  background: rgba(var(--v-theme-background), 0.96);
-  color: rgb(var(--v-theme-on-background));
-  display: flex;
-  flex-direction: column;
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    Toolbar menus — shared chrome for the Sort / Filter / Grid-view popovers.
    These three menus live in two different components (Toolbar.vue and
@@ -569,11 +646,6 @@ kbd {
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
-.tbm-subtitle {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-panel), 0.6);
-  margin-top: var(--space-1);
-}
 .tbm-spacer {
   flex: 1 1 auto;
 }
@@ -630,6 +702,9 @@ kbd {
 .tbm-label--right {
   text-align: right;
 }
+.tbm-label--center {
+  text-align: center;
+}
 
 /* Two-column grids used for option toggles and checkboxes. */
 .tbm-grid-2 {
@@ -647,9 +722,6 @@ kbd {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: var(--space-3);
-}
-.tbm-header--top {
-  align-items: flex-start;
 }
 .tbm-mono {
   font-family: var(--font-mono);
@@ -677,10 +749,8 @@ kbd {
   font-size: var(--text-sm);
   text-align: left;
   color: rgb(var(--v-theme-on-panel));
-  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
@@ -766,10 +836,8 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
-  background: transparent;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -797,9 +865,6 @@ kbd {
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
 }
-.tbm-seg--full {
-  display: flex;
-}
 .tbm-seg-btn {
   flex: 1;
   display: inline-flex;
@@ -811,10 +876,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.7);
-  background: transparent;
-  border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -913,9 +975,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  border: none;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition: filter var(--dur-1) var(--ease-standard);
 }
@@ -936,7 +996,6 @@ kbd {
   color: rgb(var(--v-theme-on-panel));
 }
 .tbm-action--outline {
-  background: transparent;
   border: 1px solid rgb(var(--v-theme-border));
   color: rgb(var(--v-theme-on-panel));
 }
@@ -1023,10 +1082,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.75);
-  background: transparent;
-  border: none;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -1039,7 +1095,169 @@ kbd {
 .tbm-ghost:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* ── Bar buttons: the toolbar control dialect ──────────────────────────────
+   Moved here from `Toolbar.vue`'s scoped block, unchanged. `<style scoped>`
+   compiles these to `.bar-btn[data-v-hash]`, which matches only Toolbar.vue's
+   own elements, so the model shelf's toolbar (which uses the same class names)
+   rendered its buttons as bare `<button>`s. The `--open` state below was
+   already global, so half the family lived here and half did not; that split is
+   what this closes. Selectors stay `bar-`-prefixed, so global scope is
+   contained, the same containment argument `SideBar.global.css` makes. Toolbar
+   keeps only its own overrides (the responsive fold, the icon-trigger accent).
+   ────────────────────────────────────────────────────────────────────────── */
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  font-size: var(--text-base);
+  font-family: inherit;
+  /* Icons and labels take the sidebar's treatment: the toolbar-text token
+     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
+     hover/active — so the toolbar and sidebar chrome read as one strip. */
+  color: rgb(var(--v-theme-toolbar-text));
+  /* A transparent 1px border is reserved so the open state (which colours the
+     border) does not change the box size and make the button jump. */
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  height: 32px;
+  white-space: nowrap;
+  position: relative;
+}
+
+.bar-btn:hover {
+  background: rgba(var(--v-theme-toolbar-text), 0.1);
+  color: rgb(var(--v-theme-toolbar-text));
+}
+
+.bar-btn--active {
+  color: rgb(var(--v-theme-primary));
+}
+
+.bar-btn--boxed {
+  border-radius: var(--radius-sm);
+}
+
+/* Icon-only bar button */
+.bar-btn--icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bar-btn-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+}
+
+.bar-btn-prefix {
+  font-size: var(--text-sm);
+  opacity: var(--opacity-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bar-split-toggle {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  padding-right: var(--space-2);
+}
+
+.bar-split-menu {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+/* Wrapper so the filter-count badge can overlay the icon without affecting
+   layout (the badge is absolutely positioned within this). */
+.bar-icon-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Small count badge, overlaid on the top-right of the filter icon. Absolutely
+   positioned so it never changes the size of the button or shifts the chevron
+   and the buttons that follow it. */
+.bar-filter-badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
+  min-width: 15px;
+  height: 15px;
+  text-align: center;
+  line-height: 15px;
+  pointer-events: none;
+}
+
+.bar-separator {
+  width: 1px;
+  height: 24px;
+  background: rgba(var(--v-theme-on-background), 0.2);
+  margin: 0 var(--space-2);
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.bar-btn-sort-type {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  flex-shrink: 1;
+  /* The current selection reads at full strength against the muted "Sort:". */
+  color: rgb(var(--v-theme-toolbar-text));
+}
+
+.bar-btn-sort-secondary {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  flex-shrink: 1;
+}
+
+/* ── Split button (a direction toggle welded to a menu trigger) ───────────── */
+.bar-split-button {
+  display: flex;
+  align-items: center;
   background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+/* Open state: the whole split button adopts the panel fill + border so it reads
+   as one object with its menu (the caret bridges the gap). */
+.bar-split-button--open {
+  border-color: rgb(var(--v-theme-border));
+  background: rgb(var(--v-theme-panel));
+}
+
+.bar-split-button--open .bar-split-toggle,
+.bar-split-button--open .bar-split-menu {
+  background: transparent;
+}
+
+.bar-split-button--open .bar-btn-chevron {
+  transform: rotate(180deg);
+  transition: transform var(--dur-1) var(--ease-standard);
 }
 
 /* ── Open trigger state — the toolbar button while its menu is open ────────── */

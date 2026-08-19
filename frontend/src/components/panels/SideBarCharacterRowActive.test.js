@@ -31,7 +31,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { mount, flushPromises } from "@vue/test-utils";
-import { ref } from "vue";
 
 const apiGet = vi.fn();
 
@@ -64,46 +63,35 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
-vi.mock("vuetify/components", () => {
-  const stubs = new Map();
-  return new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === "__esModule") return true;
-        if (typeof prop !== "string") return undefined;
-        if (!stubs.has(prop)) {
-          stubs.set(prop, { name: prop, template: "<div><slot /></div>" });
-        }
-        return stubs.get(prop);
-      },
-      has: () => true,
-    },
-  );
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
 });
 
-vi.mock("vue-router", () => ({
-  useRoute: () => ({ query: {}, params: {}, path: "/", name: "all-pictures" }),
-  useRouter: () => ({
-    push: vi.fn(),
-    replace: vi.fn(),
-    currentRoute: ref({ query: {} }),
-  }),
-}));
-
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
-globalThis.IntersectionObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+// Mutable, so a test can put the sidebar on a route other than the default.
+const nav = vi.hoisted(() => ({ route: null }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual("vue");
+  const { vi: vitest } = await import("vitest");
+  nav.route = reactive({
+    query: {},
+    params: {},
+    path: "/",
+    name: "all-pictures",
+  });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({
+      push: vitest.fn(),
+      replace: vitest.fn(),
+      currentRoute: { value: { query: {} } },
+    }),
+  };
+});
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
 
 const ADA = { id: 7, name: "Ada", image_count: 3, project_image_count: 3 };
@@ -119,16 +107,20 @@ function respond(url) {
   return { data: [] };
 }
 
-async function mountSidebar() {
-  const wrapper = mount(SideBar, {
+async function mountSidebar({ docked = false } = {}) {
+  if (docked) useSidebarStore().sidebarDocked = true;
+  const options = {
     shallow: true,
     props: { backendUrl: "/api/v1" },
     global: {
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
+      ...(docked ? { stubs: { teleport: false } } : {}),
     },
-  });
+  };
+  if (docked) options.attachTo = document.body;
+  const wrapper = mount(SideBar, options);
   wrapper.vm.refreshSidebar();
   for (let i = 0; i < 5; i += 1) await flushPromises();
   return wrapper;
@@ -150,6 +142,12 @@ function characterRowIsActive(wrapper, name) {
   return row.classes().includes("active");
 }
 
+function characterRow(wrapper, name) {
+  return wrapper
+    .findAll(".sidebar-list-item")
+    .find((el) => String(el.attributes("title") ?? "").startsWith(`${name} (`));
+}
+
 let consoleWarn;
 
 beforeEach(() => {
@@ -163,9 +161,35 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  document.body.innerHTML = "";
 });
 
 describe("the character row's single-selection fallback", () => {
+  it("exposes selection state and keyboard activation semantics", async () => {
+    const selection = useSelectionStore();
+    const wrapper = await mountSidebar();
+    selection.selectedCharacter = ADA.id;
+    selection.selectedCharacterIds = [];
+    await wrapper.vm.$nextTick();
+
+    const adaRow = characterRow(wrapper, ADA.name);
+    const graceRow = characterRow(wrapper, GRACE.name);
+    expect(adaRow.attributes()).toMatchObject({
+      role: "button",
+      tabindex: "0",
+      "aria-pressed": "true",
+    });
+    expect(graceRow.attributes("aria-pressed")).toBe("false");
+
+    await graceRow.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("select-character")?.at(-1)?.[0]).toMatchObject({
+      id: GRACE.id,
+      ids: [GRACE.id],
+    });
+
+    wrapper.unmount();
+  });
+
   it("lights the row when only the scalar selection is set", async () => {
     // Exactly the `App.vue:391` share-token state: the scalar names a real
     // person, the id list was never written. Before the fix the bare
@@ -240,6 +264,117 @@ describe("the character row's single-selection fallback", () => {
       String(msg ?? "").includes("selectedCharacter"),
     );
     expect(resolutionWarnings).toEqual([]);
+
+    wrapper.unmount();
+  });
+});
+
+describe("the shelf's two routes are one destination", () => {
+  // `SideBar` keeps its own `isModelsView`, separate from the one
+  // `useAppNavigation` exports, and adding the runs tab broke this half
+  // silently: on `/models/runs` the Models entry went dark AND the underlying
+  // picture selection lit a row of its own, which is the two-active-
+  // destinations defect the guard exists to prevent. Both now read
+  // `MODEL_SHELF_ROUTES`, so the pair cannot drift apart again.
+  it("treats /models/runs as the Models destination", async () => {
+    nav.route.name = "models-runs";
+    const wrapper = await mountSidebar();
+    const models = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Models"));
+    expect(models).toBeTruthy();
+    expect(models.attributes("aria-current")).toBe("page");
+    wrapper.unmount();
+    nav.route.name = "all-pictures";
+  });
+
+  it("does not let a picture selection light a second destination there", async () => {
+    nav.route.name = "models-runs";
+    useSelectionStore().selectedCharacter = ADA.id;
+    const wrapper = await mountSidebar();
+    const active = wrapper.findAll(".sidebar-list-item.active");
+    const labels = active.map((el) => el.text());
+    expect(labels.filter((l) => l.includes("Ada"))).toHaveLength(0);
+    wrapper.unmount();
+    nav.route.name = "all-pictures";
+  });
+});
+
+describe("the docked library menu", () => {
+  it("uses menu semantics and supports arrow, submenu, and Escape focus", async () => {
+    const wrapper = await mountSidebar({ docked: true });
+    const trigger = wrapper.find(
+      ".sidebar-collapsed-row--project .sidebar-collapsed-item",
+    );
+
+    expect(trigger.element.tagName).toBe("BUTTON");
+    expect(trigger.attributes()).toMatchObject({
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+    });
+
+    await trigger.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+
+    const menu = document.querySelector("#sidebar-project-menu");
+    expect(menu.getAttribute("role")).toBe("menu");
+    expect(menu.getAttribute("aria-label")).toBe("Library navigation");
+    const rootItems = Array.from(
+      menu.querySelectorAll(':scope > [role="menuitem"]'),
+    );
+    expect(rootItems.map((item) => item.tagName)).toEqual([
+      "BUTTON",
+      "BUTTON",
+      "BUTTON",
+    ]);
+    expect(document.activeElement).toBe(rootItems[0]);
+
+    rootItems[0].dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(document.activeElement).toBe(rootItems[1]);
+
+    rootItems[1].dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+
+    const submenu = document.querySelector("#sidebar-project-submenu");
+    expect(submenu.getAttribute("role")).toBe("menu");
+    expect(submenu.getAttribute("aria-label")).toBe("Projects");
+    const submenuItem = submenu.querySelector('[role="menuitem"]');
+    expect(submenuItem.tagName).toBe("BUTTON");
+    expect(document.activeElement).toBe(submenuItem);
+
+    submenuItem.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+    expect(document.querySelector("#sidebar-project-submenu")).toBeNull();
+    expect(document.activeElement).toBe(rootItems[1]);
+
+    rootItems[1].dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+    expect(document.querySelector("#sidebar-project-menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger.element);
 
     wrapper.unmount();
   });

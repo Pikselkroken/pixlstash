@@ -116,6 +116,28 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # sidecar naming. A folder/filesystem endpoint, so READ tokens (handed
         # out to view a shared gallery) must not reach it.
         "/api/v1/reference-folders/detect-sidecars",
+        # Names the tagger-plugin folder on the server's disk, and returns
+        # plugin import errors whose text can carry any path the failing plugin
+        # reached for. The authz gate declares it LOCAL_OWNER_ONLY; it is here
+        # as well because that is the pattern filesystem/browse already sets,
+        # and because AUTHZ_GATE_ENFORCING is a documented one-line rollback —
+        # without this entry, taking it would hand the folder straight back to
+        # every share token.
+        "/api/v1/taggers/plugin-diagnostics",
+        # The plugin list carries the caller's own tagger_settings, which is
+        # user settings exactly like /users/me/config above — a plugin may
+        # declare a free-text parameter and the owner may have typed a path
+        # into it. Gate policy is OWNER_ONLY; same belt-and-braces reasoning.
+        "/api/v1/taggers",
+        # Found by the derivation in tests/test_authz_host_capability_16_3.py
+        # ::test_every_untemplated_locality_get_is_on_the_read_blocked_belt,
+        # not by anyone reading this list: it is LOCAL_OWNER_ONLY at the gate
+        # and serves the move queue's source and destination folders, so with
+        # the gate rolled back a READ token read host paths straight out of it.
+        # Its two templated siblings on the same tier cannot be expressed here
+        # at all — this frozenset matches literal paths — and stay the recorded
+        # follow-up.
+        "/api/v1/model-moves",
     }
 )
 
@@ -294,6 +316,7 @@ class WebSocketAuth:
 
     user_id: int
     is_owner: bool
+    library_uuid: Optional[str] = None
 
 
 class AuthService:
@@ -304,6 +327,20 @@ class AuthService:
         self._server_config = server_config
         self._server_config_path = server_config_path
         self._logger = logger
+        # Returns the uuid of the library a newly minted token belongs to.
+        # A callable rather than a value because the active library changes at
+        # runtime: a token must be stamped with the library that is active when
+        # it is minted, not the one that was active when the server booted.
+        # Set by ``Server``; left None for a Vault built without one (tests, the
+        # CLI tools), where minting is not exercised.
+        self.library_uuid_provider = None
+        # The *active library's* database, as distinct from ``self._db``, which
+        # is the hub. This service is not purely identity: guest sessions are
+        # per-library state and stay in the vault (plan §9), so the guest-session
+        # cookie lookup has to read from there. Re-pointed when the active
+        # library changes; falls back to ``self._db`` when unset, which is the
+        # single-database arrangement tests and CLI tools still use.
+        self.vault_db = None
         self.active_session_ids: dict[str, int] = {}
         # Which token minted which session, in both directions, so a session can
         # be ended in O(1) when its token is removed (see _register_session /
@@ -323,6 +360,9 @@ class AuthService:
         # stale key resolves to the same token or to nothing (issue #666).
         self._sessions_by_token_public_id: dict[str, set[str]] = {}
         self._token_public_id_by_session: dict[str, str] = {}
+        # Token-derived cookie sessions keep the token's library pin. Password
+        # and ordinary browser/desktop sessions are absent and follow switches.
+        self._library_uuid_by_session: dict[str, str] = {}
         self._session_lock = threading.Lock()
         # The pre-authenticated Electron desktop owner session, if seeded (see
         # seed_desktop_session). It grants full owner access and is therefore
@@ -558,8 +598,17 @@ class AuthService:
                 del self._guest_sessions[sid]
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
+    def clear_guest_session_tracking(self) -> None:
+        """Drop availability-only guest activity when the active library changes."""
+        with self._guest_sessions_lock:
+            self._guest_sessions = {}
+
     def _register_session(
-        self, session_id: str, user_id: int, token_public_id: Optional[str] = None
+        self,
+        session_id: str,
+        user_id: int,
+        token_public_id: Optional[str] = None,
+        token_library_uuid: Optional[str] = None,
     ) -> None:
         """Record an authenticated session and the token that created it.
 
@@ -581,12 +630,15 @@ class AuthService:
                     token_public_id, set()
                 ).add(session_id)
                 self._token_public_id_by_session[session_id] = token_public_id
+                if token_library_uuid is not None:
+                    self._library_uuid_by_session[session_id] = token_library_uuid
 
     def _forget_session(self, session_id: str) -> None:
         """Forget a single session and its token link (used by logout)."""
         with self._session_lock:
             self.active_session_ids.pop(session_id, None)
             token_public_id = self._token_public_id_by_session.pop(session_id, None)
+            self._library_uuid_by_session.pop(session_id, None)
             if token_public_id is not None:
                 sessions = self._sessions_by_token_public_id.get(token_public_id)
                 if sessions is not None:
@@ -607,6 +659,7 @@ class AuthService:
                     token_public_id, set()
                 ):
                     self._token_public_id_by_session.pop(session_id, None)
+                    self._library_uuid_by_session.pop(session_id, None)
                     if self.active_session_ids.pop(session_id, None) is not None:
                         dropped += 1
         return dropped
@@ -678,6 +731,7 @@ class AuthService:
             self.active_session_ids = {}
             self._sessions_by_token_public_id = {}
             self._token_public_id_by_session = {}
+            self._library_uuid_by_session = {}
 
     def reset_after_restore(self) -> None:
         """Drop every piece of in-memory authentication state after a restore.
@@ -1466,7 +1520,12 @@ class AuthService:
                 )
                 user_id = None
             if user_id is not None:
-                return WebSocketAuth(user_id=user_id, is_owner=True)
+                library_uuid = self._library_uuid_by_session.get(session_id)
+                if library_uuid not in (None, self.active_library_uuid()):
+                    return None
+                return WebSocketAuth(
+                    user_id=user_id, is_owner=True, library_uuid=library_uuid
+                )
 
         matched: Optional[UserToken] = None
         # Bearer token (non-browser clients can set this header).
@@ -1482,10 +1541,24 @@ class AuthService:
                     matched = candidate
 
         if matched is not None:
+            if getattr(matched, "library_uuid", None) != self.active_library_uuid():
+                return None
+            if (
+                is_unscoped_owner_token(matched)
+                and self._server_config.get("require_local_for_write", True)
+                and not is_local_ip(self._get_real_client_ip_ws(websocket))
+            ):
+                self._logger.warning(
+                    "Rejected owner-token WebSocket from non-local IP %s.",
+                    self._get_real_client_ip_ws(websocket),
+                )
+                return None
             user = self.get_user()
             if user is not None:
                 return WebSocketAuth(
-                    user_id=user.id, is_owner=is_unscoped_owner_token(matched)
+                    user_id=user.id,
+                    is_owner=is_unscoped_owner_token(matched),
+                    library_uuid=getattr(matched, "library_uuid", None),
                 )
         return None
 
@@ -1596,6 +1669,20 @@ class AuthService:
             "has_password": bool(user.password_hash),
         }
 
+    def active_library_uuid(self) -> Optional[str]:
+        """Return the library a token minted right now belongs to.
+
+        Every token is stamped with exactly one library (multi-library plan §4):
+        an unpinned token would change what it grants the moment the owner
+        switched, so a share link would start serving different pictures and an
+        automation would write into the wrong place. The hub column is NOT NULL,
+        so a missing provider surfaces as a write error rather than as a token
+        that silently follows the active library.
+        """
+        if self.library_uuid_provider is None:
+            return None
+        return self.library_uuid_provider()
+
     def create_token(
         self,
         request: Request,
@@ -1693,6 +1780,7 @@ class AuthService:
                 raise HTTPException(status_code=404, detail="User not found")
             token = UserToken(
                 user_id=user_id,
+                library_uuid=self.active_library_uuid(),
                 token_hash=token_hash,
                 token_prefix=token_prefix,
                 created_at=datetime.utcnow(),
@@ -2015,6 +2103,7 @@ class AuthService:
             )
 
         session_token_public_id: Optional[str] = None
+        session_library_uuid: Optional[str] = None
         if request.token:
             user = self.get_user()
             if not user:
@@ -2072,6 +2161,12 @@ class AuthService:
                 )
                 raise HTTPException(status_code=401, detail="Invalid token")
             session_token_public_id = matched_token.public_id
+            session_library_uuid = matched_token.library_uuid
+            if session_library_uuid != self.active_library_uuid():
+                raise HTTPException(
+                    status_code=403,
+                    detail="This token belongs to a library that is not currently active.",
+                )
 
             def update_token_last_used(session: Session, token_id: int):
                 db_token = session.get(UserToken, token_id)
@@ -2151,7 +2246,10 @@ class AuthService:
         if not user or user.id is None:
             raise HTTPException(status_code=500, detail="User not found")
         self._register_session(
-            session_id, user.id, token_public_id=session_token_public_id
+            session_id,
+            user.id,
+            token_public_id=session_token_public_id,
+            token_library_uuid=session_library_uuid,
         )
         if session_token_public_id is not None:
             self._confirm_session_token_still_exists(
@@ -2284,6 +2382,15 @@ class AuthService:
             if user_id is not None:
                 # Cookie session — full owner access, no scope restriction
                 request.state.auth_user_id = user_id
+                session_library_uuid = self._library_uuid_by_session.get(session_id)
+                if session_library_uuid is not None:
+                    request.state.session_library_uuid = session_library_uuid
+                    lease = getattr(request.state, "library_lease", None)
+                    if lease is not None and session_library_uuid != lease.library_uuid:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Token belongs to a different library"},
+                        )
             else:
                 # Try Bearer token, then fall back to ?token= query param
                 matched_token: Optional[UserToken] = None
@@ -2295,6 +2402,15 @@ class AuthService:
                     matched_token = self._token_from_query_param(request)
 
                 if matched_token is not None:
+                    lease = getattr(request.state, "library_lease", None)
+                    if (
+                        lease is not None
+                        and matched_token.library_uuid != lease.library_uuid
+                    ):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Token belongs to a different library"},
+                        )
                     user = self.get_user()
                     user_id = user.id if user else None
                     if user_id:
@@ -2348,13 +2464,21 @@ class AuthService:
                                 ),
                             )
                             request.state.token_id = matched_token.id
+                            # Guest sessions and guest scores live in the vault
+                            # and name their token by public id, because the
+                            # token itself is in the hub (see GuestSession).
+                            request.state.token_public_id = matched_token.public_id
                             # Resolve the guest session cookie for READ-scoped tokens.
                             # The cookie value is a server-generated cookie_token, NOT
                             # the client-supplied session_id.  We look up the DB row by
                             # cookie_token to get the real session_id; this ensures no
                             # user-supplied value is ever trusted directly from the cookie.
                             raw_gs = request.cookies.get("guest_session", "")
-                            if raw_gs and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs):
+                            if (
+                                lease is not None
+                                and raw_gs
+                                and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs)
+                            ):
                                 from pixlstash.db_models.guest_session import (
                                     GuestSession,
                                 )
@@ -2377,7 +2501,9 @@ class AuthService:
                                 # session's own tracking (record_guest_activity,
                                 # the 30-day expiry and the eviction cap) is
                                 # in-memory and untouched by this change.
-                                gs = self._db.run_immediate_read_task(_lookup_by_token)
+                                # Reads the vault, not the hub: a guest session
+                                # belongs to one library.
+                                gs = lease.db.run_immediate_read_task(_lookup_by_token)
                                 if gs is not None:
                                     request.state.guest_session_id = gs.session_id
                                     self.record_guest_activity(gs.session_id)

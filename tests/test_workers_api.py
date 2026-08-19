@@ -40,8 +40,13 @@ def test_workers_progress_has_expected_keys():
         process = data["process"]
         assert "ram_used_gb" in process
         assert "ram_total_gb" in process
+        # Asserted on a warm server rather than in a file of its own: the GPU
+        # out-of-memory retry announces itself through this notifier, and
+        # without the wiring the toast never leaves the machine
+        # (tests/test_vram_oom_retry.py covers everything downstream of it).
+        assert server.vault._task_runner._notifier is not None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -68,7 +73,41 @@ def test_an_active_dedup_scan_never_reports_terminal_task_progress(monkeypatch):
         assert snapshot["total"] == 6
         assert snapshot["remaining"] == 1
     finally:
-        server.vault.close()
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
+    monkeypatch,
+):
+    """The Checkpoint Hash row must not borrow the library's numbers.
+
+    It used to fall through to the generic `planner_managed` branch, which set
+    `missing = 0` and left `total` at the picture count. Reading tens of
+    gigabytes off disk then rendered as "N / N, 0 remaining, 0/s" on a row that
+    still said running, so a healthy long task read as a stuck one.
+
+    The picture count is forced to a sentinel rather than importing pictures:
+    an empty library makes the two branches indistinguishable, which is exactly
+    how this would pass while still broken.
+    """
+    temp_dir, _client, server = _setup()
+    try:
+        monkeypatch.setattr(
+            server.vault, "_count_total_pictures", lambda _session: 4242
+        )
+        workers = server.vault.get_worker_progress()
+        snapshot = workers[TaskType.CHECKPOINT_HASH.value]
+        assert snapshot["label"] == "checkpoints_hashed"
+        # The sentinel proves the branch ran: a picture-scoped worker shows it.
+        assert workers[TaskType.QUALITY.value]["total"] == 4242
+        # No hub registration in this fixture, so there is no shelf to count and
+        # the honest answer is zero — never the picture library's total.
+        assert snapshot["total"] == 0
+        assert snapshot["current"] == 0
+    finally:
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -81,6 +120,6 @@ def test_version_endpoint_returns_200():
         data = resp.json()
         assert "version" in data
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

@@ -225,13 +225,15 @@ export const scenes = [
   {
     id: 'backend-settings',
     assets: ['ScreenshotBackend.jpg'],
-    title: 'Desktop Backend settings (compute + remote access)',
+    title: 'Desktop Backend settings (remote access + desktop)',
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      // The desktop-only "Backend" tab: compute acceleration + remote access.
-      await page.getByRole('tab', { name: 'Backend' }).click()
-      await expect(page.getByText('Compute acceleration')).toBeVisible()
+      // The desktop-only "Backend" rail item. Compute acceleration used to
+      // share this pane; it is its own "Compute" item now (backend-cuda /
+      // backend-rocm below), so this one shows remote access + desktop.
+      await settings.openTab('Backend')
+      await expect(page.getByText('Remote access')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
     },
@@ -247,7 +249,7 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      await page.getByRole('tab', { name: 'Backend' }).click()
+      await settings.openTab('Compute')
       await expect(page.getByText('NVIDIA GPU (CUDA 12.8)')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
@@ -262,9 +264,21 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      await page.getByRole('tab', { name: 'Backend' }).click()
+      await settings.openTab('Compute')
       await expect(page.getByText('AMD GPU (ROCm, experimental)')).toBeVisible()
       await page.waitForTimeout(400)
+      return settings.card
+    },
+  },
+  {
+    id: 'privacy',
+    assets: ['ScreenshotPrivacy.jpg'],
+    title: 'Privacy settings (update checks + anonymous install ID)',
+    async setup({ grid, settings }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openTab('Privacy')
+      await grid.page.waitForTimeout(400)
       return settings.card
     },
   },
@@ -395,10 +409,10 @@ export const scenes = [
       // re-trigger the query. Matches the original "Sort: Similarity <name>".
       await readyGrid(grid)
       await grid.openSortMenu()
-      await page.locator('.gb-sort-grid-btn', { hasText: 'Similarity to' }).first().click()
+      await grid.sortOption('Similarity to').click()
       await page.waitForTimeout(300)
       const person = page
-        .locator('.gb-sort-similarity-row .gb-sort-grid-btn', { hasText: 'Angela Merkel' })
+        .locator('.gb-sort-panel .gb-sim-btn', { hasText: 'Angela Merkel' })
         .first()
       await expect(person).toBeVisible()
       await person.click()
@@ -409,9 +423,50 @@ export const scenes = [
       return null
     },
   },
+  {
+    // Same view, "Mixed stacks" mode: stacks whose members are not all the
+    // same picture, flagged for review.
+    id: 'mixed-stacks',
+    assets: ['ScreenshotMixedStacks.jpg'],
+    title: 'Duplicates queue — mixed stacks flagged for review',
+    async setup({ page }) {
+      await page.goto('/duplicates')
+      await expect(page.locator('.dq')).toBeVisible()
+      // The bar button and the ⋯ row are one pair: a container query at
+      // ≤1180px flips which of the two is visible, and the queue's bar is
+      // under that at this viewport, so take whichever is showing.
+      const bar = page.getByTestId('mixed-toggle')
+      if (await bar.isVisible()) {
+        await bar.click()
+      } else {
+        await page.locator('.dq-overflow .tbo-trigger').click()
+        await page.getByTestId('mixed-row').click()
+      }
+      await page.waitForTimeout(1200)
+      return null
+    },
+  },
 ]
 
 export const manual = {
+  'ScreenshotInstallId.jpg':
+    'Upgrade dialog offering the anonymous install ID — needs an upgraded-from-older-version state, not a first run',
+  'ScreenshotDuplicates.jpg':
+    'Duplicates queue with groups — the duplicate scan is still queued when the capture runs, so the queue reads "Queue clear"; needs the scan to finish first',
+  'ScreenshotKeepCoverOnly.jpg':
+    '"Keep cover only" in the picture menu — reproducible next; demo-data has 13 stacks, the scene needs to select one and open the menu',
+  'ScreenshotKeepCoverOnly2.jpg':
+    '"Keep cover only" preview dialog — reproducible next, follows ScreenshotKeepCoverOnly.jpg',
+  'ScreenshotStackFilter.jpg':
+    'Grid filtered to stacked pictures — reproducible next; demo-data has 13 stacks',
+  'ScreenshotMultiProject.jpg':
+    'One character in more than one project — needs a multi-project fixture',
+  'ScreenshotUndoHistory.jpg':
+    'Undo/redo history dropdown — needs a library with recent operations; demo-data is freshly imported',
+  'ScreenshotsJustified.jpg':
+    'Justified grid — reproducible next; the scene must persist thumbnail_mode and restore it so later captures stay square',
+  'ScreenshotsJustifiedSettings.jpg':
+    'Appearance settings layout picker — reproducible next, alongside ScreenshotsJustified.jpg',
   'ScreenshotReview1.jpg':
     'Tag review card (1.7) — hand-shot against a curated library; needs a review-session fixture scene',
   'ScreenshotReview3.jpg':

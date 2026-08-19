@@ -8,7 +8,7 @@
   --panel: #23282f; /* surface — raised cards */
   --input-bg: #2b3138; /* input-background */
   --fg: #f2e5da; /* on-background */
-  --muted: rgba(242, 229, 218, 0.55);
+  --muted: rgba(242, 229, 218, 0.7);
   --accent: #c47a1e; /* accent — the unified amber */
   --primary: #567309; /* primary — olive action fill */
   --on-accent: #f7f1ea; /* on-accent / on-primary — warm near-white label */
@@ -175,6 +175,11 @@ body {
   max-width: 560px;
 }
 
+.panel--selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
 .hw {
   font-size: 11px;
   font-weight: 600;
@@ -257,6 +262,14 @@ button.secondary {
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+button:focus-visible,
+input[type="text"]:focus-visible,
+.identity-consent:has(input:focus-visible),
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .progress {
@@ -363,6 +376,44 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.identity-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.identity-consent input {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  accent-color: var(--accent);
+}
+
+.identity-consent span {
+  min-width: 0;
+}
+
+.identity-consent strong,
+.identity-consent code {
+  display: block;
+}
+
+.identity-consent strong {
+  font-size: 13px;
+}
+
+.identity-consent code {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.identity-consent-copy {
+  margin-top: 8px;
+  padding-left: 28px;
+}
+
 .field {
   display: flex;
   gap: 8px;
@@ -459,4 +510,89 @@ button:disabled {
   overflow-y: auto;
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* Permission-recovery screen (permissions.html) */
+.app.repair {
+  justify-content: center;
+  max-width: 600px;
+}
+
+/* Folder + open padlock. Strokes only, so it reads as line art at any size and
+   needs no second colour for a dark/light split. */
+.repair-art {
+  width: 96px;
+  height: 72px;
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.repair-art-folder {
+  stroke: var(--border);
+}
+
+.repair-art-shackle,
+.repair-art-body {
+  stroke: var(--err);
+}
+
+.repair-art-body {
+  fill: var(--bg);
+}
+
+.repair-art-keyhole {
+  fill: var(--err);
+  stroke: none;
+}
+
+.repair-list {
+  list-style: none;
+  margin: 10px 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.repair-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.repair-area {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.repair-path {
+  font-size: 12px;
+  color: var(--muted);
+  /* Long absolute paths must wrap rather than force the panel to scroll. */
+  overflow-wrap: anywhere;
+}
+
+.repair-change {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.repair-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.repair-actions button {
+  min-width: 120px;
+  padding: 11px 22px;
 }

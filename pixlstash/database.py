@@ -704,7 +704,7 @@ def create_configured_engine(
     return engine
 
 
-def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
+def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
     try:
         from alembic import command
         from alembic.config import Config
@@ -739,9 +739,13 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    # The registered-library opener has already validated this exact
+    # connection. Alembic must use it rather than reopening the path and giving
+    # a replacement database migration authority.
+    config.attributes["connection"] = connection
 
     if db_exists:
-        inspector = sa_inspect(engine)
+        inspector = sa_inspect(connection)
         table_names = [
             name
             for name in inspector.get_table_names()
@@ -751,6 +755,12 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
         if has_version:
             try:
                 command.upgrade(config, "head")
+                # Alembic is running on our already-open, security-validated
+                # SQLAlchemy connection. Introspection above may have started
+                # an implicit SQLAlchemy 2.x transaction before Alembic enters
+                # its own context; without this explicit commit, upgrades of an
+                # existing vault can be rolled back when the connection closes.
+                connection.commit()
                 return
             except CommandError as exc:
                 msg = str(exc)
@@ -766,8 +776,8 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
                             logger.warning(
                                 "Stamp failed due to missing revision; clearing alembic_version and retrying."
                             )
-                            with engine.begin() as conn:
-                                conn.exec_driver_sql("DELETE FROM alembic_version")
+                            connection.exec_driver_sql("DELETE FROM alembic_version")
+                            connection.commit()
                             command.stamp(config, "head")
                         else:
                             raise
@@ -780,10 +790,12 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
             )
             command.stamp(config, "0001_baseline")
             command.upgrade(config, "head")
+            connection.commit()
             return
 
     try:
         command.upgrade(config, "head")
+        connection.commit()
     except CommandError as exc:
         msg = str(exc)
         if "Can't locate revision identified by" in msg:
@@ -798,8 +810,8 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
                     logger.warning(
                         "Stamp failed due to missing revision; clearing alembic_version and retrying."
                     )
-                    with engine.begin() as conn:
-                        conn.exec_driver_sql("DELETE FROM alembic_version")
+                    connection.exec_driver_sql("DELETE FROM alembic_version")
+                    connection.commit()
                     command.stamp(config, "head")
                 else:
                     raise
@@ -807,23 +819,30 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
         raise
 
 
-def _ensure_user_stack_strictness(engine) -> None:
-    inspector = sa_inspect(engine)
+def _ensure_user_stack_strictness(connection) -> None:
+    inspector = sa_inspect(connection)
     if "user" not in inspector.get_table_names():
         return
-    with engine.begin() as conn:
-        existing_cols = {
-            row[1] for row in conn.exec_driver_sql("PRAGMA table_info('user')")
-        }
-        if "stack_strictness" in existing_cols:
-            return
-        conn.exec_driver_sql(
-            "ALTER TABLE user ADD COLUMN stack_strictness FLOAT DEFAULT 0.92"
-        )
+    existing_cols = {
+        row[1] for row in connection.exec_driver_sql("PRAGMA table_info('user')")
+    }
+    if "stack_strictness" in existing_cols:
+        return
+    connection.exec_driver_sql(
+        "ALTER TABLE user ADD COLUMN stack_strictness FLOAT DEFAULT 0.92"
+    )
+    connection.commit()
 
 
 class VaultDatabase:
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        location_guard=None,
+        pre_migration_hook=None,
+        post_migration_hook=None,
+    ):
         self._db_path = db_path
         self.image_root = os.path.dirname(self._db_path)
         # In-memory, process-lifetime set of pictures whose image file cannot be
@@ -833,10 +852,48 @@ class VaultDatabase:
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
+        if not db_exists:
+            # Pre-create the database file 0600. Left to SQLite, a missing
+            # database is created at 0644 & ~umask — group/world-readable
+            # under the Debian/Ubuntu default umask 002. Doing it here covers
+            # every construction site, guarded or not. Without O_EXCL a lost
+            # race simply opens the other creator's file; the mode argument is
+            # ignored for an existing file.
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            os.close(os.open(self._db_path, flags, 0o600))
+
         self._engine = create_configured_engine(self._db_path)
 
-        _run_migrations(self._engine, self._db_path, db_exists)
-        _ensure_user_stack_strictness(self._engine)
+        # The guard holds a raw fd on vault.db. POSIX advisory locks are
+        # per-process, per-inode: closing ANY fd a process has on a file
+        # releases EVERY fcntl lock that process holds on it — including the
+        # ones SQLite took for the engine's live connections
+        # (sqlite.org/howtocorrupt.html §2.2). Closing the guard here, while
+        # pooled connections were open, therefore stripped the server of its
+        # kernel locks on the vault; a second process (CLI, the e2e dedup
+        # seeder, another instance) closing its own connection then saw the
+        # database as unused, checkpointed, and DELETED the live -wal/-shm,
+        # split-braining every open connection ("disk I/O error", "database
+        # disk image is malformed"). The guard must outlive the engine: it is
+        # retained and closed in close(), after dispose().
+        self._location_guard = location_guard
+        try:
+            with self._engine.connect() as initial_connection:
+                if location_guard is not None:
+                    location_guard.verify_after_open()
+                if pre_migration_hook is not None:
+                    pre_migration_hook(initial_connection)
+                _run_migrations(initial_connection, self._db_path, db_exists)
+                if post_migration_hook is not None:
+                    post_migration_hook(initial_connection)
+                _ensure_user_stack_strictness(initial_connection)
+        except Exception:
+            self._engine.dispose()
+            self._engine = None
+            # All connections are gone, so closing the guard fd is safe now.
+            if location_guard is not None:
+                location_guard.close()
+            raise
 
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
@@ -848,6 +905,10 @@ class VaultDatabase:
         self._closed = False
         self._task_worker = threading.Thread(target=self._task_worker_loop, daemon=True)
         self._task_worker.start()
+
+    @property
+    def is_open(self) -> bool:
+        return not self._closed and self._engine is not None
 
     def close(self):
         """
@@ -869,7 +930,7 @@ class VaultDatabase:
                         logger.warning(
                             "VaultDatabase: worker thread did not stop cleanly before engine disposal."
                         )
-                    self._task_worker = None
+                self._task_worker = None
             except Exception as e:
                 logger.warning(
                     f"VaultDatabase: Exception during worker thread stop: {e}"
@@ -896,6 +957,19 @@ class VaultDatabase:
                     logger.warning(
                         f"VaultDatabase: Exception during engine dispose: {e}"
                     )
+
+            # Only after every SQLite connection is disposed may the guard fd
+            # be closed: closing it earlier releases the process's POSIX locks
+            # on the vault file out from under the live connections (see the
+            # comment in __init__).
+            if getattr(self, "_location_guard", None) is not None:
+                try:
+                    self._location_guard.close()
+                except OSError as e:
+                    logger.warning(
+                        f"VaultDatabase: Exception closing location guard: {e}"
+                    )
+                self._location_guard = None
 
         gc.collect()
         logger.info("VaultDatabase.close called, resources released.")

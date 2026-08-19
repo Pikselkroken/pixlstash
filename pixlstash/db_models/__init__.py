@@ -1,3 +1,8 @@
+from .adapter_attachment import (  # noqa: F401
+    ENTITY_CHARACTER,
+    ENTITY_SET,
+    AdapterAttachment,
+)
 from .character import Character  # noqa: F401
 from .dedup import (  # noqa: F401
     DedupGroup,
@@ -63,5 +68,7 @@ from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F4
 from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401
 from .guest_session import GuestSession  # noqa: F401
+from .library_settings import LibrarySettings  # noqa: F401
+from .pending_score_invalidation import PendingScoreInvalidation  # noqa: F401
 from .guest_score import GuestScore  # noqa: F401
 from .snapshot import Snapshot  # noqa: F401

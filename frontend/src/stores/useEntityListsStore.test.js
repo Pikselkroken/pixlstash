@@ -20,6 +20,7 @@ vi.mock("../api/projects", () => ({ listProjects: vi.fn() }));
 // notify pair apiClient exports, so the reset wiring is exercised for real.
 const sessionResetHandlers = new Set();
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   isReadOnly: ref(false),
   sessionContext: ref(null),
   onSessionReset: (handler) => {

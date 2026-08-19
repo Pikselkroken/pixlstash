@@ -19,6 +19,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick, h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: {
@@ -44,14 +45,6 @@ function lockPictures(name, pictureIds) {
 }
 
 // jsdom has no ResizeObserver; ReviewBinaryCard observes its <img>.
-globalThis.ResizeObserver = class {
-  // Real ResizeObserver takes a callback; accept and ignore it so callers can
-  // construct the stub the same way (no observations fire in jsdom).
-  constructor(_callback) {}
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 // Stub Vuetify's <v-icon> so we can mount in isolation without registering
 // Vuetify (it just renders its glyph text into an <i>).

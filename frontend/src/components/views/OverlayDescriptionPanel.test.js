@@ -65,7 +65,6 @@ describe("OverlayDescriptionPanel — ending an edit", () => {
     expect(patchPicture).toHaveBeenCalledWith(
       7,
       { description: "a louder harbour" },
-      expect.anything(),
     );
     expect(w.emitted("update-description")).toBeTruthy();
     expect(w.emitted("editing-finished")).toBeTruthy();

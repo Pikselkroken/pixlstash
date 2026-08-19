@@ -4,6 +4,7 @@ import { isReadOnly, logout } from "../../utils/apiClient";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
+import LibrariesSection from "./LibrariesSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComputeSection from "./ComputeSection.vue";
@@ -86,6 +87,16 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
+      // Ordered next to Scrapheap and Snapshots — the open library's bin and
+      // its backups — so the container sits with the panes that describe it.
+      // Adjacency is the only cue: the rail is one flat list, deliberately, so
+      // nothing here may style an item by its position.
+      id: "libraries",
+      icon: "bookshelf",
+      label: "Libraries",
+      show: !isReadOnly.value,
+    },
+    {
       id: "scrapheap",
       icon: "delete-clock-outline",
       label: "Scrapheap",
@@ -136,6 +147,7 @@ watch(
       ? requested
       : "appearance";
   },
+  { immediate: true },
 );
 </script>
 
@@ -154,13 +166,16 @@ watch(
       </AppButton>
     </template>
 
-    <nav class="settings-nav">
+    <nav class="settings-nav" aria-label="Settings sections">
       <button
         v-for="item in navItems"
         :key="item.id"
         type="button"
         class="settings-nav-item"
         :class="{ 'settings-nav-item--active': settingsTab === item.id }"
+        :id="`settings-nav-${item.id}`"
+        :aria-current="settingsTab === item.id ? 'page' : undefined"
+        :aria-controls="`settings-pane-${item.id}`"
         @click="settingsTab = item.id"
       >
         <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
@@ -176,7 +191,13 @@ watch(
            have multiple root nodes (e.g. AccountSection renders dialogs as
            siblings), and v-show cannot toggle a multi-root component. The
            wrapper guarantees one element to show/hide. -->
-      <div v-show="settingsTab === 'appearance'" class="settings-pane">
+      <div
+        v-show="settingsTab === 'appearance'"
+        id="settings-pane-appearance"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-appearance"
+      >
         <AppearanceSection
           :sidebar-thumbnail-size="props.sidebarThumbnailSize"
           :theme-mode="props.themeMode"
@@ -195,14 +216,20 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'behaviour'"
+        id="settings-pane-behaviour"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-behaviour"
       >
         <BehaviourSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'smart-score'"
+        id="settings-pane-smart-score"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-smart-score"
       >
         <SmartScoreSection
           :open="dialogOpen"
@@ -213,7 +240,10 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'workflows'"
+        id="settings-pane-workflows"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-workflows"
       >
         <WorkflowsSection
           :open="dialogOpen"
@@ -222,36 +252,61 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'scrapheap'"
+        v-show="settingsTab === 'libraries'"
+        id="settings-pane-libraries"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-libraries"
+      >
+        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'scrapheap'"
+        id="settings-pane-scrapheap"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-scrapheap"
       >
         <ScrapheapSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'snapshots'"
+        id="settings-pane-snapshots"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-snapshots"
       >
         <SnapshotsSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'privacy'"
+        id="settings-pane-privacy"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-privacy"
       >
         <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
         v-show="settingsTab === 'compute'"
+        id="settings-pane-compute"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-compute"
       >
         <ComputeSection :open="dialogOpen" view="compute" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
         v-show="settingsTab === 'backend'"
+        id="settings-pane-backend"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-backend"
       >
         <ComputeSection
           :open="dialogOpen"
@@ -263,7 +318,10 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'account'"
+        id="settings-pane-account"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-account"
       >
         <AccountSection
           :open="dialogOpen"
@@ -294,13 +352,10 @@ watch(
   text-align: left;
   position: relative;
   padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
-  border: none;
-  cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.65);
   transition:
     color var(--dur-1) var(--ease-standard),
     background var(--dur-1) var(--ease-standard);
@@ -312,9 +367,9 @@ watch(
 }
 
 .settings-nav-item--active {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
   font-weight: var(--weight-semibold);
-  background: var(--hover-wash);
+  background: var(--active-wash);
 }
 
 .settings-nav-item__bar {
@@ -359,5 +414,25 @@ watch(
 .settings-content :deep(.v-switch),
 .settings-content :deep(.v-checkbox) {
   --v-input-control-height: 32px;
+}
+
+@media (max-width: 480px) {
+  :deep(.app-dialog__body--flush) {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    width: 100%;
+    max-height: 180px;
+    flex-shrink: 1;
+    border-right: none;
+    border-bottom: 1px solid rgb(var(--v-theme-divider));
+  }
+
+  .settings-content {
+    width: 100%;
+    height: min(58vh, 524px);
+    padding: var(--space-4);
+  }
 }
 </style>

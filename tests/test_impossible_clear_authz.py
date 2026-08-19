@@ -148,7 +148,7 @@ def test_scoped_read_token_cannot_clear_or_restore():
         assert r.status_code == 403, r.text
         assert _FACE_TAG in _tags(server, pic_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -175,7 +175,7 @@ def test_owner_can_clear_and_restore():
         assert r.json()["restored"] == 1
         assert _FACE_TAG in _tags(server, pic_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -191,6 +191,6 @@ def test_clear_rejects_invalid_filter_set():
         assert r.status_code == 400, r.text
         assert _FACE_TAG in _tags(server, pic_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

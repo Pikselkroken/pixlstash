@@ -83,9 +83,30 @@ export class GridPage {
     await expect(this.thumbnailImages.first()).toBeVisible({ timeout: 15_000 })
   }
 
-  /** src of the first rendered thumbnail (encodes the top-left picture id). */
+  /** Raw src of the first rendered thumbnail, cache token and all. */
   firstThumbnailSrc() {
     return this.thumbnailImages.first().getAttribute('src')
+  }
+
+  /**
+   * Which picture leads the grid — the thumbnail URL without its `?v=` token.
+   *
+   * Every caller here is asking "did the grid move?", and the picture id is in
+   * the path; the token is a cache-buster that legitimately changes underneath
+   * a stationary grid. The card renders immediately with a placeholder token
+   * derived from `imported_at` and adopts the server's the moment the batch
+   * thumbnail POST answers — and the server's is `0` until a picture has been
+   * processed, so an unprocessed fixture picture flips token mid-load without
+   * the grid moving at all. Comparing raw srcs made that a race: two specs
+   * failed their first attempt and passed on retry.
+   *
+   * Stripping it also makes the *negative* assertions honest. `grid-browse`
+   * asserts the leader CHANGED after a sort; on raw srcs a token flip alone
+   * satisfies that, so the check could pass while the grid sat still.
+   */
+  async firstThumbnailKey() {
+    const src = await this.firstThumbnailSrc()
+    return src === null ? null : src.split('?')[0]
   }
 
   // --- Grid-refresh pills (data-testid'd in ImageGrid.vue) ----------------

@@ -35,7 +35,7 @@ import {
 } from "../utils/shortcutHints";
 
 /** Settling window before the live region speaks, so a burst reads once. */
-export const ANNOUNCE_THROTTLE_MS = 350;
+const ANNOUNCE_THROTTLE_MS = 350;
 
 /**
  * Everything a receipt surface needs except its markup.

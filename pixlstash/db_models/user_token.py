@@ -53,6 +53,18 @@ class UserToken(SQLModel, table=True):
     user_id: int = Field(
         sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     )
+    # The library this token grants access to. Every token belongs to exactly
+    # one: an unpinned token would change what it grants the moment the owner
+    # switched library, so a share link would start serving different pictures
+    # and an automation would silently write into the wrong place.
+    #
+    # Declared Optional because this model maps to two tables. In the hub
+    # (``pixlstash/hub/schema.py``) the column is NOT NULL and is the live
+    # binding; in the vault's legacy ``usertoken`` table it is nullable and
+    # unused, that table being abandoned once identity moves to the hub. A hub
+    # write that leaves it None is rejected by the database rather than silently
+    # producing an unpinned token.
+    library_uuid: Optional[str] = Field(default=None, index=True)
     token_hash: str = Field(index=True)
     token_prefix: Optional[str] = Field(default=None, index=True)
     description: Optional[str] = Field(default=None)

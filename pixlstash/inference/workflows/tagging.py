@@ -55,11 +55,6 @@ class TaggingWorkflow:
     # ------------------------------------------------------------------
 
     @property
-    def is_wd14_enabled(self) -> bool:
-        """Whether WD14 inference is active for this workflow instance."""
-        return self._use_wd14
-
-    @property
     def is_pixlstash_tagger_enabled(self) -> bool:
         """Whether the PixlStash tagger is active for this workflow instance."""
         return self._use_pixlstash_tagger
@@ -398,59 +393,6 @@ class TaggingWorkflow:
         for path, tag_results in raw.items():
             path_str = str(path)
             combined[path_str] = sorted(tr.tag for tr in tag_results)
-        return combined
-
-    def _tag_images_extra_plugins(
-        self,
-        image_paths,
-        stop_event=None,
-    ) -> dict[str, list[str]]:
-        """Call any enabled tag-capable plugin that isn't WD14 or PixlStash tagger.
-
-        .. deprecated::
-            The multi-plugin path is no longer used by :meth:`tag_images`.
-            Kept for any direct callers during the transition period.
-
-        Returns a merged ``{path: [tag, ...]}`` dict.
-        """
-        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
-
-        mgr = get_tagger_plugin_manager()
-        plugins_cfg = self._tagger_settings.get("plugins", {})
-        combined: dict[str, list[str]] = {}
-
-        extra_candidates = [
-            (p.name, p)
-            for p in mgr.get_all_plugins()
-            if p.supports_tags and p.name not in self._BUILTIN_TAG_PLUGIN_NAMES
-        ]
-
-        for plugin_name, plugin in extra_candidates:
-            cfg = plugins_cfg.get(plugin_name, {})
-            enabled = cfg.get("enabled", False)
-            if not enabled:
-                continue
-            params = {
-                **plugin.default_params(),
-                **cfg.get("params", {}),
-            }
-            try:
-                if hasattr(plugin, "setup"):
-                    plugin.setup(self._engine.device)
-                plugin.init(params)
-                raw = plugin.tag_images(
-                    image_paths,
-                    parameters=params,
-                    stop_event=stop_event,
-                )
-                for path, tag_results in raw.items():
-                    path_str = str(path)
-                    existing = set(combined.get(path_str, []))
-                    existing.update(tr.tag for tr in tag_results)
-                    combined[path_str] = sorted(existing)
-            except Exception:
-                logger.exception("Extra tag plugin %r failed; skipping.", plugin_name)
-
         return combined
 
     # ------------------------------------------------------------------

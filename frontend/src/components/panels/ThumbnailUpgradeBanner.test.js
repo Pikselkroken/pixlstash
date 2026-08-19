@@ -1,6 +1,8 @@
 // ThumbnailUpgradeBanner visibility + progress logic, driven from a mocked
 // useTasksStore worker snapshot (keyed "ThumbnailGenerationTask"):
-//   - shows only while remaining > 0;
+//   - shows only while remaining > 0, and only once the backlog was ever more
+//     than a handful (a rotate re-queues the same worker for the few pictures
+//     it turned, and must not raise an upgrade banner);
 //   - never shows in steady state (nothing to regenerate);
 //   - plays a brief "Thumbnails updated" beat at completion, then hides;
 //   - stays hidden for the session once dismissed, even if regen continues;
@@ -48,6 +50,50 @@ afterEach(() => {
 });
 
 describe("ThumbnailUpgradeBanner", () => {
+  // An in-place rotate NULLs the thumbnail dimensions of exactly the pictures it
+  // turned, to re-queue their bitmaps — through this same worker, whose
+  // `remaining` is a library-wide count. So turning three photos used to raise a
+  // determinate progress bar reading "12,070 / 12,073", on an action that
+  // already shows itself on the tiles it is turning.
+  it("stays hidden for the handful a rotate re-queues", async () => {
+    store.workerSnapshots = {
+      [WORKER_KEY]: snapshot({ total: 12073, current: 12070, remaining: 3 }),
+    };
+    const wrapper = mountBanner();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tub-banner").exists()).toBe(false);
+
+    // …and it must not celebrate one either: the success beat is for a real
+    // upgrade finishing, not for three thumbnails nobody was told about.
+    store.workerSnapshots = {
+      [WORKER_KEY]: snapshot({ total: 12073, current: 12073, remaining: 0 }),
+    };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tub-banner").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("shows for a bulk rotate, and stays up through its tail", async () => {
+    // The threshold is a LATCH, not a filter. A handful outstanding at the START
+    // is a rotate; a handful at the END is the tail of a real job, and the
+    // banner vanishing at 99.9% would read as the work having stopped.
+    store.workerSnapshots = {
+      [WORKER_KEY]: snapshot({ total: 12073, current: 12053, remaining: 20 }),
+    };
+    const wrapper = mountBanner();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tub-banner").exists()).toBe(true);
+
+    store.workerSnapshots = {
+      [WORKER_KEY]: snapshot({ total: 12073, current: 12071, remaining: 2 }),
+    };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tub-banner").exists()).toBe(true);
+    expect(wrapper.find(".tub-label").text()).toBe("Upgrading thumbnails");
+    wrapper.unmount();
+  });
+
+
   it("shows while the thumbnail worker is active (remaining > 0)", async () => {
     store.workerSnapshots = {
       [WORKER_KEY]: snapshot({ total: 100, current: 30, remaining: 70 }),

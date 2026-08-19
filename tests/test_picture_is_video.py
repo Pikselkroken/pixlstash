@@ -422,7 +422,7 @@ class TestFetchBestPictureId:
                 "lower-scored still image outranks the higher-scored video"
             )
         finally:
-            server.vault.close()
+            server.close()
             temp_dir.cleanup()
             gc.collect()
 
@@ -456,6 +456,6 @@ class TestFetchBestPictureId:
                 "with is_video equal, score must decide"
             )
         finally:
-            server.vault.close()
+            server.close()
             temp_dir.cleanup()
             gc.collect()

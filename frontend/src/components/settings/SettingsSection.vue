@@ -47,7 +47,7 @@ defineProps({
 
 .s-section__desc {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   line-height: var(--leading-snug);
   margin-bottom: var(--space-3);
 }

@@ -15,6 +15,7 @@
     <div
       v-if="open"
       class="tbm tbo-panel"
+      :class="`tbo-panel--${align}`"
       role="menu"
       aria-label="More actions"
     >
@@ -41,6 +42,21 @@
 // `.tbm-action` recipe.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
+
+defineProps({
+  /**
+   * Which edge the panel hangs from. `end` (the default) opens leftward and
+   * suits a trigger near the bar's right side; `start` opens rightward, which
+   * is what a trigger sitting near the LEFT edge needs — a 220px panel
+   * right-anchored to it would open off-screen (the Duplicates bar's ⋯,
+   * amendment #4).
+   */
+  align: {
+    type: String,
+    default: "end",
+    validator: (value) => ["start", "end"].includes(value),
+  },
+});
 
 const open = ref(false);
 const wrapEl = ref(null);
@@ -78,7 +94,30 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocumentPointerDown);
 });
 
-defineExpose({ close });
+/**
+ * The trigger element, for a host whose folded row opens a DIALOG rather than
+ * toggling something: the dialog has to be told where to put focus back, and
+ * below the fold the bar button that normally answers for that is
+ * `display: none`, which cannot take focus.
+ *
+ * @returns {HTMLElement|null}
+ */
+function trigger() {
+  return triggerEl.value ?? null;
+}
+
+/**
+ * Whether the panel is showing. A host whose surface owns the keyboard needs
+ * this to tell "a key pressed inside my open menu" from "a key pressed with
+ * the closed trigger focused" — the second one still belongs to the host.
+ *
+ * @returns {boolean}
+ */
+function isOpen() {
+  return open.value;
+}
+
+defineExpose({ close, isOpen, trigger });
 </script>
 
 <style scoped>
@@ -87,12 +126,10 @@ defineExpose({ close });
   display: none;
 }
 
-/* The trigger appears with the host's FIRST fold step; the host raises this
-   flag class from its own ladder (`selbar ≤700`, `dqbar ≤720`), because only
-   the host knows when its first control folds. */
-.tbo-wrap--folding {
-  display: flex;
-}
+/* The trigger appears with the host's FIRST fold step, and the host owns that
+   rule from its own ladder (`.tb-overflow` at selbar ≤700, `.dq-overflow` at
+   dqbar ≤1180): only the host knows when its first control folds. The rule
+   lives there rather than here because the breakpoint differs per bar. */
 
 /* Mirrors `.bar-btn` from the hosts' bars (their scoped styles cannot cross
    the component boundary — same note as UndoControl carries). */
@@ -106,21 +143,14 @@ defineExpose({ close });
   flex-shrink: 0;
   position: relative;
   color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
   font-family: inherit;
-  cursor: pointer;
 }
 
 .tbo-trigger:hover {
   background: rgba(var(--v-theme-toolbar-text), 0.1);
-}
-
-.tbo-trigger:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 .bar-btn--open {
@@ -132,7 +162,6 @@ defineExpose({ close });
 .tbo-panel {
   position: absolute;
   top: calc(100% + var(--space-2));
-  right: 0;
   z-index: var(--z-dropdown);
   min-width: 220px;
   padding: var(--space-3);
@@ -141,4 +170,12 @@ defineExpose({ close });
   gap: var(--space-1);
 }
 
+/* Which edge the panel hangs from; see the `align` prop. */
+.tbo-panel--end {
+  right: 0;
+}
+
+.tbo-panel--start {
+  left: 0;
+}
 </style>

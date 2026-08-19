@@ -62,9 +62,9 @@ logger = get_logger(__name__)
 # Names that are servable even though they are not columns of the model.
 #
 # Every member is a deliberate, reviewed exception, and the guardrail test
-# ``tests/test_generic_field_reader_allowlist.py`` fails the build if this set
-# grows without one. Keep it tiny; the point of the allowlist is that the default
-# answer is "no".
+# ``tests/multi_project_authz/test_generic_field_reader_allowlist.py`` fails the
+# build if this set grows without one. Keep it tiny; the point of the allowlist
+# is that the default answer is "no".
 
 #: Empty, and that is the goal state: every ``Picture`` relationship is refused.
 #:
@@ -79,7 +79,7 @@ logger = get_logger(__name__)
 PICTURE_EXTRA_SERVABLE_FIELDS: frozenset[str] = frozenset()
 
 #: ``thumbnail`` is not a ``Character`` column at all: the handler generates a
-#: 64x64 face crop and returns image bytes. It is a live frontend consumer
+#: 256x256 face crop and returns image bytes. It is a live frontend consumer
 #: (``frontend/src/api/characters.js::getCharacterThumbnail``, and the server
 #: hands the SPA ``/characters/{id}/thumbnail`` URLs itself), so it must stay
 #: servable. It is *synthetic*, not a relationship: it discloses no related

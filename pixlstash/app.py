@@ -4,6 +4,7 @@ import logging
 import sys
 import json
 import getpass
+import shlex
 
 from platformdirs import user_config_dir
 from passlib.hash import bcrypt
@@ -12,6 +13,16 @@ from passlib.hash import bcrypt
 from pixlstash.pixl_logging import setup_logging, get_logger
 from pixlstash.server import Server
 from pixlstash.startup_checks import StartupCheckError
+from pixlstash.hub.bootstrap import HubBootstrapError
+from pixlstash.hub.db import HubPermissionError
+from pixlstash.startup_permissions import (
+    PERMISSION_REPAIR_ENV,
+    find_startup_permission_issues,
+    format_permission_problem,
+    permission_repair_signal,
+    repair_permission_issues,
+)
+from pixlstash.trusted_sqlite import TrustedSQLiteLocationError
 
 logger = get_logger(__name__)
 
@@ -55,6 +66,137 @@ def _parse_yes_no(value, default: bool) -> bool:
     if raw in {"n", "no", "false", "0", "off"}:
         return False
     return default
+
+
+def _permission_fix_commands(issues) -> list[str]:
+    """Return copy/pasteable commands for a non-interactive POSIX launch."""
+
+    return [
+        f"chmod {issue.repaired_mode:03o} {shlex.quote(issue.path)}" for issue in issues
+    ]
+
+
+def _prepare_startup_permissions(
+    server_config_path: str,
+    server_config: dict,
+) -> bool:
+    """Offer or perform the bounded permission repair needed before startup.
+
+    Electron has no usable stdin, so the first backend launch emits a structured
+    line for the shell and exits. After the user accepts the native dialog, the
+    shell retries once with ``PIXLSTASH_REPAIR_PERMISSIONS=1``. A terminal gets
+    the same decision inline; services get actionable commands and a clean exit.
+    """
+
+    repair_requested = os.environ.get(PERMISSION_REPAIR_ENV) == "1"
+    is_electron = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").lower() == "electron"
+
+    # Usually one pass is enough. A second pass can discover an active library
+    # stored in the hub only after the hub directory itself has been repaired.
+    for _ in range(3):
+        issues = find_startup_permission_issues(
+            server_config_path,
+            str(server_config.get("image_root") or "") or None,
+        )
+        if not issues:
+            return True
+
+        message = format_permission_problem(issues)
+        if repair_requested:
+            print(message, file=sys.stderr)
+            try:
+                repair_permission_issues(issues)
+            except OSError as exc:
+                print(
+                    f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr
+                )
+                return False
+            continue
+
+        if is_electron:
+            # Human text remains in the log; the single-line JSON record is the
+            # stable protocol consumed by the desktop shell.
+            print(message, file=sys.stderr)
+            print(permission_repair_signal(issues), file=sys.stderr)
+            return False
+
+        print(message, file=sys.stderr)
+        if getattr(sys.stdin, "isatty", lambda: False)():
+            try:
+                answer = input("\nFix permissions now? [Y/n] ").strip().lower()
+            except EOFError:
+                answer = "n"
+            if answer not in {"", "y", "yes"}:
+                print("Permissions were not changed.", file=sys.stderr)
+                return False
+            try:
+                repair_permission_issues(issues)
+            except OSError as exc:
+                print(
+                    f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr
+                )
+                return False
+            print("Permissions fixed. Starting PixlStash…", file=sys.stderr)
+            continue
+
+        print("\nFix them and start PixlStash again:", file=sys.stderr)
+        for command in _permission_fix_commands(issues):
+            print(f"  {command}", file=sys.stderr)
+        return False
+
+    print(
+        "PixlStash still found unsafe permissions after attempting the repair.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _prompt_legacy_identity_migration(library) -> bool:
+    """Offer, at startup, what `pixlstash-cli libraries prepare-legacy-identity`
+    otherwise requires as a separate manual step.
+
+    Skipped for Electron, whose own setup wizard already offers this choice
+    before the backend is ever launched. A non-interactive launch is told
+    about it in the log instead of being asked, and either way leaves the
+    vault exactly as untouched as declining would, with the CLI command still
+    available. Defaults to **not** migrating on a bare Enter: this is
+    irreversible (the vault stops being readable by pre-hub PixlStash
+    afterwards), and the desktop wizard's equivalent checkbox
+    (`importLegacyIdentity` in electron/src/renderer/setup.js) starts
+    unchecked for the same reason.
+    """
+    is_electron = (
+        os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron"
+    )
+    if is_electron:
+        return False
+    if not getattr(sys.stdin, "isatty", lambda: False)():
+        logger.info(
+            "%s still holds a pre-hub owner account and API tokens. Run "
+            "`pixlstash-cli libraries prepare-legacy-identity %s` to migrate "
+            "them into the hub, or start PixlStash in an interactive terminal "
+            "to be asked.",
+            library.path,
+            shlex.quote(library.path),
+        )
+        return False
+
+    print(
+        f"\n{library.path} still holds an owner account and API tokens from "
+        "before PixlStash introduced its hub. PixlStash can move them into "
+        "the hub now, after which this library will no longer be readable "
+        "as an owner/token store by versions of PixlStash older than the hub.",
+        file=sys.stderr,
+    )
+    try:
+        answer = (
+            input("Migrate this library's identity into the hub now? [y/N] ")
+            .strip()
+            .lower()
+        )
+    except EOFError:
+        answer = "n"
+    return answer in {"y", "yes"}
 
 
 def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
@@ -120,7 +262,6 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
     config["port"] = port
     config["require_ssl"] = require_ssl
     config["cookie_secure"] = require_ssl
-
     with open(server_config_path, "w") as handle:
         json.dump(config, handle, indent=2)
 
@@ -212,34 +353,60 @@ def _force_utf8_streams():
             )
 
 
-def main():
-    _force_utf8_streams()
-    parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
+def build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser for the server entry point."""
+    parser = argparse.ArgumentParser(
+        prog=f"{APP_NAME}-server",
+        description=(
+            f"Run the {APP_NAME} server. In a source checkout, where the "
+            "entry point is not on PATH, the same options are accepted by "
+            f"`python -m {APP_NAME}.app`."
+        ),
+        epilog=(
+            "Every option acts during startup and the server then runs "
+            "normally, except --clear-embeddings, which does its work and "
+            "exits. Libraries and plugins are managed with a separate "
+            f"command, `{APP_NAME}-cli`."
+        ),
+    )
     parser.add_argument(
         "--server-config",
         type=str,
         default=SERVER_CONFIG_PATH,
-        help="Path to server config file.",
+        metavar="PATH",
+        help=(
+            "Path to the server config file, which is created on first run "
+            f"if it is missing (default: {SERVER_CONFIG_PATH})."
+        ),
     )
     parser.add_argument(
         "--remove-password",
         action="store_true",
-        help="Cause the server to recreate the password on next login.",
-    )
-    parser.add_argument(
-        "--retag-and-embed",
-        action="store_true",
-        help="Re-tag all images and refresh text embeddings in the database.",
+        help=(
+            "Clear the stored username and password hash and log out every "
+            "signed-in session, so the next sign-in sets them again. The "
+            "server starts as usual afterwards."
+        ),
     )
     parser.add_argument(
         "--clear-embeddings",
         action="store_true",
-        help="Clear all text embeddings for all images (does not touch tags).",
+        help=(
+            "Clear every picture's text and image embeddings, then exit "
+            "without starting the server. Tags are not touched, and the "
+            "embeddings are recomputed in the background the next time the "
+            "server runs."
+        ),
     )
     parser.add_argument(
         "--bootstrap",
         action="store_true",
-        help=("Run interactive first-run setup for storage path, port, and HTTPS."),
+        help=(
+            "Run the interactive first-run setup — storage path, port, HTTPS, "
+            "then the username and password — even if a config file already "
+            "exists, and start the server afterwards. It needs a terminal: "
+            "with stdin redirected the setup is skipped."
+        ),
     )
     parser.add_argument(
         "--cleanup-missing-pictures",
@@ -260,7 +427,12 @@ def main():
             "Example: --path-map /mnt/photos:/data/photos"
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    _force_utf8_streams()
+    args = build_parser().parse_args()
 
     ran_bootstrap = _bootstrap_server_config(args.server_config, force=args.bootstrap)
     Server.DEFAULT_CLEANUP_MISSING_PICTURES = bool(args.cleanup_missing_pictures)
@@ -274,6 +446,8 @@ def main():
         path_map[parts[0]] = parts[1]
 
     server_config = Server.init_server_config(args.server_config)
+    if not _prepare_startup_permissions(args.server_config, server_config):
+        return 1
 
     log_level = _resolve_log_level(server_config.get("log_level"))
     log_file = server_config.get("log_file")
@@ -286,11 +460,26 @@ def main():
         setup_logging(log_level=log_level)
 
     try:
-        server = Server(server_config_path=args.server_config, path_map=path_map)
+        server = Server(
+            server_config_path=args.server_config,
+            path_map=path_map,
+            legacy_identity_prompt=_prompt_legacy_identity_migration,
+        )
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:
             print(f"- {failure}")
+        return 1
+    except (HubPermissionError, TrustedSQLiteLocationError) as exc:
+        # Suspicious cases (foreign owner, symlink/junction, replaced file) are
+        # deliberately not offered to chmod, but they still deserve a concise
+        # startup error rather than an implementation traceback.
+        print("PixlStash could not safely open its database:", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
+        return 1
+    except HubBootstrapError as exc:
+        print("PixlStash could not prepare its library:", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
         return 1
 
     if ran_bootstrap:

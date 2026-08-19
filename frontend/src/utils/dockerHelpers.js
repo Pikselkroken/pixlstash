@@ -9,13 +9,13 @@ export function normalizeFolderPath(value) {
     .replace(/\/+$/, "");
 }
 
-export function padFolderIndex(value) {
+function padFolderIndex(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return String(Math.trunc(parsed)).padStart(3, "0");
 }
 
-export function shellSingleQuote(value) {
+function shellSingleQuote(value) {
   return `'${String(value || "").replace(/'/g, `"'"'`)}'`;
 }
 

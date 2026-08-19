@@ -10,10 +10,9 @@ from PIL import Image
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from platformdirs import user_data_dir
-
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
+from pixlstash.services.builtin_models import builtin_model_dir
 from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
 
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -24,8 +23,6 @@ from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 logger = get_logger(__name__)
 
-_MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
-
 
 class ImageEmbeddingTask(BaseTask):
     """Task for generating image embeddings and aesthetic scores for one batch."""
@@ -33,15 +30,21 @@ class ImageEmbeddingTask(BaseTask):
     BATCH_SIZE = 128
     BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
 
+    # `filename`, not `path`. This table used to hold absolute paths built at
+    # import time from a second copy of the download folder's location, which is
+    # what stopped the folder from being relocatable at all: the shelf would have
+    # declared the new location while this table kept naming the old one, so a
+    # scorer that had just been moved would be downloaded again. The folder is
+    # asked for at use time instead — see `_aesthetic_config`.
     AESTHETIC_MODELS = {
         "ViT-L-14": {
             "url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
-            "path": os.path.join(_MODEL_DIR, "sac+logos+ava1-l14-linearMSE.pth"),
+            "filename": "sac+logos+ava1-l14-linearMSE.pth",
             "dim": 768,
         },
         "ViT-B-32": {
             "url": "https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_32_linear.pth",
-            "path": os.path.join(_MODEL_DIR, "sa_0_4_vit_b_32_linear.pth"),
+            "filename": "sa_0_4_vit_b_32_linear.pth",
             "dim": 512,
         },
     }
@@ -158,7 +161,19 @@ class ImageEmbeddingTask(BaseTask):
 
     @classmethod
     def _aesthetic_config(cls):
-        return cls.AESTHETIC_MODELS.get(CLIP_MODEL_NAME)
+        """The scorer for the active CLIP model, with its path resolved now.
+
+        ``path`` is joined here rather than stored in the table so it follows a
+        relocation of the download folder: every reader of the folder asks
+        :func:`builtin_model_dir`, which is what makes the folder movable.
+        """
+        config = cls.AESTHETIC_MODELS.get(CLIP_MODEL_NAME)
+        if config is None:
+            return None
+        return {
+            **config,
+            "path": os.path.join(builtin_model_dir(), config["filename"]),
+        }
 
     @classmethod
     def _is_aesthetic_disabled(cls):

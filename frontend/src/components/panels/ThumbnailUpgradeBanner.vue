@@ -25,6 +25,15 @@ import { useTasksStore } from "../../stores/useTasksStore";
 
 // The worker-type value the backend keys the thumbnail-regen snapshot under.
 const THUMBNAIL_WORKER_KEY = "ThumbnailGenerationTask";
+// Outstanding thumbnails below which this is not an upgrade worth a banner.
+//
+// The worker is shared, and `remaining` is a library-wide count of
+// `thumbnail_width IS NULL` — so an in-place rotate, which NULLs exactly the
+// pictures it turned to re-queue their bitmaps, lights up the same row as the
+// one-off v1.8.0 regeneration did. A determinate progress bar reading "12,070 /
+// 12,073" because someone turned three photos is noise, and the rotate already
+// shows itself on the tiles it is turning.
+const BULK_BACKLOG_THRESHOLD = 5;
 // How long the "Thumbnails updated" success beat lingers before the banner hides.
 const SUCCESS_BEAT_MS = 2600;
 
@@ -60,8 +69,26 @@ const percent = computed(() =>
   total.value > 0 ? Math.round((current.value / total.value) * 100) : 0,
 );
 
-// Regeneration is running while there is anything left to rebuild.
-const isActive = computed(() => remaining.value > 0);
+// Engaged when the backlog is genuinely bulk, released only when it empties.
+//
+// A LATCH rather than a plain threshold, because the two ends of a job need
+// different answers: a handful outstanding at the START is a rotate and must
+// never raise the banner, while a handful outstanding at the END is the tail of
+// a real upgrade and must not make it vanish at 99.9% — or, worse, declare
+// "Thumbnails updated" with work still running.
+const bulkEngaged = ref(false);
+watch(
+  remaining,
+  (value) => {
+    if (value > BULK_BACKLOG_THRESHOLD) bulkEngaged.value = true;
+    else if (value === 0) bulkEngaged.value = false;
+  },
+  { immediate: true },
+);
+
+// Regeneration is running while there is anything left to rebuild — and worth
+// showing only once it was ever more than a handful.
+const isActive = computed(() => remaining.value > 0 && bulkEngaged.value);
 
 // ── Visibility state machine ──────────────────────────────────────────────
 // dismissed: in-memory only (this session). This component stays mounted for
@@ -265,14 +292,11 @@ function viewProgress() {
   flex: none;
   margin-left: auto;
   padding: var(--space-2) var(--space-3);
-  border: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-primary));
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   font-family: inherit;
-  cursor: pointer;
 }
 
 .tub-view:hover {
@@ -293,22 +317,13 @@ function viewProgress() {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(var(--v-theme-on-panel), 0.6);
-  cursor: pointer;
 }
 
 .tub-dismiss:hover {
   background: rgba(var(--v-theme-on-panel), 0.08);
   color: rgb(var(--v-theme-on-panel));
-}
-
-.tub-view:focus-visible,
-.tub-dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* Enter/leave: a calm slide-and-fade. Reduced motion is honoured globally by

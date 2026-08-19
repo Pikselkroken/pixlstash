@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import os
 from dataclasses import dataclass
 from threading import Lock
@@ -43,6 +44,9 @@ class ImagePluginManager:
         with self._lock:
             self._plugins = {}
             self._errors = []
+            # name -> (source, path) of the file that claimed it, so a later
+            # collision can name the *claiming* file rather than itself.
+            origins: dict[str, tuple[str, str]] = {}
             logger.info("User image plugins directory: %s", self.user_dir)
             for source, folder in self.plugin_dirs():
                 if not os.path.isdir(folder):
@@ -66,13 +70,28 @@ class ImagePluginManager:
                         )
                         continue
                     if plugin_name in self._plugins:
-                        logger.warning(
-                            "Ignoring duplicate plugin name '%s' from %s",
-                            plugin_name,
-                            path,
-                        )
+                        claimed_by, claimed_path = origins[plugin_name]
+                        if source == "built_in" and claimed_by == "user":
+                            # User directories are walked first, so a shadowed
+                            # built-in arrives second and used to be logged as
+                            # "the duplicate" — pointing at the file that lost,
+                            # not the one that took over. Name the user file.
+                            message = (
+                                f"Replaces the built-in image plugin '{plugin_name}'"
+                            )
+                            self._errors.append(
+                                PluginLoadError(file=claimed_path, message=message)
+                            )
+                            logger.warning("%s (%s)", message, claimed_path)
+                        else:
+                            logger.warning(
+                                "Ignoring duplicate plugin name '%s' from %s",
+                                plugin_name,
+                                path,
+                            )
                         continue
                     self._plugins[plugin_name] = plugin
+                    origins[plugin_name] = (source, path)
 
     def list_plugins(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -100,10 +119,21 @@ class ImagePluginManager:
             plugin_class = self._find_plugin_class(module)
             if plugin_class is None:
                 self._errors.append(
-                    PluginLoadError(file=path, message="No ImagePlugin subclass found")
+                    PluginLoadError(
+                        file=path,
+                        message="No concrete ImagePlugin subclass defined in this file",
+                    )
                 )
                 return None
-            return plugin_class()
+            plugin = plugin_class()
+            # Exercise the schema once here, where a failure is containable.
+            # `list_plugins()` comprehends over every plugin and runs unguarded,
+            # so one plugin raising in `parameter_schema()` — or declaring a
+            # `models` header that is not a list of dicts — would take
+            # `GET /pictures/plugins` down for all of them. The tagger registry
+            # probes at load for the same reason (`_register_user_plugin`).
+            plugin.plugin_schema()
+            return plugin
         except Exception as exc:
             message = f"Failed to initialize plugin: {exc}"
             self._errors.append(PluginLoadError(file=path, message=message))
@@ -132,18 +162,49 @@ class ImagePluginManager:
 
     @staticmethod
     def _find_plugin_class(module: ModuleType) -> type[ImagePlugin] | None:
+        """Return the concrete plugin class *module* itself defines.
+
+        A class the module merely imported belongs to whoever defined it;
+        returning it would let a plugin that imports a built-in for reference
+        ship that built-in in place of the class its author wrote, and — since
+        a user plugin also wins a name collision — replace the built-in with
+        it. ``TaggerPluginManager._register_module_plugins`` excludes imported
+        classes the same way (its extra ``__module__`` prefix clause is for the
+        package shape, which this loader does not accept).
+
+        An abstract class is only a *fallback*, not a skip: an intermediate
+        base above the real one must not win, but a file whose only plugin
+        class is abstract is an author who forgot a method, and the
+        instantiation error names both the class and the method — a better
+        report than "no plugin class here" for a file that plainly has one.
+        """
+        fallback: type[ImagePlugin] | None = None
         for value in module.__dict__.values():
             if not isinstance(value, type):
                 continue
-            if value is ImagePlugin:
+            if not issubclass(value, ImagePlugin) or value is ImagePlugin:
                 continue
-            if issubclass(value, ImagePlugin):
-                return value
-        return None
+            if value.__module__ != module.__name__:
+                continue  # imported from elsewhere, not defined here
+            if inspect.isabstract(value):
+                fallback = fallback or value
+                continue
+            return value
+        return fallback
 
 
 _PLUGIN_MANAGER: ImagePluginManager | None = None
 _PLUGIN_MANAGER_LOCK = Lock()
+
+
+def user_plugin_dir() -> str:
+    """Return the directory user-supplied image plugins are loaded from.
+
+    Named rather than inlined so `pixlstash-cli plugins` can install into the
+    same place without constructing a manager (which would import and run every
+    plugin on disk).
+    """
+    return os.path.join(user_data_dir("pixlstash"), "image-plugins", "user")
 
 
 def get_image_plugin_manager() -> ImagePluginManager:
@@ -151,7 +212,6 @@ def get_image_plugin_manager() -> ImagePluginManager:
     with _PLUGIN_MANAGER_LOCK:
         if _PLUGIN_MANAGER is None:
             built_in = os.path.join(os.path.dirname(__file__), "built-in")
-            user = os.path.join(user_data_dir("pixlstash"), "image-plugins", "user")
-            _PLUGIN_MANAGER = ImagePluginManager(built_in, user)
+            _PLUGIN_MANAGER = ImagePluginManager(built_in, user_plugin_dir())
             _PLUGIN_MANAGER.reload()
         return _PLUGIN_MANAGER

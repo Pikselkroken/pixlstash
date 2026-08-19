@@ -1,3 +1,62 @@
+# [1.10.0]
+
+Pip, source, headless and Docker installations need one preparation command
+between installing and first startup — see
+[Multiple libraries](README.md#multiple-libraries). The desktop app runs it for
+you. Startup then moves owner credentials into the installation hub and clears
+owner, token and guest rows from the vault and its snapshots, so guests must
+reopen their links.
+
+- Multiple image libraries, switched from Settings → Libraries. Each keeps its
+  own pictures, tags, scores and snapshots; your account and preferences stay
+  with the installation.
+- API tokens and share links belong to the library that created them and stop
+  working while another library is active, so create a token in each library
+  your scripts use. Settings warns before you switch away from live share links.
+- A functional pixlstash CLI to perform backups, restore from backup, install
+  plugins and add picture libraries. Lets you perform regular backups with cron.
+- The desktop app can run that CLI itself: `PixlStash.AppImage cli libraries
+  list` works whether or not the app is open. Settings → Backend → Desktop →
+  Shell command adds a `pixlstash` command in `~/.local/bin` for any terminal,
+  and Settings → Libraries shows the exact command for your install.
+- Add `pixlstash-cli libraries backup` for an owner-readable local archive of a
+  library and its hub, and `libraries restore` to read one back into a new
+  folder and make it the library that opens — password and API tokens included.
+  Restore needs PixlStash stopped and never overwrites: your current config and
+  hub are moved into a dated `pre-restore-` folder, and it prints the launch
+  command for both the restored library and the one you had.
+- Add `pixlstash-cli plugins install|list|remove` for captioning plugins and
+  image filters, from the PixlStash-plugins repository, a zip, a folder or a
+  single `.py`. A plugin's `requirements.txt` is only installed with
+  `--with-deps`.
+- Add `pixlstash-cli plugins available` to list what the plugins repository
+  publishes — name, title, summary and, where declared, author and licence, with
+  `*` marking one you already have. Add a word to search. Until now the only way
+  to learn a plugin's name was to guess one wrong and read the error.
+- Add `pixlstash-cli plugins test <plugin>`, so writing a captioning plugin no
+  longer costs a server restart per typo. It loads the file the way the server
+  does, registers every plugin class it defines, and checks the parameter schema
+  is one the settings screen can render; `--image` also runs it over one picture.
+  It imports the plugin, so that code runs unsandboxed with your permissions —
+  a development aid, **not a security scanner**.
+- An image filter plugin now registers the first concrete `ImagePlugin` subclass
+  the file itself defines, rather than one it merely imports, and a name
+  collision with a built-in is logged against your file instead of the built-in.
+- Fixed the documented Windows plugin directory, which was missing a path
+  component: it is `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`.
+- Both command lines now document themselves in full, including the exit codes a
+  script needs.
+- Removed `pixlstash-server --retag-and-embed`; nothing ever read it.
+- PixlStash can now serve an adapter's file to another machine, addressed by its
+  content hash, so a ComfyUI running on a different box can use a LoRA this one
+  catalogues instead of needing its own copy. Owner-only, and reachable from
+  your own network rather than the internet.
+- The model shelf can delete models from disk — from the selection pill, the
+  row's right-click menu or the `Delete` key. It moves files to your Trash, or
+  deletes them permanently with Shift held. Only your own model folders and
+  PixlStash's own store are touched; shared caches and drives that are not
+  plugged in are refused.
+
 # [1.9.0]
 
 Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as described under 1.8.1 below: create replacements from Settings, share your links again with their new values, and enter your public URL and ComfyUI URL again. If you already updated to 1.8.1 this has happened and your tokens are left alone.

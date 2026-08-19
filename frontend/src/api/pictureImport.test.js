@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Pattern for API-module tests: mock the singleton apiClient, assert the module
 // builds the right URL and returns the mapped body (never the axios envelope).
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 

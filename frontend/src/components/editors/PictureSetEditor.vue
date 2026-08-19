@@ -1,59 +1,81 @@
 <template>
   <AppDialog
     :open="open"
-    :title="set?.id ? 'Edit picture set' : 'New picture set'"
-    :width="660"
+    :title="isExistingSet ? 'Edit picture set' : 'New picture set'"
+    :width="720"
     @close="emit('close')"
   >
-    <div class="editor-body">
-      <AppInput
-        ref="nameInputRef"
-        v-model="localSet.name"
-        label="Name *"
-        placeholder="Picture set name"
-        icon="layers-triple-outline"
-        :disabled="isLockedSet"
-        :title="isLockedSet ? LOCK_REASON : undefined"
-        @enter="save"
-      />
-      <AppTextarea
-        v-model="localSet.description"
-        label="Description"
-        placeholder="Optional description…"
-        :rows="2"
-        :disabled="isLockedSet"
-        :title="isLockedSet ? LOCK_REASON : undefined"
-      />
-      <AppSelect
-        v-model="projectSelection"
-        label="Projects"
-        :options="projectOptions"
-        :multiple="true"
-        :disabled="isLockedSet"
-        :title="isLockedSet ? LOCK_REASON : undefined"
-      />
+    <!-- Two columns rather than one tall stack, so the form stops outgrowing
+         the viewport and scrolling its own body. Tabs were the stated
+         alternative and were rejected: a field hidden behind a tab is one you
+         cannot check before saving, and this form has a single required field
+         and a single commit. The columns are a CSS reflow of unchanged source
+         order — name/description left, projects/lock right — so tab order is
+         exactly the sequence it was single-column: name, description, projects,
+         locked. Unlike the person editor this column 2 holds writable controls,
+         so that sequence now reads down the left column and then down the
+         right, which is column-major and is what the eye does with two columns
+         — but it does mean Tab travels bottom-left to top-right once.
 
-      <!-- Locked toggle: the only control that stays active while the set is
-           locked, so unticking + Save is the unlock path. -->
-      <label class="lock-row">
-        <input
-          type="checkbox"
-          class="lock-row__checkbox"
-          :checked="localSet.locked"
-          @change="localSet.locked = $event.target.checked"
+         The appearance block does NOT go in a column. Eight 32px icon columns
+         plus the scroll gutter, the "or" divider, the thumbnail and the colour
+         box have an intrinsic width around 570px; half of any dialog on the
+         width ladder is narrower than that, and fitting it would mean cutting
+         icon columns. It spans instead. -->
+    <div class="editor-body">
+      <div class="editor-col">
+        <AppInput
+          ref="nameInputRef"
+          v-model="localSet.name"
+          label="Name *"
+          placeholder="Picture set name"
+          icon="layers-triple-outline"
+          :disabled="isLockedSet"
+          :title="isLockedSet ? LOCK_REASON : undefined"
+          @enter="save"
         />
-        <span class="lock-row__body">
-          <span class="lock-row__title">Locked</span>
-          <span class="lock-row__help">
-            Locked sets are read-only: no edits to the set, its pictures' tags,
-            or descriptions until unlocked.
+        <AppTextarea
+          v-model="localSet.description"
+          label="Description"
+          placeholder="Optional description…"
+          :rows="2"
+          :disabled="isLockedSet"
+          :title="isLockedSet ? LOCK_REASON : undefined"
+        />
+      </div>
+
+      <div class="editor-col">
+        <AppSelect
+          v-model="projectSelection"
+          label="Projects"
+          :options="projectOptions"
+          :multiple="true"
+          :disabled="isLockedSet"
+          :title="isLockedSet ? LOCK_REASON : undefined"
+        />
+
+        <!-- Locked toggle: the only control that stays active while the set is
+             locked, so unticking + Save is the unlock path. -->
+        <label class="lock-row">
+          <input
+            type="checkbox"
+            class="lock-row__checkbox"
+            :checked="localSet.locked"
+            @change="localSet.locked = $event.target.checked"
+          />
+          <span class="lock-row__body">
+            <span class="lock-row__title">Locked</span>
+            <span class="lock-row__help">
+              Locked sets are read-only: no edits to the set, its pictures'
+              tags, or descriptions until unlocked.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      </div>
 
       <!-- Appearance row -->
       <div
-        class="appearance-row"
+        class="appearance-row editor-span"
         :class="{ 'appearance-row--locked': isLockedSet }"
         :title="isLockedSet ? LOCK_REASON : undefined"
       >
@@ -137,6 +159,21 @@
           </div>
         </div>
       </div>
+
+      <!-- Outside the lock wash: the tray is read-only, so a locked set still
+           shows what it uses. Keyed on the open count so an adapter attached on
+           the shelf in between still shows up here — without the freshness
+           resting on the dialog's lazy-mount behaviour, and without the widest
+           block in the dialog vanishing from under a leave transition, which is
+           what `v-if="props.open"` did. The id comes from the latched local
+           copy for the same reason: the host nulls the prop on the way out. -->
+      <AdapterTray
+        v-if="openCount > 0"
+        :key="openCount"
+        class="editor-span"
+        entity-type="set"
+        :entity-id="localSet.id"
+      />
     </div>
     <template #footer>
       <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
@@ -174,7 +211,10 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import AdapterTray from "../widgets/AdapterTray.vue";
+import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
@@ -183,7 +223,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
   thumbnailUrl: { type: String, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
 
@@ -219,7 +259,20 @@ const localSet = ref({
 // The set's persisted locked state gates the fields. Editing the checkbox does
 // not flip this — a set only becomes editable after an unlock PATCH round-trips
 // and the dialog reopens with the fresh set.
-const isLockedSet = computed(() => !!props.set?.locked);
+//
+// Written by the watcher below rather than computed off the prop, for the same
+// reason as `isExistingSet`: `SideBar.closeSetEditor` nulls `set` in the same
+// tick it closes the dialog, and a computed would lift the lock wash and
+// re-enable every field on a dialog still on screen playing its leave
+// transition. `submitSet` reads it too, so it must not flicker mid-save either.
+const isLockedSet = ref(false);
+
+// Drives the title and would drive a width branch if this editor had one; both
+// columns are populated on create, so it is only the title here.
+const isExistingSet = ref(false);
+
+// Bumped on every open, to key the adapter tray (see the template).
+const openCount = ref(0);
 
 const nameInputRef = ref(null);
 
@@ -249,9 +302,17 @@ watch(
   },
 );
 
+// Gated on `open`: the host nulls `set` as it closes, and this watcher would
+// otherwise blank all four fields, flip the title to "New picture set" and lift
+// the lock wash under a dialog that is still visible. The form is only ever
+// read while open, so filling it on the way in is the whole contract.
 watch(
-  () => props.set,
-  (newSet) => {
+  () => [props.open, props.set],
+  ([isOpen, newSet]) => {
+    if (!isOpen) return;
+    openCount.value += 1;
+    isExistingSet.value = !!newSet?.id;
+    isLockedSet.value = !!newSet?.locked;
     if (newSet) {
       localSet.value = {
         id: newSet.id,
@@ -318,7 +379,7 @@ async function saveSetFromEditor(setData) {
   } catch (e) {
     console.error("Failed to save picture set", e);
     noticeStore.error(
-      `Couldn't save that set. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that set. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "set-save" },
     );
   }
@@ -341,10 +402,36 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>
+/* `minmax(0, 1fr)` and not a bare `1fr`: a bare track takes its width from the
+   widest child, and the project list or a long option label would then push the
+   row wider than the dialog instead of wrapping inside it. */
 .editor-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-6);
+  row-gap: var(--space-5);
+}
+
+.editor-col {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  min-width: 0;
+}
+
+.editor-span {
+  grid-column: 1 / -1;
+}
+
+/* Vuetify caps the dialog at `calc(100% - 48px)`, so it stops being 720 wide
+   below a 768px viewport and each column falls under the ~300px the fields
+   want (299px at a 720px viewport). 720 is where that is unambiguous. Drop to
+   the single column the editor has always had; the appearance row's own
+   `flex-wrap` keeps handling the narrower cases from there. */
+@media (max-width: 720px) {
+  .editor-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Locked toggle row */
@@ -388,11 +475,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   border: solid rgb(var(--v-theme-on-accent));
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
-}
-
-.lock-row__checkbox:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .lock-row__body {
@@ -494,8 +576,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 48px;
   border-radius: var(--radius-md);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -517,9 +597,10 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 .icon-grid {
   display: grid;
   /* Eight 32px-button columns need ~270px plus the scroll gutter; the dialog
-     is sized 660 wide so that much is left after the thumbnail and colour
-     asides. The stable gutter reserves the scrollbar's width up front so it
-     can't eat into the last column when content overflows. */
+     is sized 720 wide and the appearance row spans both of its columns, so that
+     much is left after the thumbnail and colour asides. The stable gutter
+     reserves the scrollbar's width up front so it can't eat into the last
+     column when content overflows. */
   grid-template-columns: repeat(8, 1fr);
   column-gap: var(--space-1);
   row-gap: var(--space-1);
@@ -546,8 +627,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 32px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -594,7 +673,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 30px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  cursor: pointer;
   outline: none;
   padding: 0;
   box-sizing: border-box;

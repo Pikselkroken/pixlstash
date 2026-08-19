@@ -31,7 +31,7 @@ import { getPictureStackId, getStackBadgeCount } from "./stack";
 export const UNKNOWN_FIGURE = "–";
 
 /** The action's name, once, so the menus and the dialog cannot drift. */
-export const KEEP_COVER_ONLY_LABEL = "Keep cover only";
+const KEEP_COVER_ONLY_LABEL = "Keep cover only";
 
 /**
  * The glyph, once: the inverse of the mdi-layers-plus the user pressed to build

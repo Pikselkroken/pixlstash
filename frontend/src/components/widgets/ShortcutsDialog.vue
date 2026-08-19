@@ -1,12 +1,19 @@
 <script setup>
 import { computed } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
-import { redoKeyHint, undoKeyHint } from "../../utils/shortcutHints";
+import {
+  redoKeyHint,
+  selectAllKeyHint,
+  undoKeyHint,
+} from "../../utils/shortcutHints";
 
 // The undo/redo chords differ per platform, so the table renders whatever the
-// hint helper reports rather than hard-coding Ctrl.
+// hint helper reports rather than hard-coding Ctrl. Select-all differs the same
+// way — a macOS reader was being taught `Ctrl+A` for a chord their keyboard
+// spells `⌘A`, and the shelf's own keycap now reports the platform.
 const undoKeyHintKeys = undoKeyHint();
 const redoKeyHintKeys = redoKeyHint();
+const selectAllKeyHintKeys = selectAllKeyHint();
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -44,7 +51,11 @@ const open = computed({
               <td>Tag selected images</td>
             </tr>
             <tr>
-              <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
+              <td>
+                <template v-for="(key, i) in selectAllKeyHintKeys" :key="key"
+                  ><span v-if="i > 0">+</span><kbd>{{ key }}</kbd></template
+                >
+              </td>
               <td>Select all images</td>
             </tr>
             <tr :class="{ 'shortcut-disabled': isReadOnly }">
@@ -121,6 +132,10 @@ const open = computed({
             <tr :class="{ 'shortcut-disabled': isReadOnly }">
               <td><kbd>T</kbd></td>
               <td>Add tag</td>
+            </tr>
+            <tr :class="{ 'shortcut-disabled': isReadOnly }">
+              <td><kbd>[</kbd> / <kbd>]</kbd></td>
+              <td>Rotate 90° left / right (JPEG and PNG only)</td>
             </tr>
             <tr>
               <td><kbd>Z</kbd></td>

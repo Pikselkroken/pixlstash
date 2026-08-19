@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Column, DateTime, String, UniqueConstraint
 from sqlmodel import SQLModel, Field
 
 if TYPE_CHECKING:
@@ -17,7 +17,8 @@ class GuestSession(SQLModel, table=True):
 
     Attributes:
         session_id: Client-generated UUID stored as the primary key (max 64 chars).
-        token_id: The share token that was used to create the session.  Cascades
+        token_public_id: Public id of the share token the session was created
+            from. Not a foreign key: the token lives in the hub. Cascades
             on token deletion so all sessions for a revoked link are removed.
         created_at: Wall-clock UTC timestamp used for FIFO eviction ordering.
         last_active_at: Updated on each score POST; used to determine whether
@@ -36,10 +37,19 @@ class GuestSession(SQLModel, table=True):
     session_id: str = Field(
         sa_column=Column(String(64), primary_key=True, nullable=False)
     )
-    token_id: int = Field(
-        sa_column=Column(
-            ForeignKey("usertoken.id", ondelete="CASCADE"), nullable=False, index=True
-        )
+    # The share token this session was created from, named by its public id.
+    #
+    # **Not a foreign key, and not the integer primary key.** Since the hub/vault
+    # split, tokens live in the hub while guest sessions stay per-vault (a guest
+    # session is scoped to a share link into one library), and SQLite has no
+    # cross-database foreign keys. The integer id would be worse than useless
+    # here: it names a row in a different database, and SQLite reuses freed
+    # integer ids, so it could come to name a different token entirely. That is
+    # exactly what ``UserToken.public_id`` exists for. Resolution is a lookup in
+    # the hub, so a session whose token has been revoked resolves to nothing and
+    # fails closed.
+    token_public_id: str = Field(
+        sa_column=Column(String(64), nullable=False, index=True)
     )
     created_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False),

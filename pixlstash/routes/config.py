@@ -18,14 +18,19 @@ from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import config_service, scrapheap_service
+from pixlstash.services import (
+    config_service,
+    library_settings_service,
+    scrapheap_service,
+)
 from pixlstash.telemetry import mark_install_established
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
     changed_penalised_tags,
     invalidate_all_anomaly_scores,
-    invalidate_for_penalised_tag_change,
+    apply_pending_invalidations,
+    record_pending_invalidation,
 )
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
@@ -52,6 +57,21 @@ def _resolved_penalised_tags(raw) -> dict:
 def create_router(server) -> APIRouter:
     router = APIRouter()
     hw_monitor = config_service.HardwareMonitor()
+
+    def _config_payload(user) -> dict:
+        """Serialise the user's config, with the library-owned settings merged in.
+
+        The client sees one flat config object exactly as before. Behind it,
+        ``similarity_character`` comes from the *active library* rather than from
+        the user row: it is a character id in that vault, so the same number in
+        another library is a different person (see
+        pixlstash/db_models/library_settings.py).
+        """
+        payload = serialize_user_config(user)
+        payload["similarity_character"] = (
+            library_settings_service.get_similarity_character(server.vault.db)
+        )
+        return payload
 
     def _ensure_secure_when_required(request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -432,7 +452,7 @@ def create_router(server) -> APIRouter:
     def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        return serialize_user_config(user)
+        return _config_payload(user)
 
     @router.get(
         "/users/me/penalised-tags",
@@ -443,7 +463,7 @@ def create_router(server) -> APIRouter:
     def get_me_penalised_tags(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        config = serialize_user_config(user)
+        config = _config_payload(user)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
     @router.patch(
@@ -462,6 +482,36 @@ def create_router(server) -> APIRouter:
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
 
+        def preview_patch(session: Session, user_id: int):
+            """Validate the patch and work out which tag weights would change.
+
+            Runs against a detached copy and commits nothing, so the diff is
+            known *before* anything is written. That ordering is what lets the
+            invalidation be recorded durably first; see the comment on the write
+            below.
+            """
+            user = session.get(User, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            old_penalised_tags = _resolved_penalised_tags(
+                user.smart_score_penalised_tags
+            )
+            probe = User(**user.model_dump())
+            try:
+                would_update = apply_user_config_patch(probe, patch_data)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not would_update:
+                return set()
+            # Diff the *resolved* weight tables, not the raw JSON strings: a
+            # reordered or reformatted payload with identical weights must not
+            # trigger a re-score.
+            return changed_penalised_tags(
+                old_penalised_tags,
+                _resolved_penalised_tags(probe.smart_score_penalised_tags),
+            )
+
         def update_user(session: Session, user_id: int):
             user = session.get(User, user_id)
             if user is None:
@@ -472,10 +522,6 @@ def create_router(server) -> APIRouter:
             )
             install_id_was_enabled = bool(
                 getattr(user, "telemetry_send_install_id", False)
-            )
-
-            old_penalised_tags = _resolved_penalised_tags(
-                user.smart_score_penalised_tags
             )
             try:
                 updated = apply_user_config_patch(user, patch_data)
@@ -507,38 +553,84 @@ def create_router(server) -> APIRouter:
                 # periodic sender, the on-disk identity must already carry the
                 # established classification.
                 mark_install_established(server.server_config_path)
-
-            changed_tags: set[str] = set()
             if updated:
                 session.add(user)
-                new_penalised_tags = _resolved_penalised_tags(
-                    user.smart_score_penalised_tags
-                )
-                # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
-                # or reformatted payload with identical weights must not trigger a
-                # re-score.
-                changed_tags = changed_penalised_tags(
-                    old_penalised_tags, new_penalised_tags
-                )
-                if changed_tags:
-                    # Scoped, not library-wide: only pictures that actually carry one of
-                    # the re-weighted tags can have moved, and a blanket reset would
-                    # re-score the entire vault on every settings edit.
-                    #
-                    # Runs INSIDE this transaction, before the single commit:
-                    # invalidate_for_penalised_tag_change deliberately does not commit, so
-                    # the config write and the score invalidation land atomically. If the
-                    # process died between two separate tasks the config change would be
-                    # durable while the invalidation was lost, leaving scores stale
-                    # forever — the failure this path exists to eliminate.
-                    invalidate_for_penalised_tag_change(session, changed_tags)
                 session.commit()
                 session.refresh(user)
-            return user, updated, changed_tags
+            return user, updated
 
-        user, updated, changed_tags = server.vault.db.run_task(
+        changed_tags = server.hub_engine.run_immediate_read_task(preview_patch, user_id)
+
+        # ``similarity_character`` belongs to the active library, not to the
+        # user: it is a row id in that vault's character table, so the same
+        # number in another library is a different person (see
+        # pixlstash/db_models/library_settings.py). Split it out before the hub
+        # write so the hub never becomes a second, stale home for it. The config
+        # API stays one flat object; only the storage is split.
+        if "similarity_character" in patch_data:
+            raw_character = patch_data.pop("similarity_character")
+            if raw_character in ("", None, "null"):
+                character_id = None
+            elif isinstance(raw_character, str) and raw_character.isdigit():
+                character_id = int(raw_character)
+            else:
+                character_id = raw_character
+            library_settings_service.set_similarity_character(
+                server.vault.db, character_id
+            )
+
+        # Record the invalidation in the vault BEFORE committing the setting to
+        # the hub. The two live in different databases and SQLite has no
+        # transaction spanning both, so one of them has to go first, and this
+        # order is the one that fails safe. Crash after the record and before the
+        # setting: the record is applied against unchanged weights and the scores
+        # recompute to the values they already had, costing work and nothing
+        # else. The other order would leave the setting saved with no record that
+        # a recompute is owed, and a stale smart score is a plausible number, so
+        # nothing would ever notice.
+        if changed_tags:
+            server.vault.db.run_task(
+                lambda session: (
+                    record_pending_invalidation(session, changed_tags),
+                    session.commit(),
+                ),
+                priority=DBPriority.IMMEDIATE,
+            )
+
+        # The hub owns the user row. The five library-scoped fields (§5) still
+        # ride along here rather than in the vault's library_settings row; see
+        # the note in pixlstash/hub/schema.py.
+        user, updated = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        # Keep the process-local owner cache coherent with its new hub home.
+        # Background work (notably smart scoring) has no request from which to
+        # reload these settings.
+        server.auth.user = user
+        server._user = user
+
+        if changed_tags:
+            # Apply the recorded invalidation now, so the user sees the effect
+            # immediately. Consuming the record and NULLing the scores share one
+            # vault transaction, so that half cannot tear.
+            #
+            # A failure here is not the end of the story: the record is already
+            # durable, and PendingScoreInvalidationFinder drains it on its next
+            # sweep. Logged rather than raised for exactly that reason, because
+            # the setting is saved and the repair is already scheduled.
+            try:
+                server.vault.db.run_task(
+                    apply_pending_invalidations, priority=DBPriority.IMMEDIATE
+                )
+            except Exception:
+                logger.exception(
+                    "Penalised tags changed (%s) and the invalidation is "
+                    "recorded, but applying it now failed. Scores for pictures "
+                    "carrying those tags stay stale until the pending-"
+                    "invalidation finder drains the record.",
+                    ", ".join(sorted(changed_tags)),
+                )
+
         if changed_tags:
             # The NULL-reset already committed atomically above; just nudge the scheduler
             # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
@@ -588,7 +680,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "updated": updated,
-            "config": serialize_user_config(user),
+            "config": _config_payload(user),
         }
 
     @router.post(
@@ -723,7 +815,7 @@ def create_router(server) -> APIRouter:
             session.add(user)
             session.commit()
 
-        server.vault.db.run_task(
+        server.hub_engine.run_task(
             _save, user_id, png_data, priority=DBPriority.IMMEDIATE
         )
         return {"status": "ok"}
@@ -746,7 +838,7 @@ def create_router(server) -> APIRouter:
             session.add(user)
             session.commit()
 
-        server.vault.db.run_task(_clear, user_id, priority=DBPriority.IMMEDIATE)
+        server.hub_engine.run_task(_clear, user_id, priority=DBPriority.IMMEDIATE)
         return {"status": "ok"}
 
     @router.get(

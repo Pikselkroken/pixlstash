@@ -17,7 +17,8 @@ from io import BytesIO
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from PIL import Image
+from PIL import Image, ImageOps
+from PIL.PngImagePlugin import PngInfo
 
 from pixlstash.db_models import Picture
 from pixlstash.db_models.user import User
@@ -29,6 +30,13 @@ from ._helpers import MEDIA_TYPE_BY_FORMAT
 
 
 logger = get_logger(__name__)
+
+
+# Formats whose EXIF orientation the BROWSER applies for us, so the raw bytes can
+# be streamed through untouched. Everything else has to be transposed server-side
+# before it is served — see the measurement in `get_picture` below, and the
+# matching table in `utils/image_processing/orientation.py`.
+BROWSER_ORIENTED_FORMATS = {"jpg", "jpeg"}
 
 
 def register_routes(router, server):
@@ -86,7 +94,8 @@ def register_routes(router, server):
             user_id = getattr(request.state, "auth_user_id", None)
             if not user_id:
                 return None
-            user = server.vault.db.run_immediate_read_task(
+            # The watermark is the owner's, not a library's, so it is in the hub.
+            user = server.hub_engine.run_immediate_read_task(
                 lambda session: session.get(User, user_id)
             )
             return get_watermark_bytes(
@@ -102,9 +111,41 @@ def register_routes(router, server):
         # the source. Served directly via FileResponse so the browser can also
         # cache it by ETag.
         is_heic = fmt_lower in ("heic", "heif")
-        if apply_wm and not is_heic:
+
+        # Does this response have to arrive already turned?
+        #
+        # An in-place rotate writes the file's EXIF orientation tag and leaves
+        # the pixels alone, which is correct only where the renderer applies the
+        # tag. The backend always does (`exif_transpose` on every decode, which
+        # is what the thumbnail is built from); the browser applies it for JPEG
+        # and ONLY for JPEG. Measured 2026-08-18 against a real library file:
+        #
+        #     Chromium 148.0.7778.96 / Firefox 150.0.2
+        #       40x20 JPEG, orientation 6  ->  naturalSize 20x40   (honoured)
+        #       40x20 PNG,  orientation 6  ->  naturalSize 40x20   (ignored)
+        #
+        # A PNG's `eXIf` chunk is ignored by both engines exactly as WebP's is,
+        # so a rotated PNG showed a turned thumbnail beside an unturned full
+        # view. Turning it here is what lets the rotate stay instant, lossless
+        # and undoable for the 5-in-6 of a ComfyUI library that is PNG.
+        #
+        # Re-encoding drops the EXIF block wholesale, so anything on the
+        # HEIC-transcode or watermark path has to be turned here too — including
+        # JPEG, which would otherwise lose the tag on its way through PIL.
+        orientation = int(getattr(pic, "orientation", None) or 1)
+        reencoding = is_heic or apply_wm
+        needs_transpose = orientation != 1 and (
+            reencoding or fmt_lower not in BROWSER_ORIENTED_FORMATS
+        )
+
+        # Reference-folder pictures are the user's own files in the user's own
+        # folders; this library does not write beside them (the same rule that
+        # puts their thumbnails under `.ref_thumbs`). They render per request.
+        cacheable = not (pic.file_path and os.path.isabs(pic.file_path))
+        if not is_heic and cacheable and (apply_wm or needs_transpose):
             file_stem, file_ext = os.path.splitext(file_path)
-            wm_cache_path = f"{file_stem}_watermarked{file_ext}"
+            suffix = "_watermarked" if apply_wm else "_oriented"
+            wm_cache_path = f"{file_stem}{suffix}{file_ext}"
             if os.path.isfile(wm_cache_path):
                 try:
                     if os.path.getmtime(wm_cache_path) >= os.path.getmtime(file_path):
@@ -126,14 +167,30 @@ def register_routes(router, server):
                         return resp
                 except OSError as exc:
                     logger.warning(
-                        "Failed to access watermark cache for id=%s: %s", pic.id, exc
+                        "Failed to access derived-render cache for id=%s: %s",
+                        pic.id,
+                        exc,
                     )
         else:
             wm_cache_path = None
 
-        if is_heic or apply_wm:
+        if is_heic or apply_wm or needs_transpose:
             try:
                 with Image.open(file_path) as pil_img:
+                    # ComfyUI provenance rides in the PNG's text chunks
+                    # (`workflow` / `prompt`), and a PIL re-save drops every one
+                    # of them. This response is what "Save image as" hands the
+                    # user, so they are carried across explicitly — the stored
+                    # file is untouched either way, but a downloaded copy that
+                    # silently lost its graph would be a worse bug than the one
+                    # this branch exists to fix.
+                    pil_img.load()
+                    png_text = dict(getattr(pil_img, "text", {}) or {})
+                    # Turned FIRST, so anything composited below lands the right
+                    # way up. `exif_transpose` also drops the orientation tag it
+                    # has just applied, so the result cannot be turned twice.
+                    if needs_transpose:
+                        pil_img = ImageOps.exif_transpose(pil_img)
                     if apply_wm:
                         wm_bytes = _get_user_watermark_bytes()
                         if wm_bytes:
@@ -153,6 +210,11 @@ def register_routes(router, server):
                             save_kwargs = {"quality": 92}
                         else:
                             save_kwargs = {}
+                            if out_fmt.upper() == "PNG" and png_text:
+                                png_info = PngInfo()
+                                for text_key, text_value in png_text.items():
+                                    png_info.add_text(text_key, text_value)
+                                save_kwargs["pnginfo"] = png_info
                         out_mime = MEDIA_TYPE_BY_FORMAT.get(
                             fmt_lower, "application/octet-stream"
                         )
@@ -171,14 +233,18 @@ def register_routes(router, server):
                     detail="Failed to process image",
                 )
 
-            # Persist the watermarked result to disk so future requests are free.
+            # Persist the derived render to disk so future requests are free.
+            # Its validity rule is mtime against the source, so the next rotate
+            # (which rewrites the original) invalidates it by itself.
             if wm_cache_path is not None:
                 try:
                     with open(wm_cache_path, "wb") as _f:
                         _f.write(encoded_bytes)
                 except OSError as exc:
                     logger.warning(
-                        "Could not write watermark cache for id=%s: %s", pic.id, exc
+                        "Could not write derived-render cache for id=%s: %s",
+                        pic.id,
+                        exc,
                     )
 
             response = Response(

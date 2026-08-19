@@ -32,7 +32,7 @@ export function getStackSmartScoreValue(img) {
   return Number.isFinite(value) ? value : 0;
 }
 
-export function getStackCreatedAtTs(img) {
+function getStackCreatedAtTs(img) {
   if (!img?.created_at) return 0;
   const ts = new Date(img.created_at).getTime();
   return Number.isFinite(ts) ? ts : 0;

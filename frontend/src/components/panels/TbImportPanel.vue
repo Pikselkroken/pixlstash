@@ -5,13 +5,19 @@
       <v-icon size="18" class="tbm-header-icon"
         >mdi-cloud-upload-outline</v-icon
       >
-      <span class="tbm-title">Import photos to</span>
+      <label :for="projectSelectId" class="tbm-title">Import photos to</label>
       <span class="tbm-spacer"></span>
       <div class="tbm-select-wrap tb-import-project">
         <select
+          :id="projectSelectId"
           :value="selectedProjectId ?? '__none__'"
           class="tbm-select"
           :class="{ 'tb-import-project--none': selectedProjectId == null }"
+          :disabled="projectsLoading"
+          :aria-busy="projectsLoading ? 'true' : undefined"
+          :aria-describedby="
+            projectsLoading || projectLoadError ? projectStatusId : undefined
+          "
           @change="onProjectChange($event.target.value)"
         >
           <option value="__none__">No project</option>
@@ -24,24 +30,54 @@
       </div>
     </div>
 
+    <div
+      v-if="projectsLoading"
+      :id="projectStatusId"
+      class="tb-import-project-status"
+      role="status"
+    >
+      Loading projects…
+    </div>
+    <div
+      v-else-if="projectLoadError"
+      :id="projectStatusId"
+      class="tb-import-project-status tb-import-project-status--error"
+      role="alert"
+    >
+      <span>Projects couldn’t load. Importing without one still works.</span>
+      <button type="button" class="tb-import-retry" @click="fetchProjects">
+        Retry
+      </button>
+    </div>
+
     <div class="tb-import-tabs" role="tablist">
       <button
         v-for="t in IMPORT_TABS"
+        :id="tabId(t.id)"
         :key="t.id"
         class="tb-import-tab"
         :class="{ 'tb-import-tab--active': activeTab === t.id }"
         type="button"
         role="tab"
         :aria-selected="activeTab === t.id"
+        :aria-controls="panelId(t.id)"
+        :tabindex="activeTab === t.id ? 0 : -1"
         @click="activeTab = t.id"
+        @keydown="onTabKeydown($event, t.id)"
       >
-        <v-icon size="16">{{ t.icon }}</v-icon>
+        <v-icon size="16" aria-hidden="true">{{ t.icon }}</v-icon>
         {{ t.label }}
       </button>
     </div>
 
     <!-- Local -->
-    <div v-if="activeTab === 'local'" class="tbm-section">
+    <div
+      v-if="activeTab === 'local'"
+      :id="panelId('local')"
+      class="tbm-section"
+      role="tabpanel"
+      :aria-labelledby="tabId('local')"
+    >
       <span class="tbm-label">Local files</span>
       <div
         class="tb-import-dropzone"
@@ -54,7 +90,9 @@
         <v-icon size="30" class="tb-import-dropzone-icon"
           >mdi-tray-arrow-up</v-icon
         >
-        <div class="tb-import-dropzone-text">{{ dropMessage }}</div>
+        <div class="tb-import-dropzone-text" aria-live="polite">
+          {{ dropMessage }}
+        </div>
       </div>
       <input
         ref="localInputRef"
@@ -79,7 +117,10 @@
     <!-- Folder watch -->
     <div
       v-else-if="activeTab === 'watch'"
+      :id="panelId('watch')"
       class="tbm-section tb-import-guidance"
+      role="tabpanel"
+      :aria-labelledby="tabId('watch')"
     >
       <span class="tbm-label">Automatic folder monitoring</span>
       <p class="tb-import-note">Import folders are managed in PixlStash.</p>
@@ -97,7 +138,13 @@
     </div>
 
     <!-- Cloud suppliers: manual-zip guidance (no live connection today) -->
-    <div v-else class="tbm-section tb-import-guidance">
+    <div
+      v-else
+      :id="panelId(activeTab)"
+      class="tbm-section tb-import-guidance"
+      role="tabpanel"
+      :aria-labelledby="tabId(activeTab)"
+    >
       <span class="tbm-label">{{ activeCloud.title }}</span>
       <ol>
         <li v-for="(step, i) in activeCloud.steps" :key="i" v-html="step"></li>
@@ -108,15 +155,16 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, useId, watch } from "vue";
 import { listProjects } from "../../api/projects";
+import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
 } from "../../utils/media.js";
 
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   open: { type: Boolean, default: false },
   defaultProjectId: { type: [Number, String, null], default: null },
 });
@@ -166,11 +214,47 @@ const CLOUD_GUIDANCE = {
 };
 
 const activeTab = ref("local");
+const importPanelId = useId();
+const projectSelectId = `${importPanelId}-project`;
+const projectStatusId = `${projectSelectId}-status`;
 const localInputRef = ref(null);
 const localFiles = ref([]);
 const dragActive = ref(false);
 const projects = ref([]);
+const projectsLoading = ref(false);
+const projectLoadError = ref(false);
 const selectedProjectId = ref(props.defaultProjectId ?? null);
+let projectRequestId = 0;
+
+function tabId(id) {
+  return `${importPanelId}-tab-${id}`;
+}
+
+function panelId(id) {
+  return `${importPanelId}-panel-${id}`;
+}
+
+function onTabKeydown(event, currentId) {
+  const currentIndex = IMPORT_TABS.findIndex((tab) => tab.id === currentId);
+  if (currentIndex < 0) return;
+
+  let nextIndex = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIndex = (currentIndex + 1) % IMPORT_TABS.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    nextIndex = (currentIndex - 1 + IMPORT_TABS.length) % IMPORT_TABS.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = IMPORT_TABS.length - 1;
+  }
+
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const nextTab = IMPORT_TABS[nextIndex];
+  activeTab.value = nextTab.id;
+  nextTick(() => document.getElementById(tabId(nextTab.id))?.focus());
+}
 
 const activeCloud = computed(
   () => CLOUD_GUIDANCE[activeTab.value] ?? CLOUD_GUIDANCE.google,
@@ -203,12 +287,20 @@ watch(
 );
 
 async function fetchProjects() {
+  const requestId = ++projectRequestId;
+  projectsLoading.value = true;
+  projectLoadError.value = false;
   try {
     const rows = await listProjects();
+    if (requestId !== projectRequestId) return;
     projects.value = Array.isArray(rows) ? rows : [];
   } catch (err) {
+    if (requestId !== projectRequestId) return;
     console.warn("Failed to load projects for import menu", err);
     projects.value = [];
+    projectLoadError.value = true;
+  } finally {
+    if (requestId === projectRequestId) projectsLoading.value = false;
   }
 }
 
@@ -271,18 +363,59 @@ function triggerLocalImport(files) {
   gap: var(--space-3);
 }
 
+.tb-import-header .tbm-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Project select reads in accent when nothing is chosen, like the design. */
 .tb-import-project {
   width: 190px;
+  min-width: 0;
+  max-width: 48%;
   flex-shrink: 0;
 }
 .tb-import-project .tbm-select {
+  width: 100%;
   min-height: 34px;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
 }
 .tb-import-project--none {
   color: rgb(var(--v-theme-accent));
+}
+
+.tb-import-project-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-3);
+  color: rgba(
+    var(--v-theme-on-panel),
+    var(--opacity-text-secondary)
+  );
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.tb-import-project-status--error {
+  color: rgb(var(--v-theme-error));
+}
+
+.tb-import-retry {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+}
+
+.tb-import-retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Tabs — accent underline on the active tab. */
@@ -298,16 +431,17 @@ function triggerLocalImport(files) {
   gap: var(--space-2);
   padding: var(--space-3) var(--space-1);
   margin-bottom: -1px;
-  border: none;
   border-bottom: 2px solid transparent;
-  background: transparent;
   color: rgba(var(--v-theme-on-panel), 0.6);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
+}
+.tb-import-tab:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
 }
 .tb-import-tab:hover {
   color: rgb(var(--v-theme-on-panel));
@@ -367,5 +501,21 @@ function triggerLocalImport(files) {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), 0.6);
   margin-top: var(--space-3);
+}
+
+@media (max-width: 480px) {
+  .tb-import-header {
+    flex-wrap: wrap;
+  }
+
+  .tb-import-header .tbm-spacer {
+    display: none;
+  }
+
+  .tb-import-project {
+    flex-basis: 100%;
+    width: 100%;
+    max-width: none;
+  }
 }
 </style>

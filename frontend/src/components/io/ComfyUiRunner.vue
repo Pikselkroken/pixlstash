@@ -55,8 +55,9 @@ import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   wsPluginProgress: {
     type: Object,
     default: () => ({ key: 0, payload: null }),
@@ -315,9 +316,7 @@ function hasComfyuiRefreshRetry(pictureId) {
 async function fetchStackIdForPicture(pictureId) {
   if (!pictureId || !props.backendUrl) return null;
   try {
-    const data = await getPictureMetadata(pictureId, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getPictureMetadata(pictureId);
     const stackId = data?.stack_id ?? data?.stackId ?? null;
     return stackId != null ? String(stackId) : null;
   } catch (err) {
@@ -332,9 +331,7 @@ async function fetchStackIdForPicture(pictureId) {
 async function fetchStackMembersForOverlay(stackId) {
   if (!stackId || !props.backendUrl) return [];
   try {
-    const rows = await listStackPictures(stackId, {
-      baseUrl: props.backendUrl,
-    });
+    const rows = await listStackPictures(stackId);
     return Array.isArray(rows) ? rows : [];
   } catch (err) {
     logComfyuiDebug("stack-members-fetch-failed", {
@@ -1072,10 +1069,8 @@ defineExpose({
 .comfyui-abort-btn {
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border: none;
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
   font-size: var(--text-xs);
   line-height: 1;
   padding: var(--space-1) var(--space-2);

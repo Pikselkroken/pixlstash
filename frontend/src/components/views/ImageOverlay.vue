@@ -252,8 +252,7 @@
             type="set"
             ref="addToSetControlRef"
             :key="addToSetControlKey"
-            :backend-url="backendUrl"
-            :picture-ids="[image.id]"
+            :subject-ids="[image.id]"
             :include-deleted-members="true"
             :force-dark="true"
             :disabled="!!stackGroupingLockReason"
@@ -265,8 +264,7 @@
           <AddToEntityControl
             v-if="image && !isReadOnly"
             type="project"
-            :backend-url="backendUrl"
-            :picture-ids="[image.id]"
+            :subject-ids="[image.id]"
             :include-deleted-members="true"
             :expand-stacks="false"
             :force-dark="true"
@@ -378,6 +376,62 @@
           >
             <v-icon size="20">mdi-account-plus</v-icon>
           </button>
+
+          <!-- Rotate, in place and immediately: one click is one 90° step, no
+               dialog, no direction picker and no confirmation. The safety net
+               is undo (the receipt below narrates every step and offers it),
+               which is the right net for an action that is instant, lossless
+               and reversible — a confirm on every quarter-turn would cost more
+               than the mistake it prevents.
+
+               Greyed rather than hidden when the file cannot carry a rotation
+               every renderer agrees on: the tooltip is what teaches that
+               Filters > Rotate still makes a rotated copy, and a hidden control
+               teaches nothing. -->
+          <template v-if="image && !isReadOnly">
+            <v-tooltip
+              location="bottom"
+              :text="rotateLeftTitle"
+              :disabled="!rotateDisabledReason"
+            >
+              <template #activator="{ props: rotateLeftTipProps }">
+                <button
+                  v-bind="rotateLeftTipProps"
+                  class="overlay-icon-btn"
+                  type="button"
+                  :title="rotateLeftTitle"
+                  :aria-label="rotateLeftTitle"
+                  aria-keyshortcuts="["
+                  :disabled="!canRotateCurrent"
+                  @click.stop="rotateCurrentImage(ROTATE_CCW)"
+                  :class="{ hidden: chromeHidden }"
+                >
+                  <v-icon size="20">mdi-rotate-left</v-icon>
+                </button>
+              </template>
+            </v-tooltip>
+            <v-tooltip
+              location="bottom"
+              :text="rotateRightTitle"
+              :disabled="!rotateDisabledReason"
+            >
+              <template #activator="{ props: rotateRightTipProps }">
+                <button
+                  v-bind="rotateRightTipProps"
+                  class="overlay-icon-btn"
+                  type="button"
+                  :title="rotateRightTitle"
+                  :aria-label="rotateRightTitle"
+                  aria-keyshortcuts="]"
+                  :disabled="!canRotateCurrent"
+                  @click.stop="rotateCurrentImage(ROTATE_CW)"
+                  :class="{ hidden: chromeHidden }"
+                >
+                  <v-icon size="20">mdi-rotate-right</v-icon>
+                </button>
+              </template>
+            </v-tooltip>
+          </template>
 
           <!-- The zoom readout lives ON the control (owner ruling): a live
                whole-percent of natural size beside the retained icon. The
@@ -663,7 +717,6 @@
           <OverlayDescriptionPanel
             ref="descriptionPanelRef"
             :image="image"
-            :backend-url="backendUrl"
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
             @update-description="handleDescriptionUpdate"
@@ -706,15 +759,17 @@
                            popups as OS menus that ignore option colour. This
                            is the same menu language as the rest of the app
                            (AddToEntityControl's force-dark skin), in its
-                           single-select face mode. -->
+                           single-select face mode. Face mode picks one person
+                           for one face, so it has no subject list to compute a
+                           tri-state across and passes an empty one. -->
                       <div class="face-assign-person">
                         <AddToEntityControl
                           :ref="(el) => setFaceMenuRef(face.faceKey, el)"
                           type="face"
                           allow-create
                           float-menu
+                          :subject-ids="[]"
                           :force-dark="true"
-                          :backend-url="backendUrl"
                           :face-id="face.id"
                           :assigned-character-id="face.character_id"
                           :assigned-character-name="faceAssignedName(face)"
@@ -736,7 +791,6 @@
           <OverlayTagsPanel
             ref="tagsPanelRef"
             :image="image"
-            :backend-url="backendUrl"
             :hidden-tags="hiddenTags"
             :apply-tag-filter="applyTagFilter"
             :locked="isCurrentLocked"
@@ -751,7 +805,6 @@
             :image="image"
             :comfy-metadata="comfyMetadata"
             :date-format="dateFormat"
-            :backend-url="backendUrl"
             :video-duration="videoMeta.duration"
           />
         </aside>
@@ -777,7 +830,6 @@
     <CharacterEditor
       :open="createPersonOpen"
       :character="createPersonCharacter"
-      :backend-url="backendUrl"
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
@@ -812,14 +864,16 @@ import {
   MediaFormat,
   mediaMimeType,
   safeDownloadName,
+  setInternalDragPayload,
 } from "../../utils/media.js";
-import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   getPictureMetadata,
   listPictureFaces,
   listPictureDetections,
   addPictureFace,
   downloadPicture,
+  rotatePictures,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -851,8 +905,29 @@ import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
-import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
+import {
+  applyStackBackgroundAlpha,
+  faceBoxColor,
+  getStackColor,
+  getStackColorIndexFromId,
+  toggleScore,
+} from "../../utils/utils.js";
+import { isEditableElement, isTypingTarget } from "../../utils/dom.js";
+import {
+  getPictureStackId,
+  getStackPositionValue,
+  sortStackMembers,
+} from "../../utils/stack.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
+import {
+  ROTATE_CCW,
+  ROTATE_CW,
+  ROTATE_OP_TYPE,
+  canRotateInPlace,
+  rotateBlockReason,
+  rotateSkipNote,
+} from "../../utils/rotate.js";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -906,7 +981,7 @@ const props = defineProps({
   initialImageId: { type: [String, Number, null], default: null },
   initialExpandedStackIds: { type: Array, default: () => [] },
   allImages: { type: Array, default: () => [] },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
   smartScoreUpdate: { type: Object, default: () => ({}) },
@@ -1034,7 +1109,7 @@ const allImagesByStackId = computed(() => {
   const map = new Map();
   const list = overlayImages.value;
   for (const item of list) {
-    const stackId = getOverlayStackId(item);
+    const stackId = getPictureStackId(item);
     if (!stackId || item?.id == null) continue;
     if (!map.has(stackId)) {
       map.set(stackId, []);
@@ -1042,7 +1117,7 @@ const allImagesByStackId = computed(() => {
     map.get(stackId).push(item);
   }
   for (const [stackId, members] of map.entries()) {
-    map.set(stackId, sortOverlayStackMembers(members));
+    map.set(stackId, sortStackMembers(members));
   }
   return map;
 });
@@ -1131,11 +1206,8 @@ function setOverlayImageById(nextId) {
 
 const emit = defineEmits([
   "close",
-  "prev",
-  "next",
   "apply-score",
   "set-guest-score",
-  "remove-tag",
   "add-tag",
   "update-description",
   "overlay-change",
@@ -1192,6 +1264,110 @@ const isCurrentLocked = computed(() =>
 const currentLockReason = computed(() =>
   lockedSetsStore.lockReason(image.value?.id),
 );
+
+// ── Rotate in place ────────────────────────────────────────────────────────
+// One click (or one `[` / `]`) is one 90° step, applied immediately.
+//
+// Presses are SERIALISED, never dropped. Two quick presses are a legitimate
+// 180° and the second one has to land, so a busy flag is the wrong guard here —
+// it would throw away exactly the gesture the design promises. Letting them run
+// concurrently is not an option either: each request reads the file's current
+// orientation and writes the next one, so two in flight over one picture race,
+// and one of the turns is silently lost. A chain gives both properties.
+let rotateQueue = Promise.resolve();
+const rotateMetadataInFlightImageIds = new Set();
+
+/** Why the rotate controls are greyed, or `null` when they are live. */
+const rotateDisabledReason = computed(() =>
+  image.value ? rotateBlockReason([image.value]) : null,
+);
+const canRotateCurrent = computed(
+  () => !isReadOnly.value && !isCurrentLocked.value && canRotateInPlace(image.value),
+);
+
+/**
+ * The tooltip and the accessible name, which have to carry the refusal.
+ *
+ * A locked picture already has its own sentence (the toolbar chip states it),
+ * so the lock wins over the format reason: naming the format when the real
+ * blocker is a locked set would send the user off to convert a file that would
+ * still be refused.
+ */
+function rotateTitle(side, shortcut) {
+  if (isCurrentLocked.value) return currentLockReason.value;
+  if (rotateDisabledReason.value) return rotateDisabledReason.value;
+  return `Rotate ${side} (${shortcut})`;
+}
+const rotateLeftTitle = computed(() => rotateTitle("left", "["));
+const rotateRightTitle = computed(() => rotateTitle("right", "]"));
+
+/**
+ * One 90° step on one picture, plus the three refreshes it owes.
+ *
+ * They travel three different paths, which is why this is not a one-liner:
+ *
+ *   * the **operation log**, so the receipt narrates the step and offers undo.
+ *     Anything the server refused rides that same pill as a second sentence —
+ *     a separate notice would be the half the user dismisses;
+ *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
+ *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels exactly
+ *     where they were, so the orientation is the ONLY thing that can tell the
+ *     browser the file it decoded is now sideways;
+ *   * the **grid card behind us**, whose thumbnail URL carries a version only the
+ *     server can recompute. `overlay-change` is the existing channel, and
+ *     `fields.pixels` is what tells the grid this was a bitmap change rather
+ *     than a metadata one.
+ *
+ * @param {number|string} imageId - captured when the gesture was made, not read
+ *   at run time: the user may have navigated on while this waited its turn.
+ * @param {string} direction - {@link ROTATE_CW} or {@link ROTATE_CCW}.
+ * @returns {Promise<void>}
+ */
+async function runRotate(imageId, direction) {
+  try {
+    const result = await rotatePictures([imageId], direction);
+    operationStore.noteNextReceipt(ROTATE_OP_TYPE, rotateSkipNote(result));
+    operationStore.refresh();
+    const rotated = Array.isArray(result?.rotated_picture_ids)
+      ? result.rotated_picture_ids.map((id) => String(id))
+      : [];
+    // Nothing turned: the server refused this picture after all (a lock taken
+    // between render and click, or a container the client gate misread). The
+    // receipt already says so, so there is nothing left to refresh.
+    if (!rotated.includes(String(imageId))) return;
+    const imageIdKey = String(imageId);
+    rotateMetadataInFlightImageIds.add(imageIdKey);
+    try {
+      await fetchOverlayMetadata(imageId);
+    } finally {
+      rotateMetadataInFlightImageIds.delete(imageIdKey);
+    }
+    // The boxes are drawn in the file's own coordinate space, which the turn
+    // just redefined. Re-read rather than transform them here: whatever the
+    // server now reports is what the grid and every other surface will draw.
+    fetchFaceBboxes(imageId);
+    fetchDetections(imageId);
+    emit("overlay-change", { imageId, fields: { pixels: true } });
+  } catch (e) {
+    console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
+    noticeStore.error(`Couldn't rotate that picture. ${errorDetail(e)}`, {
+      key: "rotate-picture",
+    });
+  }
+}
+
+/**
+ * Take one rotate gesture, behind whatever is already in flight.
+ *
+ * @param {string} direction - {@link ROTATE_CW} or {@link ROTATE_CCW}.
+ * @returns {Promise<void>} settles when THIS step has landed.
+ */
+function rotateCurrentImage(direction) {
+  const imageId = image.value?.id;
+  if (!imageId || !canRotateCurrent.value) return rotateQueue;
+  rotateQueue = rotateQueue.then(() => runRotate(imageId, direction));
+  return rotateQueue;
+}
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
@@ -1432,7 +1608,7 @@ async function fetchComfyWorkflows() {
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     comfyuiWorkflows.value = [];
   } finally {
     comfyuiWorkflowLoading.value = false;
@@ -1470,8 +1646,7 @@ async function runComfyWorkflow() {
       comfyuiMenuOpen.value = false;
     }, 1200);
   } catch (err) {
-    comfyuiRunError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     comfyuiRunLoading.value = false;
   }
@@ -1532,7 +1707,7 @@ function isImageInFilmstrip(targetId) {
 async function ensureOverlayFilmstripForImage() {
   const targetId = image.value?.id ?? null;
   if (!targetId) return;
-  const stackId = getOverlayStackId(image.value);
+  const stackId = getPictureStackId(image.value);
   if (!stackId) return;
   const shouldExpand = !isImageInFilmstrip(targetId) && !!stackId;
   if (!shouldExpand) return;
@@ -1544,60 +1719,6 @@ async function ensureOverlayFilmstripForImage() {
     overlayExpandedStackIds.value = nextIds;
   }
   await ensureOverlayStackMembersLoaded(stackId, image.value);
-}
-
-function getOverlayStackId(img) {
-  const stackId = img?.stack_id ?? img?.stackId ?? null;
-  if (stackId === null || stackId === undefined) return null;
-  return String(stackId);
-}
-
-function getOverlayStackPositionValue(img) {
-  if (!img) return null;
-  const raw = img.stack_position ?? img.stackPosition ?? null;
-  if (raw === null || raw === undefined) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function getOverlayStackSmartScoreValue(img) {
-  const raw = img?.smartScore ?? img?.smart_score ?? null;
-  if (raw === null || raw === undefined) return 0;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function getOverlayStackCreatedAtTs(img) {
-  if (!img?.created_at) return 0;
-  const ts = new Date(img.created_at).getTime();
-  return Number.isFinite(ts) ? ts : 0;
-}
-
-function compareOverlayStackOrder(a, b) {
-  const posA = getOverlayStackPositionValue(a);
-  const posB = getOverlayStackPositionValue(b);
-  if (posA !== null || posB !== null) {
-    if (posA === null) return 1;
-    if (posB === null) return -1;
-    if (posA !== posB) return posA - posB;
-  }
-  const scoreA = Number(a?.score ?? 0);
-  const scoreB = Number(b?.score ?? 0);
-  if (scoreA !== scoreB) return scoreB - scoreA;
-  const smartA = getOverlayStackSmartScoreValue(a);
-  const smartB = getOverlayStackSmartScoreValue(b);
-  if (smartA !== smartB) return smartB - smartA;
-  const dateA = getOverlayStackCreatedAtTs(a);
-  const dateB = getOverlayStackCreatedAtTs(b);
-  if (dateA !== dateB) return dateB - dateA;
-  const idA = Number(a?.id ?? 0);
-  const idB = Number(b?.id ?? 0);
-  return idA - idB;
-}
-
-function sortOverlayStackMembers(members) {
-  if (!Array.isArray(members)) return [];
-  return members.slice().sort(compareOverlayStackOrder);
 }
 
 function getOverlayLocalStackMembers(stackId) {
@@ -1612,7 +1733,7 @@ function getOverlayStackSignature(stackId) {
   if (!members.length) return "";
   const parts = members.map((img) => {
     const id = img?.id != null ? String(img.id) : "";
-    const pos = getOverlayStackPositionValue(img);
+    const pos = getStackPositionValue(img);
     return `${id}:${pos === null ? "x" : String(pos)}`;
   });
   return `${members.length}|${parts.join(",")}`;
@@ -1625,17 +1746,17 @@ function normalizeOverlayStackMembersForStack(stackId, members) {
     if (!member || member.id == null) continue;
     const id = String(member.id);
     const latest = allImageById.value.get(id) || member;
-    if (getOverlayStackId(latest) !== stackId) continue;
+    if (getPictureStackId(latest) !== stackId) continue;
     normalized.push(latest);
   }
-  return sortOverlayStackMembers(normalized);
+  return sortStackMembers(normalized);
 }
 
 const overlayStackCounts = computed(() => {
   const counts = new Map();
   const list = overlayImages.value;
   for (const img of list) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) continue;
     counts.set(stackId, (counts.get(stackId) || 0) + 1);
   }
@@ -1645,24 +1766,12 @@ const overlayStackCounts = computed(() => {
 function getOverlayStackCount(item) {
   const count = Number(item?.stackCount ?? item?.stack_count ?? 0);
   if (Number.isFinite(count) && count > 0) return count;
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return 0;
   const expanded = overlayExpandedStackMembers.value.get(stackId);
   const ids = Array.isArray(expanded?.ids) ? expanded.ids : [];
   if (ids.length) return ids.length;
   return overlayStackCounts.value.get(stackId) || 0;
-}
-
-function getStackColorIndexFromId(stackId) {
-  if (stackId === null || stackId === undefined) return null;
-  const numeric = Number(stackId);
-  if (Number.isFinite(numeric)) return numeric;
-  const raw = String(stackId);
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash = (hash * 31 + raw.charCodeAt(i)) % 2147483647;
-  }
-  return hash || null;
 }
 
 function getOverlayStackColor(item) {
@@ -1679,34 +1788,10 @@ function getOverlayStackColor(item) {
   if (typeof stackIndex === "number") {
     return getStackColor(stackIndex);
   }
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   const index = getStackColorIndexFromId(stackId);
   if (index === null) return null;
   return getStackColor(index);
-}
-
-function applyOverlayStackBackgroundAlpha(color) {
-  if (!color || typeof color !== "string") return color;
-  const trimmed = color.trim();
-  if (!trimmed) return color;
-  if (trimmed.startsWith("hsla(") || trimmed.startsWith("rgba(")) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("hsl(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `hsla(${inner}, 0.6)`;
-    }
-    return `hsl(${inner} / 0.6)`;
-  }
-  if (trimmed.startsWith("rgb(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `rgba(${inner}, 0.6)`;
-    }
-    return `rgb(${inner} / 0.6)`;
-  }
-  return trimmed;
 }
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
@@ -1736,7 +1821,7 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = sortOverlayStackMembers(
+  const orderedIds = sortStackMembers(
     Array.from(imageById.values()),
   ).map((img) => String(img.id));
   for (const id of orderedIds) {
@@ -1757,7 +1842,7 @@ function collapseOverlayStackImages(images) {
   if (!Array.isArray(images) || images.length === 0) return [];
   const counts = new Map();
   for (const img of images) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) continue;
     counts.set(stackId, (counts.get(stackId) || 0) + 1);
   }
@@ -1766,7 +1851,7 @@ function collapseOverlayStackImages(images) {
   const seen = new Set();
   const collapsed = [];
   for (const img of images) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) {
       collapsed.push(img);
       continue;
@@ -1809,7 +1894,7 @@ async function ensureOverlayStackMembersLoaded(
     referenceItem?.stackCount ?? referenceItem?.stack_count ?? 0,
   );
   if (!forceReload && localMembers.length > 1) {
-    const orderedLocal = sortOverlayStackMembers(localMembers);
+    const orderedLocal = sortStackMembers(localMembers);
     if (!Number.isFinite(expectedCount) || expectedCount <= 0) {
       const ids = orderedLocal
         .filter((img) => img && img.id != null)
@@ -1884,7 +1969,7 @@ function getOverlayStackLeaderId(stackId) {
     return String(cachedIds[0]);
   }
   const cachedImages = Array.isArray(cached?.images) ? cached.images : [];
-  const orderedCached = sortOverlayStackMembers(cachedImages);
+  const orderedCached = sortStackMembers(cachedImages);
   if (orderedCached.length && orderedCached[0]?.id != null) {
     return String(orderedCached[0].id);
   }
@@ -1892,10 +1977,10 @@ function getOverlayStackLeaderId(stackId) {
 }
 
 async function toggleFilmstripStackExpand(item) {
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return;
   if (overlayExpandedStackIds.value.has(stackId)) {
-    const currentStackId = getOverlayStackId(image.value);
+    const currentStackId = getPictureStackId(image.value);
     if (currentStackId === stackId && image.value?.id != null) {
       // Always navigate to the leader when collapsing, regardless of showStacks.
       // If the current image is a non-leader it will no longer be visible in the
@@ -1918,7 +2003,7 @@ async function toggleFilmstripStackExpand(item) {
 }
 
 function prefetchFilmstripStackMembers(item) {
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return;
   void ensureOverlayStackMembersLoaded(stackId, item);
 }
@@ -1945,7 +2030,7 @@ async function applyAllImagesUpdate() {
   }
   void ensureOverlayFilmstripForImage();
 
-  const stackId = getOverlayStackId(image.value);
+  const stackId = getPictureStackId(image.value);
   if (!stackId) return;
   const nextSignature = getOverlayStackSignature(stackId);
   if (!nextSignature) return;
@@ -2126,18 +2211,6 @@ function showNextImage() {
  * @param {EventTarget|null} target - the keydown target.
  * @returns {boolean}
  */
-function isTypingTarget(target) {
-  const active =
-    typeof document === "undefined" ? null : document.activeElement;
-  return [target, active].some(
-    (el) =>
-      el instanceof HTMLElement &&
-      (el.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
-        el.getAttribute("role") === "textbox"),
-  );
-}
-
 function hasNativeCopyContext(target) {
   if (isTypingTarget(target)) return true;
   const selection = typeof window === "undefined" ? null : window.getSelection?.();
@@ -2157,13 +2230,7 @@ function handleKeydown(e) {
   // native menu (paste / spellcheck) still works in the tag and description
   // fields.
   if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
-    const t = e.target;
-    const typing =
-      t instanceof HTMLElement &&
-      (t.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) ||
-        t.getAttribute("role") === "textbox");
-    if (!typing) {
+    if (!isEditableElement(e.target)) {
       e.preventDefault();
       handleUserActivity();
       openContextMenuFromKeyboard();
@@ -2291,12 +2358,7 @@ function handleKeydown(e) {
   // Block shortcuts when any other editable element (e.g. plugin parameter inputs) has focus.
   // Still allow ESC to close the plugin/comfyui menu if open.
   const target = e.target;
-  const isEditable =
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-      target.getAttribute("role") === "textbox");
-  if (isEditable) {
+  if (isEditableElement(target)) {
     if (e.key === "Escape") {
       if (pluginMenuOpen.value) {
         pluginMenuOpen.value = false;
@@ -2356,6 +2418,15 @@ function handleKeydown(e) {
     if (addToSetControlRef.value?.lastUsedSet?.id) {
       e.preventDefault();
       addToSetControlRef.value.addToLastSet();
+    }
+  } else if (e.key === "[" || e.key === "]") {
+    // One press is one 90° step, same as the toolbar buttons; two presses make
+    // 180°. Unmodified only — Ctrl+[ / Cmd+[ is the browser's own Back on
+    // several platforms, and a bracket that both navigated history and turned
+    // the picture would be the worst kind of collision.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && canRotateCurrent.value) {
+      e.preventDefault();
+      void rotateCurrentImage(e.key === "[" ? ROTATE_CCW : ROTATE_CW);
     }
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     if (!isReadOnly.value) {
@@ -2642,10 +2713,7 @@ function handleMediaDragStart(event) {
     // open image be dropped onto a sidebar character/set/project to assign it,
     // and stops the window-level handler from mistaking the drag for an
     // external file import. See isInternalImageDrag().
-    dt.setData(
-      "application/json",
-      JSON.stringify({ type: "image-ids", imageIds: [id] }),
-    );
+    setInternalDragPayload(dt, { type: "image-ids", imageIds: [id] });
     // Deterministic drag-out to the OS file manager. The browser's native
     // <img>/<video> drag only yields a real file for some formats (and never
     // for a <video>), which is why drag-out worked for some files and not
@@ -2756,9 +2824,9 @@ const filmstripCanvasData = computed(() => {
   }
   const items = indices.map((idx) => {
     const item = images[idx];
-    const stackId = getOverlayStackId(item);
+    const stackId = getPictureStackId(item);
     const prevItem = idx > 0 ? images[idx - 1] : null;
-    const prevStackId = getOverlayStackId(prevItem);
+    const prevStackId = getPictureStackId(prevItem);
     const isStackExpanded = stackId
       ? overlayExpandedStackIds.value.has(stackId)
       : false;
@@ -2788,7 +2856,7 @@ const filmstripCanvasData = computed(() => {
     const stackColor = getOverlayStackColor(item);
     const stackTileStyle = (() => {
       if (!isStackExpanded) return {};
-      const color = applyOverlayStackBackgroundAlpha(stackColor);
+      const color = applyStackBackgroundAlpha(stackColor);
       return color ? { "--filmstrip-stack-bg": color } : {};
     })();
 
@@ -2913,63 +2981,50 @@ function buildFullImageSrc(data) {
   return getFullImageUrl(data);
 }
 
-// The media URL carries `?v=<pixel_sha>` so an in-place pixel edit busts any
-// cached copy. `pixel_sha` is not part of the grid payload, though, so on a
-// normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
-// <img> has already started (usually finished) loading the un-busted URL.
-// Letting that late arrival rewrite the src remounts the element
-// (`:key="fullImageSrc"`) and refetches a URL the HTTP cache has never seen:
-// the blank-then-reload flash on the first view of a picture in a session. It
-// also wasted the neighbour preloads, which build the un-busted URL from the
-// same grid records.
-//
-// Learning the sha is not a pixel change, so the buster baked into the shown
-// URL is pinned for as long as that picture keeps displaying the same bytes. It
-// only moves when the picture changes, when nothing was on screen yet (the cold
-// route, still waiting on the format), or when the sha goes from one KNOWN
-// value to another — a genuine in-place edit, where the reload is the point.
-// Freshness is not at risk in between: the media route answers `no-cache,
-// must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
-// every load regardless of the buster.
-const displayedPixelSha = ref(null); // baked into the URL currently rendered
-const knownPixelSha = ref(null); // latest sha observed for that picture
+function knownOrientation(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const orientation = Number(value);
+  return Number.isFinite(orientation) ? orientation : null;
+}
 
+// A cold-opened row can still arrive with `orientation: null` while the
+// backfill catches up. In that case metadata may later confirm a known
+// orientation for the same bytes; switching `fullImageSrc` at that moment would
+// remount the keyed <img> and flash blank. Keep rendering the first URL until
+// orientation moves between two known values (the actual in-place rotate case).
+const pinnedOrientation = ref(undefined);
 watch(
-  () => {
-    const data = image.value;
-    return {
-      id: data?.id ?? null,
-      sha: data?.pixel_sha ?? null,
-      hasMedia: Boolean(buildFullImageSrc(data)),
-    };
-  },
-  (next, prev) => {
-    const samePicture =
-      prev && next.id !== null && String(next.id) === String(prev.id);
-    if (!samePicture || !prev.hasMedia) {
-      displayedPixelSha.value = next.sha;
-      knownPixelSha.value = next.sha;
+  () => [image.value?.id, image.value?.orientation],
+  ([id, orientation], [previousId, previousOrientation] = []) => {
+    if (!id) {
+      pinnedOrientation.value = undefined;
       return;
     }
-    // A record that simply doesn't carry the field (any grid-shaped refresh of
-    // the same picture) says nothing about the pixels — keep what we know.
-    if (next.sha === null || next.sha === knownPixelSha.value) return;
-    const firstSighting = knownPixelSha.value === null;
-    knownPixelSha.value = next.sha;
-    if (!firstSighting) displayedPixelSha.value = next.sha;
+    const currentKnown = knownOrientation(orientation);
+    const previousKnown = knownOrientation(previousOrientation);
+    if (id !== previousId) {
+      const hasInitialUrl = Boolean(buildFullImageSrc(image.value));
+      pinnedOrientation.value =
+        currentKnown === null && hasInitialUrl ? null : undefined;
+      return;
+    }
+    if (
+      pinnedOrientation.value === null &&
+      currentKnown !== null &&
+      (rotateMetadataInFlightImageIds.has(String(id)) ||
+        (previousKnown !== null && currentKnown !== previousKnown))
+    ) {
+      pinnedOrientation.value = undefined;
+    }
   },
   { immediate: true },
 );
-
 const fullImageSrc = computed(() => {
-  const data = image.value;
-  if (!data) return "";
-  const pinned = displayedPixelSha.value;
-  // Rebuilt from the live record so a backend-url, format or share-token change
-  // still flows through; only the cache-buster is held back.
-  return buildFullImageSrc(
-    pinned === (data.pixel_sha ?? null) ? data : { ...data, pixel_sha: pinned },
-  );
+  if (!image.value) return "";
+  if (pinnedOrientation.value === null) {
+    return buildFullImageSrc({ ...image.value, orientation: null });
+  }
+  return buildFullImageSrc(image.value);
 });
 const overlayDims = ref({
   width: 1,
@@ -3107,7 +3162,7 @@ async function onDrawEnd(event) {
   } catch (e) {
     console.error("Failed to create box", e);
     noticeStore.error(
-      `Couldn't create that ${drawModeLabel.value} box. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't create that ${drawModeLabel.value} box. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-create-box" },
     );
   } finally {
@@ -3420,6 +3475,19 @@ async function fetchOverlayMetadata(imageId) {
     if (!image.value || image.value.id !== imageId) return;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
+    // The picture's own BYTES, where the server is unconditionally
+    // authoritative and this component never holds an optimistic value. The
+    // local-wins default above is right for everything the overlay can edit and
+    // wrong for these two: `orientation` is what `mediaVersion` builds the
+    // cache-buster from, so keeping a stale copy leaves `fullImageSrc` pointing
+    // at the file the `<img>` has already decoded. An in-place rotate moves it
+    // and nothing else, which is exactly the case a local-wins merge would
+    // swallow whole.
+    for (const field of ["pixel_sha", "orientation"]) {
+      if (data[field] !== undefined && data[field] !== null) {
+        merged[field] = data[field];
+      }
+    }
     const existingSmartScore =
       typeof image.value?.smartScore === "number"
         ? image.value.smartScore
@@ -3699,7 +3767,7 @@ async function assignFaceToCharacter(face, character) {
   } catch (e) {
     console.error("Failed to assign character", e);
     noticeStore.error(
-      `Couldn't assign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't assign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-assign-character" },
     );
   }
@@ -3730,7 +3798,7 @@ async function unassignFaceCharacter(face) {
   } catch (e) {
     console.error("Failed to unassign character", e);
     noticeStore.error(
-      `Couldn't unassign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't unassign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-unassign-character" },
     );
   }
@@ -3907,7 +3975,7 @@ async function handleCreatePersonSaved(savedCharacter) {
   } catch (e) {
     console.error("Failed to assign the new person to the face", e);
     noticeStore.error(
-      `Created ${name}, but couldn't assign this face. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Created ${name}, but couldn't assign this face. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-create-person" },
     );
   }
@@ -4152,8 +4220,7 @@ function mediaActionInfo(target = null) {
 
 function mediaActionError(err, fallback = "Please try again.") {
   return (
-    err?.response?.data?.detail || err?.message || String(err || fallback)
-  );
+    errorDetail(err) || err?.message || String(err || fallback) );
 }
 
 function triggerMediaDownload(blob, filename) {

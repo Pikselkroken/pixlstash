@@ -722,10 +722,6 @@ const TAIL_TOGGLE_TITLE =
   overflow-y: auto;
   padding: 20px 24px;
 }
-.rs-board :is(button, input, select):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 .rs-board-inner {
   /* Fills the frame (sidebar excluded — that's `.rs-board`'s sibling), with
      the surrounding margin coming from `.rs-board`'s own padding. */
@@ -765,7 +761,6 @@ const TAIL_TOGGLE_TITLE =
   background: rgba(var(--v-theme-on-dark-surface), 0.05);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   font-size: var(--text-2xs);
-  cursor: pointer;
   white-space: nowrap;
 }
 .rs-board-rebuild-persistent:hover:not(:disabled) {
@@ -826,7 +821,6 @@ const TAIL_TOGGLE_TITLE =
   height: 30px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -971,7 +965,6 @@ const TAIL_TOGGLE_TITLE =
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
 }
 
 .rs-board-table {
@@ -1131,7 +1124,6 @@ button.rs-board-hdr {
   height: 28px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;

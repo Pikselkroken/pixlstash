@@ -5,7 +5,6 @@
     :initialImageId="overlayImageId"
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
     :allImages="allGridImages"
-    :backendUrl="props.backendUrl"
     :tagUpdate="wsStore.wsTagUpdate"
     :descriptionUpdate="wsStore.wsDescriptionUpdate"
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
@@ -27,7 +26,6 @@
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
-    @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
@@ -39,10 +37,6 @@
   />
   <ImageImporter
     ref="imageImporterRef"
-    :backendUrl="props.backendUrl"
-    :selectedCharacterId="selectionStore.selectedCharacter"
-    :allPicturesId="ALL_PICTURES_ID"
-    :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
     @import-started="handleImportStarted"
     @import-finished="handleImagesUploaded"
     @import-cancelled="handleImportCancelled"
@@ -54,8 +48,6 @@
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
-      :unassignedPicturesId="String(UNASSIGNED_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
@@ -108,19 +100,16 @@
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
       :selected-character="String(selectionStore.selectedCharacter)"
-      :selected-set="String(selectionStore.selectedSet)"
       :selected-group-name="selectedGroupName"
       :selected-sort="sortStore.selectedSort"
-      :all-pictures-id="String(ALL_PICTURES_ID)"
-      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :keep-cover-only-stack-count="keepCoverOnlyStackCount"
       :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
+      :rotate-block-reason="selectionRotateBlockReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
@@ -155,6 +144,8 @@
       @remove-picture-shares="openRevokeSharesDialog"
       @reverse-image-search="handleReverseImageSearch"
       @find-similar-faces="handleFindSimilarFaces"
+      @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
+      @rotate-right="rotateSelectedPictures(ROTATE_CW)"
     />
 
     <!-- ── Overlay (lightbox) context menu ─────────────────────
@@ -169,10 +160,7 @@
       :y="overlayCtxY"
       :selected-image-ids="overlayCtxSelectedIds"
       :selected-character="String(selectionStore.selectedCharacter)"
-      :all-pictures-id="String(ALL_PICTURES_ID)"
-      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
       @close="overlayCtxVisible = false"
@@ -194,7 +182,6 @@
     <CharacterEditor
       :open="createPersonOpen"
       :character="createPersonCharacter"
-      :backend-url="props.backendUrl"
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
@@ -273,7 +260,6 @@
       :resource-id="contextMenuImage?.id"
       :resource-format="contextMenuImage?.format"
       :embed-watermark="userPrefsStore.embedWatermark"
-      :backend-url="props.backendUrl"
       :public-url="userPrefsStore.publicUrl"
       @update:embed-watermark="userPrefsStore.embedWatermark = $event"
       @created="onSharePicCreated"
@@ -405,7 +391,6 @@
       :image="remixImage"
       :selected-image-ids="selectedImageIds"
       :client-id="comfyuiClientId || ''"
-      :backend-url="props.backendUrl"
       :stack-outputs="genStackPrefs.stackI2IOutputs"
       @close="remixDialogOpen = false"
       @run="handleComfyuiRun"
@@ -413,7 +398,6 @@
     />
     <ComfyUiRunner
       ref="comfyuiRunner"
-      :backendUrl="props.backendUrl"
       :wsPluginProgress="wsStore.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
@@ -442,7 +426,7 @@
 
     <ProgressOverlay
       :visible="smartScoreLoadingVisible"
-      status="running"
+      :status="smartScoreProgress.status"
       :message="smartScoreProgressMessage"
       :percent="smartScoreProgressPercent"
       :indeterminate="false"
@@ -472,12 +456,14 @@
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          ↑ {{ wsStore.pendingExternalImportCount }}
+          <v-icon :size="16" aria-hidden="true">mdi-image-plus-outline</v-icon>
+          {{ wsStore.pendingExternalImportCount }}
           {{
             wsStore.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
-          }}, click to load
+          }}
+          — Load
         </button>
         <button
           v-if="wsStore.sortChangedExternalCount > 0"
@@ -485,24 +471,26 @@
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ View changed externally, click to refresh
+          <v-icon :size="16" aria-hidden="true">mdi-refresh</v-icon>
+          View changed externally — Refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
       </div>
       <div v-if="showFolderScanningState" class="empty-state">
-        <div class="empty-state-card">
+        <div class="empty-state-card" role="status" aria-live="polite">
           <div class="empty-state-illustration" aria-hidden="true">
             <img
               src="/Empty.png"
-              alt="Scanning"
+              alt=""
               :style="emptyStateImageStyle"
-              style="width: 90%"
             />
           </div>
           <div class="empty-state-title">PixlStash is scanning your folder</div>
-          <div class="empty-state-subtitle">Reticulating splines…</div>
+          <div class="empty-state-subtitle">
+            Preparing pictures and thumbnails…
+          </div>
         </div>
       </div>
       <div v-if="showEmptyState" class="empty-state">
@@ -510,9 +498,8 @@
           <div class="empty-state-illustration" aria-hidden="true">
             <img
               :src="emptyStateImage"
-              :alt="emptyStateAlt"
+              alt=""
               :style="emptyStateImageStyle"
-              style="width: 90%"
             />
           </div>
           <div class="empty-state-title">
@@ -544,6 +531,10 @@
         :style="gridContainerStyle"
         ref="gridContainer"
         data-testid="image-grid"
+        role="grid"
+        :aria-label="`${activeCategoryLabel || 'Pictures'} grid`"
+        aria-multiselectable="true"
+        :aria-busy="imagesLoading ? 'true' : 'false'"
         @click="handleGridBackgroundClick"
       >
         <!-- Top spacer for virtual scroll alignment (width 100% makes it a
@@ -580,8 +571,21 @@
               'image-card--ghost': isImageGhosted(img),
             },
           ]"
+          :ref="(element) => setImageCardRef(img.idx, element)"
+          :role="img.id && !isImageGhosted(img) ? 'row' : 'presentation'"
+          :tabindex="imageCardTabIndex(img)"
+          :aria-label="img.id ? imageCardAriaLabel(img) : undefined"
+          :aria-selected="
+            img.id && !isImageGhosted(img)
+              ? selectedImageIds.includes(img.id)
+                ? 'true'
+                : 'false'
+              : undefined
+          "
+          :aria-hidden="!img.id || isImageGhosted(img) ? 'true' : undefined"
           :inert="isImageGhosted(img) || null"
           @click="handleImageCardClick(img, img.idx, $event)"
+          @focus="handleImageCardFocus(img)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
           @contextmenu.prevent="handleImageContextMenu(img, $event)"
@@ -594,6 +598,7 @@
               'thumbnail-card',
               { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
             ]"
+            :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
           >
             <div
@@ -645,14 +650,16 @@
                     }}</v-icon
                   >
                 </div>
-                <div
+                <button
                   v-if="img.reference_folder_id"
+                  type="button"
                   class="thumbnail-reference-badge thumbnail-badge"
                   :title="img.file_path || 'Reference picture'"
+                  :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
                   @click.stop="openReferenceLocation(img.id)"
                 >
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
-                </div>
+                </button>
                 <div
                   v-if="lockedSetsStore.isLocked(img.id)"
                   class="thumbnail-lock-badge thumbnail-badge"
@@ -714,6 +721,7 @@
               >
                 <video
                   class="thumbnail-img"
+                  aria-hidden="true"
                   :src="getVideoThumbnailSrc(img)"
                   :poster="getThumbnailSrc(img)"
                   :ref="
@@ -745,6 +753,7 @@
                 <img
                   v-show="!failedThumbnailIds.has(img.id)"
                   :src="getThumbnailSrc(img)"
+                  alt=""
                   class="thumbnail-img"
                   :style="getSquareCropImgStyle(img)"
                   :ref="(el) => setThumbnailRef(img.id, el)"
@@ -768,6 +777,21 @@
                     >mdi-image-broken-variant</v-icon
                   >
                 </div>
+                <!-- In-flight rotate. Raised the moment the gesture is sent and
+                     dropped when the tile actually turns, which is a beat later
+                     than the click: the new bitmap is decoded first so the
+                     shape and the picture change in one frame. Decorative —
+                     the operation receipt is what announces the result. -->
+                <div
+                  v-if="rotatingIconFor(img)"
+                  class="thumbnail-rotating-overlay"
+                  data-testid="thumbnail-rotating-overlay"
+                  aria-hidden="true"
+                >
+                  <v-icon class="thumbnail-rotating-icon">{{
+                    rotatingIconFor(img)
+                  }}</v-icon>
+                </div>
                 <img
                   v-if="isVideo(img)"
                   class="thumbnail-drag-preview"
@@ -777,7 +801,7 @@
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
-                  <div
+                  <button
                     v-for="overlay in getFaceBboxOverlays(img)"
                     :key="
                       overlay.faceId +
@@ -786,8 +810,13 @@
                       '-' +
                       (img.thumbnail ? 1 : 0)
                     "
-                    class="face-bbox-overlay"
+                    type="button"
+                    class="face-bbox-overlay face-bbox-overlay--interactive"
                     :style="overlay.style"
+                    :aria-label="`Select face ${overlay.face.character_name || overlay.faceIdx + 1}`"
+                    :aria-pressed="
+                      isFaceSelected(img.id, overlay.faceIdx) ? 'true' : 'false'
+                    "
                     draggable="true"
                     @pointerdown.stop
                     @mousedown.stop
@@ -819,7 +848,7 @@
                     >
                       {{ overlay.face.character_name }}
                     </div>
-                  </div>
+                  </button>
                 </template>
                 <!-- Object detection (segmentation) overlays -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
@@ -862,11 +891,10 @@
                 </div>
               </template>
               <template v-else>
-                <div class="thumbnail-placeholder">
-                  <v-icon class="thumbnail-placeholder-icon"
-                    >mdi-loading</v-icon
-                  >
-                </div>
+                <div
+                  class="thumbnail-placeholder thumbnail-placeholder--loading"
+                  aria-hidden="true"
+                ></div>
               </template>
               <!-- Stack band overlay (top+bottom color stripe for compact mode) -->
               <div
@@ -1071,7 +1099,6 @@
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-          :backend-url="props.backendUrl"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
           :comfyui-client-id="comfyuiClientId"
@@ -1081,13 +1108,13 @@
           :keep-cover-only-stack-count="keepCoverOnlyStackCount"
           :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
           :grouping-lock-reason="partialStackGroupingReason"
+          :rotate-block-reason="selectionRotateBlockReason"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
           :captioner-plugins="captionerPlugins"
           :all-grid-images="allGridImages"
           :selected-character="String(selectionStore.selectedCharacter)"
-          :selected-set="String(selectionStore.selectedSet)"
-          :impossible-sources="filterStore.impossibleSources"
+              :impossible-sources="filterStore.impossibleSources"
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
@@ -1109,6 +1136,8 @@
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
           @segment="openSegmentDialog"
+          @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
+          @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
         />
       </template>
@@ -1175,13 +1204,19 @@ import {
   squareCropBboxRect,
   coverBboxRect,
 } from "../../utils/squareCrop.js";
+import { errorMessage } from "../../utils/apiError.js";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
   isVideo,
   getPictureId,
   buildMediaUrl,
+  displayedAspectRatio,
 } from "../../utils/media.js";
+import {
+  pictureGridLabel,
+  pictureGridTabIndex,
+} from "../../utils/gridAccessibility.js";
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
@@ -1201,7 +1236,11 @@ import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
 import KeepCoverOnlyDialog from "../widgets/KeepCoverOnlyDialog.vue";
-import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+} from "../../utils/apiClient";
 import {
   getPictureMetadata,
   getThumbnails,
@@ -1222,8 +1261,9 @@ import {
   getExportStatus,
   downloadExport,
   listPicturesByIds,
+  rotatePictures,
 } from "../../api/pictures";
-import { addPictureTag, removePictureTag } from "../../api/tags";
+import { addPictureTag } from "../../api/tags";
 import {
   getStack,
   keepCoverOnly,
@@ -1235,6 +1275,13 @@ import {
   keepCoverOnlySkipNote,
   selectedKeepCoverOnlyStacks,
 } from "../../utils/keepCoverOnly";
+import {
+  ROTATE_CCW,
+  ROTATE_CW,
+  ROTATE_OP_TYPE,
+  rotateBlockReason as buildRotateBlockReason,
+  rotateSkipNote,
+} from "../../utils/rotate";
 import {
   getCharacter,
   listCharacters,
@@ -1274,13 +1321,11 @@ import {
 } from "../../utils/dedup.js";
 import {
   dedupeTagList,
-  getTagId,
   hasPenalisedTags,
   penalisedTagsTitle,
   penalisedTagIcon,
   penalisedTagColor,
   getTagList,
-  tagMatches,
 } from "../../utils/tags.js";
 import {
   getStackBadgeCount,
@@ -1300,7 +1345,7 @@ import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridScoring } from "../../composables/useGridScoring.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
-import { debounce } from "lodash-es";
+import { debounce } from "../../utils/utils";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -1325,13 +1370,11 @@ const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 
 const emit = defineEmits([
-  "open-overlay",
   "update:overlay-open",
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
   "search-all",
-  "update:selected-sort",
   "update:stack-stats",
   "import-started",
   "import-ended",
@@ -1350,7 +1393,10 @@ const emit = defineEmits([
 
 // Props
 const props = defineProps({
-  backendUrl: String,
+  // Defaulted, not threaded from App.vue. Without the default this is
+  // `undefined` and every URL built from it reads "undefined/pictures/…",
+  // which is every thumbnail in the grid.
+  backendUrl: { type: String, default: () => API_BASE_URL },
   activeCategoryLabel: { type: String, default: "Category" },
 });
 
@@ -1578,9 +1624,7 @@ async function handleClearImpossibleTags() {
   }
   clearingImpossibleTags.value = true;
   try {
-    const body = await clearImpossibleTags(pictureIds, filters, {
-      baseUrl: props.backendUrl,
-    });
+    const body = await clearImpossibleTags(pictureIds, filters);
     const removed = Array.isArray(body?.removed) ? body.removed : [];
     const count = typeof body?.count === "number" ? body.count : removed.length;
     lastImpossibleRemoved.value = removed;
@@ -1604,7 +1648,7 @@ async function handleUndoImpossibleTags() {
   const pairs = lastImpossibleRemoved.value;
   if (!Array.isArray(pairs) || !pairs.length) return;
   try {
-    await restoreImpossibleTags(pairs, { baseUrl: props.backendUrl });
+    await restoreImpossibleTags(pairs);
     impossibleSnackbarVisible.value = false;
     lastImpossibleRemoved.value = [];
     debouncedFetchAllGridImages({ force: true });
@@ -1659,6 +1703,10 @@ const smartScoreProgress = reactive({
   visible: false,
   percent: 0,
   message: "Calculating smart scores",
+  // Real status, not a hardcoded "running": ProgressOverlay derives both its
+  // aria-busy and its completion announcement from this, so a sort that never
+  // leaves "running" ends in silence for a screen-reader user (#758).
+  status: "idle",
 });
 const SORT_PROGRESS_ESTIMATE_DEFAULT_MS = 2500;
 const SORT_PROGRESS_ESTIMATE_SMART_SCORE_MS = 9000;
@@ -1719,7 +1767,7 @@ async function handleAutoTag({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
+        resetPictureTags(id, body),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1737,7 +1785,7 @@ async function handleGenerateDescription({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureDescription(id, body, { baseUrl: props.backendUrl }),
+        resetPictureDescription(id, body),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1789,7 +1837,6 @@ async function runPluginWithParameters(
         captions: Array.isArray(captions) ? captions : undefined,
         stack,
       },
-      { baseUrl: props.backendUrl },
     );
     const createdIds = Array.isArray(res?.created_picture_ids)
       ? res.created_picture_ids
@@ -1972,7 +2019,7 @@ async function runComfyuiOnGridImages({
       project_id: contextProjectId,
       character_id: contextCharacterId,
     };
-    const body = await runTextToImage(payload, { baseUrl: props.backendUrl });
+    const body = await runTextToImage(payload);
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     handleComfyuiRun({ prompts });
   } catch (err) {
@@ -2047,6 +2094,7 @@ function startSmartScoreProgress(loadId, sortKey) {
   smartScoreProgressLoadId = Number(loadId) || 0;
   smartScoreProgressSortKey.value = incomingSortKey;
   smartScoreProgress.visible = true;
+  smartScoreProgress.status = "running";
 
   const estimateMs = clampSmartScoreEstimate(
     sortEstimatedDurationMsByKey[smartScoreProgressSortKey.value] ??
@@ -2104,6 +2152,7 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
       );
     }
     setSmartScoreProgressPercent(100);
+    smartScoreProgress.status = "completed";
     smartScoreProgress.message =
       searchStore.searchQuery && searchStore.searchQuery.trim()
         ? "Search complete"
@@ -2111,12 +2160,18 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
     setTimeout(() => {
       if (Number(loadId) !== smartScoreProgressLoadId) return;
       smartScoreProgress.visible = false;
+      smartScoreProgress.status = "idle";
       setSmartScoreProgressPercent(0, { allowReset: true });
       smartScoreProgress.message = "Calculating smart scores";
       smartScoreProgressSortKey.value = "";
     }, SORT_PROGRESS_COMPLETION_HOLD_MS);
     return;
   }
+  // Deliberately not "failed". This branch is reached for a superseded fetch
+  // as often as for a real error (useGridFetch passes wasSuccessful false
+  // whenever `lastRequestId` has moved on), and announcing a failure every
+  // time a user re-sorts quickly is a worse lie than saying nothing.
+  smartScoreProgress.status = "idle";
   smartScoreProgress.visible = false;
   setSmartScoreProgressPercent(0, { allowReset: true });
   smartScoreProgress.message = "Calculating smart scores";
@@ -2997,7 +3052,13 @@ const noticeStore = useNoticeStore();
  * @param {string} fallback - used when the server sent nothing useful.
  */
 function errorDetail(err, fallback = "Please try again.") {
-  return err?.response?.data?.detail || err?.message || fallback;
+  // Delegates: this used to be a verbatim copy of `errorMessage`'s body under a
+  // name that shadowed the `errorDetail` it meant to call, so it recursed until
+  // the stack blew — and every failure path in this component reports through
+  // it, which turned each of them from "a notice explaining what went wrong"
+  // into a RangeError with no notice at all. Caught by a test that made a
+  // rotate fail on purpose.
+  return errorMessage(err, fallback);
 }
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
@@ -3147,7 +3208,6 @@ function pauseVideo(id) {
 // ============================================================
 async function removeFromGroup() {
   if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
-  const backendUrl = props.backendUrl;
   const faceIds = selectedFaceIds.value
     .map((entry) => entry.faceId)
     .filter((id) => id !== undefined && id !== null);
@@ -3157,7 +3217,7 @@ async function removeFromGroup() {
       clearFaceSelection();
       return;
     }
-    restoreScrapheap(pictureIds, { baseUrl: backendUrl })
+    restoreScrapheap(pictureIds)
       .catch((err) => {
         console.error("Failed to restore pictures from the scrapheap", err);
         noticeStore.error(
@@ -3190,9 +3250,7 @@ async function removeFromGroup() {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds, {
-          baseUrl: backendUrl,
-        }),
+        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds),
       );
     }
     if (faceIds.length) {
@@ -3200,9 +3258,6 @@ async function removeFromGroup() {
         removeCharacterFacesByFaceId(
           selectionStore.selectedCharacter,
           faceIds,
-          {
-            baseUrl: backendUrl,
-          },
         ),
       );
     }
@@ -3287,7 +3342,7 @@ async function removeFromGroup() {
         memberIds = cached.ids;
       } else {
         try {
-          const stack = await getStack(stackId, { baseUrl: backendUrl });
+          const stack = await getStack(stackId);
           memberIds = stack?.picture_ids ?? [];
         } catch (err) {
           // Fallback: only remove the originally-selected picture(s). That is a
@@ -3314,9 +3369,7 @@ async function removeFromGroup() {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
         [...idsToRemoveFromSet].map((id) =>
-          removePictureFromSet(selectionStore.selectedSet, id, {
-            baseUrl: backendUrl,
-          }).catch((err) => {
+          removePictureFromSet(selectionStore.selectedSet, id).catch((err) => {
             // Expected when the picture was not in the set (the selection can
             // span sets); log rather than drop it so a real failure is visible.
             console.debug(
@@ -3332,7 +3385,7 @@ async function removeFromGroup() {
       if (stackRemovalsForExpanded.size) {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
-            removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
+            removeStackMembers(stackId, ids).catch(
               (err) => {
                 console.error("Failed to remove from stack:", err);
                 // The set removal below still runs, so the user sees the
@@ -3549,13 +3602,9 @@ async function handleCreatePersonSaved(savedCharacter) {
   }
   try {
     if (pending.mode === "faces") {
-      await addCharacterFacesByFaceId(characterId, pending.ids, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFacesByFaceId(characterId, pending.ids);
     } else {
-      await addCharacterFaces(characterId, pending.ids, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFaces(characterId, pending.ids);
     }
     const n = pending.ids.length;
     const unit = pending.mode === "faces" ? "face" : "picture";
@@ -3702,7 +3751,7 @@ async function deleteSelected(idsOverride = null) {
 
     for (const stackId of collapsedStackIds) {
       try {
-        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const stack = await getStack(stackId);
         const memberIds = stack?.picture_ids;
         if (Array.isArray(memberIds) && memberIds.length) {
           for (const mid of memberIds) resolved.add(mid);
@@ -3752,7 +3801,6 @@ async function deleteSelected(idsOverride = null) {
     return;
   }
 
-  const backendUrl = props.backendUrl;
   try {
     // Soft-delete via the bulk endpoint instead of one DELETE per id, which
     // floods the browser/Electron per-host connection pool on large selections
@@ -3765,7 +3813,7 @@ async function deleteSelected(idsOverride = null) {
     const skippedLocked = new Set();
     for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
       const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-      const resp = await deletePictures(chunk, { baseUrl: backendUrl });
+      const resp = await deletePictures(chunk);
       const skipped = resp?.skipped_locked;
       if (Array.isArray(skipped)) {
         for (const id of skipped) skippedLocked.add(String(id));
@@ -3864,7 +3912,6 @@ async function openKeepCoverOnly() {
   try {
     const report = await previewKeepCoverOnly({
       stackIds,
-      baseUrl: props.backendUrl,
     });
     if (token !== keepCoverOnlyRunToken) return;
     keepCoverOnlyPreview.value = report;
@@ -3901,7 +3948,6 @@ async function runKeepCoverOnly() {
   try {
     const result = await keepCoverOnly({
       stackIds,
-      baseUrl: props.backendUrl,
     });
     const movedIds = Array.isArray(result?.picture_ids_moved)
       ? result.picture_ids_moved
@@ -3949,6 +3995,318 @@ async function runKeepCoverOnly() {
   }
 }
 
+// ── Rotate in place ─────────────────────────────────────────────────────────
+// Applied on click, with no dialog and no confirmation: the step is instant,
+// lossless and reversible, so the safety net is the receipt's Undo rather than
+// a question asked before every quarter-turn.
+//
+// Gestures are SERIALISED rather than refused while one is in flight, for the
+// same reason as in the lightbox: two rotates the same way are a legitimate
+// 180°, and each request reads a picture's current orientation and writes the
+// next one, so two in flight over the same picture lose a turn between them.
+let rotateQueue = Promise.resolve();
+
+/**
+ * Re-read these cards' thumbnail URLs from the server.
+ *
+ * The card's `?v=` token is the server's, and it moves when the bitmap does —
+ * but only if the client actually asks for it again. This is the AWAITED way to
+ * ask, for a named set of cards, which is what a rotate needs: it has to settle
+ * before the receipt narrates the turn.
+ *
+ * `fetchThumbnailsBatch` now also applies the server's URL over its own
+ * `?v=<imported_at>` pre-fill, so `refreshGridImage`'s trailing batch would
+ * eventually repair these tiles too — but it fires that batch un-awaited, and
+ * "eventually" is not something a caller can sequence against.
+ *
+ * Taking the server's URL verbatim — never stamping a buster here — is what
+ * keeps the token a server contract rather than a mirror of one. Its shape
+ * (`?v=<W>x<H>` plus an `o<orientation>` suffix once a picture has been turned)
+ * is deliberately not parsed here for the same reason.
+ *
+ * @param {Array<number|string>} pictureIds
+ * @returns {Promise<void>}
+ */
+async function refreshThumbnailUrls(pictureIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!ids.length) return;
+  let thumbData;
+  try {
+    thumbData = await getThumbnails(ids);
+  } catch (e) {
+    console.error(
+      `refreshThumbnailUrls: could not re-read the thumbnails of pictures ` +
+        `[${ids.join(", ")}]; their tiles keep the bitmap they last painted`,
+      e,
+    );
+    return;
+  }
+  const next = allGridImages.value.slice();
+  let changed = false;
+  for (let i = 0; i < next.length; i++) {
+    const img = next[i];
+    if (!img || img.id == null) continue;
+    const record = thumbData?.[getPictureId(img.id)];
+    const url = record?.thumbnail;
+    if (!url) continue;
+    const absolute = appendShareToken(
+      url.startsWith("http") ? url : `${props.backendUrl}${url}`,
+    );
+    if (absolute === img.thumbnail) continue;
+    // The server's answer is taken VERBATIM, null included. A rotate NULLs the
+    // stored dimensions to re-queue the bitmap, and those are the dimensions of
+    // the bitmap that is now sideways: keeping them (the old `|| img.…`
+    // fallback) held the tile in its pre-rotate shape until the regeneration
+    // sweep landed, and then it jumped. Absent, `displayedAspectRatio` falls
+    // through to the raw dimensions and turns them by the orientation, which is
+    // the shape the regenerated bitmap will have.
+    const width = Number(record.thumbnail_width);
+    const height = Number(record.thumbnail_height);
+    next[i] = {
+      ...img,
+      thumbnail: absolute,
+      thumbnail_width: width > 0 ? width : null,
+      thumbnail_height: height > 0 ? height : null,
+    };
+    changed = true;
+  }
+  if (changed) allGridImages.value = next;
+}
+
+// Pictures whose rotate is in flight, and which way they are turning. Drives the
+// tile's in-flight overlay; the icon names the DIRECTION rather than showing a
+// generic spinner, because the gesture is unconfirmed and instant-looking and
+// the one thing a user needs echoed back is which way they just asked for.
+const rotatingDirectionById = ref(new Map());
+
+function markRotating(pictureIds, direction) {
+  for (const id of Array.isArray(pictureIds) ? pictureIds : []) {
+    const key = getPictureId(id);
+    if (key !== null) rotatingDirectionById.value.set(key, direction);
+  }
+}
+
+function clearRotating(pictureIds) {
+  for (const id of Array.isArray(pictureIds) ? pictureIds : []) {
+    const key = getPictureId(id);
+    if (key !== null) rotatingDirectionById.value.delete(key);
+  }
+}
+
+/** The in-flight rotate icon for this card, or `null` when it is not turning. */
+function rotatingIconFor(img) {
+  const direction = rotatingDirectionById.value.get(getPictureId(img?.id));
+  if (direction === ROTATE_CW) return "mdi-file-rotate-right";
+  if (direction === ROTATE_CCW) return "mdi-file-rotate-left";
+  return null;
+}
+
+// How long a tile will wait for its new bitmap before landing anyway. The commit
+// is deliberately blocked on the decode (see `applyRotatedCards`), so a request
+// that never answers would otherwise leave the card mid-gesture for good.
+// ponytail: a flat ceiling, not a per-picture budget — one number is enough
+// until a batch of very large thumbnails proves otherwise.
+const ROTATE_BITMAP_WAIT_MS = 5000;
+
+/**
+ * Fetch and decode a bitmap off-screen, so the next paint that uses it is free.
+ *
+ * Never rejects and never blocks for long: a URL that 404s or hangs resolves
+ * anyway, because the caller is holding a visible commit on this promise.
+ *
+ * @param {string} url
+ * @returns {Promise<void>}
+ */
+function preloadBitmap(url) {
+  if (!url) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, ROTATE_BITMAP_WAIT_MS);
+    const probe = new Image();
+    probe.onload = () => {
+      // decode() as well as load(), so the commit is not followed by a decode
+      // on the main thread — that is visible as a hitch on a large thumbnail.
+      const decoded =
+        typeof probe.decode === "function"
+          ? probe.decode().catch(() => {})
+          : Promise.resolve();
+      decoded.then(done, done);
+    };
+    probe.onerror = done;
+    probe.src = url;
+  });
+}
+
+/**
+ * Land a rotate on its cards as ONE visual change.
+ *
+ * A turned picture changes two things about its tile — the shape of the box the
+ * justified layout packs, and the bitmap inside it — and they arrive from
+ * different places: the orientation from `/pictures/{id}/metadata`, the URL and
+ * its cache token from `POST /pictures/thumbnails` (the metadata endpoint
+ * carries no thumbnail URL at all). Applying each as it arrives is what made a
+ * rotate happen twice on screen: the cell flipped to portrait first, stretching
+ * the old landscape bitmap into it, and only then did the new bitmap arrive and
+ * the picture turn.
+ *
+ * So both reads happen first, the new bitmap is fetched AND decoded off-screen,
+ * and only then is one write made to `allGridImages` — after which the shape and
+ * the pixels change in the same frame. The visible cost is that the tile does
+ * nothing for a moment, which is what the in-flight overlay is for.
+ *
+ * FIELDS ONLY: nothing is inserted, removed or reordered. A turned photo does
+ * not move in the grid, which is why this can be safe inside an open overlay
+ * where a refetch would not be.
+ *
+ * @param {Array<number|string>} pictureIds - pictures the server actually turned.
+ * @returns {Promise<void>} settles once the cards show the new picture.
+ */
+async function applyRotatedCards(pictureIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!ids.length) return;
+
+  let thumbData;
+  let records;
+  try {
+    [thumbData, records] = await Promise.all([
+      getThumbnails(ids),
+      Promise.all(ids.map((id) => fetchImageInfo(id, { force: true }))),
+    ]);
+  } catch (e) {
+    console.error(
+      `applyRotatedCards: could not re-read pictures [${ids.join(", ")}]; ` +
+        "their tiles keep the picture they last painted",
+      e,
+    );
+    return;
+  }
+
+  // The patch each card will take, built before anything is written so the
+  // write itself is one assignment.
+  const patchById = new Map();
+  ids.forEach((id, index) => {
+    const record = thumbData?.[id];
+    const info = records[index];
+    const patch = {};
+    if (info && !Array.isArray(info)) Object.assign(patch, info);
+    if (record?.thumbnail) {
+      patch.thumbnail = appendShareToken(
+        record.thumbnail.startsWith("http")
+          ? record.thumbnail
+          : `${props.backendUrl}${record.thumbnail}`,
+      );
+    }
+    if (record) {
+      // Taken verbatim, null included: a rotate NULLs the stored dimensions to
+      // re-queue the bitmap, and `displayedAspectRatio` then falls through to
+      // the raw dimensions turned by the orientation — which is the shape the
+      // regenerated bitmap will have, so the tile does not move again later.
+      const width = Number(record.thumbnail_width);
+      const height = Number(record.thumbnail_height);
+      patch.thumbnail_width = width > 0 ? width : null;
+      patch.thumbnail_height = height > 0 ? height : null;
+      // The boxes live in a coordinate space the turn just redefined.
+      patch.faces = Array.isArray(record.faces) ? record.faces : [];
+      patch.detections = Array.isArray(record.detections)
+        ? record.detections
+        : [];
+    }
+    patchById.set(id, patch);
+  });
+
+  await Promise.all(
+    [...patchById.values()].map((patch) => preloadBitmap(patch.thumbnail)),
+  );
+
+  const next = allGridImages.value.slice();
+  let changed = false;
+  for (let i = 0; i < next.length; i++) {
+    const img = next[i];
+    if (!img || img.id == null) continue;
+    const patch = patchById.get(getPictureId(img.id));
+    if (!patch) continue;
+    next[i] = { ...img, ...patch, idx: img.idx ?? i };
+    // The range is re-read on the next visit, so a later background sweep's
+    // regenerated bitmap is picked up rather than masked by this write.
+    invalidateThumbnailIndex(i);
+    changed = true;
+  }
+  if (changed) allGridImages.value = next;
+}
+
+/**
+ * One 90° step over a set of pictures, plus the refresh it owes.
+ *
+ * Mixed selections are the normal case and are handled by DOING the work that
+ * can be done: the server splits its answer into rotated / unsupported /
+ * skipped, and everything it left alone rides the receipt as a second sentence
+ * rather than a notice of its own.
+ *
+ * @param {Array<number|string>} pictureIds - captured at gesture time.
+ * @param {string} direction - `"cw"` or `"ccw"`.
+ * @returns {Promise<void>}
+ */
+async function runRotate(pictureIds, direction) {
+  markRotating(pictureIds, direction);
+  try {
+    const result = await rotatePictures(pictureIds, direction);
+    // The note is armed immediately before the refresh that narrates the
+    // action, so the two arrive together.
+    operationStore.noteNextReceipt(ROTATE_OP_TYPE, rotateSkipNote(result));
+    operationStore.refresh();
+    const rotated = Array.isArray(result?.rotated_picture_ids)
+      ? result.rotated_picture_ids
+      : [];
+    if (!rotated.length) return;
+    await applyRotatedCards(rotated);
+  } catch (e) {
+    console.error(
+      `Rotate ${direction} failed for pictures [${pictureIds.join(", ")}]`,
+      e,
+    );
+    noticeStore.error(`Couldn't rotate those pictures. ${errorDetail(e)}`, {
+      key: "rotate-pictures",
+    });
+  } finally {
+    clearRotating(pictureIds);
+  }
+}
+
+/**
+ * Take one rotate gesture over the selection, behind anything already running.
+ *
+ * @param {string} direction - `"cw"` or `"ccw"`.
+ * @returns {Promise<void>} settles when THIS step has landed.
+ */
+function rotateSelectedPictures(direction) {
+  // Snapshotted now, not when the turn comes up: the selection is the one the
+  // user was looking at when they asked.
+  const pictureIds = (
+    Array.isArray(selectedImageIds.value) ? selectedImageIds.value : []
+  ).slice();
+  if (!pictureIds.length) return rotateQueue;
+  rotateQueue = rotateQueue.then(() => runRotate(pictureIds, direction));
+  return rotateQueue;
+}
+
 async function handleSetProjectForSelected(payload) {
   if (partialStackGroupingReason.value) {
     noticeStore.warning(partialStackGroupingReason.value, {
@@ -3992,17 +4350,13 @@ async function handleSetProjectForSelected(payload) {
       }
       await setPicturesProject(pictureIds, nextProjectId, {
         mode: "remove",
-        baseUrl: props.backendUrl,
       });
     } else if (action === "added") {
       await setPicturesProject(pictureIds, nextProjectId, {
         mode: "add",
-        baseUrl: props.backendUrl,
       });
     } else {
-      await setPicturesProject(pictureIds, nextProjectId, {
-        baseUrl: props.backendUrl,
-      });
+      await setPicturesProject(pictureIds, nextProjectId);
     }
 
     // Project membership only scopes the grid query in the project view:
@@ -4031,7 +4385,7 @@ async function handleSetProjectForSelected(payload) {
     }
     emit("refresh-sidebar");
   } catch (err) {
-    const message = err?.response?.data?.detail || err?.message || String(err);
+    const message = errorDetail(err) || err?.message || String(err);
     noticeStore.error(`Couldn't update the project. ${message}`, {
       key: "project-update",
     });
@@ -4213,6 +4567,26 @@ const selectedMediaSupport = computed(() => {
 
   return { hasImages, hasVideos };
 });
+
+// The selection's picture records, in selection order, for the gates that need
+// to look at the files rather than only count them.
+function selectedPictureRecords() {
+  const ids = Array.isArray(selectedImageIds.value) ? selectedImageIds.value : [];
+  if (!ids.length) return [];
+  const byId = new Map(
+    (Array.isArray(allGridImages.value) ? allGridImages.value : [])
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+  return ids.map((id) => byId.get(String(id))).filter(Boolean);
+}
+
+// Why the context menu's rotate items are greyed, or null while at least one
+// selected picture can be rotated in place.
+const selectionRotateBlockReason = computed(() =>
+  buildRotateBlockReason(selectedPictureRecords()),
+);
+
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
@@ -4421,6 +4795,7 @@ const selectedExpandedCount = computed(() => {
     (filterStore.comfyuiLoraFilter || []).length === 0 &&
     filterStore.minScoreFilter == null &&
     filterStore.maxScoreFilter == null &&
+    !filterStore.unscoredOnlyFilter &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -4543,9 +4918,7 @@ async function loadDeletePreview(ids) {
   deleteForeverConfirmToken.value = "";
   try {
     const d =
-      (await previewScrapheapDelete(ids ?? null, {
-        baseUrl: props.backendUrl,
-      })) ?? {};
+      (await previewScrapheapDelete(ids ?? null)) ?? {};
     deleteForeverConfirmToken.value = String(d.confirm_token ?? "");
     deleteForeverTotalCount.value = Number(d.total_count) || 0;
     deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
@@ -4610,14 +4983,12 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     deleteForeverOpen.value = false;
     return;
   }
-  const backendUrl = props.backendUrl;
   deleteForeverBusy.value = true;
   try {
     const resp = await purgeScrapheap({
       pictureIds: idsToRemove,
       includeProtected,
       confirmToken: deleteForeverConfirmToken.value,
-      baseUrl: backendUrl,
     });
     // Locked pictures survive a purge too, and this endpoint reports them under
     // the same `skipped_locked` name as the bulk soft-delete. Same rule as
@@ -4711,7 +5082,6 @@ async function runEmptyScrapheap(includeProtected) {
     const resp = await purgeScrapheap({
       includeProtected,
       confirmToken: deleteForeverConfirmToken.value,
-      baseUrl: props.backendUrl,
     });
     // Clear + refetch reconciles either case: when only the unprotected subset
     // was purged, the refetch brings the kept protected originals back.
@@ -4747,7 +5117,7 @@ async function confirmRestoreScrapheap() {
   if (!confirmed) return;
   scrapheapRestoring.value = true;
   try {
-    await restoreScrapheap(undefined, { baseUrl: props.backendUrl });
+    await restoreScrapheap(undefined);
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -4769,7 +5139,7 @@ async function confirmRestoreScrapheap() {
 
 async function openReferenceLocation(picId) {
   try {
-    await openPictureLocation(picId, { baseUrl: props.backendUrl });
+    await openPictureLocation(picId);
   } catch (err) {
     // Was a silent ignore ("the OS might not support it"), which left a click
     // doing nothing with no explanation. The cause is worth stating: it is
@@ -4812,15 +5182,11 @@ async function handleImagesUploaded(payload) {
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
           pictureIds.map((id) =>
-            addPictureToSet(selectedSetId, id, {
-              baseUrl: props.backendUrl,
-            }),
+            addPictureToSet(selectedSetId, id),
           ),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
-        await addCharacterFaces(selectedCharacterId, pictureIds, {
-          baseUrl: props.backendUrl,
-        });
+        await addCharacterFaces(selectedCharacterId, pictureIds);
       }
     } catch (e) {
       console.error("Failed to associate imported pictures:", e);
@@ -5018,23 +5384,8 @@ const allGridImagesLength = computed(() => allGridImages.value?.length ?? 0);
 // listing, not just fetched thumbnails). Missing/zero dimensions (unimported
 // pictures, unprobed videos) fall back to square so justified packing never
 // divides by zero.
-function getGridImageAspectRatio(img) {
-  if (!img) return 1;
-  const tw = Number(img.thumbnail_width);
-  const th = Number(img.thumbnail_height);
-  if (Number.isFinite(tw) && tw > 0 && Number.isFinite(th) && th > 0) {
-    return tw / th;
-  }
-  const w = Number(img.width);
-  const h = Number(img.height);
-  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
-    return w / h;
-  }
-  return 1;
-}
-
 const gridAspectRatios = computed(() =>
-  (allGridImages.value || []).map(getGridImageAspectRatio),
+  (allGridImages.value || []).map(displayedAspectRatio),
 );
 
 const {
@@ -5079,13 +5430,15 @@ const stackDeckEdgesFit = computed(
   () => !isJustifiedMode.value && !gridStore.compactMode,
 );
 
+function gridImageLayoutIndex(img, localIdx) {
+  return Number.isFinite(img?.idx) ? img.idx : renderStart.value + localIdx;
+}
+
 function _justifiedItemGeometry(img, localIdx) {
   if (!isJustifiedMode.value) return null;
   const layout = justifiedLayout.value;
   if (!layout || !layout.rowHeights.length) return null;
-  const globalIdx = Number.isFinite(img?.idx)
-    ? img.idx
-    : renderStart.value + localIdx;
+  const globalIdx = gridImageLayoutIndex(img, localIdx);
   if (globalIdx < 0 || globalIdx >= layout.itemScaledWidths.length) return null;
   const row = rowOfIndex(layout.rowStarts, globalIdx);
   return {
@@ -5640,9 +5993,7 @@ async function updateSelectedGroupName() {
     selectionStore.selectedCharacter !== `${SCRAPHEAP_PICTURES_ID}`
   ) {
     try {
-      const char = await getCharacter(selectionStore.selectedCharacter, {
-        baseUrl: props.backendUrl,
-      });
+      const char = await getCharacter(selectionStore.selectedCharacter);
       name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
@@ -5653,9 +6004,7 @@ async function updateSelectedGroupName() {
       return;
     }
     try {
-      const set = await getPictureSet(primarySelectedSetId.value, {
-        baseUrl: props.backendUrl,
-      });
+      const set = await getPictureSet(primarySelectedSetId.value);
       name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
@@ -5717,7 +6066,7 @@ const {
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
-  errorDetail,
+  removeImagesById,
 });
 
 // ============================================================
@@ -5751,6 +6100,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
+    focusCursor: focusGridCursor,
     openOverlay,
     deleteSelected,
     selectionBarRef,
@@ -5767,7 +6117,6 @@ async function fetchImageInfo(imageId, options = {}) {
     return await getPictureMetadata(imageId, {
       smartScore: !!options.smartScore,
       cacheBuster: options.force ? Date.now() : undefined,
-      baseUrl: props.backendUrl,
     });
   } catch (e) {
     console.error("Tag fetch failed:", e);
@@ -5859,7 +6208,6 @@ async function refreshStackFacets(pictureIds) {
     try {
       rows = await listPicturesByIds(chunk, {
         fields: "grid",
-        baseUrl: props.backendUrl,
       });
     } catch (e) {
       console.error(
@@ -5958,6 +6306,15 @@ function handleOverlayChange(payload) {
     return;
   }
   if (!imageId) return;
+  // The picture's own bytes changed (an in-place rotate from the lightbox).
+  // Nothing is inserted, removed or reordered — the card is the same card — but
+  // both its shape and its bitmap move, from two different reads, and they have
+  // to land together or the tile turns twice on screen. `applyRotatedCards`
+  // owns that; see its docstring.
+  if (fields.pixels) {
+    void applyRotatedCards([imageId]);
+    return;
+  }
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     if (overlayOpen.value) {
       // Smart-score re-ranking would reorder allGridImages mid-viewing, so the
@@ -6128,6 +6485,7 @@ watch(
     () => filterStore.comfyuiLoraFilter,
     () => filterStore.minScoreFilter,
     () => filterStore.maxScoreFilter,
+    () => filterStore.unscoredOnlyFilter,
     () => filterStore.smartScoreBucketFilter,
     () => filterStore.resolutionBucketFilter,
     () => filterStore.tagFilter,
@@ -6384,10 +6742,6 @@ const emptyStateImage = computed(() => {
   return isScrapheapView.value ? "/EmptyTrash.png" : "/Empty.png";
 });
 
-const emptyStateAlt = computed(() => {
-  return isScrapheapView.value ? "Empty scrap heap" : "No images";
-});
-
 const isDarkThemeActive = computed(() => {
   const mode = String(userPrefsStore.themeMode || "light").toLowerCase();
   if (mode === "dark") return true;
@@ -6457,6 +6811,42 @@ const gridImagesToRender = computed(() => {
   return filtered.slice(renderStart.value, renderEnd.value);
 });
 
+const imageCardRefs = new Map();
+const firstFocusableRenderedIndex = computed(
+  () =>
+    gridImagesToRender.value.find(
+      (image) => image?.id && !isImageGhosted(image),
+    )?.idx ?? -1,
+);
+
+function setImageCardRef(index, element) {
+  const normalizedIndex = Number(index);
+  if (!Number.isFinite(normalizedIndex)) return;
+  if (element) imageCardRefs.set(normalizedIndex, element);
+  else imageCardRefs.delete(normalizedIndex);
+}
+
+function imageCardTabIndex(image) {
+  return pictureGridTabIndex(image, {
+    cursorIndex: cursorIdx.value,
+    fallbackIndex: firstFocusableRenderedIndex.value,
+    ghosted: isImageGhosted(image),
+  });
+}
+
+function imageCardAriaLabel(image) {
+  return pictureGridLabel(image, { video: isVideo(image) });
+}
+
+async function focusGridCursor(index) {
+  await nextTick();
+  imageCardRefs.get(Number(index))?.focus({ preventScroll: true });
+}
+
+function handleImageCardFocus(image) {
+  if (image?.id && !isImageGhosted(image)) cursorIdx.value = image.idx;
+}
+
 // Batch fetch metadata (including thumbnail) for visible range
 // ============================================================
 // THUMBNAIL BATCH FETCH
@@ -6506,8 +6896,11 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       square_crop_side: img?.square_crop_side,
     }));
     // Synchronously pre-fill thumbnail URLs from imported_at so <img> elements
-    // render immediately without waiting for the POST round trip. The POST
-    // still runs to enrich face overlays and penalised-tag hints.
+    // render immediately without waiting for the POST round trip. This is a
+    // placeholder with a placeholder's lifetime: the POST below replaces it
+    // with the server's own URL the moment that answers, because only the
+    // server's `?v=` token moves when a bitmap is regenerated. The POST also
+    // enriches face overlays and penalised-tag hints.
     for (let i = 0; i < gridImages.length; i++) {
       const gridImg = gridImages[i];
       if (!gridImg.thumbnail && gridImg.id && gridImg.imported_at) {
@@ -6522,17 +6915,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         };
       }
     }
-    // Separate images: those missing a thumbnail need a full fetch; those that
-    // already have one still need penalised_tags refreshed (e.g. after a tag
-    // removal on a stack-head image whose thumbnail was carried over from the
-    // previous grid state and was therefore never re-fetched).
-    const missingThumbIds = new Set(
-      gridImages
-        .filter(
-          (img) => img.id !== null && img.id !== undefined && !img.thumbnail,
-        )
-        .map((img) => String(img.id)),
-    );
     ids = Array.from(
       new Set(
         gridImages
@@ -6542,9 +6924,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     );
     let overlayNeedsRedraw = false;
     if (ids.length) {
-      const thumbData = await getThumbnails(ids, {
-        baseUrl: props.backendUrl,
-      });
+      const thumbData = await getThumbnails(ids);
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -6554,33 +6934,37 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           continue;
         }
         const thumbObj = thumbData[String(gridImg.id)];
-        // Only overwrite thumbnail URL for images that didn't already have one.
-        if (missingThumbIds.has(String(gridImg.id))) {
-          const thumbnailUrl =
-            thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        // The server owns the thumbnail URL. Its `?v=` token is the only thing
+        // that moves when a bitmap is regenerated — the upgrade NULL-reset in
+        // thumbnail_generation_task, a reference-folder source swap, an in-place
+        // rotate — so the answer always replaces whatever the card is carrying,
+        // including the `?v=<imported_at>` placeholder pre-filled just above.
+        // That placeholder is a stand-in until this arrives, never a
+        // replacement for it: gating on "didn't already have one" meant every
+        // card with an imported_at kept a token derived from its import date,
+        // which never changes again, and no regenerated thumbnail ever
+        // repainted. A card the server reports no URL for keeps what it has,
+        // so a still-processing picture is not blanked; a card that never had
+        // one stays null and goes down the retry path below.
+        const thumbnailUrl =
+          thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        if (thumbnailUrl) {
           const previousThumbnail = gridImg.thumbnail || null;
-          gridImg.thumbnail = thumbnailUrl
-            ? appendShareToken(
-                thumbnailUrl.startsWith("http")
-                  ? thumbnailUrl
-                  : `${props.backendUrl}${thumbnailUrl}`,
-              )
-            : null;
-          if (
-            gridImg.id != null &&
-            gridImg.thumbnail &&
-            gridImg.thumbnail !== previousThumbnail
-          ) {
-            thumbnailAssignedAtMap[gridImg.id] = performance.now();
-          }
-          if (gridImg.id != null && thumbObj && thumbObj.thumbnail) {
+          gridImg.thumbnail = appendShareToken(
+            thumbnailUrl.startsWith("http")
+              ? thumbnailUrl
+              : `${props.backendUrl}${thumbnailUrl}`,
+          );
+          if (gridImg.id != null) {
+            if (gridImg.thumbnail !== previousThumbnail) {
+              thumbnailAssignedAtMap[gridImg.id] = performance.now();
+            }
             thumbnailLoadedMap[gridImg.id] =
               (thumbnailLoadedMap[gridImg.id] || 0) + 1;
           }
         }
-        // Always refresh faces, thumbnail dimensions, and penalised_tags
-        // from authoritative server data, even when the thumbnail URL was
-        // pre-filled from imported_at.
+        // Faces, thumbnail dimensions and penalised_tags come from the same
+        // authoritative record, whether or not it carried a URL.
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
           const thumbHeight = Number(thumbObj.thumbnail_height);
@@ -6748,6 +7132,7 @@ function handleImageCardClick(img, idx, event) {
     return;
   }
   cursorIdx.value = idx;
+  focusGridCursor(idx);
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   let newSelection;
@@ -6963,7 +7348,7 @@ async function handleOverlayScrapheapRestore() {
   const id = overlayCtxImage.value?.id;
   if (id == null) return;
   try {
-    await restoreScrapheap([id], { baseUrl: props.backendUrl });
+    await restoreScrapheap([id]);
   } catch (err) {
     console.error("Failed to restore picture from the scrapheap", err);
     noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
@@ -7012,9 +7397,7 @@ async function confirmSegment() {
   // on the resulting CHANGED_PICTURES event (detections is a card-content
   // field), and the overlay reconciles too if open.
   try {
-    await detectPictures(ids, segmentPrompt.value.trim(), {
-      baseUrl: props.backendUrl,
-    });
+    await detectPictures(ids, segmentPrompt.value.trim());
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
     tasksStore.nudge();
@@ -7052,9 +7435,7 @@ function scheduleSharedPictureFetch() {
     const ids = visibleSlice.map((img) => img.id).filter(Boolean);
     if (!ids.length) return;
     try {
-      const body = await getSharedPictureIds(ids, {
-        baseUrl: props.backendUrl,
-      });
+      const body = await getSharedPictureIds(ids);
       const shared = new Set(body?.shared_ids ?? []);
       // Update: remove any id from the queried batch that is no longer shared,
       // and add any that are now shared. This keeps the set accurate when
@@ -7089,9 +7470,7 @@ async function confirmRevokePictureShares() {
   revokeSharesPending.value = null;
   if (!pending?.pictureId) return;
   try {
-    await revokeTokensByResource("picture", pending.pictureId, {
-      baseUrl: props.backendUrl,
-    });
+    await revokeTokensByResource("picture", pending.pictureId);
     const next = new Set(sharedPictureIds.value);
     next.delete(pending.pictureId);
     sharedPictureIds.value = next;
@@ -7143,38 +7522,9 @@ async function _afterTagMutation(imageId) {
   }
 }
 
-async function removeTagFromImage(imageId, tag) {
-  if (!imageId) {
-    console.error("Image ID is required to remove a tag.");
-    return;
-  }
-
-  try {
-    const tagId = getTagId(tag);
-    if (tagId == null) {
-      console.warn("Tag id is required to remove a tag.", tag);
-      return;
-    }
-    const tagKey = String(tagId);
-    await removePictureTag(imageId, tagKey, { baseUrl: props.backendUrl });
-    const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId,
-    );
-    if (gridImg && Array.isArray(gridImg.tags)) {
-      const d = getTagList(gridImg.tags);
-      gridImg.tags = d.filter((t) => !tagMatches(t, tag));
-    }
-    await _afterTagMutation(imageId);
-  } catch (error) {
-    console.error("Error removing tag:", error);
-  }
-}
-
 async function addTagToImage(imageId, tag) {
   try {
-    const response = await addPictureTag(imageId, tag, {
-      baseUrl: props.backendUrl,
-    });
+    const response = await addPictureTag(imageId, tag);
     const responseTags = getTagList(response?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
@@ -7250,6 +7600,16 @@ defineExpose({
   // `stack_count` is derived per stack and is absent from a card's /metadata
   // read, so the per-card refresh cannot repair it.
   refreshStackFacets,
+  // Same shape, different value: a card's thumbnail URL comes from the batch
+  // thumbnail endpoint and is absent from /metadata, so refreshGridImage alone
+  // cannot repair a tile whose FILE changed (an in-place rotate, or an undo of
+  // one arriving over the socket).
+  refreshThumbnailUrls,
+  // A bytes change (an in-place rotate, or an undo/redo of one over the socket)
+  // moves the tile's shape and its bitmap from two different reads. This lands
+  // them as one visual change; nothing that reacts to `pixels` should be doing
+  // the two refreshes by hand.
+  applyRotatedCards,
   repositionImageByScore,
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
@@ -7535,9 +7895,7 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.message = "Preparing export...";
     exportProgress.cancelRequested = false;
 
-    const startBody = await startExport(exportQuery, {
-      baseUrl: props.backendUrl,
-    });
+    const startBody = await startExport(exportQuery);
     const taskId = startBody?.task_id;
     if (!taskId) {
       throw new Error("Missing task_id from export response.");
@@ -7552,9 +7910,7 @@ async function exportCurrentViewToZip(options = {}) {
         exportProgress.visible = false;
         return;
       }
-      const statusBody = await getExportStatus(taskId, {
-        baseUrl: props.backendUrl,
-      });
+      const statusBody = await getExportStatus(taskId);
       const status = statusBody?.status;
       exportProgress.status = status || "in_progress";
       exportProgress.processed = statusBody?.processed || 0;
@@ -7584,9 +7940,7 @@ async function exportCurrentViewToZip(options = {}) {
       throw new Error("Export timed out waiting for ZIP.");
     }
 
-    const { blob, filename } = await downloadExport(downloadUrl, {
-      baseUrl: props.backendUrl,
-    });
+    const { blob, filename } = await downloadExport(downloadUrl);
 
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -7604,8 +7958,7 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
     console.error("ZIP export failed", e);
-    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
-      key: "export-zip",
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, { key: "export-zip",
     });
     setTimeout(() => {
       exportProgress.visible = false;
@@ -7828,9 +8181,7 @@ async function handleAssignFaceSearchResults() {
   }
   faceSearchAssignBusy.value = true;
   try {
-    await addCharacterFaceAssignments(character.id, assignments, {
-      baseUrl: props.backendUrl,
-    });
+    await addCharacterFaceAssignments(character.id, assignments);
     selectedImageIds.value = [];
     clearFaceSelection();
     lastSelectedImageId.value = null;

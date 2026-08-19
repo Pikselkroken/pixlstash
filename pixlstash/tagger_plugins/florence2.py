@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import traceback
 from typing import TYPE_CHECKING, Callable, Optional
@@ -137,6 +138,11 @@ class Florence2Service:
         self._processor = None
         self._model_device = None
         self._dtype = None
+        # Serialises loading against unloading. ``aggressive_unload`` runs from
+        # the idle sweep and from shutdown, neither of which knows a load is in
+        # flight, and dropping the model mid-load frees device memory the
+        # loader is still writing into. See test_model_unload_race.py.
+        self._load_lock = threading.RLock()
         self._model_variant = DEFAULT_FLORENCE_VARIANT
         variant = FLORENCE_MODEL_VARIANTS[DEFAULT_FLORENCE_VARIANT]
         self._model_name = variant["model"]
@@ -219,9 +225,22 @@ class Florence2Service:
 
     def ensure_ready(self) -> None:
         """Load Florence-2 if not already loaded (idempotent)."""
-        if self.is_loaded():
-            return
-        self._init()
+        with self._load_lock:
+            if self.is_loaded():
+                return
+            self._init()
+
+    def unload(self) -> None:
+        """Release the model and processor, waiting for any in-flight load.
+
+        The plugin used to clear ``_model``/``_processor`` from outside, which
+        could land in the middle of :meth:`_init`. Freeing device memory the
+        loader is still writing into crashes the process, so the drop belongs
+        here, under the same lock the load takes.
+        """
+        with self._load_lock:
+            self._model = None
+            self._processor = None
 
     def description_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for caption generation."""
@@ -248,6 +267,10 @@ class Florence2Service:
         self, image_path: str, _retry_on_cpu: bool = True
     ) -> Optional[str]:
         """Generate a natural language caption for a single image or video file.
+
+        There is no ``stop_event`` here: one caption is a single inference with
+        nothing to interrupt part-way, so cancellation is the caller's check
+        before it asks for the next one.
 
         Args:
             image_path: Path to the image or video file.
@@ -301,13 +324,18 @@ class Florence2Service:
             return None
 
     def generate_captions_batch(
-        self, image_paths: list, _retry_on_cpu: bool = True
+        self,
+        image_paths: list,
+        _retry_on_cpu: bool = True,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of still images.
 
         Args:
             image_paths: List of file paths (non-video only).
             _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            stop_event: Optional :class:`threading.Event` to interrupt
+                inference mid-batch.
 
         Returns:
             Dict mapping file path → caption string (or None on failure).
@@ -324,6 +352,11 @@ class Florence2Service:
         try:
             valid_items = []
             for image_path in image_paths:
+                if stop_event and stop_event.is_set():
+                    logger.debug(
+                        "Florence-2 generate captions batch stop-event reached, ending early"
+                    )
+                    return {}
                 try:
                     image = Image.open(image_path).convert("RGB")
                     image = _resize_to_max_dim(image, max_dim=640)
@@ -347,6 +380,12 @@ class Florence2Service:
             )
             inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
             logger.debug("Batch inputs moved to %s", self._model_device)
+
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate captions batch stop-event reached, ending early"
+                )
+                return {}
 
             with torch.inference_mode():
                 generated_ids = self._model.generate(
@@ -375,15 +414,22 @@ class Florence2Service:
                 )
                 if self._reload_on_cpu(cause=e):
                     return self.generate_captions_batch(
-                        image_paths, _retry_on_cpu=False
+                        image_paths, _retry_on_cpu=False, stop_event=stop_event
                     )
 
             logger.error("Florence-2 batch captioning failed: %s", e)
             logger.debug(traceback.format_exc())
-            return {
-                image_path: self.generate_caption(image_path, _retry_on_cpu=False)
-                for image_path in image_paths
-            }
+            captions = {}
+            for image_path in image_paths:
+                if stop_event and stop_event.is_set():
+                    logger.debug(
+                        "Florence-2 per-image fallback stop-event reached, ending early"
+                    )
+                    break
+                captions[image_path] = self.generate_caption(
+                    image_path, _retry_on_cpu=False
+                )
+            return captions
 
     def detect_objects(
         self,
@@ -769,6 +815,7 @@ class Florence2Plugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: Florence-2 does not produce tags.
         supports_descriptions: Florence-2 generates captions.
         requires_download: Model must be downloaded on first use.
@@ -780,6 +827,14 @@ class Florence2Plugin(TaggerPlugin):
         "Microsoft Florence-2 — generates natural-language image descriptions. "
         "The selected checkpoint also drives the Segment action."
     )
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license: str = "GPL-3.0-only"
+    # One entry per selectable checkpoint (FLORENCE_MODEL_VARIANTS) — the user
+    # picks which one is downloaded.
+    models: list[dict[str, str]] = [
+        {"name": "florence-community/Florence-2-base", "license": "MIT"},
+        {"name": "florence-community/Florence-2-large-ft", "license": "MIT"},
+    ]
     supports_tags: bool = False
     supports_descriptions: bool = True
     requires_download: bool = True
@@ -885,20 +940,6 @@ class Florence2Plugin(TaggerPlugin):
         """Return ``{name: default}`` from ``parameter_schema``."""
         return {f["name"]: f["default"] for f in self.parameter_schema()}
 
-    def plugin_schema(self) -> dict:
-        """Return JSON-serialisable metadata for this plugin."""
-        return {
-            "name": self.name,
-            "display_name": self.display_name,
-            "description": self.description,
-            "supports_tags": self.supports_tags,
-            "supports_descriptions": self.supports_descriptions,
-            "requires_download": self.requires_download,
-            "parameters": self.parameter_schema(),
-            "downloaded_artifacts": self.list_downloaded_artifacts(),
-            "is_loaded": self.is_loaded(),
-        }
-
     def needs_download(self, parameters=None) -> bool:
         """Return ``True`` — Florence-2 is always downloaded on first use."""
         # Florence-2 uses HuggingFace's automatic caching; the service handles
@@ -929,8 +970,7 @@ class Florence2Plugin(TaggerPlugin):
     def unload(self) -> None:
         """Unload Florence-2 from memory."""
         if self._service is not None:
-            self._service._model = None
-            self._service._processor = None
+            self._service.unload()
 
     def is_loaded(self) -> bool:
         """Return ``True`` if Florence-2 is loaded."""
@@ -972,17 +1012,20 @@ class Florence2Plugin(TaggerPlugin):
         self,
         image_paths: list,
         parameters: dict,
-        stop_event=None,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of image/video paths.
 
         Args:
             image_paths: Ordered list of absolute image/video paths.
             parameters: Plugin parameters (uses ``max_new_tokens``).
-            stop_event: Not used by Florence-2 (kept for interface compatibility).
+            stop_event: Optional :class:`threading.Event`.  Checked before each
+                video and before each still-image chunk, so a cancel returns
+                the captions produced so far rather than running the batch out.
 
         Returns:
             ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            A cancelled batch simply omits the paths it never reached.
         """
         _VIDEO_EXTS = frozenset(
             {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
@@ -995,6 +1038,11 @@ class Florence2Plugin(TaggerPlugin):
         batch_items: list[str] = []
 
         for path in image_paths:
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
+                return results
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()
             if ext in _VIDEO_EXTS:
@@ -1006,8 +1054,15 @@ class Florence2Plugin(TaggerPlugin):
 
         batch_size = self.service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
+                return results
             chunk = batch_items[idx : idx + batch_size]
-            captions = self.service.generate_captions_batch(chunk)
+            captions = self.service.generate_captions_batch(
+                chunk, stop_event=stop_event
+            )
             for path_str in chunk:
                 results[path_str] = captions.get(path_str)
 

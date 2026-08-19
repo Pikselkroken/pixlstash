@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pixlstash.startup_permissions import mkdir_private
+
 _UNSET: Any = object()
 _torch_mod: Any = _UNSET
 _ort_mod: Any = _UNSET
@@ -193,7 +195,10 @@ class StartupChecks:
             return
 
         try:
-            os.makedirs(image_root, exist_ok=True)
+            # Missing library paths must satisfy the SQLite namespace guard
+            # even under umask 0002. Existing paths remain an explicit user
+            # repair decision rather than being silently chmodded here.
+            mkdir_private(Path(image_root))
         except Exception as exc:
             outcome.hard_failures.append(
                 f"Unable to create image_root directory '{image_root}': {exc}"

@@ -169,22 +169,15 @@ function formatCount(value) {
   padding: var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: transparent;
   color: inherit;
   font-family: var(--font-ui);
   font-size: var(--text-base);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
 .vrow:hover:not(:disabled) {
   background: var(--hover-wash);
-}
-
-.vrow:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 /* The last row standing is ON, not unavailable, so it keeps the active wash and

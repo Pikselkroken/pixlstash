@@ -243,7 +243,7 @@ def delete_tag_predictions(
     Uses a direct bulk DELETE to avoid ORM cascade side-effects.
 
     Dropping the model's anomaly prediction rows removes their probabilities from the
-    scorer's inputs (:func:`pixlstash.picture_scoring.fetch_anomaly_confidences` reads
+    scorer's inputs (:func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences` reads
     ``TagPrediction`` rows in the anomaly vocabulary), so the cached ``Picture.smart_score``
     goes stale and must be NULLed for the background ``SmartScoreTask`` to recompute it.
     Wrapping the delete in :func:`invalidate_on_anomaly_change` mirrors the sibling

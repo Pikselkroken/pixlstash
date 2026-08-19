@@ -72,6 +72,7 @@ from pixlstash.authz.policy import (
     SCOPED_POLICIES,
     AccessPolicy,
     RoutePolicy,
+    LibraryAccessMode,
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES, ROUTE_POLICIES
@@ -457,15 +458,37 @@ class AuthzGate:
         ladder lives in exactly one place. The object-scoped classes are handled
         by :meth:`_enforce_scoped_policy` (Step 4).
 
-        **The project-filter check runs first, for every declared route and every
-        policy class (issue #708).** It is deliberately policy-independent: a
-        ``project_id`` filter is a question about the *project space*, not about
-        the object the route is named after, so which ``AccessPolicy`` the route
-        carries says nothing about whether the filter is allowed. Placing it here
-        rather than in each handler is what makes it inherited — a new route that
-        accepts ``project_id`` is covered the day it is mounted, with no
-        declaration to remember (the omission class of §16.2).
+        **The library checks run first, then the project-filter check, for every
+        declared route and every policy class (issue #708).** The project filter
+        is deliberately policy-independent: a ``project_id`` filter is a question
+        about the *project space*, not about the object the route is named after,
+        so which ``AccessPolicy`` the route carries says nothing about whether the
+        filter is allowed. Placing it here rather than in each handler is what
+        makes it inherited — a new route that accepts ``project_id`` is covered
+        the day it is mounted, with no declaration to remember (the omission class
+        of §16.2). It resolves project ids against the server, so it must run
+        *after* the library checks have settled which vault is being read.
         """
+        # Mid-swap the server's vault is being replaced, so a request served now
+        # could read from one library and write to another. Refused before any
+        # other check, including the pin, because during the swap there is no
+        # settled answer to "which library is active".
+        self._refuse_while_switching(request, route_policy)
+        if (
+            route_policy.library_access is LibraryAccessMode.ACTIVE_VAULT
+            and getattr(self._server, "library_coordinator", None) is not None
+            and getattr(request.state, "library_lease", None) is None
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Active-library request was not admitted safely.",
+            )
+
+        # The library pin runs before every policy branch, so no access level
+        # can sidestep it and a route added without thinking about libraries is
+        # pinned by default.
+        self._enforce_library_pin(request, route_policy)
+
         enforce_project_filter_scope(self._server, request)
 
         policy = route_policy.policy
@@ -621,6 +644,116 @@ class AuthzGate:
             )
         check = _MEMBERSHIP_BY_POLICY[route_policy.policy]
         check(self._server, request, obj_id)
+
+    def _refuse_while_switching(
+        self, request: Request, route_policy: RoutePolicy
+    ) -> None:
+        """Return 503 while the active library is being replaced.
+
+        The swap closes one vault and opens another. A request that landed in
+        that window would be served against a half-swapped server, which is
+        worse than an error: it could return a plausible answer from the wrong
+        library. 503 with ``Retry-After`` says "come back in a second", which is
+        exactly what is true.
+
+        Library-independent routes are exempt: they touch no library content, so
+        they remain answerable throughout, which is what lets a client ask what
+        is going on instead of seeing everything fail.
+        """
+        if route_policy.library_access is not LibraryAccessMode.ACTIVE_VAULT:
+            return
+
+        from pixlstash.services.library_switch_service import (
+            SwitchState,
+            switching_state_of,
+        )
+
+        state = switching_state_of(self._server)
+        if state is SwitchState.READY:
+            return
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PixlStash has no verified open library. Restart the server."
+                if state is SwitchState.UNAVAILABLE
+                else "PixlStash is switching library. Try again in a moment."
+            ),
+            headers={"Retry-After": "2"},
+        )
+
+    def _enforce_library_pin(self, request: Request, route_policy: RoutePolicy) -> None:
+        """Refuse a token whose library is not the active one.
+
+        Every token belongs to exactly one library (multi-library plan §4).
+        Without this, switching library would silently change what an existing
+        token grants: a share link would start serving somebody else's pictures,
+        and an automation holding an ALL token would write into the wrong place.
+
+        Cookie sessions are deliberately exempt. A session says "I am the owner,
+        show me what is active", and following the switch is the entire point of
+        the feature; a token says "programmatic access to *this* library".
+
+        Fails closed in both directions that matter: a token with no stamp at all
+        is refused rather than treated as universal.
+        """
+        if route_policy.library_independent:
+            return
+
+        matched_token = getattr(request.state, "matched_token", None)
+        if matched_token is None:
+            # Password/browser sessions follow switches. A cookie session
+            # created from a token inherits that token's pin.
+            session_library = getattr(request.state, "session_library_uuid", None)
+            if session_library is None:
+                return
+            active_uuid = self._auth.active_library_uuid()
+            if active_uuid is None or session_library == active_uuid:
+                return
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This session was created from a token for a library that "
+                    "is not currently active."
+                ),
+            )
+
+        active_uuid = self._auth.active_library_uuid()
+        if active_uuid is None:
+            # No registry (a Vault built without a Server, or a hub that has no
+            # libraries yet). Nothing to pin against, so nothing to enforce.
+            return
+
+        token_library = getattr(matched_token, "library_uuid", None)
+        if token_library == active_uuid:
+            return
+
+        # A resource-scoped share token learns nothing: 404 is what every other
+        # out-of-scope resource returns, so a link to a non-active library is
+        # indistinguishable from one that never existed.
+        if _is_resource_scoped(request):
+            logger.info(
+                "Refusing a resource-scoped token stamped for library %s while "
+                "%s is active",
+                token_library,
+                active_uuid,
+            )
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # An owner token holder owns both libraries, so name the problem.
+        logger.info(
+            "Refusing an owner token stamped for library %s while %s is active",
+            token_library,
+            active_uuid,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This token belongs to a library that is not currently active. "
+                "Switch to that library, or use a token created for the active "
+                "one."
+            ),
+        )
 
     def _enforce_unscoped_owner(self, request: Request) -> None:
         """Require a fully-unscoped owner via the shared AuthService helper.

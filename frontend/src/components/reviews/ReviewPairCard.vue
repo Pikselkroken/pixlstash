@@ -319,13 +319,8 @@ function openZoom(id, ext) {
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
-  cursor: pointer;
 }
 .rs-manual-tag:hover {
   background: rgba(0, 0, 0, 0.85);
-}
-.rs-manual-tag:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
 }
 </style>

@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_likeness import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import resolve_path_within
 
 from ._models import (
     RestoreInProgressError,
@@ -73,8 +74,9 @@ class FullRestoreMixin:
         3. Scan snapshot Picture rows; collect missing-file IDs.
         4. Dispose the live engine, copy the snapshot over the live DB, and
            re-open it.
-        5. Clear every API token (see ``_clear_api_tokens``) — a restore always
-           leaves the vault with no tokens, whatever the snapshot held.
+        5. Clear every API token (see ``_clear_hub_api_tokens``) and the vault's
+           guest state (see ``_clear_guest_state``) — a restore always leaves the
+           vault with no tokens, whatever the snapshot held.
         6. Delete rows whose files are missing and perform post-swap cleanup.
         7. Reset the in-memory authentication state the swap invalidated (see
            ``_reset_auth_state``); clients sign in again afterwards.
@@ -159,7 +161,7 @@ class FullRestoreMixin:
             Populated RestoreReport.
         """
         cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
@@ -646,7 +648,16 @@ class FullRestoreMixin:
             for snap in live_snapshots:
                 if snap["relative_path"] in existing_snapshot_paths:
                     continue
-                abs_snap = os.path.join(vault_root, snap["relative_path"])
+                try:
+                    abs_snap = resolve_path_within(vault_root, snap["relative_path"])
+                except ValueError as exc:
+                    logger.warning(
+                        "RestoreService: snapshot index row %s points outside "
+                        "the vault root; not re-inserting it after restore: %s",
+                        snap["relative_path"],
+                        exc,
+                    )
+                    continue
                 if not os.path.exists(abs_snap):
                     # File was pruned/deleted since capture — skip rather than
                     # leave a dangling index row pointing at nothing.
@@ -711,7 +722,8 @@ class FullRestoreMixin:
             # token row in place.  ``run_control_task`` has returned, so the
             # swap has finished and released ``exclusive_engine_access``; this
             # writer task opens its session on the re-created engine.
-            db.run_task(self._clear_api_tokens, priority=0)
+            db.run_task(self._clear_guest_state, priority=0)
+            self._clear_hub_api_tokens()
             db.run_task(_post_restore_cleanup, priority=0)
             # Rebuild process-local auth state only after the restored database
             # is in its final form. A reset failure is fatal and intentionally
@@ -757,7 +769,7 @@ class FullRestoreMixin:
         **Where it runs, and why that is safe.** After
         ``run_control_task(_do_swap)`` has returned, so the swap has finished
         and released ``exclusive_engine_access()`` and the engine has been
-        re-created; and after ``_clear_api_tokens``, so the swapped-in database
+        re-created; and after the token clear, so the swapped-in database
         already holds no token rows. The restore authentication gate has been
         closed since before the swap, so no request can repopulate the cache in
         the queue gap. ``reset_after_restore`` re-reads the
@@ -794,7 +806,7 @@ class FullRestoreMixin:
             ) from exc
 
     @staticmethod
-    def _clear_api_tokens(session: Session) -> None:
+    def _clear_guest_state(session: Session) -> None:
         """Delete every API token row from the swapped-in database.
 
         A restore always leaves the vault with no API tokens, whatever the
@@ -821,16 +833,36 @@ class FullRestoreMixin:
             session: Live writer session on the swapped-in database.
         """
         cleared: dict[str, int] = {}
+        # Clear the abandoned legacy vault token table as well. Live tokens
+        # are revoked from the hub below, but a restored portable credential
+        # copy must remain inert and blank.
         for model in (GuestScore, GuestSession, UserToken):
             cleared[model.__name__] = session.execute(sa_delete(model)).rowcount
         session.commit()
         logger.info(
-            "RestoreService: cleared API tokens after restore (%d token(s), "
-            "%d guest session(s), %d guest score(s)); tokens must be created "
-            "again from Settings and share links re-shared.",
-            cleared["UserToken"],
+            "RestoreService: cleared %d guest session(s) and %d guest score(s) "
+            "and %d legacy token row(s) from the restored vault.",
             cleared["GuestSession"],
             cleared["GuestScore"],
+            cleared["UserToken"],
+        )
+
+    def _clear_hub_api_tokens(self) -> None:
+        """Revoke tokens in the identity hub; tokens no longer live in a vault."""
+        auth_service = getattr(self._vault, "auth_service", None)
+        if auth_service is None:
+            return
+
+        def clear(session: Session) -> int:
+            count = session.execute(sa_delete(UserToken)).rowcount
+            session.commit()
+            return count
+
+        count = auth_service._db.run_task(clear, priority=0)
+        logger.info(
+            "RestoreService: revoked %d hub API token(s) after restore; tokens "
+            "must be recreated and share links re-shared.",
+            count,
         )
 
     def _find_missing_file_ids(
@@ -1032,6 +1064,21 @@ class FullRestoreMixin:
             with db.exclusive_engine_access():
                 # Dispose engine and all pooled connections before touching the file.
                 db._engine.dispose()
+                # With every connection gone, the retained location guard may
+                # (and on Windows MUST) release its fd: os.replace onto a file
+                # with an open handle is WinError 5 there. Ordering matters —
+                # guard only after dispose, or closing it strips the process's
+                # POSIX locks out from under the live connections (the
+                # corruption the guard retention exists to prevent). No new
+                # guard is armed on the swapped file: connections take their
+                # own locks, there is no further guard-close left to strip
+                # them, and re-validating the namespace here would make restore
+                # refuse installed-base directories that startup accepts. The
+                # next process start guards the file as usual.
+                guard = getattr(db, "_location_guard", None)
+                if guard is not None:
+                    guard.close()
+                    db._location_guard = None
                 # Remove stale WAL/SHM files so the new DB starts clean.
                 for suffix in ("-wal", "-shm"):
                     stale = live_db_path + suffix
@@ -1047,6 +1094,13 @@ class FullRestoreMixin:
                 # read-only handle ("rb") with EBADF, since CommitFileBuffers
                 # requires write access.
                 with open(staged_db_path, "rb+") as staged_fd:
+                    # VACUUM INTO created the snapshot at 0644 & ~umask and
+                    # copy2 preserved that mode, so under umask 002 a restore
+                    # would leave the live vault.db group-writable — which the
+                    # trusted-location check then refuses on the next startup.
+                    # Windows has no fchmod and no real mode bits.
+                    if hasattr(os, "fchmod"):
+                        os.fchmod(staged_fd.fileno(), 0o600)
                     staged_fd.flush()
                     os.fsync(staged_fd.fileno())
                 os.replace(staged_db_path, live_db_path)

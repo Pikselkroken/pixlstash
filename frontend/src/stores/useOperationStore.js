@@ -38,7 +38,7 @@ import { useNoticeStore } from "./useNoticeStore";
 import { useWsStore } from "./useWsStore";
 
 /** How many history steps the popover shows (design rule: capped at 50). */
-export const HISTORY_LIMIT = 50;
+const HISTORY_LIMIT = 50;
 
 /** Receipt dwell, in ms. Destructive actions get longer to catch the mistake. */
 export const RECEIPT_MS = 5000;
@@ -65,9 +65,9 @@ export const WS_REFRESH_DEBOUNCE_MS = 400;
  * hand-off, because collapsing is an imperative grid op (`removeImagesById`)
  * and the store must not reach into the grid.
  */
-export const GHOST_NONE = "none";
+const GHOST_NONE = "none";
 export const GHOST_PENDING = "pending";
-export const GHOST_COMMITTED = "committed";
+const GHOST_COMMITTED = "committed";
 
 /**
  * How long a fresh ghost set waits for the receipt that will own its window.
@@ -86,7 +86,7 @@ export const GHOST_ADOPT_TIMEOUT_MS = 2500;
  * How many Ctrl+Z presses may queue behind an in-flight undo. A cap, because a
  * held key or a panicked burst should not walk the whole stack.
  */
-export const MAX_QUEUED_STEPS = 5;
+const MAX_QUEUED_STEPS = 5;
 
 /**
  * `op_type` → mdi glyph. Exact matches first; anything unknown falls through
@@ -97,7 +97,7 @@ export const MAX_QUEUED_STEPS = 5;
  * row for an unrecognised type must still render as a sensible step rather
  * than a blank or a crash.
  */
-export const OP_ICONS = {
+const OP_ICONS = {
   "pictures.tags.add": "mdi-tag-plus-outline",
   "pictures.tags.remove": "mdi-tag-minus-outline",
   "pictures.tags.remove_all": "mdi-tag-off-outline",
@@ -105,6 +105,9 @@ export const OP_ICONS = {
   "pictures.tags.replace": "mdi-tag-multiple-outline",
   "pictures.score": "mdi-star-outline",
   "pictures.fields": "mdi-pencil-outline",
+  // One glyph for both directions: the op type does not name which way the
+  // picture turned, and a receipt that guessed would be wrong half the time.
+  "pictures.rotate": "mdi-rotate-right",
   "pictures.project": "mdi-folder-outline",
   "characters.assign": "mdi-account-check-outline",
   "characters.unassign": "mdi-account-off-outline",

@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 
 from fastapi.testclient import TestClient
 
@@ -110,7 +111,7 @@ def test_list_ranks_pending_by_score():
         # The file extension is returned so the client can render full-res images.
         assert filtered[0]["picture_ext"] == "png"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -135,7 +136,7 @@ def test_accept_remove_deletes_tag():
         accepted = client.get("/tag_suggestions", params={"status": "ACCEPTED"}).json()
         assert any(r["id"] == sid for r in accepted)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -153,7 +154,7 @@ def test_accept_add_creates_tag():
 
         assert _has_tag(client, pic_id, "bad anatomy")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -177,7 +178,7 @@ def test_reopen_undoes_accepted_remove():
         pending = client.get("/tag_suggestions").json()
         assert any(r["id"] == sid for r in pending)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -236,7 +237,7 @@ def test_fix_twin_tags_the_twin_and_undoes():
         assert not _has_tag(client, twin_id, "malformed hand")
         assert any(r["id"] == sid for r in client.get("/tag_suggestions").json())
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -286,7 +287,7 @@ def test_swap_flips_both_labels_and_undoes():
         assert _has_tag(client, suspect, "malformed hand")
         assert not _has_tag(client, twin, "malformed hand")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -310,7 +311,7 @@ def test_dismiss_leaves_tag_untouched():
         ).json()
         assert any(r["id"] == sid for r in dismissed)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -341,7 +342,7 @@ def test_list_includes_tagger_confidence():
         assert len(rows) == 1
         assert abs(rows[0]["tagger_confidence"] - 0.42) < 1e-6
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -426,7 +427,7 @@ def test_bulk_accept_resolves_when_signals_agree():
         assert reopened["count"] == 1
         assert _has_tag(client, suspect, "malformed hand")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -469,7 +470,7 @@ def test_bulk_accept_dry_run_counts_without_writing():
         assert applied["accepted_ids"] == [sid]
         assert not _has_tag(client, suspect, "malformed hand")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -498,7 +499,7 @@ def test_bulk_accept_skips_when_tagger_contradicts_neighbour():
         assert _has_tag(client, suspect, "malformed hand")
         assert not _has_tag(client, twin, "malformed hand")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -529,7 +530,7 @@ def test_bulk_accept_skips_when_neighbour_vote_is_weak():
         assert low["count"] == 1
         assert not _has_tag(client, suspect, "malformed hand")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -551,7 +552,7 @@ def test_bulk_accept_adds_tag_when_signals_agree():
         assert _has_tag(client, suspect, "malformed hand")  # missing tag added
         assert _has_tag(client, twin, "malformed hand")  # twin keeps it
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -615,7 +616,7 @@ def test_scan_tag_builds_and_rebuilds_queue():
         rows2 = client.get("/tag_suggestions").json()
         assert len(rows2) == len(rows)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -662,7 +663,7 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
         assert c not in {row["picture_id"], row["twin_picture_id"]}
         assert "dhash hamming" in row["reason"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -709,7 +710,7 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
         assert row["twin_sim"] >= tag_scan_service.MIN_DISPLAY_TWIN_SIM
         assert "dhash hamming" not in row["reason"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -768,7 +769,7 @@ def test_scan_tag_confidence_fallback_for_new_tag():
         # B has no prediction at all, so it must not be surfaced.
         assert b not in {r["picture_id"] for r in rows}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -814,7 +815,7 @@ def test_scan_tag_confidence_fallback_ignores_stale_model_version():
         assert res["count"] == 0
         assert client.get("/tag_suggestions").json() == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -868,7 +869,7 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
         assert a in picture_ids  # un-reviewed confident candidate still proposed
         assert b not in picture_ids  # human-rejected candidate excluded
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -990,7 +991,7 @@ def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
         assert rows_after[ids["u"]]["direction"] == "add"
         assert rows_after[ids["t1"]]["direction"] == "remove"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1112,7 +1113,7 @@ def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
         assert res_regressed["added"] == 0
         assert res_regressed["removed"] == 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1124,7 +1125,7 @@ def test_accept_missing_suggestion_returns_404():
         resp = client.post("/tag_suggestions/999999/accept")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1185,16 +1186,55 @@ def _add_face(server, pic_id, character_id, face_index=0):
     from pixlstash.db_models import Face
 
     def ins(session):
-        session.add(
-            Face(
+        # The real upload pipeline may finish face detection before this
+        # fixture runs. Reuse its deterministic first face when present instead
+        # of racing it for the (picture, frame, face) unique key.
+        face = session.exec(
+            select(Face).where(
+                Face.picture_id == pic_id,
+                Face.frame_index == 0,
+                Face.face_index == face_index,
+            )
+        ).first()
+        if face is None:
+            face = Face(
                 picture_id=pic_id,
-                character_id=character_id,
+                frame_index=0,
                 face_index=face_index,
             )
-        )
+            session.add(face)
+        face.character_id = character_id
         session.commit()
 
     server.vault.db.run_task(ins)
+
+
+def _wait_for_task_runner_idle(server, timeout_s=60):
+    """Wait until import-triggered CPU/GPU work is quiescent across two polls."""
+    runner = server.vault._task_runner
+    deadline = time.time() + timeout_s
+    stable_polls = 0
+    while time.time() < deadline:
+        with runner._active_task_lock:
+            active = bool(runner._active_tasks)
+        idle = not active and runner._queue.empty() and runner._gpu_queue.empty()
+        stable_polls = stable_polls + 1 if idle else 0
+        if stable_polls >= 2:
+            return
+        time.sleep(0.1)
+    raise AssertionError("TaskRunner did not become idle before face fixture setup")
+
+
+def _clear_faces(server, picture_ids):
+    from sqlmodel import delete
+
+    from pixlstash.db_models import Face
+
+    def clear(session):
+        session.exec(delete(Face).where(Face.picture_id.in_(picture_ids)))
+        session.commit()
+
+    server.vault.db.run_task(clear)
 
 
 def test_filter_by_project_returns_only_in_project_suspects():
@@ -1218,7 +1258,7 @@ def test_filter_by_project_returns_only_in_project_suspects():
             out_pic,
         }
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1238,7 +1278,7 @@ def test_filter_by_set_returns_only_in_set_suspects():
         rows = client.get("/tag_suggestions", params={"set_id": set_id}).json()
         assert {r["picture_id"] for r in rows} == {in_pic}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1249,6 +1289,12 @@ def test_filter_by_character_numeric_and_unassigned():
         char_pic = _upload_picture(client)  # has a face with character 7
         unassigned_pic = _upload_named(client)  # face, no character
         other_pic = _upload_named(client)  # no face at all
+        # Imports require the planner-backed face worker. Once all imports have
+        # been accepted, stop new finder work and drain tasks before replacing
+        # auto-detected faces with the exact filter fixture.
+        server.vault._work_planner.stop()
+        _wait_for_task_runner_idle(server)
+        _clear_faces(server, [char_pic, unassigned_pic, other_pic])
         for p in (char_pic, unassigned_pic, other_pic):
             _seed_suggestion(server, p, "malformed hand", "remove")
         # Create a character row so character_id=<id> resolves.
@@ -1270,7 +1316,7 @@ def test_filter_by_character_numeric_and_unassigned():
         ).json()
         assert {r["picture_id"] for r in rows} == {unassigned_pic}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1300,7 +1346,7 @@ def test_filters_and_together_intersection():
         # Only the picture in BOTH dimensions survives the intersection.
         assert {r["picture_id"] for r in rows} == {both}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1319,7 +1365,7 @@ def test_empty_scope_yields_no_rows_not_error():
         # An unknown id is likewise empty, not an error.
         assert client.get("/tag_suggestions", params={"set_id": 999999}).json() == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1389,7 +1435,7 @@ def test_bulk_accept_respects_filter_dry_run_and_apply():
             client, out_suspect, "malformed hand"
         )  # out of scope, untouched
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1461,7 +1507,7 @@ def test_scoped_token_list_only_sees_its_own_suspects():
         rows = bearer.get(f"{API}/tag_suggestions", headers=headers).json()
         assert {r["picture_id"] for r in rows} == {pic_a}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1483,7 +1529,7 @@ def test_scoped_token_filter_cannot_widen_to_other_set():
         assert rows == []
         assert all(r["picture_id"] != pic_b for r in rows)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1568,7 +1614,7 @@ def test_scoped_token_list_redacts_out_of_scope_twin():
         assert owner_rows[0]["twin_sim"] == 0.97
         assert str(pic_b) in owner_rows[0]["reason"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1592,7 +1638,7 @@ def test_owner_filter_does_not_redact_own_twin():
         assert rows[0]["twin_picture_id"] == pic_b
         assert str(pic_b) in rows[0]["reason"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1688,7 +1734,7 @@ def test_scan_tag_survives_large_picture_ids_scope():
         assert {r["picture_id"] for r in rows} == set(embedded)
         assert all(r["direction"] == "add" for r in rows)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1764,7 +1810,7 @@ def test_legacy_scan_refreshes_stale_pending_in_place():
             == 1
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1812,6 +1858,6 @@ def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
         add_sid = _seed_suggestion(server, pic, "malformed hand", "add", source="model")
         assert accept_suggestion(server.vault, add_sid)["direction"] == "add"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

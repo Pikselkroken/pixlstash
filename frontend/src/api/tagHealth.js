@@ -4,7 +4,8 @@
 // GET keeps answering with `building: true` and a progress fraction, which is
 // what the caller polls on.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Base path of the tag-health resource. */
 const TAG_HEALTH_URL = "/tag_health";
@@ -17,8 +18,7 @@ const TAG_HEALTH_URL = "/tag_health";
  *   (`building`, `progress`, `computed_at`, `stale`).
  */
 export async function getTagHealth(params) {
-  const res = await apiClient.get(TAG_HEALTH_URL, { params });
-  return res.data;
+  return unwrap(apiClient.get(TAG_HEALTH_URL, { params }));
 }
 
 /**
@@ -30,6 +30,5 @@ export async function getTagHealth(params) {
  * @returns {Promise<Object>} the response body.
  */
 export async function rebuildTagHealth() {
-  const res = await apiClient.post(`${TAG_HEALTH_URL}/rebuild`);
-  return res.data;
+  return unwrap(apiClient.post(`${TAG_HEALTH_URL}/rebuild`));
 }

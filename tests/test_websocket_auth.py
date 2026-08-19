@@ -11,9 +11,12 @@ themselves. These tests guard against:
 """
 
 import asyncio
+import concurrent.futures
+import contextlib
 import json
 import tempfile
 import threading
+import types
 
 import pytest
 from anyio import ClosedResourceError
@@ -27,6 +30,47 @@ from pixlstash.server import Server
 API = "/api/v1"
 WS_UPDATES = f"{API}/ws/updates"
 WS_COMFYUI = f"{API}/ws/comfyui"
+
+# TestClient bridges the app to this thread through an anyio portal. When the
+# server closes a socket and the handler then returns, the portal can tear the
+# session down while this thread is still waiting on the queued close frame, so
+# the client observes a cancellation instead of the frame. That is a harness
+# artifact under load: uvicorn writes the close to a real socket and a real
+# client reads the code. Tests therefore tolerate these on the client side and
+# assert the close code where the server issues it (``_record_close_codes``).
+_HARNESS_TEARDOWN = (
+    concurrent.futures.CancelledError,
+    asyncio.CancelledError,
+    ClosedResourceError,
+)
+
+
+def _registered_ws(server, *, broadcast: bool):
+    """The server-side ``WebSocket`` of the tracked client with this role."""
+    with server._ws_clients_lock:
+        for client in server._ws_clients:
+            if client.get("ws") is not None and client.get("broadcast") is broadcast:
+                return client["ws"]
+    return None
+
+
+def _record_close_codes(monkeypatch, websocket) -> list:
+    """Record every close code a server-side ``WebSocket`` is closed with.
+
+    The drains close these sockets on the loop that owns them and their callers
+    wait for that to finish, so the recorded codes are readable as soon as the
+    triggering call returns. Unlike the client thread's view, this does not race
+    the TestClient portal, so it is what pins the ``1012`` claim.
+    """
+    codes: list[int] = []
+    original = websocket.close
+
+    async def _close(code: int = 1000, reason: str | None = None):
+        codes.append(code)
+        await original(code=code, reason=reason)
+
+    monkeypatch.setattr(websocket, "close", _close, raising=False)
+    return codes
 
 
 @pytest.fixture(scope="module")
@@ -50,10 +94,10 @@ def owner_client(server):
     return client
 
 
-def _read_token(owner_client) -> str:
+def _read_token(owner_client, scope="READ") -> str:
     r = owner_client.post(
         f"{API}/users/me/token",
-        json={"description": "read-only", "scope": "READ"},
+        json={"description": f"{scope.lower()} token", "scope": scope},
     )
     assert r.status_code == 200, r.text
     return r.json()["token"]
@@ -133,6 +177,32 @@ def test_broadcast_delivers_only_to_owner_clients(server):
     assert len(owner_ws.received) == 1, "Owner must receive the event"
     assert owner_ws.received[0]["type"] == "tags_changed"
     assert scoped_ws.received == [], "Scoped client must receive no global events"
+
+
+def test_switch_cleanup_closes_and_forgets_every_live_websocket(server):
+    class _ClosableWS:
+        def __init__(self):
+            self.closed = None
+
+        async def close(self, code, reason):
+            self.closed = (code, reason)
+
+    first = _ClosableWS()
+    second = _ClosableWS()
+    comfyui_proxy = _ClosableWS()
+    with server._ws_clients_lock:
+        saved = list(server._ws_clients)
+        server._ws_clients = [{"ws": first}, {"ws": second}]
+        server._ws_clients.append({"ws": comfyui_proxy, "broadcast": False})
+    try:
+        asyncio.run(server._close_all_websockets())
+        assert first.closed == (1012, "Library switched")
+        assert second.closed == (1012, "Library switched")
+        assert comfyui_proxy.closed == (1012, "Library switched")
+        assert server._ws_clients == []
+    finally:
+        with server._ws_clients_lock:
+            server._ws_clients = saved
 
 
 # ---------------------------------------------------------------------------
@@ -298,12 +368,13 @@ def test_x_client_id_header_populates_request_state(owner_client):
 class _FakeHandshake:
     """Minimal stand-in for a Starlette WebSocket at handshake time."""
 
-    def __init__(self, cookies=None, query=None, headers=None):
+    def __init__(self, cookies=None, query=None, headers=None, client_ip=None):
         from starlette.datastructures import Headers
 
         self.cookies = cookies or {}
         self.query_params = query or {}
         self.headers = Headers(headers or {})
+        self.client = types.SimpleNamespace(host=client_ip) if client_ip else None
 
 
 def test_authenticate_websocket_cookie_is_owner(server):
@@ -328,6 +399,62 @@ def test_authenticate_websocket_read_token_is_not_owner(server, owner_client):
     auth = server.auth.authenticate_websocket(ws)
     assert auth is not None
     assert auth.is_owner is False, "READ token must not be owner-scoped"
+
+
+def test_authenticate_websocket_rejects_token_for_inactive_library(
+    server, owner_client
+):
+    token = _read_token(owner_client)
+    original_provider = server.auth.library_uuid_provider
+    server.auth.library_uuid_provider = lambda: "inactive-library"
+    try:
+        assert (
+            server.auth.authenticate_websocket(_FakeHandshake(query={"token": token}))
+            is None
+        )
+        assert (
+            server.auth.authenticate_websocket(
+                _FakeHandshake(headers={"authorization": f"Bearer {token}"})
+            )
+            is None
+        )
+    finally:
+        server.auth.library_uuid_provider = original_provider
+
+
+@pytest.mark.parametrize("client_ip", ["8.8.8.8", "100.64.0.1"])
+def test_authenticate_websocket_rejects_remote_all_bearer(
+    server, owner_client, client_ip
+):
+    token = _read_token(owner_client, scope="ALL")
+    auth = server.auth.authenticate_websocket(
+        _FakeHandshake(
+            headers={"authorization": f"Bearer {token}"}, client_ip=client_ip
+        )
+    )
+    assert auth is None
+
+
+def test_token_derived_cookie_websocket_keeps_library_pin(server):
+    user = server.auth.get_user()
+    server.auth._register_session(
+        "token-cookie",
+        user.id,
+        token_public_id="public-token",
+        token_library_uuid="library-a",
+    )
+    original_provider = server.auth.library_uuid_provider
+    server.auth.library_uuid_provider = lambda: "library-b"
+    try:
+        assert (
+            server.auth.authenticate_websocket(
+                _FakeHandshake(cookies={"session_id": "token-cookie"})
+            )
+            is None
+        )
+    finally:
+        server.auth.library_uuid_provider = original_provider
+        server.auth._forget_session("token-cookie")
 
 
 def test_origin_check(server):
@@ -360,6 +487,103 @@ def test_comfyui_proxy_rejects_anonymous(server):
     with pytest.raises(WebSocketDisconnect):
         with anon.websocket_connect(WS_COMFYUI):
             pass
+
+
+def test_updates_accept_failure_releases_generation_lease(
+    server, owner_client, monkeypatch
+):
+    from starlette.websockets import WebSocket
+
+    async def fail_accept(_self, *args, **kwargs):
+        raise RuntimeError("injected accept failure")
+
+    monkeypatch.setattr(WebSocket, "accept", fail_accept)
+    with pytest.raises(RuntimeError, match="injected accept failure"):
+        with owner_client.websocket_connect(WS_UPDATES):
+            pass
+    assert server.library_coordinator._readers == {}
+
+
+def test_updates_registration_failure_releases_generation_lease(server, owner_client):
+    class ExplodingClients(list):
+        def append(self, _client):
+            raise RuntimeError("injected registration failure")
+
+    original = server._ws_clients
+    server._ws_clients = ExplodingClients(original)
+    try:
+        with pytest.raises(RuntimeError, match="injected registration failure"):
+            with owner_client.websocket_connect(WS_UPDATES):
+                pass
+        assert server.library_coordinator._readers == {}
+    finally:
+        server._ws_clients = original
+
+
+def test_library_switch_terminates_the_comfyui_proxy(
+    server, owner_client, tmp_path, monkeypatch
+):
+    """The progress proxy is old-library work and shares the WS drain."""
+    from pixlstash.routes import comfyui as comfyui_routes
+
+    class _BlockingUpstream:
+        def __init__(self):
+            self.entered = threading.Event()
+            self.exited = threading.Event()
+
+        async def __aenter__(self):
+            self.entered.set()
+            return self
+
+        async def __aexit__(self, *_args):
+            self.exited.set()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Future()
+
+        async def send(self, _message):
+            return None
+
+    upstream = _BlockingUpstream()
+    monkeypatch.setattr(
+        comfyui_routes.websockets, "connect", lambda *_a, **_k: upstream
+    )
+    original = server.library_registry.active_library()
+    target = server.library_registry.create(str(tmp_path / "ws-switch"), "WS switch")
+
+    try:
+        context = owner_client.websocket_connect(WS_COMFYUI)
+        websocket = context.__enter__()
+        try:
+            assert upstream.entered.wait(timeout=5)
+            proxy_ws = _registered_ws(server, broadcast=False)
+            assert proxy_ws is not None, "the proxy did not register for the drain"
+            close_codes = _record_close_codes(monkeypatch, proxy_ws)
+
+            response = owner_client.post(
+                f"{API}/libraries/active", json={"uuid": target.uuid}
+            )
+            assert response.status_code == 200, response.text
+            # The switch closes the claimed generation before it returns, so the
+            # code the proxy socket was closed with is already recorded. The
+            # handler's own ``finally`` closes again afterwards; only the first
+            # close is the drain's.
+            assert close_codes[:1] == [1012], close_codes
+
+            with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as excinfo:
+                websocket.receive_text()
+            if isinstance(excinfo.value, WebSocketDisconnect):
+                assert excinfo.value.code == 1012
+        finally:
+            with contextlib.suppress(*_HARNESS_TEARDOWN):
+                context.__exit__(None, None, None)
+        assert upstream.exited.wait(timeout=5), "upstream proxy context must terminate"
+    finally:
+        if server.library_registry.active_library().uuid != original.uuid:
+            server.library_switch.switch_to(original.uuid)
 
 
 def test_restore_barrier_terminates_every_authenticated_websocket(
@@ -406,18 +630,31 @@ def test_restore_barrier_terminates_every_authenticated_websocket(
     updates_ws = updates_context.__enter__()
     comfyui_ws = comfyui_context.__enter__()
     try:
+        server_sockets = [
+            _registered_ws(server, broadcast=True),
+            _registered_ws(server, broadcast=False),
+        ]
+        assert all(server_sockets), "both sockets must be tracked before the barrier"
+        close_codes = [
+            _record_close_codes(monkeypatch, socket) for socket in server_sockets
+        ]
+
         thread = threading.Thread(target=_close_and_drain, daemon=True)
         thread.start()
 
-        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as updates_close:
+        with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as updates_close:
             updates_ws.receive_text()
-        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as comfyui_close:
+        with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as comfyui_close:
             comfyui_ws.receive_text()
 
         thread.join(timeout=10)
         assert not thread.is_alive(), "WebSocket admission leases did not drain"
         assert "error" not in outcome, outcome.get("error")
         assert upstream_closed.is_set(), "ComfyUI upstream survived the drain"
+        # What the barrier sent, recorded server-side: the client threads may or
+        # may not have drained the frame before the portal tore them down.
+        for codes in close_codes:
+            assert codes[:1] == [1012], close_codes
         for closed in (updates_close.value, comfyui_close.value):
             if isinstance(closed, WebSocketDisconnect):
                 assert closed.code == 1012
@@ -427,10 +664,8 @@ def test_restore_barrier_terminates_every_authenticated_websocket(
         # 1012. Starlette TestClient reflects that server-task cancellation from
         # ``__exit__`` even though the client already observed the clean close.
         for context in (comfyui_context, updates_context):
-            try:
+            with contextlib.suppress(*_HARNESS_TEARDOWN):
                 context.__exit__(None, None, None)
-            except BaseException:
-                pass
         server.auth.reopen_auth_after_restore()
 
 

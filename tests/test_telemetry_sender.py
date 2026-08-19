@@ -319,10 +319,11 @@ def test_consent_is_re_read_rather_than_captured(tmp_path):
                 session.add(user)
                 session.commit()
 
-            server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
+            server.hub_engine.run_task(update, priority=DBPriority.IMMEDIATE)
 
         # The settings endpoint writes a different ORM instance from the
-        # detached object cached on AuthService. The callback must see the DB,
+        # detached object cached on AuthService. Identity and consent live in
+        # the hub, so the callback must re-read that authoritative database and
         # not require a process restart to observe the opt-in.
         assert server.auth.user.telemetry_send_install_id is False
         persist_consent(True)

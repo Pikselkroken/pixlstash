@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
@@ -31,11 +32,11 @@ describe("api/pictureSets", () => {
     expect(result).toEqual([{ id: 1 }]);
   });
 
-  it("listPictureSets prefixes an explicit backend base", async () => {
+  it("listPictureSets requests the picture_sets route", async () => {
     apiClient.get.mockResolvedValue({ data: [] });
-    await listPictureSets({ baseUrl: "http://host:9000" });
+    await listPictureSets();
     expect(apiClient.get).toHaveBeenCalledWith(
-      "http://host:9000/picture_sets",
+      "/picture_sets",
       undefined,
     );
   });
@@ -60,8 +61,8 @@ describe("api/pictureSets", () => {
 
   it("patchPictureSet addresses the set by id", async () => {
     apiClient.patch.mockResolvedValue({ data: {} });
-    await patchPictureSet(5, { name: "Trip 2" }, { baseUrl: "/be" });
-    expect(apiClient.patch).toHaveBeenCalledWith("/be/picture_sets/5", {
+    await patchPictureSet(5, { name: "Trip 2" });
+    expect(apiClient.patch).toHaveBeenCalledWith("/picture_sets/5", {
       name: "Trip 2",
     });
   });
@@ -100,9 +101,9 @@ describe("api/pictureSets", () => {
 
   it("removePictureFromSet addresses one picture within one set", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
-    await removePictureFromSet(5, 42, { baseUrl: "/be" });
+    await removePictureFromSet(5, 42);
     expect(apiClient.delete).toHaveBeenCalledWith(
-      "/be/picture_sets/5/members/42",
+      "/picture_sets/5/members/42",
     );
   });
 

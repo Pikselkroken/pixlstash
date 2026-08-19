@@ -90,7 +90,6 @@
 import { computed } from "vue";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
-import { API_BASE_URL } from "../../utils/apiClient";
 
 const props = defineProps({
   /** Members in the stack, including any not rendered in this strip. */
@@ -172,7 +171,6 @@ function memberTitle(id) {
 function thumbUrl(member) {
   return pictureThumbnailUrl(member.id, {
     version: member.thumbnail_version,
-    baseUrl: API_BASE_URL,
   });
 }
 
@@ -252,16 +250,10 @@ function onPick(member) {
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.06);
   overflow: hidden;
-  cursor: pointer;
 }
 
 .sxthumb:hover:not(:disabled) {
   background: var(--hover-wash);
-}
-
-.sxthumb:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 /* The cover is flagged twice, by edge and by label, so it survives both a
@@ -311,22 +303,15 @@ function onPick(member) {
   padding: var(--space-2) var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.75);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
 .sxbtn:hover {
   background: var(--hover-wash);
-}
-
-.sxbtn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 </style>

@@ -476,11 +476,6 @@ function archivedSummary(a) {
   border-right: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
-.rs-rail :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
-
 .rs-rail-head {
   flex-shrink: 0;
   display: flex;
@@ -504,9 +499,7 @@ function archivedSummary(a) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   color: rgb(var(--v-theme-on-primary));
   background: rgb(var(--v-theme-primary));
   transition: filter 0.12s;
@@ -537,10 +530,7 @@ function archivedSummary(a) {
   width: 100%;
   text-align: left;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  background: transparent;
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-rail-item:hover {
@@ -659,13 +649,10 @@ function archivedSummary(a) {
   align-items: center;
   gap: 4px;
   padding: 2px 6px;
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-dark-surface-error));
-  cursor: pointer;
 }
 .rs-rail-session-wrap:hover .rs-rail-abort,
 .rs-rail-session-wrap:focus-within .rs-rail-abort {
@@ -714,7 +701,6 @@ function archivedSummary(a) {
 .rs-abort-btn {
   height: 32px;
   padding: 0 12px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -747,8 +733,6 @@ function archivedSummary(a) {
   height: 34px;
   border: 1px dashed rgba(var(--v-theme-on-dark-surface), 0.3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -777,10 +761,7 @@ function archivedSummary(a) {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1);
-  border: none;
   border-radius: var(--radius-sm);
-  background: none;
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
@@ -848,11 +829,8 @@ function archivedSummary(a) {
   width: 24px;
   height: 24px;
   margin-right: var(--space-1);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-dark-surface-error));
-  cursor: pointer;
 }
 .rs-rail-archived-wrap:hover .rs-rail-archived-del,
 .rs-rail-archived-wrap:focus-within .rs-rail-archived-del {
@@ -889,9 +867,6 @@ function archivedSummary(a) {
 .rs-shelf-toggle {
   display: inline-flex;
   padding: 1px;
-  border: none;
-  background: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-shelf-clear {
@@ -899,10 +874,7 @@ function archivedSummary(a) {
   align-items: center;
   gap: 3px;
   padding: 1px 3px;
-  border: none;
   border-radius: var(--radius-sm);
-  background: none;
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);

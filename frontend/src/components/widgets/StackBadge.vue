@@ -182,7 +182,6 @@ const title = computed(() => {
   gap: var(--space-2);
   min-height: var(--badge-size);
   padding: 0 var(--space-2);
-  border: none;
   border-radius: var(--radius-pill);
   background-color: var(--scrim-photo);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -191,18 +190,12 @@ const title = computed(() => {
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
   font-variant-numeric: tabular-nums;
-  cursor: pointer;
 }
 
 /* Layered as an image so the scrim underneath is preserved: a `background`
    shorthand on hover would drop the backing and leave the glyph on the photo. */
 .sbadge:hover {
   background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
-}
-
-.sbadge:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 /* A coloured glyph cannot reach `on-dark-surface`'s luminance, so the chip it

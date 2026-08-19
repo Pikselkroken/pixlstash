@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Pattern for API-module tests: mock the singleton apiClient, assert the module
 // builds the right URL and returns response.data (never the axios envelope).
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), patch: vi.fn() },
 }));
 
@@ -30,13 +31,13 @@ describe("api/config", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("both calls accept an explicit backend base", async () => {
+  it("both calls address the user-config route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
     apiClient.patch.mockResolvedValue({ data: {} });
-    await getUserConfig({ baseUrl: "/be" });
-    await patchUserConfig({ a: 1 }, { baseUrl: "/be" });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/users/me/config");
-    expect(apiClient.patch).toHaveBeenCalledWith("/be/users/me/config", {
+    await getUserConfig();
+    await patchUserConfig({ a: 1 });
+    expect(apiClient.get).toHaveBeenCalledWith("/users/me/config");
+    expect(apiClient.patch).toHaveBeenCalledWith("/users/me/config", {
       a: 1,
     });
   });

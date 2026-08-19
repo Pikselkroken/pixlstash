@@ -58,6 +58,18 @@ _NO_REAL_FACE_SQL = (
 )
 
 
+def is_truthy_flag(raw) -> bool:
+    """Return ``True`` for the boolean query-param spellings the frontend sends.
+
+    ``unscored=1`` is the contract, but ``true``/``yes``/``on`` are accepted too so
+    a hand-written URL behaves the same. Anything else (including an absent param
+    and the explicit ``unscored=0``) is False.
+    """
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _tag_in_exists(prefix: str, tags_lower: list[str]) -> tuple[str, dict]:
     """Return an ``EXISTS (a tag in tags_lower)`` SQL fragment + its bind params.
 
@@ -130,6 +142,12 @@ class PredicateFilter(BaseModel):
     format: Optional[List[str]] = None
     min_score: Optional[int] = None
     max_score: Optional[int] = None
+    # "Never rated by the user". Both states are reachable in production: a
+    # picture that was never touched keeps ``score IS NULL``, while clicking the
+    # current star again writes a literal 0 (``POST /pictures/apply-scores``
+    # accepts 0..5 and nothing normalises it back to NULL). To a user those are
+    # the same thing, so the predicate covers both.
+    unscored: bool = False
     smart_score_bucket: Optional[str] = None
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
@@ -255,6 +273,8 @@ class PredicateFilter(BaseModel):
             preds.append(Picture.score >= self.min_score)
         if self.max_score is not None:
             preds.append(Picture.score <= self.max_score)
+        if self.unscored:
+            preds.append(or_(Picture.score.is_(None), Picture.score == 0))
 
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())
@@ -486,6 +506,7 @@ class PredicateFilter(BaseModel):
             format=qp.getlist("format") or None,
             min_score=_int_or_none("min_score"),
             max_score=_int_or_none("max_score"),
+            unscored=is_truthy_flag(qp.get("unscored")),
             smart_score_bucket=qp.get("smart_score_bucket") or None,
             resolution_bucket=qp.get("resolution_bucket") or None,
             comfyui_models_filter=qp.getlist("comfyui_model") or None,

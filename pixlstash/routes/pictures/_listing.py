@@ -24,7 +24,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
 )
@@ -37,7 +37,7 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
-from pixlstash.utils.query.predicate_filter import PredicateFilter
+from pixlstash.utils.query.predicate_filter import PredicateFilter, is_truthy_flag
 
 from ._helpers import (
     _enrich_scrapheap_retention,
@@ -127,6 +127,15 @@ class GridPicture(BaseModel):
     )
     reference_folder_id: int | None = Field(
         None, description="Source reference-folder id for externally-referenced files."
+    )
+    orientation: int | None = Field(
+        None,
+        description=(
+            "Stored EXIF orientation, 1-8, or null when it has not been read "
+            "yet. Carried in the grid projection because it is the cache-buster "
+            "for the full-size media URL: an in-place rotate changes nothing "
+            "else about the picture."
+        ),
     )
     file_path: str | None = Field(
         None,
@@ -256,6 +265,12 @@ class PictureListFilters:
         ),
         max_score: int | None = Query(
             None, description="Maximum star score.", examples=[5]
+        ),
+        unscored: bool = Query(
+            False,
+            description=(
+                "Only pictures the user never rated: score IS NULL or score = 0."
+            ),
         ),
         smart_score_bucket: str | None = Query(
             None, description="unscored | 1-2 | 2-3 | 3-4 | 4-5"
@@ -500,6 +515,10 @@ def select_pictures_for_listing(
     min_score = int(min_score_raw) if min_score_raw is not None else None
     max_score_raw = query_params.pop("max_score", None)
     max_score = int(max_score_raw) if max_score_raw is not None else None
+    # Popped, not left in ``query_params``: the leftovers are splatted into
+    # ``Picture.find(**search)``, whose ``hasattr`` fallthrough silently drops any
+    # key that is not a Picture column, so the filter would do nothing at all.
+    unscored = is_truthy_flag(query_params.pop("unscored", None))
     smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
     resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)
@@ -579,7 +598,10 @@ def select_pictures_for_listing(
                     ).all()
                 )
 
-            shared_ids = server.vault.db.run_task(
+            # Tokens live in the hub, so the "what has this owner shared"
+            # lookup runs there. Reading it from the vault would silently return
+            # nothing rather than failing, which is the worse shape.
+            shared_ids = server.hub_engine.run_task(
                 _fetch_shared_ids, auth_user_id, priority=DBPriority.IMMEDIATE
             )
             shared_id_set = set(shared_ids)
@@ -615,8 +637,8 @@ def select_pictures_for_listing(
         raise HTTPException(status_code=400, detail=str(ve))
 
     guest_session_id = getattr(request.state, "guest_session_id", None)
-    guest_token_id = (
-        getattr(request.state, "token_id", None) if guest_session_id else None
+    guest_token_public_id = (
+        getattr(request.state, "token_public_id", None) if guest_session_id else None
     )
     # Fallback: rejected-consent guests have no HttpOnly cookie, but may pass
     # the in-memory session ID as a query param so scores are overlaid for the
@@ -627,7 +649,7 @@ def select_pictures_for_listing(
             qp_sid = request.query_params.get("guest_session_id", "")
             if qp_sid and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", qp_sid):
                 guest_session_id = qp_sid
-                guest_token_id = getattr(request.state, "token_id", None)
+                guest_token_public_id = getattr(request.state, "token_public_id", None)
 
     hidden_tags = _get_hidden_tags_from_request(server, request) or None
 
@@ -655,6 +677,7 @@ def select_pictures_for_listing(
         project_id_value: str | None,
         min_score_value: int | None = None,
         max_score_value: int | None = None,
+        unscored_value: bool = False,
         smart_score_bucket_value: str | None = None,
         resolution_bucket_value: str | None = None,
         tags_filter_value: list[str] | None = None,
@@ -700,6 +723,7 @@ def select_pictures_for_listing(
                 and not formats
                 and min_score_value is None
                 and max_score_value is None
+                and not unscored_value
                 and smart_score_bucket_value is None
                 and resolution_bucket_value is None
                 and not tags_filter_value
@@ -749,6 +773,7 @@ def select_pictures_for_listing(
             format=formats,
             min_score=min_score_value,
             max_score=max_score_value,
+            unscored=unscored_value,
             smart_score_bucket=smart_score_bucket_value,
             resolution_bucket=resolution_bucket_value,
             tags_filter=tags_filter_value,
@@ -785,6 +810,7 @@ def select_pictures_for_listing(
             project_id_raw,
             min_score_value=min_score,
             max_score_value=max_score,
+            unscored_value=unscored,
             smart_score_bucket_value=smart_score_bucket,
             resolution_bucket_value=resolution_bucket,
             tags_filter_value=query_params.get("tags_filter"),
@@ -901,6 +927,7 @@ def select_pictures_for_listing(
                 format=format,
                 min_score=min_score,
                 max_score=max_score,
+                unscored=unscored,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -933,6 +960,7 @@ def select_pictures_for_listing(
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
@@ -957,7 +985,7 @@ def select_pictures_for_listing(
                 else None
             ),
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
         )
         pics = _record_sql_count(pics)
     elif only_deleted:
@@ -971,6 +999,7 @@ def select_pictures_for_listing(
                 format=format,
                 min_score=min_score,
                 max_score=max_score,
+                unscored=unscored,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -978,7 +1007,7 @@ def select_pictures_for_listing(
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
-                guest_token_id=guest_token_id,
+                guest_token_public_id=guest_token_public_id,
                 **query_params,
             )
         pics = server.vault.db.run_task(
@@ -993,6 +1022,7 @@ def select_pictures_for_listing(
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
@@ -1000,7 +1030,7 @@ def select_pictures_for_listing(
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
             **query_params,
         )
         pics = _record_sql_count(pics)
@@ -1251,6 +1281,7 @@ def select_pictures_for_listing(
                 include_unimported=True,
                 min_score=min_score,
                 max_score=max_score,
+                unscored=unscored,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
@@ -1271,6 +1302,7 @@ def select_pictures_for_listing(
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
@@ -1279,7 +1311,7 @@ def select_pictures_for_listing(
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
             **query_params,
         )
         pics = _record_sql_count(pics)
@@ -1306,8 +1338,8 @@ def select_pictures_for_listing(
             # Python.  Avoids .in_() on sa_column-defined fields which can
             # silently produce no rows in SQLModel.
             stmt = select(GuestScore).where(GuestScore.session_id == guest_session_id)
-            if guest_token_id is not None:
-                stmt = stmt.where(GuestScore.token_id == guest_token_id)
+            if guest_token_public_id is not None:
+                stmt = stmt.where(GuestScore.token_public_id == guest_token_public_id)
             rows = session.exec(stmt).all()
             return {row.picture_id: row.score for row in rows}
 

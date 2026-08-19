@@ -2,6 +2,7 @@
   <div
     ref="rootEl"
     class="dq"
+    role="region"
     tabindex="-1"
     aria-label="Duplicate review queue"
     aria-describedby="dq-key-help"
@@ -44,9 +45,15 @@
          2026-07-29). -->
     <div class="dq-toolbar">
       <div class="dq-tb-left">
-        <span v-if="store.hasGroups || store.showingMixed" class="qtitle">{{
-          headline
-        }}</span>
+        <!-- The count leads, so the ellipsis eats the noun phrase and never
+             the number; the full sentence stays in the DOM (a screen reader
+             hears it whole at every width) and in the tooltip. -->
+        <span
+          v-if="store.hasGroups || store.showingMixed"
+          class="qtitle"
+          :title="headline"
+          >{{ headline }}</span
+        >
         <!-- SESSION tally, and says so: the durable record is the Decided
              page, which spans every session. -->
         <span
@@ -56,15 +63,19 @@
         >
         <!-- The flip side of the queue: review what was already decided and
              clear a decision. -->
-        <!-- Compresses, never folds (amendment #2): at ≤720 the label span
-             hides and the icon-only form remains — the same pattern as
-             Auto-stack — so the button carries its own accessible name at
-             every width. -->
+        <!-- Folds into the ⋯ at ≤1180 (amendment #4), where it keeps its label
+             — icon-only, `mdi-history` says nothing on its own. The exception
+             is the way BACK: while the Decided page is showing, this button is
+             the visible exit from a sub-page, so it stays on the bar and
+             compresses to its arrow, which needs no label. -->
         <button
           v-if="!store.showingMixed"
           type="button"
           class="qdecided"
-          :class="{ 'qdecided--on': store.showingDecided }"
+          :class="{
+            'qdecided--on': store.showingDecided,
+            'dq-fold-906': pageTogglesFold,
+          }"
           :title="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
@@ -89,7 +100,10 @@
           v-if="!store.showingDecided"
           type="button"
           class="qdecided"
-          :class="{ 'qdecided--on': store.showingMixed }"
+          :class="{
+            'qdecided--on': store.showingMixed,
+            'dq-fold-906': pageTogglesFold,
+          }"
           :title="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
           :aria-pressed="store.showingMixed ? 'true' : 'false'"
@@ -108,11 +122,71 @@
           >
         </button>
 
-        <!-- Separator D-S1: renders at ALL widths (amendment #2). With the
-             Decided toggle compressing instead of folding, its left flank is
-             always populated — including on an empty queue, where the
-             headline is v-if'd away but the toggle remains. The tail's D-S2
-             stays at every width too. -->
+        <!-- The ⋯, and it stands where the controls it collapses stood: at the
+             end of the toggle run, inside the group it serves (amendment #2's
+             principle, amendment #4's measurement). It holds the two page
+             toggles and nothing else — the tier gate, the scope pill, the
+             count and the app-wide tail all stay on the bar at every width.
+             Fold = CSS both ways: a row and its bar button carry the same
+             condition, and the container query at ≤1180 flips which of the
+             pair
+             is visible. The panel opens rightward (`align="start"`), because
+             this trigger sits near the bar's left edge. -->
+        <TbOverflowMenu
+          v-if="pageTogglesFold"
+          ref="overflowEl"
+          class="dq-overflow"
+          align="start"
+        >
+          <!-- Each row carries the same accessible name its bar button
+               carries, spelled out rather than left to the visible text:
+               name-from-content would otherwise reduce Mixed stacks to its
+               label and count, and the sentence saying what a mixed stack IS
+               is the whole reason that button has a tooltip. The count is
+               aria-hidden on both forms for the same reason — it is already
+               in the sentence. -->
+          <template #default="{ close }">
+            <button
+              type="button"
+              class="tbm-action"
+              :title="decidedToggleLabel"
+              :aria-label="decidedToggleLabel"
+              data-testid="decided-row"
+              @click="
+                onToggleDecided();
+                close();
+              "
+            >
+              <v-icon size="18">mdi-history</v-icon>
+              <span>{{ decidedToggleLabel }}</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action"
+              :title="mixedToggleTitle"
+              :aria-label="mixedToggleTitle"
+              data-testid="mixed-row"
+              @click="
+                onToggleMixed();
+                close();
+              "
+            >
+              <v-icon size="18">mdi-alert-outline</v-icon>
+              <span>{{ mixedToggleLabel }}</span>
+              <span
+                v-if="store.mixedTotal"
+                class="qmixed-count"
+                aria-hidden="true"
+                >{{ store.mixedTotal.toLocaleString() }}</span
+              >
+            </button>
+          </template>
+        </TbOverflowMenu>
+
+        <!-- Separator D-S1: renders at ALL widths (amendment #2). Its left
+             flank is always populated — by the toggles above 1180, by the ⋯
+             below it, and on an empty queue by whichever of the two is
+             showing. The tail's D-S2 stays at every width too. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
 
         <!-- Escape inside the popover (including on its threshold slider,
@@ -123,7 +197,7 @@
           class="dq-tier-wrap"
           @keydown.esc.stop.prevent="closeTierMenu()"
         >
-          <!-- The label ellipsizes under pressure and hides at ≤720 (the
+          <!-- The label ellipsizes under pressure and hides at ≤1180 (the
                compressed form is [filter icon][chevron], the grid Filter
                trigger's grammar), so the button carries its own accessible
                name at every width — without it the hidden span would leave
@@ -181,10 +255,7 @@
              the user is looking straight at the answer. -->
         <!-- Not on the Mixed stacks page: its rows draw one fixed 64px cover,
              so a size control there would be a control with nothing to buy. -->
-        <div
-          v-if="store.hasGroups && !store.showingMixed"
-          class="dq-size dq-fold-720"
-        >
+        <div v-if="store.hasGroups && !store.showingMixed" class="dq-size">
           <v-icon size="16" aria-hidden="true"
             >mdi-image-size-select-large</v-icon
           >
@@ -207,7 +278,7 @@
 
         <!-- Compresses with the bar rather than folding: a bulk action with
              an accent fill must stay a visible target. Full label → short
-             "Auto-stack N" (≤720) → icon + count (≤600), the sentence
+             "Auto-stack N" (≤1040) → icon + count (≤820), the sentence
              surviving as tooltip and accessible name throughout. -->
         <button
           v-if="store.exactCount > 0 && !readOnly && !store.showingMixed"
@@ -233,11 +304,12 @@
              they must not vanish with it. One separator divides the queue's
              own controls from the app-wide cluster. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
-        <!-- No burger in this bar (amendment #2): a burger may only collapse
-             controls from its own visual group, and every foldable here
-             found a better answer — Decided and Auto-stack compress to
-             icon forms, the size slider simply hides at ≤720 (the value
-             persists in the store), and the app-wide tail never folds. -->
+        <!-- No burger in THIS group (amendment #2's principle, kept): a
+             burger may only collapse controls from its own visual group, and
+             the app-wide tail never folds at any width. The queue's own ⋯
+             lives in the left group, where the controls it collapses stood.
+             Auto-stack compresses to an icon form and the size slider hides
+             at ≤1040, its value persisting in the store. -->
         <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
@@ -543,7 +615,9 @@
       role="alert"
     >
       <v-icon size="48">mdi-alert-circle-outline</v-icon>
-      <h3>{{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}</h3>
+      <h3>
+        {{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}
+      </h3>
       <p>
         Some duplicate comparisons were not completed, so this queue cannot be
         marked clear. Review any available groups and run the scan again.
@@ -701,7 +775,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useDedupStore } from "../../stores/useDedupStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
 import {
   candidateId,
   groupUnits,
@@ -723,6 +797,7 @@ import {
 } from "../../utils/thumbnailSizes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import MixedQueueRow from "../widgets/MixedQueueRow.vue";
@@ -998,6 +1073,7 @@ const listEl = ref(null);
 const mixedListEl = ref(null);
 const tierWrapEl = ref(null);
 const tierButtonEl = ref(null);
+const overflowEl = ref(null);
 const tierMenuOpen = ref(false);
 const compareOpen = ref(false);
 const autoStackOpen = ref(false);
@@ -1051,7 +1127,8 @@ function onToggleExpansion(group, stackId) {
  */
 function onExpansionKey(group) {
   if (store.showingDecided) {
-    announcement.value = "Every picture in this decided group is already shown.";
+    announcement.value =
+      "Every picture in this decided group is already shown.";
     return;
   }
   const result = toggleExpansionForGroup(group);
@@ -1085,8 +1162,19 @@ function announceExpansion(group, stackId, open) {
 const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
 
+/**
+ * Whether the two page toggles are the kind that folds into the ⋯ at ≤1180.
+ * They are, on the review queue, where both are forward navigation. On the
+ * Decided and Mixed pages the surviving toggle reads "Back to review" and is
+ * the visible way out of a sub-page, so it stays on the bar (amendment #4) —
+ * and the ⋯ would then hold nothing, which is why the same flag mounts it.
+ */
+const pageTogglesFold = computed(
+  () => !store.showingDecided && !store.showingMixed,
+);
+
 /** What the Decided toggle says: the visible label on a wide bar, the
- * tooltip and accessible name at every width (the span hides at ≤720). */
+ * tooltip and accessible name at every width (folded into the ⋯ at ≤1180). */
 const decidedToggleLabel = computed(() =>
   store.showingDecided ? "Back to review" : "Decided",
 );
@@ -1217,7 +1305,7 @@ function onMixedRowFocus(index, event) {
 /** Open Compare on a mixed row, focusing it first so the two cannot disagree. */
 function onCompareMixed(index) {
   setMixedFocus(index);
-  compareOpen.value = true;
+  openCompare();
 }
 
 /**
@@ -1530,7 +1618,6 @@ function prefetchNextGroup() {
     // backend origin, or the warmed URL is not the one the row will render.
     img.src = pictureThumbnailUrl(candidateId(candidate), {
       version: candidate.thumbnail_version,
-      baseUrl: API_BASE_URL,
     });
   }
 }
@@ -1648,12 +1735,35 @@ watch(
 /** Open Compare on a row, focusing it first so the two can never disagree. */
 function onCompare(index) {
   store.setFocus(index);
+  openCompare();
+}
+
+/**
+ * The control that opened Compare, so focus can go back to it.
+ *
+ * WCAG 2.4.3 expects focus to return to the invoking control, not to the
+ * container. Returning it to `rootEl` dumped a keyboard user at the top of the
+ * queue and made them walk back to the row they were judging.
+ */
+const compareInvoker = ref(null);
+
+function openCompare() {
+  compareInvoker.value =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   compareOpen.value = true;
 }
 
 function closeCompare() {
   compareOpen.value = false;
-  rootEl.value?.focus?.();
+  const invoker = compareInvoker.value;
+  compareInvoker.value = null;
+  // The invoker can be gone: deciding from inside the dialog removes its row.
+  // Falling back to the container beats dropping focus onto <body>, which
+  // strands the keyboard entirely.
+  if (invoker?.isConnected) invoker.focus();
+  else rootEl.value?.focus?.();
 }
 
 /**
@@ -1977,6 +2087,22 @@ function onDocumentPointerDown(event) {
  */
 function tierMenuOwnsEvent(event) {
   return Boolean(tierWrapEl.value?.contains?.(event?.target));
+}
+
+/**
+ * The same rule for the ⋯ overflow, and the same shape: only an OPEN panel
+ * owns the keys pressed inside it. With the panel closed the trigger is an
+ * ordinary toolbar button, so the queue's keys keep working while it holds
+ * focus — exactly as they do on the tier trigger beside it. Escape never
+ * reaches here: the menu stops it on its own wrap and closes back to the
+ * trigger.
+ *
+ * @param {KeyboardEvent} [event]
+ * @returns {boolean}
+ */
+function overflowOwnsEvent(event) {
+  if (!overflowEl.value?.isOpen?.()) return false;
+  return Boolean(overflowEl.value?.$el?.contains?.(event?.target));
 }
 
 /**
@@ -2524,7 +2650,7 @@ const handleKeydown = createDedupKeyHandler({
   store,
   isCompareOpen: () => compareOpen.value,
   openCompare: () => {
-    if (store.focusedGroup) compareOpen.value = true;
+    if (store.focusedGroup) openCompare();
   },
   closeCompare,
   undo: () => operationStore.undo(),
@@ -2539,7 +2665,8 @@ const handleKeydown = createDedupKeyHandler({
   isBlocked: (event) =>
     autoStackOpen.value ||
     store.showingMixed ||
-    (tierMenuOpen.value && tierMenuOwnsEvent(event)),
+    (tierMenuOpen.value && tierMenuOwnsEvent(event)) ||
+    overflowOwnsEvent(event),
   // One row less than the viewport holds, so a page move keeps the row the
   // user was reading on screen as the anchor for the next one.
   pageRows: () => Math.max(1, viewportRows.value - 1),
@@ -2560,6 +2687,8 @@ const handleKeydown = createDedupKeyHandler({
     flip: (delta) => compareRef.value?.flipZoom?.(delta),
     to: (index) => compareRef.value?.zoomTo?.(index),
     togglePixels: () => compareRef.value?.toggleZoomPixels?.(),
+    step: (direction) => compareRef.value?.stepZoom?.(direction),
+    pan: (dx, dy) => Boolean(compareRef.value?.panZoom?.(dx, dy)),
   },
 });
 
@@ -2627,13 +2756,15 @@ const handleMixedKeydown = createDedupKeyHandler({
   store: mixedKeyStore,
   isCompareOpen: () => compareOpen.value,
   openCompare: () => {
-    if (mixedFocusedRow.value) compareOpen.value = true;
+    if (mixedFocusedRow.value) openCompare();
   },
   closeCompare,
   undo: () => operationStore.undo(),
   isReadOnly: () => readOnly.value,
   isBlocked: (event) =>
-    autoStackOpen.value || (tierMenuOpen.value && tierMenuOwnsEvent(event)),
+    autoStackOpen.value ||
+    (tierMenuOpen.value && tierMenuOwnsEvent(event)) ||
+    overflowOwnsEvent(event),
   pageRows: () => Math.max(1, viewportRows.value - 1),
   onEscape,
   // `E` opens a deck in the review queue. Here every member is already on
@@ -2651,6 +2782,8 @@ const handleMixedKeydown = createDedupKeyHandler({
     flip: (delta) => compareRef.value?.flipZoom?.(delta),
     to: (index) => compareRef.value?.zoomTo?.(index),
     togglePixels: () => compareRef.value?.toggleZoomPixels?.(),
+    step: (direction) => compareRef.value?.stepZoom?.(direction),
+    pan: (dx, dy) => Boolean(compareRef.value?.panZoom?.(dx, dy)),
   },
   unitsOf: mixedUnitsFor,
   signatureOf: (row) => row?.stack_id,
@@ -2927,8 +3060,25 @@ defineExpose({ windowedGroups, tierLabel });
   gap: var(--space-3);
 }
 
+/* The shrink chain, and it is the GUARANTEE behind the ladder below
+   (amendment #4). Both groups used to sit at the flex default
+   (`min-width: auto`) over `white-space: nowrap` content, so neither could
+   shrink: the surplus left through the right edge and took the last children
+   in DOM order with it, which is exactly Settings and Stats. The left group
+   yields first and its text members ellipsize; the right group never shrinks,
+   so no content the left group can hold — a scope named by the user, a
+   seven-digit count — can push the app-wide tail off the bar.
+
+   NOT `overflow: hidden` on the bar: the tier popover and the ⋯ panel are
+   absolutely positioned inside it and would be clipped away. */
+.dq-tb-left {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 .dq-tb-right {
   margin-left: auto;
+  flex: 0 0 auto;
 }
 
 /* Divides the queue's identity (what it holds, which side is showing) from the
@@ -2936,6 +3086,10 @@ defineExpose({ windowedGroups, tierLabel });
 .dq-tb-sep {
   width: 1px;
   height: 18px;
+  /* A 1px flex item is a shrinkable one: once the left group started yielding
+     (amendment #4) the rule would give up its single pixel and disappear
+     before any label did. */
+  flex-shrink: 0;
   background: rgb(var(--v-theme-divider));
 }
 
@@ -2975,7 +3129,11 @@ defineExpose({ windowedGroups, tierLabel });
 .dq-tier-wrap {
   position: relative;
   /* Part of the tier button's shrink chain: without this the flex default
-     (min-width: auto) refuses to shrink and the label wraps instead. */
+     (min-width: auto) refuses to shrink and the label wraps instead.
+     `display: flex` is the other half — as a block the wrap could shrink to
+     nothing while the inline-flex button inside kept its full width and drew
+     straight over its neighbours (amendment #4). */
+  display: flex;
   min-width: 0;
 }
 
@@ -3009,22 +3167,15 @@ defineExpose({ windowedGroups, tierLabel });
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-border));
-  background: transparent;
   color: inherit;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
 .dq-btn:hover {
   background: var(--hover-wash);
-}
-
-.dq-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 .dq-btn--accent {
@@ -3046,8 +3197,16 @@ defineExpose({ windowedGroups, tierLabel });
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
-  /* The to-do count is the queue's one number; it never truncates. */
-  flex-shrink: 0;
+  /* The FIRST thing to give between two rungs, and it gives from the RIGHT:
+     the count leads the string, so the ellipsis eats "groups to review" and
+     never the number (amendment #4). The full sentence stays in the DOM for a
+     screen reader and in the tooltip. The weight buys the order — the give is
+     shared out in proportion to `flex-shrink × width`, and a clipped tail on a
+     sentence reads better than "Mixed stac…" on a button. */
+  min-width: 0;
+  flex-shrink: 6;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .qsub {
@@ -3062,25 +3221,32 @@ defineExpose({ windowedGroups, tierLabel });
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  /* Same shrink chain as the tier button: between two rungs the label
+     ellipsizes on one line rather than the button overlapping its
+     neighbour. The glyph and the count never feed the ellipsis. */
+  min-width: 0;
   padding: var(--space-1) var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  background: transparent;
   font-size: var(--text-xs);
   font-family: var(--font-ui);
   color: inherit;
   white-space: nowrap;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
+}
+
+.qdecided .v-icon {
+  flex-shrink: 0;
+}
+
+.qdecided-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .qdecided:hover {
   background: var(--hover-wash);
-}
-
-.qdecided:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .qdecided--on {
@@ -3095,6 +3261,7 @@ defineExpose({ windowedGroups, tierLabel });
 .qmixed-count {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   min-width: var(--badge-size);
   min-height: var(--badge-size);
   padding: 0 var(--space-2);
@@ -3128,13 +3295,10 @@ defineExpose({ windowedGroups, tierLabel });
 }
 
 .qselclear {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
 }
 
 .qselclear:focus-visible {
@@ -3315,13 +3479,60 @@ defineExpose({ windowedGroups, tierLabel });
   white-space: nowrap;
 }
 
-/* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md,
-   amendment #2 — this bar has NO burger: every foldable compresses or
-   hides within its own group instead). Floor: count, Decided (icon), Tier
-   gate (icon+chevron), scope pill (compressed, if scoped), Auto-stack
-   (compressed, if present), separator, Undo, Settings, Stats. ──────────── */
+/* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md:
+   amendment #4 measured it, #7 re-placed the rungs, #8 re-ordered them by
+   what each one COSTS). ─────────────────────────────────────────────────
+
+   Measured against the full bar (1408px, typical content), one item at a
+   time — this is the table the order is derived from, not an argument:
+
+     48 done this session            122px   a readout
+     the size value (Very Large)      84px   a readout the slider already shows
+     Auto-stack's sentence            91px   words; the tooltip keeps them
+     the tier label                  137px   words; the tooltip keeps them
+     both page toggles → the ⋯       232px   one extra click
+     the SIZE CONTROL                212px   a control, outright
+
+   **Cheapest loss first, and the size control is never spent.** It was being
+   dropped fourth, which is what #8 fixes: it is the one thing on this bar
+   with no fold destination and no tooltip standing in for it, and the queue's
+   whole business is looking at pictures — a control that changes the thing
+   you are looking at is not what you sell to buy 128px. Spending Auto-stack's
+   sentence instead (91px, and the button still shows its count) reaches a
+   NARROWER floor than the old ladder did while dropping the slider, because
+   the old order spent the expensive things first.
+
+   Every rung fires at the width the configuration above it needs:
+
+     full                1408px
+     after rung 1        1202px
+     after rung 2        1111px
+     after rung 3         974px
+     after rung 4         906px
+     after rung 5         706px   ← the floor, with the size control still on
+
+   Below 706px the shrink chain (amendment #4: `.dq-tb-left { min-width: 0;
+   flex: 0 1 auto }`) ellipsizes the count headline, which carries the bar to
+   ~380px with nothing leaving it — narrower than the 586px floor the ladder
+   reached by dropping the slider.
+
+   Tuned to typical content on purpose: the same chain answers a pathological
+   scope name or a seven-digit count. A ladder placed at the worst case would
+   collapse the bar for everyone to protect a case the chain already holds.
+
+   The queries are 24px under the widths the rungs are named for:
+   `container-type: inline-size` queries the CONTENT box and this bar's inset
+   is `0 var(--space-3) 0 var(--space-5)`. Re-measure by stepping the
+   container, never by reasoning about it — both times this ladder was wrong,
+   a number had been argued rather than read. ───────────────────────────── */
 .dq-auto-short,
 .dq-auto-count {
+  display: none;
+}
+
+/* The ⋯ trigger appears with the first control that folds into it, and only
+   this bar knows that width (the component's own default is hidden). */
+.dq-overflow {
   display: none;
 }
 
@@ -3332,7 +3543,10 @@ defineExpose({ windowedGroups, tierLabel });
   text-overflow: ellipsis;
 }
 
-@container dqbar (max-width: 860px) {
+/* Rung 1. The two readouts that report rather than control: the session tally
+   (the durable record is the Decided page) and the slider's word for a
+   position the slider already shows. Buys 206px. */
+@container dqbar (max-width: 1384px) {
   .qsub {
     display: none;
   }
@@ -3341,36 +3555,72 @@ defineExpose({ windowedGroups, tierLabel });
   }
 }
 
-@container dqbar (max-width: 720px) {
-  /* The size control hides outright — no replacement row: the value
-     persists in the store and comes back with the width. */
-  .dq-fold-720 {
-    display: none;
-  }
+/* Rung 2. Auto-stack drops its sentence for "Auto-stack N" — the cheapest
+   word on the bar, because the count it keeps IS the sentence's subject and
+   the full form survives as the tooltip and the accessible name. Buys 91px,
+   and spending it here is what keeps the tier label and both toggle labels
+   alive for another 200-400px. */
+@container dqbar (max-width: 1178px) {
   .dq-auto-full {
     display: none;
   }
   .dq-auto-short {
     display: inline;
   }
-  /* The tier trigger compresses to [filter icon][chevron] — the grid Filter
-     trigger's grammar; the button's own title/aria-label carry the name. */
+}
+
+/* Rung 3. The tier trigger compresses to [filter icon][chevron], the grid
+   Filter trigger's shipped grammar, with its title and aria-label carrying
+   the name. Buys 137px. */
+@container dqbar (max-width: 1087px) {
   .dq-tier-label {
-    display: none;
-  }
-  /* The Decided toggle compresses to its icon, the Auto-stack pattern; its
-     title/aria-label carry the name. */
-  .qdecided-label {
     display: none;
   }
 }
 
-@container toolbar (max-width: 600px) {
+/* Rung 4. Auto-stack keeps its flash and its count and drops the verb. Buys
+   68px. */
+@container dqbar (max-width: 950px) {
   .dq-auto-short {
     display: none;
   }
   .dq-auto-count {
     display: inline;
+  }
+}
+
+/* Rung 5, and the last: the page toggles fold into the ⋯, which appears in
+   their place. The biggest single bite on the bar, taken when the bar has
+   actually run out rather than 400px before. A toggle showing "Back to
+   review" never carries the fold class, so the way out of a sub-page stays on
+   the bar and compresses to its arrow, which says what it does without a
+   label. Buys 200px net of the ⋯ itself. */
+@container dqbar (max-width: 882px) {
+  .dq-fold-906 {
+    display: none;
+  }
+  .dq-overflow {
+    display: flex;
+  }
+  .qdecided-label {
+    display: none;
+  }
+}
+
+/* The floor's density step. Below the shared ladder's last rung the bar buys
+   its remaining width from the runs' own gaps rather than from another
+   control, so the worst case (a scope in force AND exact matches to
+   auto-stack) still fits with nothing leaving the bar.
+
+   The groups only: `.dq-toolbar` IS the query's container, and a container
+   query styles a container's DESCENDANTS, never the container itself — a rule
+   for the bar's own gap or inset here would be dead. Its 36px band and its
+   insets are pinned to the grid bar's anyway (guardrail in Toolbar.test.js),
+   so they are not this ladder's to spend. */
+@container toolbar (max-width: 420px) {
+  .dq-tb-left,
+  .dq-tb-right {
+    gap: var(--space-2);
   }
 }
 </style>

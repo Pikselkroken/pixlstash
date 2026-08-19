@@ -2,8 +2,8 @@
 
 Split out of the former ``pixlstash.picture_scoring`` module (Backend Refactor
 Phase 2 §4.6). Smart-score computation lives in the sibling
-:mod:`pixlstash.scoring.smart_score`. The public ``pixlstash.picture_scoring``
-import path is preserved as a thin re-export shim.
+:mod:`pixlstash.scoring.smart_score`. Import the public names from
+:mod:`pixlstash.scoring`.
 """
 
 import struct

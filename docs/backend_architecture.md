@@ -18,7 +18,7 @@
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
 7. [Task System](#7-task-system)
-8. [Image Plugins](#8-image-plugins)
+8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing and checking plugins from the CLI](#81-installing-and-checking-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
@@ -49,7 +49,6 @@ pixlstash/
 ├── task_runner.py                    # Threaded CPU/GPU task executor
 ├── work_planner.py                   # Polls finders, schedules work
 ├── vault.py                          # Top-level orchestrator
-├── picture_scoring.py                # Back-compat shim → re-exports pixlstash.scoring.*
 ├── stacking.py                       # Picture stacking
 ├── worker_config.py                  # Concurrency / batch tuning
 ├── startup_checks.py                 # Disk / VRAM / SSL preflight
@@ -144,7 +143,7 @@ pixlstash/
 │   ├── vram_budget.py                # VRAM budgeting
 │   └── workflows/                    # tagging, description, text/clip/face embedding
 │
-├── scoring/                          # Picture scoring (split out of picture_scoring.py)
+├── scoring/                          # Picture scoring (formerly picture_scoring.py)
 │   ├── smart_score.py                # Anchor-based smart-score heuristic + anomaly penalty
 │   └── character_likeness.py         # Face↔reference likeness scoring
 │
@@ -207,8 +206,8 @@ The runtime is organised around five layers:
 | Layer | Component | Responsibility |
 |-------|-----------|----------------|
 | **API** | `server.py`, `routes/*` | HTTP / WebSocket handlers, request validation |
-| **Services** | `services/*` | Focused business-logic modules extracted from route handlers when they grew too large; not a formal service tier — `vault.py`, `picture_scoring.py`, and `stacking.py` are the real domain layer |
-| **Domain** | `vault.py`, `inference/engine.py`, `picture_scoring.py`, `stacking.py` | Core orchestration: vault lifecycle, ML engine, scoring, stacking |
+| **Services** | `services/*` | Focused business-logic modules extracted from route handlers when they grew too large; not a formal service tier: `vault.py`, `scoring/`, and `stacking.py` are the real domain layer |
+| **Domain** | `vault.py`, `inference/engine.py`, `scoring/`, `stacking.py` | Core orchestration: vault lifecycle, ML engine, scoring, stacking |
 | **Workers** | `task_runner.py`, `work_planner.py`, `tasks/*` | Async background processing of new pictures |
 | **Persistence** | `database.py`, `db_models/*`, `migrations/*` | Schema, queries, transactions |
 
@@ -246,8 +245,6 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | Inference runtime | **onnxruntime** ≥ 1.24 |
 | Face detection | **insightface** ≥ 0.7.3 |
 | Text embeddings | **sentence_transformers** ≥ 5.2 |
-| NLP | **spacy** ≥ 3.8 |
-| Tensor utils | **einops** ≥ 0.8 |
 
 #### ML import discipline — these libraries are imported *inside functions*
 
@@ -306,13 +303,16 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/picture_scoring.py](../pixlstash/picture_scoring.py) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty — per-tag severity × confidence × precision, where confidence is graded *relative to that tag's acceptance threshold* (normalised onto `[threshold, 1]` before the `CONF_POWER` exponent, so a barely-accepted detection costs `EVIDENCE_FLOOR` of full severity for every tag regardless of where its gate sits, and full confidence is unchanged), noisy-OR over merge-alias duplicates only, then rank-decayed accumulation across distinct defects so defect *count* escalates the penalty; the raw score is soft-compressed rather than hard-clipped at the bottom so heavily penalised pictures stay ordered instead of tying at 1.0. Per-tag severity comes from the **user's** `User.smart_score_penalised_tags` (resolved per scoring session by `resolve_penalised_tag_weights`; `DEFAULT_SMART_SCORE_PENALIZED_TAGS` is only the seed/fallback, and a tag absent from the user's table is not penalised at all), and a **model** prediction is charged only when the defect is genuinely visible in the picture's tag list: it must clear the tagger's per-label acceptance threshold **and** have a matching `Tag` row. The threshold alone used to stand in for both, but `TagPredictionBackfillTask` writes predictions against a picture's *existing* tag set and deliberately never writes a `Tag` row, and a stale-model prediction re-graded against a newer meta.json's lower threshold can clear a gate it never cleared when it was written; either way the picture was penalised for a defect that appears nowhere in the UI. Human POS/NEG decisions are honoured regardless of confidence *and* of tag membership: a human POS counts with no `Tag` row, a human NEG suppresses while the tag is still applied. The applied-tag check is applied unconditionally rather than inside the threshold branch, which is what puts tag membership into `anomaly_state_signature` (it reads with `apply_thresholds=None`) and so makes adding or removing an anomaly tag invalidate the cached score. See [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py), [`utils/service/anomaly_thresholds.py`](../pixlstash/utils/service/anomaly_thresholds.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These two distinct features have been split into `scoring/smart_score.py` and `scoring/character_likeness.py`; `picture_scoring.py` remains as a thin back-compat re-export shim. |
+| [pixlstash/scoring/](../pixlstash/scoring/) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty: per-tag severity × confidence × precision, where confidence is graded *relative to that tag's acceptance threshold* (normalised onto `[threshold, 1]` before the `CONF_POWER` exponent, so a barely-accepted detection costs `EVIDENCE_FLOOR` of full severity for every tag regardless of where its gate sits, and full confidence is unchanged), noisy-OR over merge-alias duplicates only, then rank-decayed accumulation across distinct defects so defect *count* escalates the penalty; the raw score is soft-compressed rather than hard-clipped at the bottom so heavily penalised pictures stay ordered instead of tying at 1.0. Per-tag severity comes from the **user's** `User.smart_score_penalised_tags` (resolved from the **hub** by `resolve_penalised_tag_weights`, which takes the auth service rather than the scoring session — identity never lives in a vault, so resolving it from the scoring session found no user row on every call and silently scored with the seed; `DEFAULT_SMART_SCORE_PENALIZED_TAGS` is only the seed/fallback, and a tag absent from the user's table is not penalised at all), and a **model** prediction is charged only when the defect is genuinely visible in the picture's tag list: it must clear the tagger's per-label acceptance threshold **and** have a matching `Tag` row. The threshold alone used to stand in for both, but `TagPredictionBackfillTask` writes predictions against a picture's *existing* tag set and deliberately never writes a `Tag` row, and a stale-model prediction re-graded against a newer meta.json's lower threshold can clear a gate it never cleared when it was written; either way the picture was penalised for a defect that appears nowhere in the UI. Human POS/NEG decisions are honoured regardless of confidence *and* of tag membership: a human POS counts with no `Tag` row, a human NEG suppresses while the tag is still applied. The applied-tag check is applied unconditionally rather than inside the threshold branch, which is what puts tag membership into `anomaly_state_signature` (it reads with `apply_thresholds=None`) and so makes adding or removing an anomaly tag invalidate the cached score. See [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py), [`utils/service/anomaly_thresholds.py`](../pixlstash/utils/service/anomaly_thresholds.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These two distinct features are split into `scoring/smart_score.py` and `scoring/character_likeness.py`; import the public names from `pixlstash.scoring`. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
 | [pixlstash/event_types.py](../pixlstash/event_types.py) | `EventType` enum used by WebSocket event bus. |
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
+| [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
 ---
 
@@ -374,10 +374,10 @@ Authorization is unchanged: the route is already declared `SCOPED_LIST` in `auth
 
 **`score_agreement` (stats section, `include=picture`).** Cross-tabulates the user's star rating against the smart score for the stats sidebar's agreement heatmap. Shape: `{cells: [{score, bucket, count}] (dense, all 20), rated, pairs, total, pearson, spearman, tau_b}`.
 
-- **Unrated means both `NULL` and `0`**, matching `score_distribution` (which labels NULL "Unscored" and omits 0) and the smart-score anchor query's `score > 0`. `rated` counts every rated picture; `pairs` counts the plottable subset that also has a smart score, so a rating awaiting its first smart-score computation is still reported as rated rather than silently dropped from the coverage line.
+- **Unrated means both `NULL` and `0`**, matching `score_distribution` (whose "Unscored" bucket counts both), the `unscored=1` grid filter, and the smart-score anchor query's `score > 0`. Clicking the current star again writes a literal `0` that nothing normalises back to `NULL`, so every consumer has to treat the two alike or the counts stop summing to the library. `rated` counts every rated picture; `pairs` counts the plottable subset that also has a smart score, so a rating awaiting its first smart-score computation is still reported as rated rather than silently dropped from the coverage line.
 - **One query serves both the cells and the coefficient.** It groups by `(score, smart_score * 100 cast to int)`, so `tau_b` keeps essentially all of the continuous variable's resolution while the four display buckets are summed from the same rows. The number and the grid can therefore never disagree.
 - **Three coefficients, all from the same rows.** `pearson` (straight-line, assumes evenly spaced stars), `spearman` (rank, mid-ranked so the five-level rating axis shares ties rather than inventing an order) and `tau_b` (the strictest tie correction, since nearly every pair ties on the rating axis). The sidebar shows Pearson and Spearman; tau-b stays in the payload. All three are `null` below `AGREEMENT_MIN_PAIRS` (20) and whenever one variable is constant, because a vanishing denominator means "no variance", not "no relationship", and must never be reported as 0.
-- **`_agreement_scope` deliberately drops `min_score` / `max_score` / `smart_score_bucket`** while honouring every other filter and scope. A cell click sets exactly those three, so a self-filtering matrix would collapse to the clicked cell and strand the user with no way to reach a neighbour. The rebuild is skipped entirely when none of the three is active. This self-exclusion is what `tests/test_score_agreement_stats.py` guards hardest.
+- **`_agreement_scope` deliberately drops `min_score` / `max_score` / `unscored` / `smart_score_bucket`** while honouring every other filter and scope. `unscored` is dropped for a stronger reason than self-collapse: the matrix's rows are the ratings 1-5 by construction, so honouring "never rated" would render it permanently empty rather than merely narrow. A cell click sets exactly the score and bucket filters, so a self-filtering matrix would collapse to the clicked cell and strand the user with no way to reach a neighbour. The rebuild is skipped entirely when none of them is active. This self-exclusion is what `tests/test_score_agreement_stats.py` guards hardest.
 
 ### `characters.py`
 List, create, update, delete characters; fetch reference picture set; list pictures per character. Face assign / unassign lives in the adjacent [`characters_faces.py`](../pixlstash/routes/characters_faces.py) module (same `create_router(server)` factory, mounted next to the characters router), keeping this module focused on character CRUD and search.
@@ -464,173 +464,210 @@ Public guest scoring and shared-link endpoints.
 > Auto-generated from `server.api.openapi()`. Regenerate with `python scripts/render_backend_architecture.py`.
 
 <!-- AUTOGEN:start name="routes" -->
-| Method | Path                                                                          | Tags            | Summary                                                    |
-| ------ | ----------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------- |
-| GET    | /api/v1/characters                                                            | characters      | List characters                                            |
-| POST   | /api/v1/characters                                                            | characters      | Create character                                           |
-| POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                         |
-| POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                          |
-| POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                  |
-| DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                              |
-| PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
-| DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
-| GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
-| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
-| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
-| GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
-| GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
-| GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
-| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
-| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
-| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
-| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                 |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                |
-| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack               |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                     |
-| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
-| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
-| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                    |
-| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
-| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
-| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture             |
-| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
-| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
-| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
-| GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
-| POST   | /api/v1/login                                                                 | auth            | Login                                                      |
-| POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
-| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
-| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
-| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
-| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                       |
-| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                           |
-| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state         |
-| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                |
-| GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                          |
-| POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                         |
-| GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                 |
-| POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                                |
-| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                            |
-| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                         |
-| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets    | Delete picture set                                         |
-| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | List picture set members                                   |
-| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk add pictures to set                                   |
-| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk replace picture set members                           |
-| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Add picture to set                                         |
-| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Remove picture from set                                    |
-| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets    | Get picture set thumbnail                                  |
-| DELETE | /api/v1/pictures                                                              | pictures        | Bulk move pictures to scrapheap                            |
-| GET    | /api/v1/pictures                                                              | pictures        | List pictures                                              |
-| POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                                  |
-| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                           |
-| GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter                   |
-| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                 |
-| GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                   |
-| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                  |
-| GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                      |
-| POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                    |
-| POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                         |
-| POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                       |
-| DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                   |
-| POST   | /api/v1/pictures/import/staging/{staging_id}/commit                           | pictures        | Hand off a staging session to the background import        |
-| POST   | /api/v1/pictures/import/staging/{staging_id}/files                            | pictures        | Stream files into a staging session                        |
-| GET    | /api/v1/pictures/import/staging/{staging_id}/status                           | pictures        | Get async import staging status                            |
-| GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                      |
-| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                 |
-| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                          |
-| POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                   |
-| PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                   |
-| POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                |
-| DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                      |
-| POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                         |
-| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                   |
-| GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                    |
-| GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                 |
-| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                           |
-| POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                               |
-| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                |
-| PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                       |
-| DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                  |
-| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
-| GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
-| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
-| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
-| GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
-| POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
-| GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
-| DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                  |
-| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                           |
-| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                         |
-| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                        |
-| GET    | /api/v1/projects                                                              | projects        | List all projects                                          |
-| POST   | /api/v1/projects                                                              | projects        | Create a project                                           |
-| POST   | /api/v1/projects/membership                                                   | projects        | Batch project membership lookup                            |
-| GET    | /api/v1/projects/{id_or_name}                                                 | projects        | Get a project by ID or name                                |
-| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects        | List picture sets for a project                            |
-| PUT    | /api/v1/projects/{project_id}                                                 | projects        | Update a project                                           |
-| DELETE | /api/v1/projects/{project_id}                                                 | projects        | Delete a project                                           |
-| GET    | /api/v1/projects/{project_id}/attachments                                     | projects        | List attachments for a project                             |
-| POST   | /api/v1/projects/{project_id}/attachments                                     | projects        | Upload an attachment to a project                          |
-| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects        | Add a URL bookmark to a project                            |
-| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Download a project attachment                              |
-| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Delete a project attachment                                |
-| GET    | /api/v1/projects/{project_id}/export                                          | projects        | Export project as ZIP                                      |
-| GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                                  |
-| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name           |
-| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name               |
-| POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                        |
-| GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                       |
-| DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived) |
-| GET    | /api/v1/reviews/preview                                                       | reviews         | Preview a review's coverage before creating it             |
-| GET    | /api/v1/reviews/{review_id}                                                   | reviews         | Get one review's detail                                    |
-| DELETE | /api/v1/reviews/{review_id}                                                   | reviews         | Delete one review session                                  |
-| POST   | /api/v1/reviews/{review_id}/abort                                             | reviews         | Abort a review (discard the session)                       |
-| POST   | /api/v1/reviews/{review_id}/archive                                           | reviews         | Archive a review (completed)                               |
-| POST   | /api/v1/reviews/{review_id}/refresh                                           | reviews         | Re-scan a review append-only                               |
-| GET    | /api/v1/reviews/{review_id}/suggestions                                       | reviews         | List a review's ranked queue                               |
-| GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                             |
-| POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                            |
-| GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                           |
-| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Rename Snapshot                                            |
-| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Delete Snapshot                                            |
-| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots       | Hash Compare                                               |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots       | Restore Snapshot                                           |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots       | Restore Batch                                              |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots       | Preview Full Restore                                       |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots       | Preview Batch Restore                                      |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots       | Restore Resource                                           |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                   |
-| GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                               |
-| POST   | /api/v1/stacks                                                                | stacks          | Create stack                                               |
-| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                            |
-| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                  |
-| GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                          |
-| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                          |
-| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                       |
-| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                        |
-| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                              |
-| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                     |
-| GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                      |
-| POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                               |
-| GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                            |
-| POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag                |
-| POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                                   |
-| POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements          |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                                |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                               |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour                  |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                        |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/skip                                  | tag_suggestions | Skip a tag-fix suggestion (no decision)                    |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways)      |
-| POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger             |
-| GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                   |
-| GET    | /api/v1/tags                                                                  | tags            | List all tags                                              |
-| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                               |
-| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                          |
-| GET    | /version                                                                      | server          | Read Version                                               |
-| WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                     |
-| WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                  |
+| Method | Path                                                                          | Tags            | Summary                                                     |
+| ------ | ----------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------- |
+| GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                  |
+| GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                         |
+| PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter                |
+| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                                |
+| GET    | /api/v1/characters                                                            | characters      | List characters                                             |
+| POST   | /api/v1/characters                                                            | characters      | Create character                                            |
+| POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                          |
+| POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                           |
+| POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                   |
+| DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                               |
+| PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                            |
+| DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                            |
+| GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                         |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                        |
+| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                     |
+| GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                              |
+| GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                         |
+| GET    | /api/v1/check-session                                                         | auth            | Check Session                                               |
+| GET    | /api/v1/checkpoints                                                           | model_shelf     | List checkpoints on the shelf                               |
+| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                              |
+| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                    |
+| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                             |
+| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                  |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                 |
+| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                 |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack                |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                      |
+| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                           |
+| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                      |
+| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                     |
+| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                      |
+| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                        |
+| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture              |
+| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                       |
+| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
+| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
+| GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
+| POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                   |
+| GET    | /api/v1/login                                                                 | auth            | Check Registration                                          |
+| POST   | /api/v1/login                                                                 | auth            | Login                                                       |
+| POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
+| POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                             |
+| POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                     |
+| GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                               |
+| POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                     |
+| GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on             |
+| PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                            |
+| DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                            |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location            |
+| POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                            |
+| GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder       |
+| GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                       |
+| GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                       |
+| POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                        |
+| GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                 |
+| POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder             |
+| DELETE | /api/v1/model-moves                                                           | model_shelf     | Cancel the running model move                               |
+| POST   | /api/v1/model-stacks                                                          | model_shelf     | Collapse models into one stack                              |
+| GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one subject         |
+| DELETE | /api/v1/model-stacks/{stack_id}                                               | model_shelf     | Break a stack apart                                         |
+| PATCH  | /api/v1/model-stacks/{stack_id}/cover                                         | model_shelf     | Choose which member covers a stack                          |
+| DELETE | /api/v1/model-stacks/{stack_id}/members/{model_id}                            | model_shelf     | Take one model out of a stack                               |
+| PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models     |
+| GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                 |
+| POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
+| POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
+| POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
+| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
+| GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
+| GET    | /api/v1/models/{model_id}/samples/{filename}                                  | model_shelf     | One training preview stored beside an imported checkpoint   |
+| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                     |
+| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                  |
+| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                 |
+| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                        |
+| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                            |
+| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state          |
+| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                 |
+| GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                           |
+| POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                          |
+| GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                  |
+| POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                                 |
+| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                             |
+| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                          |
+| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets    | Delete picture set                                          |
+| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | List picture set members                                    |
+| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk add pictures to set                                    |
+| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk replace picture set members                            |
+| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Add picture to set                                          |
+| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Remove picture from set                                     |
+| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets    | Get picture set thumbnail                                   |
+| DELETE | /api/v1/pictures                                                              | pictures        | Bulk move pictures to scrapheap                             |
+| GET    | /api/v1/pictures                                                              | pictures        | List pictures                                               |
+| POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                                   |
+| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                            |
+| GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter                    |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                  |
+| GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                    |
+| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                   |
+| GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                       |
+| POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                     |
+| POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                          |
+| POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                        |
+| DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                    |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/commit                           | pictures        | Hand off a staging session to the background import         |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/files                            | pictures        | Stream files into a staging session                         |
+| GET    | /api/v1/pictures/import/staging/{staging_id}/status                           | pictures        | Get async import staging status                             |
+| GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                       |
+| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                  |
+| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                           |
+| POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                    |
+| PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                    |
+| POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                    |
+| POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                 |
+| DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                       |
+| POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                          |
+| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                    |
+| GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                     |
+| GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                  |
+| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                            |
+| POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                                |
+| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                 |
+| PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                        |
+| DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                   |
+| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                   |
+| GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                    |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                      |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                          |
+| GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                        |
+| POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                          |
+| GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                           |
+| DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                   |
+| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                            |
+| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                          |
+| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                         |
+| GET    | /api/v1/projects                                                              | projects        | List all projects                                           |
+| POST   | /api/v1/projects                                                              | projects        | Create a project                                            |
+| POST   | /api/v1/projects/membership                                                   | projects        | Batch project membership lookup                             |
+| GET    | /api/v1/projects/{id_or_name}                                                 | projects        | Get a project by ID or name                                 |
+| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects        | List picture sets for a project                             |
+| PUT    | /api/v1/projects/{project_id}                                                 | projects        | Update a project                                            |
+| DELETE | /api/v1/projects/{project_id}                                                 | projects        | Delete a project                                            |
+| GET    | /api/v1/projects/{project_id}/attachments                                     | projects        | List attachments for a project                              |
+| POST   | /api/v1/projects/{project_id}/attachments                                     | projects        | Upload an attachment to a project                           |
+| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects        | Add a URL bookmark to a project                             |
+| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Download a project attachment                               |
+| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Delete a project attachment                                 |
+| GET    | /api/v1/projects/{project_id}/export                                          | projects        | Export project as ZIP                                       |
+| GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                                   |
+| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name            |
+| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name                |
+| POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                         |
+| GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                        |
+| DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived)  |
+| GET    | /api/v1/reviews/preview                                                       | reviews         | Preview a review's coverage before creating it              |
+| GET    | /api/v1/reviews/{review_id}                                                   | reviews         | Get one review's detail                                     |
+| DELETE | /api/v1/reviews/{review_id}                                                   | reviews         | Delete one review session                                   |
+| POST   | /api/v1/reviews/{review_id}/abort                                             | reviews         | Abort a review (discard the session)                        |
+| POST   | /api/v1/reviews/{review_id}/archive                                           | reviews         | Archive a review (completed)                                |
+| POST   | /api/v1/reviews/{review_id}/refresh                                           | reviews         | Re-scan a review append-only                                |
+| GET    | /api/v1/reviews/{review_id}/suggestions                                       | reviews         | List a review's ranked queue                                |
+| GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                              |
+| POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                             |
+| GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                            |
+| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Rename Snapshot                                             |
+| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Delete Snapshot                                             |
+| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots       | Hash Compare                                                |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots       | Restore Snapshot                                            |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots       | Restore Batch                                               |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots       | Preview Full Restore                                        |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots       | Preview Batch Restore                                       |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots       | Restore Resource                                            |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                    |
+| GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                                |
+| POST   | /api/v1/stacks                                                                | stacks          | Create stack                                                |
+| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                             |
+| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                   |
+| GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                           |
+| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                           |
+| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                        |
+| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                         |
+| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                               |
+| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                      |
+| GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                       |
+| POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                                |
+| GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                             |
+| POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag                 |
+| POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                                    |
+| POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements           |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                                 |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                                |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour                   |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                         |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/skip                                  | tag_suggestions | Skip a tag-fix suggestion (no decision)                     |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways)       |
+| POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger              |
+| GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                    |
+| GET    | /api/v1/tags                                                                  | tags            | List all tags                                               |
+| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
+| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
+| GET    | /version                                                                      | server          | Read Version                                                |
+| WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
+| WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |
 <!-- AUTOGEN:end name="routes" -->
 
 ---
@@ -808,6 +845,31 @@ Snapshot: id, kind, created_at, relative_path,
 - **`TaskRunner`** — executes tasks from CPU and GPU queues. CPU queue is multi-threaded (`NUM_WORKERS` per `worker_config.py`); GPU queue is serialised to avoid CUDA contention.
 - **`WorkPlanner`** — polls each finder, respects `*_MAX_INFLIGHT` limits, applies adaptive backoff when no work is found.
 
+**Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
+
+**A GPU out-of-memory failure is retried, not lost.** VRAM pressure is almost always another process (a ComfyUI run, a second model) that gives the card back shortly, so `BaseTask.run()` gives a task `VRAM_OOM_ATTEMPTS` (3) attempts. Two guards keep that narrow, because re-running `_run_task()` from the top is only safe for an inference pass that failed before it wrote anything:
+
+- **GPU-queue tasks only.** The CPU queue's import and purge tasks move and delete files; a blind second pass over one is a second effect, not a retry.
+- **A device out-of-memory only.** `is_vram_oom()` takes `torch.OutOfMemoryError` by type, or a message that says "out of memory" **and** names a device (`cuda`/`gpu`/`hip`/`vram`), walking `__cause__`/`__context__` because a plugin wraps the driver's error in its own class. The device word is what keeps `sqlite3.OperationalError: out of memory` (SQLITE_NOMEM) out.
+
+Between attempts `TaskRunner._pause_and_report_vram_oom` flushes the allocator cache — this returns *our own* cached-but-unused segments to the driver, which is what a fragmented allocation needs; it cannot reclaim what another process holds, and the pause is what covers that — emits `EventType.VRAM_OOM` so the SPA can raise a warning toast counting the attempts used, and waits `VRAM_OOM_RETRY_PAUSE_S` (5 s, kept short because the single GPU worker is parked on it and an interactive `submit_and_wait` queues behind it). A shutdown during the pause abandons the remaining attempts. Every retry sequence ends with a closing frame — `recovered` when a later attempt succeeded, `gave_up` when the task died — and the two counters are read for different jobs: `task.vram_oom_attempts` (how many attempts OOMed) decides *whether* a card is open, so a task that OOMed twice and then died of something else still closes it; `task.attempts_used` (which attempt actually ran) is what the frame reports, so a recovery names the attempt that did the work rather than the last one that failed, and a sequence that ended short of `max_attempts` is visibly an early stop rather than an exhausted retry.
+
+The retry lives in `run()` rather than in the worker loop so a task settles — `_done_event`, `completed_at` — exactly once, after the last attempt; a `submit_and_wait` caller must not be woken by an attempt that is about to be retried. `Vault.notify` deliberately does **not** wake the planner for `VRAM_OOM`: every other event means "there may be work to pick up", and this one means the GPU is full.
+
+**The consequence for callers: an OOM must be allowed to propagate.** `DescriptionWorkflow` and `DescriptionTask` re-raise it instead of falling into their "clear the description" path, because clearing a caption over a transient condition destroys data the retry would have produced; the picture keeps its sentinel and a later sweep picks it up. This only reaches as far as the OOMs that actually surface: a plugin that catches per image internally (JoyCaption) or falls back to CPU inside the service (Florence-2) reports a `None` caption instead, which is indistinguishable from "this image cannot be described" and is still cleared.
+
+**A cancel is not a failure, and the event belongs to the task.** `BaseTask` carries a `_cancel_event` that its default `on_cancel()` sets and its `on_queued()` clears, so a task needing cancellation does not have to build its own — `DescriptionTask` uses it by *not* overriding `on_cancel`. The ten task classes that do override it (`TagTask`, `QualityTask`, `FaceExtractionTask` and friends) keep their own events and never call `super().on_cancel()`, so for those the base event stays unset; it is an available hook, not a property of every task. `run()` reads it in exactly one place — before the first attempt, so a task cancelled while queued and then picked up by a worker does no work at all.
+
+**A task that returned normally reports `COMPLETED`, cancel event or not.** The event is set by the shutdown thread and can land at any instant, including after `_run_task` committed its rows; marking such a task `CANCELLED` would race a task that had already finished, and `Vault._on_task_complete` fires only for `COMPLETED`, so the notification for work already in the database would be swallowed. Cancellation is expressed by what the work *does* — return early — not by rewriting the status of work that finished.
+
+Long-running work threads the event downward as a `stop_event`: `DescriptionTask` passes its own to `DescriptionWorkflow.generate_batch()`, which checks it per picture and hands it to the plugin, so a shutdown stops between images instead of running a 32-image JoyCaption batch out. **The event is a parameter, never workflow state:** with CPU spillover the batch runs on a `DescriptionWorkflow` that `InferenceEngine.description_workflow` builds fresh on every access, so an event stored on the workflow would be set on an object nobody is running. (`TagTask` does not yet pass one to `TaggingWorkflow.tag_images`; the same treatment is owed there.)
+
+The write path has to tell the two apart. Blanking a description is how a picture the model genuinely cannot caption stops being retried for ever — `MissingDescriptionFinder` selects only `NULL` or a `__description::` sentinel, so an empty string is a permanent, silent exclusion. A cancel says nothing about the pictures it skipped, so `DescriptionTask` persists nothing for them and the finder picks them up on the next sweep; a real failure still clears.
+
+**A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
+
+**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
+
 ### Registered tasks
 
 | Task | Queue | Finder | Purpose |
@@ -831,20 +893,22 @@ Snapshot: id, kind, created_at, relative_path,
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
 | `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
 | `PICTURE_IMPORT` | CPU | _(none — user-triggered)_ | Async streaming-staging import (#459). Finishes a committed staging session server-side (the *safe* window): hashes, de-dupes by `pixel_sha` (incl. intra-batch), ingests each staged file, inserts `Picture` rows with a pending-tag sentinel, then removes the staging dir. Enqueued by `POST /pictures/import/staging/{id}/commit`; HIGH priority, no WorkFinder. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`), completion emits `CHANGED_PICTURES` + `PICTURE_IMPORTED`. |
+| `MODEL_FOLDER_SCAN` | CPU | _(none — user-triggered)_ | Model shelf. Walks one registered `model_folder` and reconciles its `model` / `model_file` rows with disk (`ModelFolderScanner.scan_folder`). Enqueued by `POST /model-folders/{id}/rescan`; HIGH priority, no WorkFinder. **Works on the hub, not the vault** — like `CHECKPOINT_HASH`, because a model folder is a fact about the machine. It replaced a bare `threading.Thread`, which nothing observed: the scan hashes every adapter it sees, so a 57 GB folder ran for minutes with no progress, a crash was indistinguishable from a slow read (the scanner logs and returns without stamping `last_checked`), and the thread was exactly the leaked-daemon shape #856's teardown gate exists to catch. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`, fed by the scanner's `progress` callback once per file); the outcome is the task's own `status`, surfaced per folder as `scan_status` / `scan_error` on `GET /model-folders`. **One scan per folder at a time**, gated by `_scans` in `routes/model_folders.py`, claimed *before* submission so the gate covers the queued window too. Deliberately **not** under `SHELF_IO_LOCK`: that lock serialises the mutating shelf operations (moves, imports) against each other, and a minutes-long read has no business blocking a move the owner asked for. Concurrent scans of *different* folders are safe by construction — the missing sweep is `seen_at <` the run's own stamp, per-folder (#794). **The scan's write cadence is bounded by time as well as by count** (`_WRITE_INTERVAL_S = 2.0` beside `_WRITE_BATCH = 200`), which is what lets `CHECKPOINT_HASH` overlap it: a 91-file folder is one commit at the very end under the count alone, and a measured 6.11 GB scan showed `MissingCheckpointHashFinder` zero rows at any point while it ran, so the two workers went strictly nose to tail. Time rather than a smaller count because the cost driver is per-file hashing, not row count — ten 4 GB adapters are ten files and several minutes. Commits are cheap enough to spend: 0.06 ms marginal per extra commit over 1,800 files on the hub (WAL, `synchronous=NORMAL`). Measured on a 9.4 GB folder: first work visible to the finder at 2.05 s of a 4.33 s scan, against never before, with scan wall time unchanged. |
 | `GFS_SNAPSHOT` | CPU | `EnsureGfsSnapshotFinder` | Drives the Grandfather-Father-Son automatic snapshot schedule: at most one snapshot per check (every 5 minutes), of the highest tier that is due (`MONTHLY` / `WEEKLY` / `DAILY`). Retention prunes each tier independently (7 daily / 4 weekly / 12 monthly). Registered in `vault.py`. |
 | `SCRAPHEAP_RETENTION_PURGE` | CPU | `ScrapheapRetentionPurgeFinder` | Scrapheap auto-purge. Every 15 minutes, selects UNPROTECTED, UNLOCKED soft-deleted pictures whose deadline has passed and permanently destroys them through the ONE destruction path, `scrapheap_service.purge_scrapheap_pictures(..., include_protected=False)`. **Deadline = `max(deleted_at + scrapheap_retention_days, scrapheap_retention_reduced_at + 1 day)`** — the second term is a FLOOR measured from the last window *lowering*, not a per-picture extension, so after a reduction nothing is purgeable for a day regardless of age. (Measuring the grace from `deleted_at` would only help the `[days, days+1)` band, leaving `Never -> 30` free to wipe a long-lived scrapheap on the next sweep.) The deadline and the locked-set freeze are enforced **twice** — in the finder's candidate query and again by a `RetentionGuard` inside `build_purge_plan`, which re-derives them from the row's current `deleted_at` (the task runs at LOW priority, so a restore/re-delete in between is a real TOCTOU). Locked-set members (directly, or via a live stack sibling) are skipped and reported, never raised — on **every** path: `build_purge_plan` enforces the freeze unconditionally, so the manual `DELETE /pictures/scrapheap` cannot destroy one either, at either `include_protected` value (returned as `skipped_locked`). `POST /pictures/scrapheap/delete-preview` reports `locked_count` / `protected_count` / `unprotected_count` as three DISJOINT buckets summing to `total_count`, keyed on which action destroys the row — locked classified FIRST (the opposite of `auto_purge_exempt_reason`, where protected wins) because the preview answers "what will this button destroy?" and must lead with the binding blocker, while the badge answers "why is this kept?" and leads with the permanent reason. The candidate query evaluates the deadline in SQL — `deleted = TRUE AND deleted_at <= now - retention_days`, keyset-paginated on `(deleted_at, id)` so `ix_picture_deleted_at` is actually used (ordering by `id` instead made SQLite walk every scrapheap row via `ix_picture_deleted`: 1.23 ms/page vs 0.08 ms/page on a 200k library with a 20k scrapheap) — and returns early without scanning at all while `now < reduced_at + grace`, since no row can be due inside the floor. The lock lookup is chunked; the lock lookup is chunked to `LOCK_QUERY_CHUNK` ids so a large scrapheap cannot hit the 999-variable limit of SQLite < 3.32 and silently disable the sweep. The scrapheap listing applies the SAME two exemptions through the same helpers, exposing `purge_at` / `auto_purge_exempt` / `auto_purge_exempt_reason` (`"protected"` | `"locked"` | `null`; protected wins when both apply), so the countdown the UI renders can never disagree with what the sweep will do. Full restore and per-resource restore both re-stamp `deleted_at = now()` on restored scrapheap rows, so restoring an old snapshot cannot hand the sweep an already-expired deadline. Protected reference-folder originals (`allow_delete_file=False`) are exempt from any timer and are excluded from the candidate query — only the consent-gated manual delete-forever (`include_protected=true`) can destroy them. `scrapheap_retention_days=null` ("Never") disables the finder entirely, and a config save NEVER purges synchronously. **`null` is the DEFAULT (`scrapheap_service.DEFAULT_RETENTION_DAYS`): auto-purge is opt-in.** An unattended path that removes files from disk must be one the user switched on, so an install that has never saved a window — a fresh install, or one upgraded from a release without the setting — is never on the clock; an unparseable stored value also resolves to Never rather than to a window. The server-config key is written *only* by `apply_retention_config` (i.e. by an explicit PATCH), so "key absent" reliably means "never chosen" and an existing explicit choice, including an explicit `30`, survives the upgrade untouched. Because the default is Never (an infinite window), **turning auto-purge on is a *reduction*** and therefore earns both the grace floor and the `/impact` confirm — the switch-on is the one change that can expose an entire long-lived scrapheap at once. Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
+| `CHECKPOINT_HASH` | CPU | `MissingCheckpointHashFinder` | Model shelf (v1.10). The **only finder that works on the hub rather than on the vault**, because a model folder is a fact about the machine: `ModelFolderScanner` (`services/model_folder_scanner.py`) registers a checkpoint the instant it sees it as a `model` row with `file_kind = 'checkpoint'` and `sha256` NULL — it may be 24 GB and the shelf must not stall behind it — and this fills the digest in, which is what `model.hashed_at` was always for. **A changed file at a known path forks onto a new `model` row rather than editing the old one in place.** A `model` row is per *content* and legitimately holds many `model_file` rows, so clearing `sha256` by id stripped the digest off copies in other folders that nobody had touched, and it was rejected outright by `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` when an adapter had been replaced by a checkpoint at that path, rolling the whole write batch back and aborting the scan before its missing and unreachable sweeps ran. The stored row is reused only when it is that path's sole location and its `file_kind` still matches, which is the case where the entry is the same and only the hash is stale. Adapters are not in this lane; they are hashed on sight by the scan, and `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` is what makes that a schema fact. The queue is `sha256 IS NULL` joined to a `model_file` row in state `present`, matching the partial index `ix_model_hash_queue`. **A `sha256 UNIQUE` collision is a MERGE inside the task, never a raise**: two rows legitimately reach one digest, because an unhashed checkpoint is identified by the location it was found at, so one file in two registered folders is two rows (as is the duplicate the move invariant's crash window is *designed* to leave). The lower id survives, **every `model_file` row the dropped id held is repointed at it**, and it fills any column only the dropped row had. That location move is what stops a checkpoint present at two paths being re-hashed and re-merged once per scan cycle forever. A row whose file cannot be read is deferred for the life of the process, or one broken path would make the planner submit a doomed task every cycle; a re-scan re-queues it. Registered in `vault.py` only when the vault was opened through a hub registration (`RegisteredVaultPath`), so a Vault built without a hub — CLI tools, most tests — simply does not have this lane. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 
 **Probe cost (#651)**: the planner sweeps every finder on a short interval and resets to `MIN_INTERVAL_S` whenever anything was submitted, so a finder's query runs continuously while any pipeline is active — including on a fully-processed library, where it matches nothing. Two rules follow, and a new finder must obey both:
 
 - **Never select the whole ORM `Picture`.** Narrow to the columns the task actually reads (`load_only`, plus `load_only` on any `selectinload`). `image_embedding`, `text_embedding`, `likeness_parameters` and `Face.features` are `LargeBinary`; dragging them through a probe evicts the pages the API endpoints need, several times a second. Keep it an ORM select though — `BaseTaskFinder._filter_and_claim` claims via `getattr(picture, "id", None)`, so a scalar/tuple select silently claims nothing. The session is closed before the task runs, so anything not loaded raises `DetachedInstanceError`.
-- **Give the predicate an index, and lead it with the nullable column.** PixlStash never runs `ANALYZE`, so there is no `sqlite_stat1` and SQLite scores a partial index by the table's default row estimate rather than by how few rows it covers. A partial index only wins when it can claim *more* equality terms than the index it competes with; `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted`, while an `(id)`-only partial index ties and loses on a creation-order tie-break that `create_all` randomises. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
+- **Give the predicate an index, and lead it with the nullable column.** Pick the column order that wins *with and without* table statistics. PixlStash itself never runs `ANALYZE`, but that is a property of our code, not of the database: a user can run it from any SQLite client, and nothing asserts `sqlite_stat1`'s absence, so a rule that depends on it is a rule that can be switched off from outside. Leading with the nullable work column does not depend on it. A partial index only wins when it can claim *more* equality terms than the index it competes with, and `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted` under either regime. The counter-example is the load-bearing evidence: an `(id)`-only partial index over the same predicate claims no extra term, so without statistics SQLite ignores it and falls back to `ix_picture_deleted` at **80 ms**, against **0.003 ms** for the correct ordering on the same 200k-row table. Accurate statistics leave that plan unchanged; stale ones (an `ANALYZE` run mid-import) collapse the probe to `SCAN picture` whether the partial indexes exist or not, so they are not a case the column order can be chosen for. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
 
 Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
 
-**User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
+**User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`, `MODEL_FOLDER_SCAN`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
 
 ---
 
@@ -852,11 +916,280 @@ Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `Mi
 
 Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
-- **`base.ImagePlugin`** — abstract base. Each plugin declares `name`, `display_name`, `parameter_schema()` and implements `run(images, parameters, progress_callback, error_callback)`.
-- **`registry.PluginRegistry`** — discovers plugins (built-in + user-supplied), exposes lookup by name.
+- **`base.ImagePlugin`** — abstract base. Each plugin declares `name`, `display_name`, `description`, the `author`/`license`/`models` header (see §9's `TaggerPlugin` entry — the two base classes carry the same three, defaulting to empty), `parameter_schema()` and implements `run(images, parameters, progress_callback, error_callback)`.
+- **`registry.PluginRegistry`** — discovers plugins (built-in + user-supplied), exposes lookup by name. **It probes `plugin_schema()` once at load**, so a plugin that raises there — or declares a `models` header that is not a list of dicts — is rejected with a recorded reason instead of taking `GET /pictures/plugins` down for every plugin at request time. `TaggerPluginManager._register_user_plugin` does the same.
 - **`service.apply_plugin_to_pictures`** — batch entry point invoked by `POST /pictures/{id}/plugin/{name}`; emits `PLUGIN_PROGRESS` events.
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
+
+User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user` (`registry.user_plugin_dir()`). **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
+
+[docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are quiet rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** so a file defining two concrete plugins ships one (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. The other two halves of the class-selection divergence were closed in #968: `_find_plugin_class` now excludes classes the module merely imported (as `TaggerPluginManager._register_module_plugins` does; its extra `__module__` prefix clause covers the package shape, which this loader does not accept), so a plugin that imports a built-in for reference can no longer be shipped in place of the class its author wrote. An abstract class is demoted to a *fallback* rather than skipped: an intermediate base above the real class no longer wins, while a file whose only plugin class is abstract still produces `Can't instantiate abstract class X with abstract method run`, which names the class and the missing method — the reason not to copy the tagger's outright skip here. The shadowing itself is still user-wins, but it is now recorded: a `PluginLoadError` on the manager's own error list, and — since that list is served nowhere (above) — a log line, which is the only place a user will see it. Both name the **user** file as the one taking over, where the log used to name the built-in as "the duplicate" and so point away from the cause. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
+
+### 8.1 Installing and checking plugins from the CLI (issue #958)
+
+`pixlstash-cli plugins available|install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
+puts a plugin in the right directory instead of asking the user to. The
+destination differs by kind *and* by shape, and getting it wrong fails silently:
+a folder in the image directory is skipped without a message, and a single
+module in the tagger directory named after the wrong thing simply never loads.
+
+| Detected | Destination | Installed as |
+|---|---|---|
+| Captioning, folder source with `__init__.py` | `tagger-plugins/user/<name>/` | the folder |
+| Captioning, single module | `tagger-plugins/user/<name>.py` | the file |
+| Image | `image-plugins/user/<name>.py` | the file, always |
+
+Four properties are load-bearing:
+
+- **Nothing is imported.** The kind, the plugin's `name` and the shape are read
+  out of the source with `ast`, because importing to classify means running
+  third-party code before the user has agreed to install it. The cost is that
+  some checks can only warn (a missing abstract method, a captioner with neither
+  capability flag, an image module defining more than one `ImagePlugin`
+  subclass, a folder image plugin whose sibling modules are being left behind);
+  `--strict` promotes them all to refusals, in `_analyse` for the per-file ones
+  and again at the end of `plan_install` for the ones about the plan itself.
+  The same choice is why `plugins list` cannot report an import-time failure
+  such as a missing `torch`: for a captioning plugin that surfaces in
+  `GET /taggers/plugin-diagnostics`, and for an image filter it surfaces
+  nowhere at all (the load errors were taken off `GET /pictures/plugins` in the
+  §8 sweep above), so the command points at the server log for that case.
+- **The destination is named after the plugin's `name`, not the source file**, so
+  `install ./Downloads/plugin(1).py` lands as `my_filter.py`. A computed or
+  non-snake_case `name` is a refusal, since it is also the collision key.
+- **Built-in names are refused**, and read out of the shipped sources
+  (`image_plugins/built-in/*.py`, `_FIRST_PARTY_PLUGINS`) rather than listed a
+  second time. The two kinds fail in opposite directions and both fail quietly:
+  a user image plugin *replaces* a built-in (recorded since #968, but only in
+  the server log), and a user captioning plugin loses to one and never loads.
+- **`plugins remove` is the first CLI verb that deletes.** It is scoped by
+  location, not provenance — anything in the two user directories, however it
+  got there — so what it guarantees instead is containment, and it takes two
+  checks to hold: a name carrying a path separator is refused (so it can only
+  ever address a direct child), **and** a symlinked entry is refused rather than
+  followed (so nothing can reach out of the directory that way). Following the
+  link would stay inside the letter of "only delete plugin files" while deleting
+  a file the user did not name. Zip extraction is checked entry by entry the
+  same way — traversal and symlink both — before anything is written.
+- **Installing never deletes before it has the replacement.** The copy is staged
+  as `_<name>.installing` beside the destination and moved into place, so a copy
+  that fails part-way leaves the previous plugin intact; the leading underscore
+  keeps the staging entry out of both registries' scans. Installing a plugin
+  over itself (`install <the installed path> --force`, which a tab-completion
+  makes easy) is refused outright rather than deleting the only copy.
+
+`main()` opens the hub only for the `libraries` group (`needs_hub` on the group
+parser). Plugin installation touches no library, and a machine that has never
+started the server has no hub to open; opening one would exit `3` where the work
+would have succeeded.
+
+The two user directories are named in `plugin_install._SUBDIRS` rather than
+imported, because importing `image_plugins.registry` pulls in cv2 and Pillow on
+every CLI run. (The *tagger* registry is cheap and **is** imported, for
+`_FIRST_PARTY_PLUGINS` in `builtin_names` — so the rule is about cv2, not about
+registries in general.) `tests/test_plugin_install.py::test_the_installer_writes_where_the_registries_read`
+pins the duplicated paths to `tagger_plugins.registry.user_plugin_dir()` and
+`image_plugins.registry.user_plugin_dir()` so they cannot drift.
+
+**The `--ref` flag is validated, not just interpolated.** `requests` collapses
+dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/main`)
+walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
+unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
+check is what keeps "a named plugin from one repository" true.
+
+**`plugins available` lists that repository, and shares its download.** Until it
+existed, `install <name>` was the only thing that knew what `PLUGINS_REPO`
+contained, and the catalogue leaked out only on the failure path — the
+`Available: ...` line of the "no plugin called X" refusal. Guessing a name wrong
+was the documented way to discover the right one. The listing reuses that same
+archive rather than adding a second source: `_download_repository` and
+`_published_dirs` were split out of `_fetch_from_repository`, so the layout
+(`plugins/<kind>/<slug>`) and the `--ref` validation above have one definition
+each, and a listing can never show a set that installing cannot reach. It needs
+no API token and no second host, because codeload serves the zip unauthenticated.
+
+Two properties carry over from §8.1 and one is new:
+
+- **Still nothing is imported.** This reads plugin source that has just come off
+  the network, so the ast-only rule is not a preference here but the whole of the
+  safety story; `test_the_catalogue_never_imports_a_published_plugin` fails the
+  build if `importlib` is reached at all.
+- **One broken published plugin does not empty the listing.** `_catalogue_entry`
+  records the problem on the entry rather than raising, because the reader is
+  choosing between the others and a refusal naming none of them is useless. This
+  is the same shape as `_describe` for installed plugins.
+- **The summary comes from the README's first *sentence*, not its first line.**
+  The published READMEs hard-wrap their opening paragraph, so a line-wise read
+  prints a fragment ("...so it runs"). `_summary` joins the paragraph before
+  splitting the sentence. `author` and `license` (issue #961) are read as class
+  literals through the existing `_string_attribute`, and shown only where the
+  plugin declares them — every plugin published so far predates the header.
+- **`install <name>` takes the name the listing printed, which is the plugin's
+  *declared* name, not the repository's directory slug.** The two differ in the
+  published repository — `plugins/captioning/moondream2_captioner` declares
+  `moondream2` — and matching only on the directory left `plugins available`
+  advertising `moondream2` while `plugins install moondream2` refused it. The
+  declared name is the identity everywhere else too: it is what the plugin
+  installs under, what `plugins list` shows and what `plugins remove` takes. So
+  `_fetch_from_repository` matches the declared name first and the directory
+  name second (that one still works, and was the only one accepted before), and
+  its `Available:` refusal lists declared names, falling back to the directory
+  name only for a folder too broken to read one out of. **Both passes run over
+  the whole set**, not per folder in `sorted()` order: otherwise a declared name
+  would beat only the directory names that happen to sort after it, and which
+  plugin `install` fetched would depend on the kind directory it sat in. **Two
+  folders answering to one name are refused, naming both** — the shape
+  `resolve_removal` already uses for an ambiguous name. Picking one silently
+  would let a string inside downloaded code, which the listing does not show,
+  decide what gets installed.
+
+**`plugins test` is the exception to "nothing is imported", and the reason the
+rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),
+issue Pikselkroken/pixlstash-plugins#4). Discovery runs once, at start-up, so
+without it the loop for finding a typo in a plugin is edit → restart → boot →
+read the error row under Settings › Auto-tagging. Here the user has named a
+plugin and asked for it to be run, so importing it is the request rather than a
+side effect of classifying it.
+
+**It is a development aid and must never be presented as a security check**, and
+that is a wording constraint on the code as much as on the docs. Running the
+plugin *is* the mechanism, so the command has no way to tell a user whether a
+plugin is safe — it has already executed the module body by the time it prints
+anything, unsandboxed, with the caller's permissions, which is why the caveat is
+printed *before* the load rather than after it. Everything it reports is about
+the plugin's contract, never its intent. A report a user reads as a safety
+verdict is worse than no report, and would also be the second time a
+"reassuring" plugin surface got the trust boundary wrong (the `plugins list`
+listing already has to say out loud that it imports nothing and therefore cannot
+see an import-time failure). Observing what a plugin *reaches for* — an audit
+hook over `socket.connect` / `subprocess.Popen` / writes — is tracked separately
+and is disclosure, not containment; real containment is OS-level and out of
+scope here.
+
+- **The load is `TaggerPluginManager.load_plugin_from_path`, the server's own
+  loader** — extracted from the body of `_load_user_plugins`, which now calls
+  it, rather than reimplemented. Module namespacing, the package's
+  `submodule_search_locations`, the `sys.modules` registration *before*
+  `exec_module` (so `from . import helper` resolves) and the containment of a
+  failing import are therefore the same by construction, not by resemblance. A
+  second implementation that got the package case wrong would fail plugins that
+  work in the server, which is worse than no check at all.
+- **Sharing the loader is not sharing discovery, and the gap is where the
+  silent failures live.** `_load_user_plugins` filters the directory listing
+  *above* the extracted method (`.`/`_`-prefixed entries are skipped without a
+  message) and the registry refuses a duplicate name *after* it — and the
+  checker's manager deliberately scans no directory, so neither fires. Both are
+  therefore restated in `plugin_check`: `_ineligible` on the entry name, and
+  `_installed_names`, which reads the installed captioners' names statically
+  through `plugin_install.list_installed()` (no import, nobody else's plugin
+  code run) and excludes the target itself so checking an already-installed
+  plugin does not report it colliding with its own copy. Without these a plugin
+  passes here and never loads there, which is the exact failure the command
+  exists to remove.
+- **What it adds is the schema shape**, which nothing else checks. The registry
+  exercises `plugin_schema()` at registration so a raising plugin cannot take
+  out the boot, but a schema that *renders* wrong raises nowhere, and the three
+  ways of getting it wrong land in different places: an unknown `type` falls
+  through `TaggerParametersUI.vue`'s `v-else` to a text box, a `select` with no
+  `options`/`enum` key fails that branch's `Array.isArray` guard and becomes a
+  text box too, while `options: []` **satisfies** the guard and renders a real
+  dropdown with nothing in it. A missing `default` or `name` is worse —
+  `default_params()` and `fill_defaults()` read both unguarded, on every library
+  open — as is a name a first-party plugin already holds, which loses that
+  collision silently. **Missing `label` and neither capability flag being set
+  are warnings, not failures**: the UI renders `field.label || field.name` and a
+  flagless plugin registers exactly as written, so refusing them would make this
+  less useful than the restart it replaces, and `plugins install` already only
+  warns about the second.
+- **`plugin_check.SCHEMA_TYPES` is a hand-copy of a `v-else-if` chain in a Vue
+  component**, which this repository does not otherwise allow (cf. `_SUBDIRS`
+  pinned to the registries). `test_schema_types_match_the_component_that_renders_them`
+  parses `TaggerParametersUI.vue` and pins the two together; it is what makes
+  the list `bool` (an undocumented alias for `boolean`) and `enum` (an alias for
+  a select's `options`) appear in, since the checker mirrors what renders rather
+  than what the guide recommends writing.
+- **`--image` runs the plugin the way the workflows do** — `setup(device)` if it
+  exists, then `init(params)`, then `generate_descriptions` (or `tag_images`)
+  with the schema's defaults — and checks the result is a dict keyed by the paths
+  it was given, because the workflow looks its results up by path and silently
+  drops anything else. **Which method to call is decided before any of that**:
+  a plugin with neither capability flag has nothing for this to call and the
+  workflows would never reach it either, so downloading and initialising its
+  model would be work done for a call that is not going to happen. It stops
+  when `needs_download()` is True rather than
+  starting a multi-gigabyte fetch from a check command. **That is a courtesy and
+  not a guarantee, and no wording may promise otherwise:** `needs_download()` is
+  the plugin's own answer about its own files, and a plugin that downloads
+  inside `init()` — which is where `from_pretrained_local_first` does it, and so
+  where an author copying the shipped captioners will do it — is already past
+  that gate.
+- **Only captioning plugins.** Image filters have a different base class and a
+  different parameter schema (`string` + `enum`, no `select`), so `plugins test`
+  says so and stops rather than reporting "No TaggerPlugin subclass found",
+  which is true and useless to the person who pointed it at the other kind.
+
+`tests/test_plugin_install.py` drives this off the shipped
+`tagger_plugins/plugin_template.py`: the pass case guards the starter we hand
+contributors, and every failure case is one mistake spliced into a copy of it,
+each anchored on a string that must appear exactly once so a mutation that
+matched a docstring instead of the code cannot read as coverage. **The `--image`
+test splices sentinels into its copy rather than running the template as
+shipped**, because as shipped the template cannot fail it: it seeds
+`self._device = "cpu"` in `__init__` and falls back to `max_tokens or 128`, so
+the caption a working run produces is character-for-character the caption you
+get with `setup()`, `init()` and the merged defaults *all* skipped. That
+assertion was dead on arrival and was found by deleting each of the three from
+`plugin_check` in turn; with the sentinels in place all three deletions fail the
+test and the unmutated file passes.
+
+**There is deliberately no manifest.** An optional `pixlstash-plugin.toml` was
+considered and dropped: static detection already answers what the thing is and
+which kind, no plugin written so far ships one, so the parse path would be dead
+on arrival. The one thing it would genuinely add is a declared minimum
+PixlStash version — a captioning plugin installed on 1.9.0 lands on disk and can
+never load, and only a declaration could say so. Add it when there is something
+that writes it.
+
+### 8.2 Embedded metadata follows the source into the output
+
+**Provenance is inherited, not regenerated.** A plugin run creates a *new*
+picture, and the source's embedded metadata is the only copy of things that
+cannot be recomputed — above all the ComfyUI graph in a PNG's `workflow` /
+`prompt` / `parameters` text chunks, which `utils/comfyui_utilities.find_comfy_workflow`
+reads back as `metadata["png"][…]`. Saving the output without them destroyed
+them permanently, for every plugin, on every run.
+
+`service._save_output_images(image, source_format, source_path)` therefore
+re-reads the metadata **from the source file**, not from the in-memory image:
+`_load_input_images` builds its PIL image with `Image.fromarray(...)`, so
+`img.info` is already empty before any plugin sees it. The source path is
+carried in the 4-tuples `_load_input_images` returns and threaded into the save.
+
+| Output format | Carried | Mechanism |
+|---|---|---|
+| PNG | all tEXt/zTXt/iTXt chunks (`workflow`, `prompt`, `parameters`, …) | `_source_png_text` → `pnginfo=` |
+| JPEG, WebP | EXIF IFD0 + Exif sub-IFD, minus the fields below | `_source_exif_bytes` → `exif=` |
+| BMP, TIFF | nothing | — |
+| video source, or bytes a plugin already encoded | nothing — returned untouched | early return |
+
+**Dropped on purpose**, because a plugin may legitimately change geometry
+(`scaling` upscales, `rotate` swaps the axes) and a carried-over measurement
+would then be false:
+
+- **Orientation (`0x0112`) — the highest-risk one.** `ImageUtils.load_image_or_video`
+  applies `ImageOps.exif_transpose` on load, so the pixels a plugin returns are
+  *already upright*. Re-stamping the source's orientation would turn the output
+  a second time on display, and its displayed size would disagree with its
+  stored size.
+- `ImageWidth` (`0x0100`) / `ImageLength` (`0x0101`), and `PixelXDimension`
+  (`0xA002`) / `PixelYDimension` (`0xA003`) in the Exif sub-IFD.
+- The IFD1 thumbnail, which `Exif.tobytes()` does not write — it would show the
+  un-transformed image.
+
+Nothing is fabricated: a source with no metadata yields an output with none.
+Failing to read the source's metadata is logged at warning level and the run
+continues without it; it never fails the plugin.
 
 ---
 
@@ -870,6 +1203,86 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 | `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
 | `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
+
+#### User-supplied plugins (issue #326)
+
+Beyond the four built-ins above, `TaggerPluginManager` scans
+`user_data_dir("pixlstash")/tagger-plugins/user` and registers whatever `TaggerPlugin`
+subclasses it finds there. `pixlstash/tagger_plugins/plugin_template.py` is the starter and
+[docs/writing-tagger-plugins.md](writing-tagger-plugins.md) is the contract. Four properties
+are load-bearing:
+
+- **Two accepted shapes**: a single `.py` file, or a folder containing `__init__.py` (loaded
+  as a package, so it may `from . import helper`). Entries starting with `.` or `_` are
+  skipped. Modules are namespaced `pixlstash_user_tagger_<entry>` with the extension kept
+  (`foo.py` → `…_foo_py`, so a `foo/` package beside it is a different module), distinct
+  from the image plugins' `pixlstash_dynamic_plugin_*`. A failed import restores whatever
+  `sys.modules` entry it displaced, so a contrived clash cannot strip a working plugin's
+  module out from under it.
+- **Built-ins are loaded first and win a name collision**, which is the deliberate divergence
+  from `ImagePluginManager` (where the user directory is scanned first). A user plugin named
+  `florence2` would be inert anyway — `DescriptionWorkflow.generate_batch` routes that name
+  down a native fast path that never touches the plugin object — so the collision is recorded
+  as a `PluginLoadError` and surfaced in the UI rather than silently ignored.
+- **Every concrete class the module *defines* is registered**, not just the first one found,
+  so a package may bundle two engines. A subclass merely imported into the module is
+  excluded by comparing `__module__`.
+- **`pixlstash-cli plugins install` writes here**, working the destination out
+  from the source rather than asking for it — §8.1. It is the same directory and
+  the same two shapes; nothing about discovery changes.
+- **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
+  is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
+  restart, which the guide and the Auto-tagging settings section both say. **The author's
+  way out is `pixlstash-cli plugins test`** (§8.1), which calls the one-plugin entry point
+  `load_plugin_from_path` that the scan below now loops over — same loader, in a process
+  that is not the server. The directory is
+  not created at boot; **`GET /taggers/plugin-diagnostics`** returns its path so the UI can
+  tell the user where to make it. That is a route of its own, on the §16.3 locality tier,
+  and not a field on `GET /taggers`: the list route was `ANY_TOKEN` at the time, so a field there handed
+  the owner's home directory to every share-link holder. The same sweep took `plugin_dirs`
+  **and** `plugin_errors` off `GET /pictures/plugins` and `workflow_dirs` off
+  `GET /comfyui/workflows`, both `ANY_TOKEN` and both carrying the same directory; nothing
+  read any of them, so they are deleted rather than moved.
+
+A broken plugin never aborts the load: each entry is wrapped, logged with its path, and
+recorded as a `PluginLoadError` that **`GET /taggers/plugin-diagnostics`** returns in
+`load_errors`. It is on the locality tier with the folder, and for the same reason rather
+than by association: the message is `str(exc)` from an exception raised by third-party code
+during import, so an `OSError` out of a plugin's module body carries whatever absolute path
+it was reaching for. Sanitising that text would be guesswork. The **Auto-tagging** settings
+section renders the list; `PluginsTable.vue` never could, since a failed plugin carries
+neither capability flag.
+Registration also calls `plugin_schema()` once, because `GET /taggers`,
+`user_settings_utils` and `fill_defaults()` (on the library-open path, `server.py`) all
+call it unguarded: a plugin whose `parameter_schema()` raises has to be rejected at load
+or it takes the settings screen and the boot down with it. That check is boot-state only
+— it cannot catch a plugin that starts raising once its model is loaded — and the
+inference methods (`tag_images`, `generate_descriptions`, `download`, …) remain unguarded
+by design, exactly as they are for first-party plugins. `SystemExit` is caught alongside
+`Exception` so a stray `sys.exit()` in a plugin module cannot end the process;
+`KeyboardInterrupt` deliberately still propagates. The registry lock is an `RLock` and `_loaded`
+is set before loading for the same class of reason — a plugin whose module body calls
+`get_tagger_plugin_manager()` would otherwise hang the server forever, which is not an
+exception and so cannot be caught. It sees the partial registry.
+
+Plugin code runs unsandboxed, exactly as image plugins already do — but earlier: the
+tagger registry is built during vault construction, so a user plugin executes at boot
+rather than on first request. Three consequences worth naming: a plugin that hangs or
+segfaults at import stops the server starting (no containment is possible in-process);
+the developer's own plugin folder is executed by any test that boots a `Server`; and the
+folder's absolute host path needs somewhere to be served from, which is why
+`GET /taggers/plugin-diagnostics` exists on the §16.3 locality tier rather than as fields on
+`GET /taggers`, which was `ANY_TOKEN` then and is `OWNER_ONLY` now (the same disclosure `GET /pictures/plugins` and
+`GET /comfyui/workflows` had made all along, now removed from both).
+
+**The plugin lifecycle is not fully wired for third parties, and the guide says so.**
+`ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
+registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; and
+`DescriptionWorkflow` charges the VRAM budget for Florence-2 only, so
+`estimated_vram_mb()` is never consulted. Closing either is a separate change to the
+workflow, not to discovery. The third gap listed here — `generate_descriptions` being
+called without a `stop_event` — is closed: `DescriptionWorkflow` now passes one on both
+paths, so a plugin that honours it stops between images instead of running the batch out.
 
 #### Florence-2 checkpoint selection (issue #512)
 
@@ -886,7 +1299,8 @@ No migration is needed: the value is read from `tagger_settings` with a `base` f
 ### `TaggerPlugin` ABC
 
 Every plugin declares:
-- **Class attributes**: `name`, `display_name`, `description`, `supports_tags`, `supports_descriptions`, `requires_download`, `default_enabled`.
+- **Class attributes**: `name`, `display_name`, `description`, `author`, `license`, `models`, `supports_tags`, `supports_descriptions`, `requires_download`, `default_enabled`.
+- **The header — `author`, `license`, `models`** — is declared as plain literals so a tool can read it off the source with `ast` instead of importing the plugin and running its module body. `models` lists every model or remote service the plugin loads (`{"name": ..., "license": ...}` per entry), because the plugin's own license says nothing about the weights it downloads. All three default to empty on both base classes, so a plugin that omits them loads unchanged and a caller shows nothing for it; `plugin_schema()` forwards them either way. `ImagePlugin` carries the same three. `tests/test_plugin_install.py::test_every_shipped_plugin_declares_a_readable_header` holds every shipped plugin *and both templates* to a literal header.
 - **`parameter_schema()`** — list of JSON-serialisable parameter definitions (same shape as `ImagePlugin.parameter_schema()`).
 - **Lifecycle**: `needs_download()`, `download()`, `init(parameters)`, `unload()`, `is_loaded()`.
 - **Inference**: `tag_images(...)` (when `supports_tags`) returns `{path: list[TagResult]}`; `generate_descriptions(...)` (when `supports_descriptions`) returns `{path: caption_str}`. `TagResult` carries `tag` and `confidence` (may be `None` for LLM-based plugins).
@@ -945,15 +1359,15 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
 | [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
+| [services/stack_detector.py](../pixlstash/services/stack_detector.py) | **Adapter-stack detection for the model shelf (shelf plan F5), read-only in its proposing half.** `propose_stacks` groups *loose* adapters whose names differ only by a training step or by a version token and writes nothing; `apply_stack` is the separate call the UI makes after the owner has seen that dry run — the third instance of the house rule that **detection proposes, it never applies**, after folder monitoring and the ai-toolkit run scan.<br><br>**A stack is a subject, not a training run.** Grouping is on the name with both the step and the version stripped (`split_model_version` in `utils/model_utils.py`), so `Foxglove` and `Foxglove_v2` — separate runs, one character LoRA — land behind one row. Groups come back as `step_group` (one version throughout) or `version_group` (two or more), and a `step_group`'s name keeps its version so a run of `portrait_mix_v2` checkpoints is still called that. **Prefix grouping** (`JimmyVehicle` beside `JimmyVehicle2`) is still absent, and the version rule is careful about it: only an explicit `v<digits>`, optionally with one decimal, counts, because a bare trailing digit could be part of the name and merging on it would invent a subject. That case needs per-group adjudication with counter-evidence — a design question, not missing code.<br><br>Four rules carry the weight and each is mutation-checked. **Grouped per folder**, never shelf-wide: two runs on different disks can share a name, and collapsing across them would invent a run and put one stack's members on two drives. **A group needs a stepped member or two versions**, or a shared name in one folder is a duplicate rather than a subject with a history — and distinctness is compared on the parsed `(major, minor)`, so `Foxglove` beside `Foxglove_v1` is one version and stays a duplicate. **The cover is recomputed server-side** from the filenames (newest version first, then within it the bare final, else the highest step), so a client cannot choose the face of a stack by reordering its request. That is a strict **superset** of `run_importer._cover_first`, which is left alone: it orders one ai-toolkit run, which is single-version by construction, so the two agree on every input it can see — but it is a second function now, not the same rule, and the docs say so rather than asserting a parity a reader would find broken. And **the `stack_id IS NULL` gate is re-read inside the write transaction**, so a row stacked between the dry run and the confirmation is dropped rather than torn out of the stack it already has — the shape the CSO review of `forget_models` established.<br><br>**`fuse` stacks the stacks, and `unstack` takes it back.** `apply_stack(..., fuse=True)` admits already-stacked models and absorbs their stacks **whole** — every member, including ones the caller did not name, because a stack is atomic and a remnant of one is not a stack — then deletes the emptied `adapter_stack` rows and inherits the first surviving name rather than blanking it. The race guard survives the flag: the widened predicate admits a row only from a stack *this call is absorbing*, never from a third that appeared in the gap, and it is still repeated on the UPDATE. **`MAX_MEMBERS_PER_STACK` lives on the service and is counted after the widening**, because the route can only count what it was sent — reported in review of #999 and reproduced at 300 members against a ceiling of 200 from a request naming two ids. `unstack` is the inverse and the shelf's first undo for this: it clears `stack_id`/`stack_position` and drops the row inside one transaction, touching **no file on disk**, and 404s on an unknown id before releasing anything. Its one consequence is stated rather than hidden — released members are loose again, so `propose_stacks` can re-offer them; unstacking undoes a grouping, it does not record a refusal.<br><br>**`set_cover` and `remove_member` curate a stack that already exists**, and both are the owner overruling the filenames. `set_cover` moves one member to `stack_position` 0 and renumbers the rest, which is the only way a cover is ever chosen by hand — `apply_stack` deliberately recomputes the order and ignores the one it was given. **The choice needs no column of its own**: nothing *renumbers* a stack once it is built (detection reads *loose* adapters only, and `run_importer`'s upsert `COALESCE`s an existing `stack_position`), so it survives a re-scan and a re-import — both asserted, the re-import in `tests/test_model_run_import.py`. What can still happen is a member's row *disappearing*: Forget and Delete both end at `model_shelf_service._purge`, and the checkpoint-hash task's duplicate merge deletes the losing row, none of which knows about stacks. That is what **`repair_stacks`** is for, and it is the single statement of the rule — renumber the survivors contiguously, dissolve a stack left with fewer than two members — called by `_purge` and by `remove_member` rather than written twice. It deliberately leaves an *empty* `adapter_stack` row alone: `run_importer` inserts the stack before its members, so deleting empty ones would race a live import into removing the row it is about to point at. `remove_member` releases one file from a run and renumbers the survivors, so removing the cover promotes the member behind it, and **dissolves the stack when it would be left with one member** — a one-member stack is a grouping the shelf draws as a plain row and nobody can see or undo. Both refuse a model that is not in the named stack (404) from inside the transaction, and neither touches a byte on disk |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
-| [services/restore_service.py](../pixlstash/services/restore_service.py) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
+| [services/restore/](../pixlstash/services/restore/) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
 | [services/tagger_run_service.py](../pixlstash/services/tagger_run_service.py) | System-of-record DB side for tagger evaluation runs pushed from PixlTagger: upsert a posted report on the run name and list stored runs for the stats panel |
 | [services/tag_health_service.py](../pixlstash/services/tag_health_service.py) | Tag health board cache — computes one `TagHealth` row per tag from indexed SQL over `tag_prediction` / `tag` / `tag_suggestion` / `picture` plus stored `PictureLikeness` pairs; rebuilt in the background |
 | [services/tag_suggestion_service.py](../pixlstash/services/tag_suggestion_service.py) | Human half of the tag-suggestion review queue: list ranked suspects and apply (write through to `Tag`) or dismiss them |
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
 | [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
-| [services/impossible_tag_scan_service.py](../pixlstash/services/impossible_tag_scan_service.py) | On-demand impossible-tag scan — (re)builds the cleanup queue for person-tags that are impossible on a picture with no detectable face; sibling of `tag_scan_service.py` |
 | [services/operation_log_service.py](../pixlstash/services/operation_log_service.py) | The operation log (§21): snapshots the reversible metadata facets of the affected pictures before and after a mutation, records the diff as one append-only `Operation` row (with a batch id when it is part of a bulk action), and applies a recorded state back for undo/redo. `run_recorded_metadata_task` is the wrapper mutation sites call instead of `vault.db.run_task`, so capture, mutation and recording share one queued task |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
@@ -961,7 +1375,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 
 A service function must take an explicit **`session: Session`** and do its DB work on that pre-opened session — the `*_in_session(session, ...)` pattern. **Services must not call `vault.db.run_task` / `vault.db.run_immediate_read_task` directly**; only `Vault` (and the thin per-service wrapper that bridges a route to the DB worker) owns the work-queue. This is rule 3 of the refactoring guardrails (see [docs/ideas/codebase-refactoring.md](ideas/codebase-refactoring.md) §3) and keeps `services/` from degrading into a second DB layer.
 
-The canonical shape — copy a sibling such as [`snapshot_service.py`](../pixlstash/services/snapshot_service.py) or [`restore_service.py`](../pixlstash/services/restore_service.py):
+The canonical shape (copy a sibling such as [`snapshot_service.py`](../pixlstash/services/snapshot_service.py) or [`restore/`](../pixlstash/services/restore/)):
 
 - Pure, testable **`*_in_session(session, ...)`** functions hold all the logic.
 - A thin **vault wrapper** (`def do_x(vault, ...)`) does nothing but `vault.db.run_task(x_in_session, ...)` and shape the return.
@@ -997,6 +1411,14 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 
 - Baseline: `0001_baseline` calls `SQLModel.metadata.create_all()` for the full current schema.
 - All subsequent migrations use conditional `add_column` (see [.github/copilot-instructions.md](../.github/copilot-instructions.md)) so they are safe on fresh DBs.
+
+The multi-library lane runs `0097`-`0101`, linearly after develop's
+`0096_add_picture_is_video`. `0098` creates the one-row `library_settings` table
+and owns `library_uuid` plus `similarity_character`; `0101` adds
+`settings_fingerprint` separately. Do not move the latter back into `0098`:
+feature-lane vaults may already have recorded `0098`, and Alembic only runs
+forward. Both revisions inspect the live schema so fresh databases and partially
+exercised development databases converge.
 - `__all__` is declared at the top of each migration to silence static-analysis "unused" warnings.
 - Data regenerations are triggered by `NULL`-resetting work columns — never by application logic in migrations.
 
@@ -1056,7 +1478,17 @@ Selected milestones:
 
 | 0096 | `picture.is_video` — persists what used to be a `CASE` over five `file_path ILIKE '%.ext'` tests in the character-thumbnail ordering (#651). Additive, `NOT NULL DEFAULT 0`, with a set-based extension backfill. NOT NULL is a correctness constraint, not tidiness: SQLite sorts `NULL` first, so a nullable column would let an unclassified row outrank a still image in the very ordering the column exists to serve, and would slip past the backfill's `= 0` guard |
 
-Current head: `0096_add_picture_is_video`.
+| 0097 | `usertoken.library_uuid` so the shared token model maps in both the hub and a vault (§16.4). Additive; the multi-library lane starts here, linearly after `0096` |
+
+| 0098 | The one-row `library_settings` table: owns `library_uuid` and `similarity_character`, the settings that belong to a library rather than to the machine |
+
+| 0099 | Repoints `guest_score` / `guest_session` at `token_public_id` and clears their rows, so guest state survives a token reissue by public id rather than integer id |
+
+| 0100 | `pending_score_invalidation`: the durable record that scores are owed a recompute, so an invalidation raised against a dormant library is not lost across the hub/vault boundary |
+
+| 0101 | `library_settings.settings_fingerprint`, the keyed fingerprint that lets a dormant library detect it has fallen behind owner settings and catch up on activation |
+
+Current head: `0101_add_settings_fingerprint`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 
@@ -1110,6 +1542,1008 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
+### Stored path containment (#776)
+
+`Snapshot.relative_path` and `Picture.file_path` are database values, so a
+faulty import, a bug, or a restored archive can put a path in them that points
+outside the library. They are contained **before a destructive operation**,
+never on the read path:
+
+- **Snapshot file paths** (`relative_path` / manifest / hashes) go through
+  `resolve_path_within(vault_root, …)` at every read/delete site (retention
+  prune, snapshot delete, restore, identity scrub). `os.path.join` silently
+  discards the base when a component is absolute and must not be used there.
+- **The scrapheap purge delete** (`remove_picture_files`) is the one unattended
+  `os.remove` that follows `Picture.file_path` wherever it points, so it checks
+  the resolved path against `image_root` **plus the configured reference-folder
+  roots** (`Vault.reference_folder_roots()`, host-side and path-mapped forms).
+  Containing against `image_root` alone would strand every reference-folder
+  library's files; never do that. A refused path is reported as unconfirmed, so
+  the deletion ledger is corrected to `file_removed=False` and restore can
+  still resurrect the row.
+- **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
+  which only honours a recorded `tags_file`/`description_file` value that is
+  exactly the image stem plus a safe suffix, so a fabricated column cannot
+  redirect a write.
+
+**Reads are deliberately not contained.** `resolve_picture_path` does not
+police where a picture lives. Whoever can write the vault DB can read those
+files directly, so refusing to serve them buys little, while a false refusal
+(an orphaned reference-folder row, a moved mount, a path-mapper form) presents
+to a desktop user as their pictures failing to load. Over-blocking a delete
+strands a file and is recoverable; over-blocking a read breaks the library.
+
+Both directions are asserted in `tests/test_path_containment.py`: escape is
+refused at each sink, and in-root plus reference-folder files are still deleted
+(over-blocking is its own regression). **That file covers the picture sinks
+only.** The model shelf's write/unlink sites (`services/model_mover.py`,
+`services/run_importer.py`) are the same class and are contained the same way,
+but they use the hub rather than the vault and are asserted in
+`tests/test_model_move.py` and `tests/test_model_run_import.py` — do not read
+the sentence above as covering them.
+
+- **The shelf's containment is reachable at every one of its four sites**, and
+  none of it is a dead sanitizer. Two are obvious: a `model_file.relpath` is a
+  database value, so the mover resolves each **source** against its own
+  `model_folder.path` before unlinking it, and a run *name* comes from the HTTP
+  body, so the importer resolves it against the registered output root before
+  reading it. The two **destination** checks were previously commented as
+  unreachable, on the grounds that `os.path.basename` had already flattened the
+  name — that is wrong. `resolve_path_within` calls `realpath`, so a **symlink
+  standing at the destination filename** resolves outside the folder and is
+  refused, which `basename` does nothing about. A *dangling* symlink is the
+  sharp case: `os.path.exists` is False for it, so the collision check that
+  follows waves it through. Before #1012 the containment was the only thing
+  between the request and an `os.replace` writing outside a registered folder;
+  publication now refuses a taken name outright, so the containment's job is to
+  make that refusal a 4xx naming the file rather than a failed item on a worker
+  thread. Both are pinned by a negative that goes red when the guard is swapped
+  for `os.path.join`.
+- **Publication claims the destination name and never replaces it**
+  (`model_mover.publish_no_clobber`, #1012). Every shelf write that puts a file
+  at its final name — the same-drive move, the cross-drive copy,
+  `POST /model-files` and the ai-toolkit import — goes through one function.
+  `os.replace`, and `os.rename` on POSIX, overwrite in silence, which made the
+  free-destination check only as good as the gap that followed it: on the copy
+  path that gap is a whole checkpoint's copy and digest, and a trainer or
+  ComfyUI writing that name inside it had its file replaced while the move
+  reported `moved` and removed the source. **The claim is one syscall** — a hard
+  link, or an `O_CREAT|O_EXCL` reservation where the filesystem or
+  `fs.protected_hardlinks` will not give one — so there is no instant in which
+  an existing file is gone and ours is not yet there, and a conflict leaves the
+  destination, the source and the hub row exactly as they were. It is the
+  publication the backup writer already used
+  (`library_backup_service._publish_private_temp`).
+- **Publication gives back what it claimed** if it then cannot drop the
+  temporary name. That failure is ordinary on Windows, where a file another
+  process holds open cannot be unlinked and ComfyUI holds loaded models open;
+  without the rollback it would leave an unregistered copy at the destination
+  *and* a name that refuses every later move of that model, which `os.rename`
+  could never produce because it was one syscall. The rollback is **best
+  effort**: it runs through `discard_partial` with an error already on its way
+  to the caller, so a destination that will not unlink either keeps the claimed
+  name and says so in a warning. The move is reported failed in both cases; only
+  the retry differs. The two-attempt claim is the
+  only place the two shapes differ in residue: a **crash** between the
+  reservation and the replace (never the link) leaves an empty file at the final
+  name, which is the price of moving at all on a filesystem without hard links.
+- **The relocation target is the one caller-supplied host path in the shelf**
+  (`POST /model-folders/{folder_id}/relocate`). Owner-chosen paths are trusted
+  here, as reference folders are, so the guard is deliberately narrow —
+  `validate_reference_folder_path`: absolute, and not a system directory — and
+  it is pinned in both directions by `tests/test_model_shelf_api.py` (`/etc/…`
+  and a relative path are 400; an ordinary absolute path still relocates). The
+  InsightFace branch runs the *same* guard on the same input, through the shared
+  `_validated_destination`, and contains every pack relpath with
+  `resolve_path_within` against both roots before it removes a source tree.
+
+### The shelf's five verbs (shelf plan F3)
+
+**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
+
+**Addressed by `model.id`, never by hash.** A 24 GB checkpoint is listable the moment it is registered and stays `sha256 NULL` until `MissingCheckpointHashFinder` reads it, so a hash-addressed verb layer would leave the largest files on the shelf as the only ones that cannot be corrected. `model.id` is AUTOINCREMENT and never reissued.
+
+**`PATCH /models` writes only the fields the body carries**, using `model_fields_set` rather than a null check, so an explicit `null` is a *clear* (a wrong base model back to unset, which returns the row to the filter's "not set" bucket) while an absent field is untouched. That distinction is what lets one route carry three verbs without Set base model blanking the names in the selection.
+
+Three guards on it, none of them authz:
+
+- **`display_name` is refused for more than one id.** A name is a fact about one file; in bulk it would give every selected row the same one, and there is no undo.
+- **`file_kind` cannot be cleared, only corrected.** Every file is something and `unknown` is how the shelf says so; a null would leave a row neither list block matches.
+- **A correction the hub's own CHECK would reject is refused by name.** `model` carries `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` and the same for `kind`. Left to SQLite a violation surfaces as a 500 naming `CHECK constraint failed`, which tells the owner nothing about the file they picked. The guard decides on the **post-write** state (`changes.get(col, row[col])`), not on the body, because three different bodies reach the same violation and only one mentions `file_kind`: promoting an unhashed checkpoint; `{"kind": null}` on a row that is already an adapter, which names no `file_kind` at all; and `{"kind": null, "file_kind": "adapter"}`, which a guard reading the *stored* kind waves through. Both of the latter were 500s until the CSO review of #869 found them.
+
+**Forget is gated on the row's state, never on the size of the selection** (ruled 2026-08-10). A model is forgettable only when no copy of it is `present` **or `unreachable`**. The second is the one that matters: `unreachable` is the we-could-not-look state an unplugged NAS produces, and acting on it would let one call wipe the curation for a whole drive. A selection of one is therefore just a legal selection and needs no special case, and the confirmation stays at every size, because what makes it confirm is that curation cannot be reconstructed — as true of one row as of four hundred.
+
+**The gate and the DELETE are one critical section.** `HubDatabase.fetchall` takes and releases the hub lock per call, so reading the states through it left a window in which a background `ModelFolderScanner` could flip a row from `missing` back to `present` between the check and the delete, and the model would be forgotten anyway. Both `SELECT`s therefore run on the transaction's own connection inside `with hub.transaction()`. Small window, unrecoverable consequence, on the one shelf operation with no undo behind it — the wrong side of that trade, and found by the CSO review of #869. `tests/test_model_shelf_api.py::test_forget_reads_its_gate_inside_the_write_transaction` counts the reads that escape the transaction rather than trying to schedule the race.
+
+**Ids that fail the gate come back under `refused` with a reason rather than failing the call.** A selection is made against a list that may be seconds old, and failing the whole request because one file came back is the wrong answer to good news. That response *is* the receipt the shelf shows.
+
+**Vault attachments survive a forget, deliberately.** `adapter_attachment` lives in each library's vault keyed by the content hash, so the rows held by libraries that are not open are unreachable from here and deleting only the active library's half would be an arbitrary subset. Left in place they are invisible (every read joins hub to vault) and they re-link by content if the file ever returns — the same property that makes folder removal a tombstone. What Forget destroys is the hub-side curation: name, base model, kind, trigger words. That is the whole reason it is one of the two confirmations while folder removal is neither.
+
+**No undo, and no operation-log half.** The v1.9 operation log is vault-only and the shelf's rows are hub-side; the decision to span it was overturned on 2026-08-09 and reaffirmed 2026-08-10. Confirmation only where the prior state cannot be reconstructed: a bulk base-model overwrite and Forget.
+
+### The built-in model folder: declared, never scanned
+
+**PixlStash downloads engines for itself, so it declares what they are.** The
+shelf catalogues by *reading* — the scanner walks a folder, reads each
+`.safetensors` header and decides. That is right for a folder of LoRAs the owner
+assembled and wrong for our own engines: half of them are ONNX or `.pt`, which
+the scanner does not even yield (`MODEL_SUFFIX` is `.safetensors`), and every one
+of them is a file we chose to fetch. `services/builtin_models.py` declares them
+and writes the rows; nothing is parsed and nothing is hashed, so a 339 MB tagger
+costs an existence check at start-up.
+
+**`file_kind = 'engine'`, with the role in `kind`.** `kind` already holds free
+text (`lora`, `lokr`) and already renders as the row's label, so `tagger` /
+`captioner` / `scorer` / `face` ride there and `file_kind` stays four values
+wide instead of growing one entry per role. No schema change: the `model` CHECK
+constraints bind only `adapter`. `kind` holds the **primary** label only; the
+full set lives in `model_capability` (below).
+
+**The scanner must skip these folders**, which is what `model_folder.owner`
+marks. It yields only `.safetensors` and sweeps whatever it did not see to
+`missing`, so pointed here it would mark the ONNX tagger and both `.pth` scorers
+missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
+them, as it already does for a `source` folder.
+
+**The filenames are restated rather than imported.** Every downloader names its
+files as module constants, but those modules import onnxruntime, torch, cv2 and
+PIL at module level and start-up must not pay that to learn two strings. The
+duplicate is pinned by `tests/test_builtin_models.py`, which imports the real
+constants where the cost is free. Drift is self-announcing rather than silent: a
+renamed file makes its declared row go `not_downloaded` *and* the real file
+appear in the unclaimed readout, which is a visible pair.
+
+**Protected, because they are ours.** `DELETE` on the folder answers 409 (the
+caller is authorized; what refuses is what the target is), and every verb refuses
+an engine row: renaming our own tagger would make the shelf lie about it,
+assigning one to a character means nothing, and forgetting one deletes a row the
+next start-up declares straight back. Forget reports `is_a_builtin_engine` as a
+**refusal reason** rather than raising, which is the shape that route already
+speaks — and the check runs *inside* the delete transaction, alongside the state
+gate, rather than as a route-level read that would break the one-critical-section
+invariant.
+
+**Declared-but-absent is normal, and it has its own word.**
+`sac+logos+ava1-l14-linearMSE.pth` is fetched only for the CLIP model that needs
+it, so about half of these are absent on any given machine. That is a state, not
+a warning — which is why `declare_folder` writes **`not_downloaded`** and never
+`missing`. `missing` is the *scanner's* word for a registered file that was in a
+readable folder and is not in it any more, and the shelf draws it as a fault
+(error rail, error glyph, "The file is not where it was"): a false alarm on a
+healthy machine, which is what #926 reported. Everything declared here is
+re-fetched the moment something needs it, so the softer word is also right for a
+file that WAS here and is gone. The **sweep** at the end of `declare_folder` is
+the one exception and still writes `missing`: a row the declaration no longer
+*names* — `antelopev2` deleted out of the InsightFace store, a repo dropped by
+`huggingface-cli delete-cache` — is gone rather than pending, because nothing
+will fetch it back.
+
+**Only ENOENT is "not downloaded".** `declare_builtin_models` `stat`s each
+engine, and a `FileNotFoundError` is the one absence that means *nobody has
+fetched this yet*. Any other `OSError` — a permission denial, an IO error, a
+mount that has gone strange — is us being unable to **look**, which is
+`unreachable`, and it is logged with the path and the error. Folding those into
+`not_downloaded` would hide a real filesystem fault behind a download glyph,
+which is the same false-reassurance failure in the other direction from the one
+#926 reported. `DeclaredEntry` therefore carries the resolved `state` rather
+than a `present` flag: only the caller knows which of the three its own root
+means, and the InsightFace and HuggingFace roots — both of which read a listing
+before declaring anything, and both of which bail out entirely if that listing
+fails — can only ever mean the other two.
+
+**The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
+declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree
+references by name or by pattern. It is called "not claimed by anything in this
+build", never "orphaned": we know our own manifest, we do not know that a
+previous build, a plugin or the owner did not put it there. Same epistemics as
+`missing` (a fact) against `unreachable` (the absence of one), and the same
+doctrine — detection proposes, it never applies, so nothing here deletes.
+`hf_hub_download(local_dir=…)` leaves `.cache/huggingface` beside what it writes,
+at the top level and inside every subdirectory it fills; that is the tool's, and
+reporting it would train the reader to ignore the list.
+
+**And the readout is declared, which is what makes it reachable (#927).** It
+existed, it was right, and *nothing called it* — so the shelf listed the four
+engines and said nothing about the 339 MB sitting beside them: invisible, and
+therefore impossible to act on. `declare_builtin_models` now appends one entry
+per unclaimed file, and two choices carry the fix:
+
+- **`file_kind='unknown'`, never `engine`.** Every shelf verb refuses an engine
+  row (see *Protected, because they are ours* above), so a leftover declared as
+  ours would be visible and still untouchable — half a fix that reads like a
+  whole one. `unknown` is what the shelf already calls *Unclassified*, and it is
+  the honest reading of "present, and nothing in this build claims it".
+- **Weights only** (`MODEL_SUFFIXES`: `.safetensors .ckpt .pt .pth .bin .onnx
+  .gguf`, wider than the scanner's lone `.safetensors` because this folder is
+  where the other formats land). Every hit is now a row rather than a line in a
+  log, and a shelf that also lists a label CSV and a revision sidecar is one
+  nobody reads closely enough to notice the `.pt`. Bytes are unaffected: the
+  folder's total is read off the disk, not summed from these rows.
+
+**A re-declaration `COALESCE`s rather than restates.** That is a no-op for an
+engine — each declares its kind, role and name, and `PATCH /models` refuses one
+anyway — and it is what stops every server start from resetting a name the owner
+typed onto the one row class here they may curate. `file_kind` needs the same
+care for a sharper reason (`DeclaredEntry.restated_file_kind`): a leftover enters
+with `sha256` NULL, so `CheckpointHashTask` picks it up, and a digest that is
+already registered **merges** the two `model` rows — this folder's `model_file`
+is repointed at the survivor, which is somebody's real adapter. Restating
+`unknown` onto it would drop that adapter out of `/adapters` for its own folder,
+over a second copy the owner happened to leave in the download folder.
+
+Deleting the *file* is not this change and not this module: that is #925.
+
+### The other two roots: InsightFace packs and the HuggingFace cache
+
+**The built-in folder was never the only place models land, and the other two
+were invisible.** InsightFace keeps face packs under `~/.insightface/models`;
+everything fetched through `huggingface_hub` goes to the HuggingFace cache. On a
+measured machine that is 0.9 GB and 116 GB against the built-in folder's 1.1 GB —
+so the shelf was showing the smallest of the three and the owner had no way to
+see where the disk had gone. `services/builtin_caches.py` declares both.
+
+**Declared, never scanned, for the reason above and one more.** The scanner
+yields only `.safetensors`: InsightFace holds ONNX and would list as *empty*,
+and the HuggingFace cache is content-addressed, with its 37 `.safetensors` behind
+`snapshots/` symlinks onto hashed blobs. A walk would read 116 GB to learn what
+the cache's own index already knows. Both therefore carry `owner`, which is the
+marker the scanner reads to skip a folder.
+
+**Discovered rather than restated, which inverts `builtin_models`.** That module
+declares filenames because it *chose* those downloads, and duplicating two
+strings beats importing onnxruntime at start-up. Neither reason survives here:
+the contents are whatever the owner and the tools put there, so a fixed list
+would be a guess that goes stale. InsightFace is one `listdir`; HuggingFace is
+`scan_cache_dir()`, which reads the cache's bookkeeping and measured **0.01 s
+against 116 GB and 26 repos**. Start-up cost is not the reason to avoid either.
+
+**InsightFace declares the union of what is on disk and what we provision.**
+Only `KNOWN_MODEL_PACKS` would hide the `antelopev2` and `buffalo_s` a real
+machine has; only what is on disk would drop a pack we provision that has not
+downloaded yet. Both, and an absent known pack lands `missing` — the same state
+as the ViT-L/14 scorer, and no more of a warning. The `.zip` InsightFace
+downloaded a pack from sits beside it and gets no row, the same judgement
+`TOOLING_DIRS` makes about `.cache`.
+
+**HuggingFace declares a repo, not a file.** A per-file listing would show the
+same weights once per revision and mean nothing; `repo_id` is the unit a person
+recognises and `size_on_disk` the number they came for.
+
+### What a cached model is FOR: the feature classifier and `model_capability`
+
+**A cached repo is labelled by the feature it powers, not by its file format and
+not by its ML task.** `repo_type` is `model` for all 26 repos on a real machine
+and therefore says nothing. `services/model_features.py` answers from four
+sources, in order, the first one that answers winning outright: repos our own
+downloaders name (a fact, not a guess); the shipped `KNOWN_BASE_MODELS` table;
+the snapshot's own `model_index.json` / `config.json`; and then **`other`**,
+which is the part that matters — a VAE, a T5 encoder and a BERT are components
+of somebody else's pipeline, and forcing one into a feature label would put a
+confident wrong word in the column a reader uses to decide what is safe to
+delete. `…ForConditionalGeneration` is the documented trap: it is the class of
+every vision-language captioner *and* of `T5ForConditionalGeneration`, so it
+only counts as a captioner when the config also describes a vision tower.
+
+**A model that serves several features appears under each, which needs a set.**
+`features_for_repo` returns an ordered tuple, and the shelf lists the model once
+per entry. Two worked examples, and both are the reason: Florence-2 is one set
+of weights driving `get_captions` *and* `detect_objects` (what `DetectionTask`
+runs), and the CLIP the embedder loads is both the search encoder and the
+aesthetic predictor's backbone — `ImageEmbeddingTask` runs one forward pass and
+uses the result twice. A single label answers "what breaks if I delete this"
+wrongly for exactly the rows a reader is deciding about, which is the question
+the column exists for.
+
+**The set lives in `model_capability(model_id, capability)`**, the same
+one-model-many-rows idiom as `model_file` and read the same way — one whole-page
+query grouped in Python (`fetch_capabilities`), never a join onto the row SELECT
+that would fan every model row out once per capability. `model.kind` is left
+alone and keeps the **first** entry: it is the adapter-algorithm column, it
+carries a CHECK that says so, and every existing reader was written against one
+string. Only declared engines carry capabilities; a scanned adapter has none,
+because its `kind` is an algorithm and an algorithm is not a capability.
+
+**It is a child of `model` with foreign keys ON**, so every site that deletes a
+`model` row deletes its capabilities first — `forget_models` and the
+`CHECKPOINT_HASH` merge (which carries them across to the survivor, since the
+two rows are the same bytes). A forgotten child here does not leak quietly; it
+**aborts the delete**. The same rule is why `_rebuild_model_with_kind_check`
+does not have to carry this table: its guard is false forever once the rebuild
+has run, and the `CREATE TABLE` follows it. A third child would have to join
+that dance.
+
+**No index on `capability`, deliberately.** The shelf facets and filters
+client-side over rows it has already fetched, so nothing asks SQL "which models
+can X". The declaration restates the set wholesale rather than diffing it — at
+most two rows, and the declaration is the authority, so a capability it no
+longer claims has to go or the model stays listed under a feature it stopped
+serving.
+
+**`provenance` stays `builtin` on every row here.** It is a claim about how the
+row was *written* — declared by PixlStash's registration rather than scanned out
+of a folder the owner assembled — and not a claim that PixlStash chose the
+model. It did not choose most of them. `external` would say the row came from a
+scan, which is the one thing that never happens to these folders.
+
+**The shared writer is `declare_folder`.** All three roots resolve their own
+entries — an engine is one `stat`, a pack is a directory sum, a repo is a number
+from an index — and hand `DeclaredEntry` rows to one writer. Only the writing was
+ever common, so only the writing is shared.
+
+**The shelf had to be taught to ask.** `GET /adapters` defaults to
+`file_kind=adapter`, and the frontend's `Show` panel had exactly three blocks —
+adapters, checkpoints, unclassified — none of which requested `engine`. So the
+backend had answered `file_kind=engine` since #876, this document claimed the
+engines were "on the shelf for completeness", and nothing on the shelf had ever
+displayed one. The fourth block (`filters.engines`, on by default) is what makes
+that sentence true. A row's block comes from `blockOf`, so engines refetch and
+are replaced independently of the other three.
+
+**`movable` describes the folder, and gains a fourth value.** It says how a
+folder moves, not whether a route to move it is built yet:
+
+| Value | Meaning | Folders |
+|---|---|---|
+| `per_item` | files move one at a time | a folder the owner assembled |
+| `root_only` | relocates as a whole | the managed store and the InsightFace packs (both have a route), our downloads (#905 still owes one) |
+| `external` | taken *from*, never written into | an ai-toolkit output root |
+| `fixed` | **cannot relocate at all** — another tool owns where it lives | the HuggingFace cache |
+
+`fixed` exists because `root_only` would be a lie about the cache. Its location
+is `HF_HOME`, read at import by a library shared with every other tool on the
+machine, so "moving" it is a restart and a re-download rather than a move — and
+the design requires that row to render with no drag handle and no Move, its one
+action being an explanation. A value the UI can read is what makes that possible
+without special-casing a path.
+
+**The move guard names both `root_only` and `fixed`.** Neither permits a
+per-item move out, so keying on one would leave the other open — which is
+precisely how renaming this vocabulary could silently drop the protection. The
+plan originally said `external` for these two roots; that would have overloaded
+a word already meaning "ai-toolkit output root" *and*, because the guard is
+keyed on values rather than on `owner`, would have removed the protection on the
+way past. Recorded here rather than in the plan because this is the shipped
+behaviour.
+
+**A declaration sweeps what it no longer names**, and these folders have nowhere
+else to get that. The scanner marks anything it did not see on a walk `missing`,
+and it skips these precisely because they carry an `owner` — so without a sweep
+in `declare_folder` a row here could never stop being `present`. It is a no-op
+for the built-in engines, whose entry set is a fixed tuple naming every row; it
+exists for the discovered roots, where `huggingface-cli delete-cache` drops a
+repo out of the index and a deleted pack drops out of the listing. The row left
+behind would otherwise claim its bytes forever, inflating the `present_bytes`
+the folder list reports. Predicate is `seen_at <` the run's own stamp, not `!=`,
+so a concurrent declaration cannot have its rows swept by this one.
+
+**Each root is declared independently at start-up**, so one unreadable root
+cannot cost the shelf the other two, and every failure is logged and swallowed:
+a machine that has never run face detection has no InsightFace directory, and one
+that has downloaded nothing through the library has no cache. Both are normal.
+
+**Where the folder is: one accessor, and a location that can be recorded (#905,
+closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
+the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all
+ask it. They used to each build `user_data_dir("pixlstash")/downloaded_models`
+for themselves — agreeing by convention, not by construction — which is exactly
+what made the folder immovable: relocate it and the shelf would have declared the
+new location while every downloader kept filling the old one and re-fetching what
+had just been moved away. Unifying them needed
+`ImageEmbeddingTask.AESTHETIC_MODELS` to stop resolving its paths at **import**
+time; the table now holds `filename` and `_aesthetic_config()` joins the folder at
+use time. `tests/test_builtin_models.py::test_no_module_builds_the_download_path_for_itself`
+is what stops a fourth caller reintroducing the convention.
+
+Resolution order, first hit wins:
+
+1. `PIXLSTASH_BUILTIN_MODEL_DIR` — for a deployment that mounts the folder
+   elsewhere without moving anything into it. It now redirects the folder
+   *whole*, downloads included, which is what makes it safe to name here; the
+   test suite no longer uses it (see below).
+2. the location a relocation recorded, in `downloaded_models.location` beside
+   the default;
+3. `user_data_dir("pixlstash")/downloaded_models`.
+
+**A record naming a folder that is not there is still obeyed, and said so once
+per start.** Obeyed, because the folder is normally on a drive and a drive may
+be away for an afternoon; the alternative was tried and withdrawn under review,
+since falling back to the default makes a vanished folder unrelocatable
+(`relocatable_identity` recognises it by path) and leaves two copies once it
+returns. Said, because the next download re-creates the recorded path and pulls
+~750 MB into it, and nothing anywhere used to mention that — which is what made
+one stale record an investigation rather than a `grep`.
+
+The line is `_warn_if_the_recorded_folder_looks_wrong`, called from
+`declare_builtin_models` at start-up. **Not from the accessor**, which was the
+second withdrawn attempt: `builtin_model_dir()` is read on every call and sits
+behind `relocatable_identity` on the per-row path of `GET /model-folders`, which
+the frontend polls every three seconds, so a line there is a flood and its
+`stat` is a syscall against a drive that may be gone.
+
+**Two symptoms, because either alone goes quiet.** "The recorded folder cannot
+be read" is what a start sees while the drive is away — but where the record
+merely went stale, the download that follows creates the path, so that symptom
+lasts one start. The second says the same thing from the other side and does not
+heal itself: **engines still in the default folder, which a relocation should
+have emptied**. Before the re-download that is a fetch about to be repeated;
+after it, two copies with the recorded folder still filling. It is checked
+whatever the recorded folder holds, for exactly that reason — stopping at "the
+recorded folder has something in it" would report the accident only inside the
+window its own download closes. Silent when the default is empty, which is a
+relocation that worked: the files went with it.
+
+It fires only for the folder **a relocation recorded**, matched against the
+record itself. Not "anything that is not the default": the owner who symlinked
+the default folder at their big drive and then relocated onto it has a default
+that *resolves to* the recorded location, so a path test goes quiet for the
+person who did the most to move their models. And not at all while
+`PIXLSTASH_BUILTIN_MODEL_DIR` is set, since that names the folder over the
+record's head — a volume that has not mounted yet is a first start, nothing was
+ever fetched, and "delete the pointer" would be advice that does nothing. The
+record is read by a quiet reader beside `_configured_model_dir()`, which reports
+its own failures and has already been called by the time the declaration runs.
+
+It reports what `stat` says rather than asserting the folder is missing, so a
+permission error reads as one. An unmounted mount point that still exists as an
+empty directory is indistinguishable from an empty folder and is not claimed.
+
+`declare_insightface_packs` says the **first** of those about a recorded pack
+root that cannot be listed, in place of the "normal on a machine that has not
+run face detection" it logs otherwise — which is exactly wrong for a machine
+that has a recorded root, since having one means it ran face detection. A root
+recorded back onto `~/.insightface` itself falls through to that ordinary line,
+because the remedy would name the directory it starts from.
+
+It deliberately does **not** say the second, and the asymmetry is the point:
+`downloaded_models` is PixlStash's alone, so engines still sitting in it can
+only mean a relocation that did not take. `~/.insightface` is the *library's*
+root, shared with every other InsightFace tool on the host — ComfyUI's face
+nodes among them — so packs under it are just as likely to be another tool's,
+and the two states are byte-identical on disk. A line claiming a failed
+relocation there would fire forever on an ordinary machine, and its remedy would
+tell the owner to abandon the packs they moved in favour of somebody else's
+directory. Where a claim cannot be told apart from an innocent state, the claim
+is not made.
+
+**The recorded location is a file, not a hub row**, because the folder is
+machine-global — one download serves every library and every server instance on
+the host — while a hub belongs to one deployment. In the hub, a second deployment
+on the same machine would keep downloading to the old place, which is the
+divergence the accessor exists to remove. Read on every call rather than cached,
+so a relocation applies to the next download instead of to the next restart.
+
+**Relocating it is `POST /model-folders/{id}/relocate`**, the managed store's
+route, gated by `managed_model_store.relocatable_identity()` — the one place that
+says which roots relocate, read by the route *and* reported to the client as
+`relocatable` on `GET /model-folders`. It has to be reported: the download folder
+carries the same `kind`, `owner` and `movable` as the InsightFace packs
+(`declare_folder` writes all three identically), so it is told apart by **path**,
+which no client can do. The folder adds two steps to the relocation's ending,
+both after the last file has landed and before the hub is told: its **companion**
+files are carried across (they are declared but have no `model_file` row, and an
+engine without its label set is a broken engine), and the new location is
+recorded. Order matters — a pointer written before the files arrived would send
+the next download to an empty folder.
+
+**Start-up declaration is off in the test suite** (`Server.DEFAULT_DECLARE_MODEL_ROOTS`).
+These roots are machine-global, so a `Server` on a temp config dir would otherwise
+describe whichever engines the developer's machine holds — `test_workers_api`
+caught that as `assert 3 == 0` on a runner with a warm cache. Pointing the
+accessor at a temp directory instead, which is how this was handled before, stopped
+being an option the moment the downloaders started reading it: a fresh temp
+directory means every engine is downloaded again on every shard, against the model
+cache CI restores. `tests/test_builtin_models.py` covers the declaration directly
+against a `tmp_path`.
+
+**Writing the recorded locations is off in the test suite too**, and by
+construction rather than by convention: the session-scoped autouse
+`sandbox_the_recorded_model_locations` in `tests/conftest.py` redirects
+`builtin_models._pointer_path` and `insightface_model_utils._pointer_path` into a
+session temp directory, leaving a test's own redirection of `_pixlstash_data_dir`
+untouched. Both records are machine-global and outlive the process that writes
+them, so a test that writes one has changed where the real PixlStash on that
+machine downloads its engines — which is not hypothetical: a record naming a
+finished run's `tmp_path` had every later start re-create the deleted directory
+and fetch ~750 MB of engines into it, silently, while the real ones sat in the
+default folder. Per-test redirection of the seam was the previous protection and
+it is the remembered kind: it lapses when a relocation's worker thread finishes
+after the redirection is undone, and it never existed for a module that did not
+think to add it. `test_no_test_can_name_the_machines_own_recorded_locations`
+fails if the fixture goes away.
+
+Two details of that fixture are load-bearing. The redirected name carries the
+**writing test's id**, so one test's record cannot change where a later test in
+the same shard downloads — one shared file would be a flake the sharder
+reshuffles between runs. And nothing is **restored** at the end: a relocation
+records its location from a daemon worker thread the suite leaves unjoined, so
+putting the original `_pointer_path` back would reopen the machine's file for
+exactly that write. The empty-sandbox assertion is a tripwire rather than a
+census — it sees a write made while no test had redirected the seam, and a late
+thread write that lands during a test which *has* redirected it goes to that
+test's `tmp_path` instead: safe, but unreported.
+
+The write that poisoned a real machine has **not** been reproduced, and nothing
+here should be read as naming it. What was found alongside the fixture is a
+shape that lets any of this escape a test: `test_relocate_is_owner_only_and_local_only`
+ended on a real `202` relocation it never awaited, so that job's ending ran
+inside whichever test came next. **A `202` from this route is awaited, always**,
+and `no_model_move_outlives_its_test` in `tests/conftest.py` fails any test that
+leaves a move running, suite-wide — which is why a module fixture may clear
+`model_moves._job` when it sets up but never when it tears down: an autouse
+fixture tears down last, so clearing it there hides the leak from the guard.
+
+**Note what that identity rests on.** The route decides whether it is relocating
+the download folder with `is_builtin_model_dir(folder["path"])`, which compares
+against `builtin_model_dir()` — the recorded location itself. Identity is
+therefore held in a mutable file rather than in the row, so a folder whose path
+comes to equal the recorded value inherits it, including the right to rewrite
+the record when relocated. That is worth closing; it is also the loose end of
+the investigation this fixture came from, which never established which process
+wrote the record it found.
+
+#### Relocating the InsightFace packs (#906)
+
+`root_only` said the packs relocate as a whole before anything could relocate
+them; #906 made the claim true, and deliberately after #902's vocabulary change
+rather than inside it, so a rename could not put face extraction in its blast
+radius. It landed after #905 and follows it deliberately: the two roots are the
+same kind of path and are now recorded, gated and reported the same way.
+
+**The root is a recorded location, not a config key.**
+`insightface_model_utils.insightface_root()` is the single answer, and all three
+callers ask it: the `auraface` download (`_pack_dir`), the shelf's declaration
+(`builtin_caches.insightface_models_dir`) and the `FaceAnalysis(name=…, root=…)`
+the face pipeline constructs. Resolution is the recorded root, else
+`~/.insightface`; read on every call, so a relocation applies to the next
+download rather than to the next restart.
+
+It is written to `insightface.location`, **beside the download folder's own
+pointer and resolved through the same `_pixlstash_data_dir()` seam**, for the
+reason #905 gives about `downloaded_models.location` and which applies here word
+for word: this path is machine-global — InsightFace has exactly one root per
+machine, and one set of packs serves every library and every server instance on
+it — while `server-config.json` and the hub each belong to one deployment. An
+earlier revision of this change put it in `server-config.json`; that would have
+meant a second PixlStash on the same machine kept downloading packs to the old
+place, which is precisely the divergence a single accessor exists to remove.
+`insightface_model_pack` stays in server-config because it is a *preference*
+about which pack to load, not a machine path.
+
+**There is deliberately no environment override**, unlike the download folder's.
+`PIXLSTASH_INSIGHTFACE_DIR` existed and named the *models* directory — one level
+below the root that is now recorded — so the two could disagree: the shelf would
+declare the override path while downloads and `FaceAnalysis` used the root, and a
+relocation identified by `insightface_models_dir()` would repoint the row at a
+directory the next start would not declare. Inert while nothing could relocate, a
+bug the moment something could. It had no callers in the product or the suite and
+was removed; `PIXLSTASH_BUILTIN_MODEL_DIR` is safe precisely because it redirects
+its folder *whole*.
+
+**The path names the root, not the folder.** `models` is InsightFace's own layout
+— the library joins it onto whatever root it is given — so the folder follows the
+root to `<path>/models`. Naming the folder directly would mean accepting only
+paths whose last component is `models`, which is a worse thing to ask of the
+owner than one documented sentence. It is the one asymmetry in the relocate
+route's contract and it lives entirely on the server: the dialog sends the path
+the owner picked, exactly as it does for the other two.
+
+**A pack is a directory, so this one does not go through `ModelMover`.** There is
+no per-file row to repoint and no `sha256` to verify a copy against — packs are
+declared from a listing, never hashed. `model_mover.move_directory` keeps the
+guarantee that matters instead: **copy under `.pixlstash-partial` → rename into
+place → then remove the source**, so a *complete* pack survives at one end or the
+other. That is the shape of the per-file ordering and it is load-bearing for a
+different reason — a half-populated `buffalo_l/` is worse than none at all,
+because the pipeline would start, find the directory and then fail on a model
+that is not in it. Same-filesystem is `os.rename` and copies nothing.
+
+**Everything around the work is the shared relocation.** `relocatable_identity`
+names it (so `GET /model-folders` reports `relocatable` for it without the client
+knowing why), `_start_job` gives it the machine-wide `SHELF_IO_LOCK` slot and the
+job clients poll, `_validated_destination` runs the same blocklist on the same
+input, and `_finish_relocation` promotes the destination and carries every pack
+row across — the `missing` tombstones included. Validation stays in the POST: an
+unusable destination, a pack that would overwrite one already at the target, a
+relpath escaping its folder, or a copy that would not fit are 4xx before a byte
+moves.
+
+**The pointer is written before the hub is told**, the download folder's order
+and correct here for the same reason: a root recorded before the packs arrived
+would send the next download into an empty directory. If that write fails the
+packs are already at the new root and a relocation is not undoable (the cancel
+ruling), so the hub is still told the truth and the lost durability is logged as
+an error naming the pointer and the repair. Interrupted halfway, the moved packs
+are at the new root, the rest are at the old one, and the recorded root still
+names the old one — so face extraction keeps working and re-running finishes the
+job (a pack whose source is gone is skipped, not failed).
+
+**What is still refused, and why the negatives are asserted.** Widening the route
+is the kind of change that quietly opens it to everything, so
+`tests/test_insightface_relocation.py` pins the refusals beside the acceptance:
+the HuggingFace cache (`fixed`, and `foreign`/`root_only`'s neighbour — it would
+be reachable if the route ever keyed on a column instead of on
+`relocatable_identity`), a folder the owner registered, and an unknown id. The
+per-item move guard in `ModelMover._plan_one` is untouched and still names both
+`root_only` and `fixed`.
+
+### The managed model store (shelf plan B7)
+
+**Exactly one `model_folder` row with `kind='managed'` always exists.** It is
+PixlStash's own model storage, the way the vault owns picture files, and it is
+created on first run by
+[`services/managed_model_store.py`](../pixlstash/services/managed_model_store.py)
+(`ensure_managed_folder`, called from `Server.__init__` right after the hub is
+bootstrapped). It is the default destination for a drop or an ai-toolkit import.
+
+- **Why `managed` rather than a seeded `user` folder.** With zero registered
+  folders there is nowhere to drop or import a model, so drag-in is impossible
+  on a fresh install. But a `user` folder is an *association the owner made*, and
+  one the owner is forbidden to dissolve is not an association — the honest
+  answer is a kind that means "PixlStash's own storage", which was already in the
+  enum and created by nothing. `user` and `foreign` folders may legitimately
+  number **zero**; that is a normal state (nothing catalogued in place) and gets
+  no error and no message.
+- **Where it goes: beside `hub.db`, under the config directory, not at a fixed
+  `user_data_dir` path.** Same reasoning as the hub itself (#168), and stronger
+  here: this is a directory files are *copied into and unlinked from*, so a fixed
+  platform path would have every test run and every alternate deployment writing
+  into the owner's real store. A default install therefore gets it under the
+  platform user directory anyway, because that is where the config dir is.
+- **Relocatable, never removable.** `DELETE /api/v1/model-folders/{folder_id}`
+  answers **409** for this row — not 403: the caller is fully authorized and the
+  request is well formed, and what refuses it is the state of the target. A 403
+  would send an operator hunting through the §16.3 tiers for a permission that
+  does not exist. `POST /api/v1/model-folders` accepts `user` and `source` only,
+  so a second managed row cannot be made over HTTP either. Both directions are
+  asserted (`tests/test_model_shelf_api.py`): the managed row is refused, an
+  ordinary `user` row is still forgotten — over-blocking would break the shelf's
+  only tombstone.
+- **`ensure_managed_folder` never overrules a relocation.** The row's `path` is
+  the authority, so a start after the owner has moved the store to another drive
+  returns the existing row untouched rather than re-pointing it at the config
+  dir and stranding every file. It is also idempotent, promotes a pre-existing
+  `user` row at the same path rather than failing the `UNIQUE(path)` insert, and
+  degrades to "no store registered" rather than refusing to boot when the
+  directory cannot be created.
+- **`movable='root_only'`, `owner='pixlstash'`.** Nothing enforces `movable`
+  today — the mover does not read it — so it describes what the folder is rather
+  than gating an operation. Whether the UI offers moving a single file *out* of
+  the store is a verb question and is not settled here.
+- This is also what settles the integration plan's §4.1 zero-copy claim: the
+  ComfyUI picker node registers **this one store**, not an enumeration of every
+  present folder across possibly-offline drives. The store is therefore designed
+  as a single directory and must not become several.
+
+### `Add file`: one loose model onto the shelf (shelf plan F6)
+
+`POST /api/v1/model-files`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the path for a
+single adapter or checkpoint that is **not** part of a training run and does not
+deserve a registered folder of its own — the file downloaded into `~/Downloads`
+an hour ago. It copies that file into a folder the shelf catalogues (the managed
+store above, unless another is named) and registers it there, so the row is on
+the shelf when the call returns and the owner never has to rescan.
+
+- **A copy, never a move.** The source is the owner's own file in a directory
+  PixlStash did not create, so nothing here unlinks it. `delete_after_import`
+  exists precisely because removing a source is a decision, and it is one made
+  about a *registered* folder rather than about an arbitrary path. The ordering
+  is therefore the mover's with its last step removed: **copy → verify by
+  SHA-256 → register the row and commit.** Every interruption leaves either
+  nothing or an unregistered file in the store, never a row naming a file that
+  is not there — and it takes the same machine-wide `SHELF_IO_LOCK` slot as a
+  move, an import and forgetting a folder, so two writers cannot race for one
+  destination filename.
+- **It is the one shelf route that takes a host path in its body**, which the
+  import block beside it deliberately does not (a run is *named*, and the server
+  joins the name to a registered root). That cannot be avoided here: the whole
+  point is a file in a folder nobody registered. So the containment is on the
+  **write** — `resolve_path_within(destination.path, basename)`, which also
+  refuses a symlink standing at the destination name — and the read is bounded
+  instead: a regular file, `MODEL_SUFFIX`, and refused outright when it already
+  sits inside a registered folder, because copying it would put a second copy of
+  a catalogued file into the store forever and a rescan is what the owner wants.
+  It is `LOCAL_OWNER_ONLY` for both halves at once (§16.3): it takes a path like
+  `POST /model-folders` and writes files like `POST /model-moves`.
+- **Registration reuses the scanner, not a second dialect of it.**
+  `ModelFolderScanner.register_file` runs the same `_describe` → `_write_batch`
+  path a walk uses, so an added file and a scanned one are one kind of row —
+  same header parse, same `ON CONFLICT(sha256)` join onto a model the shelf
+  already knows. It sweeps nothing: a walk marks every row it did not see
+  `missing`, and this looks at one name.
+- **The bytes are hashed once, on the way in.** `copy_and_digest` digests them
+  as it writes and `file_digest` reads the copy back to prove it matches, so the
+  digest is known *and verified* by the time the row is written;
+  `register_file(…, sha256=…)` passes it to `_describe` rather than letting the
+  scanner read the whole file a third time with the caller still waiting. A walk
+  has no such digest — it found a file it knows nothing about — and passes
+  `None`, which is the path that hashes. One consequence is deliberate: a
+  **checkpoint** added this way keeps its digest instead of the NULL a scan
+  leaves for `MissingCheckpointHashFinder`. That finder exists so nobody reads
+  24 GB just to hash it; here the read has already been paid for, and deferring
+  anyway would schedule a second one for nothing.
+  A file whose header will not parse is **not** left in the store: the copy is
+  discarded and the call is a 400, because the scanner would not have registered
+  it either and a file the shelf never lists is not what "added" means.
+
+### A trained model's previews: `<stem>_samples/`
+
+An ai-toolkit run is a directory of `.safetensors` **and** a `samples/` directory
+of the previews the trainer rendered at each step. One measured run was 1.9 GB of
+which `samples/` was 15 MB, so the provenance costs 0.8 % of the bytes and the
+import takes the whole run rather than only the weights
+([`services/run_importer.py`](../pixlstash/services/run_importer.py)).
+
+- **On disk in the destination folder, not in a hub store and not in a new
+  table.** One directory per imported checkpoint, named from that checkpoint's
+  own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
+  `JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
+  ai-toolkit's own filenames unchanged. `model_mover.samples_relpath` is the one
+  place that name is derived; nothing else spells the suffix. The cost of this
+  choice is that a person opening the folder sees the previews too, which is
+  also the point: they survive PixlStash not being there.
+- **Which previews go where.** A sample goes to the checkpoint whose step it
+  names. The **bare final takes the highest sample step's** — it carries no step
+  of its own and it is the stack cover, so a rule that left it blank would make
+  the most visible row of a fresh import the only empty one. Importing that same
+  step as well copies its previews twice; that duplication is accepted.
+  `TrainingRun.samples_for` is the whole rule.
+- **Ordered inside the existing crash window, never widening it.** Per
+  checkpoint: after the `model`/`model_file` rows commit and **before**
+  `unlink_source`, so `delete_after_import` can never outrun the copy. That
+  ordering is the reason this was a data-loss fix rather than a feature: before
+  it, a source folder carrying `delete_after_import` destroyed the run's
+  previews outright.
+- **A failed copy is logged and non-fatal**, reported in the outcome's `detail`
+  with `sample_count: 0` while the checkpoint stays `imported`. Losing a preview
+  must not cost the weights. The copy is written to a `.pixlstash-partial`
+  directory and renamed into place, so a failure half-way leaves no
+  half-populated directory to be read as the whole set.
+- **A pre-existing `<stem>_samples/` refuses the whole batch**, in the same pass
+  as the filename collision and before the first byte. It is the sharper of the
+  two refusals: a checkpoint collision refuses a file the owner can see, while
+  merging into an existing directory would write into one they may have put
+  there. There is no undo for shelf operations.
+- **A move carries them** (`model_mover.carry_samples`, on both the same-drive
+  rename and the cross-drive copy paths, in the same position in the ordering
+  and under the same non-fatal rule), and their bytes are counted into
+  `require_space` — 15 MB per run is small against the weights and is not
+  nothing when the destination is nearly full.
+- **Read back over `GET /models/{model_id}/samples`** and its byte sibling
+  (§16.3, `local_owner_only`). Addressed by `model.id` rather than by sha256,
+  because a checkpoint nobody has hashed has no sha256 to be addressed by. Both
+  key on `is_sample_filename` rather than on "an image in a directory whose name
+  matched", so neither can be used to read the owner's own pictures back out of
+  a directory that merely sits at the derived name — the same test the delete
+  verb uses, and the reason all three verbs agree on what a sample is.
+- **Deleted with the model when the directory holds only previews** (see the
+  `Delete` section). The name is inferred, not recorded, so the contents are
+  what decide whether it is the model's.
+
+Deliberately not here: the shelf's Sample view, the sample/icon toggle and the
+promote-a-sample verb (the "Visual identity" ruling's card, which this makes
+buildable and stops at), and any persistence of `rank` or `config.yaml`.
+
+### `Delete`: models off the shelf and off the disk (#933)
+
+`POST /api/v1/model-files/delete`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the shelf's
+only destructive verb, and it lives beside `Add file` because the two are one
+authority — a file in a registered folder, written or unlinked. Before it, the
+shelf could rename a model, move it and forget a row whose file was *already*
+gone, but the only way to actually delete the 6 GB checkpoint the owner no
+longer wants was a file manager and then a rescan.
+
+- **The trash is the default and the undo.** `permanent=false` hands each path
+  to `send2trash`, so the OS keeps the bytes recoverable by the mechanism the
+  owner already knows; `permanent=true` unlinks, and there is no undo, no
+  operation-log half and no scrapheap behind it (the shelf-wide ruling of
+  2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
+  Windows-Explorer gesture. A machine with no trash we can reach — a container —
+  refuses with `trash_unavailable` rather than quietly unlinking instead, which
+  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
+  undo":** Windows deletes outright anything larger than the Recycle Bin's
+  per-volume quota, which a multi-GB checkpoint routinely is, and a
+  freedesktop trash lives on the same volume as the file — so trashing frees no
+  space until the trash itself is emptied. The confirmation says the first out
+  loud; neither is something PixlStash can fix from here.
+- **Only the folders whose contents are the owner's.** `user`, and the
+  `managed` store PixlStash keeps for files it was *given* — which is where
+  `Add file` and an import land, so a shelf that could not delete from it could
+  not undo either of them. Everything else is refused whole: the engines
+  PixlStash re-declares on every start, the InsightFace packs, and the
+  HuggingFace cache, which is a symlink store shared with every other tool on
+  the machine. That is the line `model_mover._plan_one` draws for a move, drawn
+  here by `kind` rather than by `movable` because the managed store is
+  `root_only` — the *folder* moves as a unit — while the files in it are
+  individually the owner's.
+- **A directory of nothing but previews goes with the model; anything else
+  stays.** An imported checkpoint carries a `<stem>_samples/` directory beside
+  it, and the delete closes the lifecycle the import opens and a move carries:
+  skipping it leaves a directory no route lists and no rescan registers, and one
+  that then refuses the owner's *whole* re-import of that run, with the only
+  remedy outside the app. But **the model is a thing the caller named and this
+  directory is only inferred from its filename**, so removing it on the name
+  alone would destroy an owner's own folder of renders on a Shift+Delete they
+  meant for a `.safetensors`. What licenses it is the contents: ai-toolkit names
+  every preview `<timestamp>__<step>_<index>`, so a directory holding only those
+  is the model's whoever wrote them, and one file that is not — a favourite
+  render, a note, a subdirectory, a symlink — means it is the owner's and stays.
+  That is the same test `GET /models/{id}/samples` uses to decide what to list,
+  so all three verbs agree on what a sample is.
+
+  Deliberately **not** keyed on `model.provenance`. That is a fact about
+  *content* — one value shared by every copy of a model — while the risk is per
+  *copy*: a trained model with a second copy a rescan registered elsewhere would
+  have taken that folder with it, and an import onto an existing sha256 leaves
+  the row `external` (`_register`'s `ON CONFLICT` deliberately does not overwrite
+  provenance) while still writing the previews, so the gate would have been wrong
+  in both directions. Both were found by adversarial review of a draft that used
+  it.
+
+  Unlike the file it is **non-fatal**: the weights are what was asked for, so
+  previews that will not go are a warning and some occupied disk rather than a
+  failed deletion, and they are removed *after* the file for the same reason.
+  Both gestures remove it, by the call each uses — `send2trash` for the trash,
+  `shutil.rmtree` for a permanent delete — and a symlinked directory is refused
+  explicitly rather than left to whichever of those two happens to decline it.
+- **A model is deleted whole or not at all.** Every copy goes, so a model with
+  one copy in a user folder and another in the cache is refused rather than
+  half-deleted: unlinking the reachable half would leave the row the owner
+  wanted gone still on the shelf, rebuilt by the next scan. `unreachable` is
+  refused for the reason Forget refuses it — an unplugged drive is not a
+  deletion — and `missing` is not a refusal at all: there is nothing to unlink
+  and the row is exactly what was asked for.
+- **Bytes first, rows second, per model.** The unlink runs before
+  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
+  a file that is not there — which the next scan marks `missing` — rather than a
+  file nothing on the shelf can see, which is the tombstone invariant the
+  mover's ordering exists to protect, read in the other direction. A model whose
+  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
+  (nothing went) from **`partly_deleted`** (some copies went and one did not),
+  because "could not be deleted" over a model that has already lost half its
+  copies is the one sentence this route must not produce.
+- **The gate reads share one transaction, and the purge has a gate of its own.**
+  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
+  take and release the hub lock between them, so a background
+  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
+  run inside that transaction — a 24 GB file would hold the hub's write lock for
+  the length of a disk operation — so the remaining window is closed on the
+  other side: `purge_deleted_models` deletes the location rows this call emptied
+  and then drops a `model` row **only when no location row for it survives**. A
+  copy the scanner registered while the files were going therefore keeps its
+  model alive instead of being purged out from under a file that is really
+  there, and the route logs the difference.
+- **The link, never what the link points at.** Containment here is *not*
+  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
+  the bytes a symlinked model points at and leave the link, gutting any other
+  row naming those bytes. A symlinked model is ordinary practice on this shelf
+  (`_present_copy` contains lexically for exactly that reason), so
+  `_contained_path` contains the file lexically and `realpath`s the *directory*
+  holding it — a `..` cannot escape, a symlinked directory component cannot
+  redirect the unlink out of the folder, and what is removed is the name the
+  shelf catalogues. A row that still escapes is refused as
+  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
+  elsewhere on the disk.
+- **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
+  slot an add, a move, an import and — since #1017 — forgetting a folder take,
+  so nothing can be copying into a folder this is emptying.
+- Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
+  is a list of hub `model.id` — so it is on that tier for the destruction
+  alone, which is the unlink half of `POST /model-moves` without the copy that
+  justifies it.
+
+#### The unlink is authorised by exactly one committed row (#1017)
+
+`ModelMover`'s ordering — copy → verify → repoint and commit → **then** unlink —
+rests on "the row moved". SQL does not: an `UPDATE` that matches nothing reports
+success, so a `model_file` row deleted between the plan and the commit let the
+mover unlink the source and report `moved` with the destination bytes registered
+nowhere at all. That is the dangling residue inverted, and worse — a file no row
+names, after the only other copy was removed.
+
+- **`ModelMover._repoint` requires exactly one affected row** and raises
+  `RepointLost` otherwise, inside the transaction, so it rolls back. `_rename`
+  renames the file back, `_copy_verify_repoint_unlink` discards the copy, and
+  `_move_one` reports that file `failed`. Nothing is unlinked. **This is the
+  guarantee**; everything below is defence in depth.
+- **The predicate is the source key and nothing else.** `model_file` is
+  `PRIMARY KEY (model_folder_id, relpath)`, so the key already matches at most
+  one row. Adding `model_id` cannot narrow a real ambiguity and *would* miss:
+  `CheckpointHashTask` folds duplicate checkpoints by rewriting
+  `model_file.model_id` to the survivor, on the task runner and outside
+  `SHELF_IO_LOCK`, and hashing a large checkpoint overlaps a multi-minute copy
+  easily. The row is still there and still names the file; only its model was
+  consolidated. Failing on that would discard a finished copy and report a
+  legitimate move failed — pinned in both directions in
+  `tests/test_model_move.py`.
+- **`DELETE /model-folders/{folder_id}` takes the `SHELF_IO_LOCK` slot** and
+  answers 409 while it is held. That is the second, transient 409 on that route
+  (the managed-row refusal above is the other one). It is a slot, not a general
+  exclusion: a rescan writes the same rows outside this lock by design, and a
+  multi-run import is a sequence of separate lock-taking requests, so a forget
+  can still land between two of them. What it buys is a clean 4xx before the
+  batch starts instead of a file failed halfway through forty.
+- **The UI says so beforehand.** `ModelFoldersDialog`'s `forgetReason` blocks
+  Forget while `useModelMovesStore().busy`, the same guard `relocateReason`
+  already carried, and the row's note explains it — an ordinary `user` folder is
+  forgettable without being relocatable, so a guard written only for Move left
+  exactly those rows clickable and failing.
+
+### Hub and library identity
+
+`hub.db` sits beside `server-config.json`, outside every image library. It owns
+the owner row, password hash, all API/share tokens, preferences, and the library
+registry. Each registry row has an immutable random `library.uuid`; this is the
+only durable identity stamped on tokens. The integer row id and runtime switch
+generation are never durable identities. The hub uses its own sequential schema
+versioning (currently v2); v2 adds per-library `settings_salt` and the durable
+`identity_migration_state` plus a path- and payload-digest-bound
+`identity_migration_operation` used by one-shot legacy preparation.
+
+The vault carries an advisory `library_settings.library_uuid` fingerprint. It
+helps detect a folder swap, but never authorizes access and never supersedes the
+hub UUID. Startup is deliberately two-phase:
+
+1. The desktop preparer explicitly validates the legacy vault, reads its owner
+   and tokens in deterministic order, and writes a one-shot hub operation bound
+   to the canonical source path and a SHA-256 payload digest. Normal startup has
+   no inference path: config contents, config age, vault presence, and hub loss
+   never create `pending`. Startup copies only when the registry row and durable
+   operation are both `pending` and path/digest still match, then atomically
+   moves both hub states to `copied` with the identity rows.
+2. `VaultDatabase` opens the vault and completes Alembic. Only then does startup
+   atomically stamp an absent fingerprint, accept an equal one, or fail without
+   overwriting a conflict. Every library whose durable identity state is not yet
+   `complete` then undergoes a mandatory portable-identity scrub: all rows in
+   `guest_score`, `guest_session`, `usertoken`, and `user` are deleted child
+   first; SQLite `secure_delete`, WAL checkpoint/truncation, DELETE journal mode,
+   and `VACUUM` erase free-page and journal remnants; and the result is checked
+   for integrity, zero portable rows, and absent sidecars before its inode and
+   parent directory are synced. That covers the **live vault** and is what marks
+   the library `complete`. This applies to attached secondary libraries as well
+   as the one explicit legacy identity donor.
+
+**Historical archives are scrubbed in the background, not at startup.** Each
+registered legacy plain or zstd snapshot is materialized, scrubbed, recompressed
+when needed, independently verified, and atomically replaced under strict path,
+type, ownership, and symlink checks. Doing that inline cost minutes ahead of the
+listening socket (22 archives / 5.7 GB measured at 5 min 47 s) with no port open,
+which is indistinguishable from a hang. `MissingSnapshotIdentityScrubFinder`
+drains them one at a time at `LOW` priority instead, and serving does not depend
+on it because every restore and preview path scrubs the scratch database it
+materializes. Progress is durable per archive in `snapshot.identity_scrubbed_at`
+(0102), so an interrupted pass resumes rather than restarting. `NULL` means
+exactly "a legacy archive still owed work": snapshots created since are stamped
+at creation, because `SnapshotService` scrubs the scratch database before
+compressing it.
+
+**`create_backup` finishes any outstanding archives before packaging.**
+`_library_files` collects `snapshots/**` verbatim and `_DATABASE_FILES` excludes
+only the root-level vault, so a backup taken mid-drain would carry pre-hub
+`user`/`usertoken` rows out of the machine, and the restore-path scrub cannot
+help because nothing materializes those archives: they are copied as bytes. The
+scrub runs strictly **after** the vault guard, since opening the vault earlier
+would let SQLite consume a pre-positioned `-wal` sidecar that `_open_guarded_source`
+exists to refuse. A scrub that fails aborts the backup rather than writing a
+tarball holding credentials.
+
+New snapshots are scrubbed before compression and written mode `0600` on POSIX.
+All restore, preview, and resource-restore paths scrub their materialized scratch
+database after schema upgrade, so an old or externally supplied archive cannot
+reintroduce portable owner, token, or guest-session state. Historical archives
+created under the old common `0664` umask are accepted only when they are regular
+files owned by the current account, then privatized through a no-follow file
+descriptor before their contents are processed. Every operation is idempotent,
+so a crash between copy, stamp, archive replacement, and marker update converges
+toward redundant sanitation rather than credential loss or reintroduction.
+
+Hub loss therefore does not re-import the blank legacy identity or deadlock
+registration. A recreated hub mints a fresh immutable registry UUID, records
+the vault fingerprint only as advisory evidence, creates an unclaimed hub
+owner, and requires the owner to register again; passwords and token/share-link
+values cannot be recovered without a hub backup.
+
 #### Engine and connection settings
 
 **Every SQLite engine that serves the application is built by `database.create_configured_engine(path, *, wal=True, foreign_keys=True)`**: `VaultDatabase.__init__`, the post-swap rebuild in `services/restore/full_restore.py::_swap_database`, and all nine restore-package snapshot engines (through `schema_upgrade.snapshot_engine`). A bare `create_engine` call at any of those sites is a bug: the configuration comes in two halves (`connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S}` and the `init_database` connect listener), and a call site that writes its own `create_engine` gets neither, so it silently runs on SQLite's defaults (5 s busy timeout, 2 MiB page cache, rollback journal, `foreign_keys=OFF`). That drift has been a real bug twice: the restore path once left the rebuilt engine *better* configured than the startup engine (#651), and nine engines in `services/restore/` ran with no settings at all (#709).
@@ -1153,6 +2587,79 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 
 **Known edge, unreachable today.** `wal=False` means "do not *set* WAL", not "force a single file". `journal_mode` is a persistent header property, so against a database file whose header **already** says WAL, a `wal=False` engine reports `wal` and creates a `-wal` sidecar, which is exactly the outcome the flag exists to prevent. No path reaches it: every snapshot is produced by `VACUUM INTO` from the live WAL vault, and `VACUUM INTO` emits a `delete`-mode file. **Do not "fix" this by having the connect listener run `PRAGMA journal_mode=DELETE`.** SQLite refuses to leave WAL while another connection holds the file, so the second pooled connection raises "database is locked", and the pragma is a *write*: it would fail, or mutate the file, on read-only preview opens, which are eight of the nine snapshot engines. If a WAL-header snapshot ever becomes reachable, convert the **file** once at materialisation time (`wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` on a single exclusive connection, which is what `_upgrade_snapshot_schema` and `preview._fill_snapshot_hashes_at` already do), never per connection.
 
+#### Trusted SQLite locations, and the accepted Windows residue (W17)
+
+Every credential-bearing SQLite open goes through `trusted_sqlite.py`, whose
+module docstring is the design record: which actor each check is for, why the
+earlier DACL refusal was removed (it stopped the server starting on Windows,
+W6/W7/W18), and what a `private=True` open verifies instead.
+
+**Group-write is not automatically an exposure.** `mode & 0o022` is a *proxy*
+for "another principal can write here", and for the group bit that proxy is
+wrong wherever the group is the owner's own. Debian, Ubuntu and every other
+distro running `useradd -U` give each account a same-named group of its own and
+default to umask 002, so a directory PixlStash created before it started passing
+`0700` explicitly is `0775` with a group of exactly one member. The blanket bit
+test read that as "another account could replace the database" and exited the
+server 1 during startup on a stock Linux box with a library from an earlier
+release, with no recovery short of a manual `chmod`. `_is_private_group` names
+the actor instead of the bit: group-write is tolerated only when the group is the
+directory owner's own, same-named, and has no other member; any lookup failure
+is reported as shared, so the open is refused. World-write is refused exactly as
+before, and the file-level checks are unchanged — a `0664` database cannot come
+from a umask, since SQLite requests `0644`.
+
+A root-owned ancestor is **not** covered by this: the ownership check above
+admits `st_uid in (uid, 0)`, but the group tolerance additionally requires
+`st_uid == uid`, because for gid 0 the "owner's own group" is the administrators'
+group rather than one single owner's. `root:root 0775` directories exist in the
+wild (`/var/lib/AccountsService` on a stock Ubuntu box) and keep the blanket
+refusal.
+
+**Accepted risk, group membership (same record as W17).** Two things the group
+answer cannot see, both stated rather than fixed:
+
+- `grp.getgrgid(gid).gr_mem` lists **supplementary** members only, so an empty
+  one is the default state of every private group, not evidence about it. An
+  account whose *primary* gid is this user's own group passes the check and can
+  write the directory. `pwd.getpwall()` would see it and is deliberately not
+  called: it is unreliable exactly where it would matter (SSSD defaults to
+  `enumerate = false`, so on the managed hosts that have real user directories it
+  answers "nobody") and slow where it works. Reaching this needs
+  `useradd -g <this user> <account>` — an administrator putting a second account
+  into one user's own group.
+- Names resolve through the server process's NSS while the writers come from the
+  kernel's uid/gid on the filesystem, so a container or idmapped mount whose
+  `/etc/group` disagrees with the host answers about a different group than the
+  one that can write. An id that does not resolve at all fails closed.
+
+Both share W17's owner and revisit date below, and both would be closed by the
+same thing: an answer about the *filesystem's* principals rather than this
+process's name service.
+
+An NSS lookup on the startup path is the cost, and only for a directory that is
+already group-writable — a tightened install performs none. A lookup that fails
+is reported as shared, so the worst case is the refusal this whole section
+exists to remove, never a weaker check.
+
+**Accepted risk W17.** Python exposes neither owner SID nor directory DACL
+portably, so the POSIX `mode & 0o022` test — "another principal cannot write
+this directory" — has no Windows implementation. On Windows a library on a
+network share, removable media, or a deliberately loosened folder is therefore
+not protected against another local principal substituting `vault.db` or
+pre-positioning a sidecar before startup. What still runs there: redirect
+rejection (symlink **and** junction), the regular-file requirement on the target
+and every sidecar, and the `(st_dev, st_ino)` identity match across the open.
+The vault is authorization-bearing (`authz/membership.py` answers scope
+questions out of it), so this is not reads-only; the blast radius is stated in
+full in the module docstring.
+
+Owner: lindkvis. Revisit 2026-11-08, together with the native ACL verifier
+(`win32security.GetNamedSecurityInfo`, or ctypes against advapi32) that is the
+route back to tightening this. Recorded here rather than in a review document
+because `docs/reviews/` is gitignored: an accepted risk nobody else can read is
+not a record.
+
 ### Vector storage
 
 - Embeddings (`image_embedding`, `text_embedding`, `Face.features`) are stored as `BLOB` columns.
@@ -1166,6 +2673,7 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 | Thumbnails | Memory (LRU, ~128) + disk `.pixlstash/` | Pre-generated at startup |
 | Watermarks | In-memory rendered images | Seed-keyed |
 | Quality stats | In-memory (≈60 s TTL) | Used by aggregate endpoints |
+| Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
 ---
@@ -1175,10 +2683,11 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 1. `app.py:main()` parses CLI args and loads/creates the server config.
 2. `StartupChecks().run()` validates disk space, VRAM, CUDA, SSL; may force CPU mode.
 3. `Server.__init__()`:
-    - Instantiates `Vault` (loads `image_root`, opens `VaultDatabase`, creates `TaskRunner`, registers finders, and starts `TaskRunner` + `WorkPlanner`).
+    - Opens/migrates the hub, resolves its active immutable library UUID, and performs a legacy identity copy only when a matching explicit durable preparation operation exists. `app.py:main()` passes `Server()` an optional prompt callback, which it threads into `bootstrap_hub()`: on an interactive terminal (never for Electron, whose own setup wizard already offers this), a detected-but-unprepared legacy vault is offered a `[y/N]` explanation instead of requiring `pixlstash-cli libraries prepare-legacy-identity` as a separate manual step first; declining, a non-interactive launch (logged instead of asked), or losing a race to a concurrent preparation, all leave the vault exactly as inert — or as far along — as if the prompt had not run.
+    - Instantiates `Vault` (opens `VaultDatabase` and runs Alembic), then stamps/validates `library_settings.library_uuid` and completes crash-safe legacy blanking before authentication starts.
     - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
-4. `uvicorn.run(api, …)` enters the **lifespan**:
+4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
     - Logs server readiness and serves requests.
@@ -1187,6 +2696,72 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
    - `Vault.close()` stops the planner and drains workers.
    - `VaultDatabase` flushes pending writes and closes connections.
    - WebSocket clients are disconnected.
+
+### Active-library switching
+
+`LibrarySwitchService` serializes switches. `LibraryGenerationCoordinator`
+classifies every declared HTTP route as `HUB_ONLY`, `ACTIVE_VAULT`, or the one
+`SWITCH_WRITER`. Its outermost ASGI lease begins before authentication and ends
+after the final response body frame; the lease captures one generation and its
+library UUID/vault/DB tuple. WebSockets use a shorter lease through auth,
+acceptance, and tracked registration. The writer closes admission, waits a
+bounded time for the old generation to drain, then re-resolves and validates the
+target fingerprint before any candidate migration. A second concurrent switch
+fails promptly with 409 rather than waiting behind the writer.
+
+While state is `SWITCHING`, new active-library requests receive 503 before auth;
+hub-only identity/registry routes remain available without guest-vault
+enrichment. `Vault.close()` then stops the planner, cancels queued/active tasks,
+joins workers, and closes its DB before publication.
+
+Publication updates the hub active row, `server.vault`, and `auth.vault_db`
+inside the refused-request window, then increments an ephemeral runtime
+generation used to reject stale async results. Only after that tuple is live,
+every `/ws/updates` subscriber and `/ws/comfyui` proxy is closed with 1012
+(`Library switched`); the SPA treats that close as a document reload rather than
+a transient reconnect, so a non-initiating tab cannot retain old-library ids or
+stores. Thumbnail-memory, stats and anomaly-region caches are cleared so row ids
+from one library cannot hit another's cache. Any exception before old close
+leaves it untouched; an exception after old close rebuilds and republishes the
+previous vault only after the coordinator verifies registry/vault/auth
+coherence. A recovery failure poisons the handles, enters terminal
+`UNAVAILABLE`, returns 503 before auth, closes sockets, and signals every
+retained listener to exit; it can never republish `READY` around a mixed tuple.
+
+`GET /libraries` returns an `active_share_links` count on every library entry.
+It is owner metadata with no host path sensitivity and is available before the
+switch so the confirmation UI can warn how many resource-scoped links will go
+inactive. The switch response retains its top-level `active_share_links` count
+for the library just left.
+
+**Accepted risk — remote registry metadata.** An authenticated remote owner may
+list library names, active/reachable status, UUIDs, and share-link counts even
+when host paths are redacted. Risk: those labels and counts can reveal collection
+categories and activity. Blast radius: the single authenticated owner account
+and this installation's registry metadata only; no picture content, credentials,
+or filesystem paths. Compensating controls: `OWNER_ONLY`, token/session auth,
+path and CLI-hint redaction, and library pinning on tokens. Owner: product
+security + backend/auth maintainer. Revisit: **2026-11-01 or before any multi-user
+principal can list libraries, whichever comes first.**
+
+**Accepted risk — explicit remote host operations.** Setting
+`allow_remote_host_ops=true` deliberately lets a genuinely remote authenticated
+owner see registered paths/CLI hints and switch the process-wide active library.
+Risk: host layout disclosure and availability impact to every connected client;
+blast radius: all registered library paths and all sessions on that one server.
+Compensating controls: disabled by default, owner-only authentication, a startup
+warning, trusted-proxy requirements, fail-fast switch serialization, and no HTTP
+attach/create/detach path. Risk owner: the deployment operator who enables the
+flag, with product security/backend maintaining the boundary. Revisit:
+**2026-11-01, before multi-user support, or before enabling the flag by default.**
+
+Locality has two intentionally different meanings here. Password/cookie owners
+on Tailscale pass `LOCAL_OWNER_ONLY` via `is_local_or_tailscale_ip`. An `ALL`
+bearer token is first checked by the older `require_local_for_write` middleware,
+which uses `is_local_ip` and therefore excludes Tailscale CGNAT. Consequently the
+route may advertise `can_manage=true` to a Tailscale cookie owner while the same
+request made with an `ALL` bearer is denied earlier; this is deliberate and not
+a promise that Tailscale is local for every authentication mechanism.
 
 ---
 
@@ -1213,6 +2788,8 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 | `RESTORE_STARTED`      | ✗ internal  |
 | `RESTORE_COMPLETED`    | ✗ internal  |
 | `RESTORE_FAILED`       | ✗ internal  |
+| `LIBRARY_SWITCHED`     | ✓ broadcast |
+| `VRAM_OOM`             | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).
@@ -1246,9 +2823,14 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 The HTTP auth middleware runs only for the `http` ASGI scope, so the WebSocket routes authenticate themselves **before** `accept()` (otherwise any reachable client — including a cross-site page, since the browser auto-attaches the session cookie — could subscribe):
 
 - `AuthService.authenticate_websocket(ws)` mirrors the HTTP paths (cookie session = owner; `?token=` honoured for READ scope only; `Bearer` header for any scope) and returns `WebSocketAuth(user_id, is_owner)` or `None`.
+- Token-authenticated WebSockets, including cookies created from a token, also
+  enforce the token's `library_uuid` before acceptance. Password/browser
+  sessions remain library-independent and follow a switch. All accepted
+  sockets, including ComfyUI progress proxies, are tracked and closed after
+  switch publication, so no connection can retain old-library filters or ids.
 - `AuthService.is_websocket_origin_allowed(ws, ...)` rejects cross-site handshakes (CSWSH): a present `Origin` must be same-origin (`Origin` host == `Host`) or in the configured CORS allow-list; a missing `Origin` (non-browser client) still has to pass the auth check.
 - `/ws/updates`: rejects (`close(1008)`) unauthenticated or foreign-Origin handshakes. The global vault-activity stream is **owner-only** — a resource-scoped / READ token may connect but `_broadcast_ws_event` never delivers it events outside its grant.
-- `/ws/comfyui`: requires an authenticated **owner** before proxying; the previous unauthenticated fallback to `DEFAULT_COMFYUI_URL` is removed.
+- `/ws/comfyui`: requires an authenticated **owner** before proxying; the previous unauthenticated fallback to `DEFAULT_COMFYUI_URL` is removed. Its downstream connection is registered in the same switch-lifecycle set as `/ws/updates`, while remaining excluded from vault-event broadcasts.
 
 ---
 
@@ -1277,7 +2859,7 @@ Prefix:   /assets/, /share/, /docs/
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
-**Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id and nothing else: a session carries no scope, so every request it authenticates resolves as a full, unscoped owner (`token_scope` stays `None`, and `require_unscoped_owner` passes). Three rules govern that, all enforced in `auth.py`:
+**Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
 1. **Only an owner credential can be exchanged for a session.** `POST /login` with a `token` issues a cookie only for an *unexpired* `ALL`-scope token with **no** `resource_type`. A `READ` token, a resource-restricted token, and an expired token are each refused. The rule has one spelling, the module-level `is_unscoped_owner_token` / `is_token_expired` predicates, shared with the WebSocket handshake (`authenticate_websocket`) and matching what `require_unscoped_owner` derives from `request.state`. A refused exchange returns the same `401 {"detail": "Invalid token"}` as an unrecognised token, so the response does not distinguish the two cases; the reason is logged server-side.
 2. **Removing a token ends the sessions it created.** This is the enforced rule, and it is narrower than "a session never outlives its token" — see the gaps below. `_register_session` records the minting token id in `_sessions_by_token_id` / `_token_id_by_session` (both directions, so lookup and cleanup are O(1)), and every path that removes a token calls `_drop_sessions_for_tokens` with the removed ids before flushing the token cache. That covers `delete_token` and `revoke_tokens_for_resource`. Sessions from a password login and the seeded desktop session carry no token id and are deliberately untouched by token removal; the credential-changing paths (`change_password`, `remove_password_hash`) call `_clear_all_sessions`, which ends everything. `update_token` only toggles `watermark` and does not withdraw access, so it flushes the token cache but keeps sessions. `_session_lock` and `_token_cache_lock` are always taken separately, never nested.
@@ -1308,7 +2890,7 @@ Both are follow-up work. Do not read rule 2 as covering them.
 - `PUBLIC` / `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` declarations require a machine-checked `justification=`. Exemptions are recorded decisions, not blanks.
 - The coverage matrix (`docs/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
 
-**Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
+**Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/multi_project_authz/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
 
 **Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. Two of the four (`GET /projects/{id_or_name}` and `GET /projects/{id_or_name}/picture_sets`) had their inline `_require_scope_allows_project` **replaced** by `enforce_project_path_scope`, and the other two gained it *in addition to* their `_require_scope_allows_{character,picture_set}` check: all four also name a **project** in the path, which is a second question the gate cannot see, and answering it after resolving the project made the routes a project-existence oracle (#708 condition 2 — see §16.6 for the reproduction and the uniform-refusal rule). (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
 
@@ -1365,7 +2947,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 **Why this is accepted today (single-owner).** The exposure is bounded to effectively nil in the current single-owner product:
 
 - `READ`-scope tokens — the only tokens the share UI mints for non-owners — are **fully blocked** from this class: writes are rejected by the middleware, `detect-sidecars` and `filesystem/browse` are in `READ_BLOCKED_GET_PATHS`, and the list endpoints return empty for any scoped token.
-  - **That membership is now a machine fact, not a remembered step (#831).** The middleware's non-GET rule says nothing about a GET, so `READ_BLOCKED_GET_PATHS` was the only pre-routing refusal on the tier's two GETs — and it was hand-maintained with nothing tying it to `ROUTE_POLICIES`. `tests/test_architecture_guardrails.py::test_locality_tier_gets_are_read_blocked_in_the_middleware` derives the requirement from the registry in both directions: a GET declared `local_owner_only`/`loopback_owner_only` without its entry fails the build, and an entry naming no declared owner-class GET fails it too. The gate's own `_enforce_unscoped_owner` is the live enforcement for the tier and is pinned separately by `tests/test_authz_gate_step3.py::test_local_owner_only_get_refused_at_the_gate`, which empties the frozenset so the token actually reaches the gate. The frozenset is kept rather than deleted in favour of the single chokepoint because it is the layer that survives an `AUTHZ_GATE_ENFORCING = False` rollback.
+  - **That membership is now a machine fact, not a remembered step (#831).** The middleware's non-GET rule says nothing about a GET, so `READ_BLOCKED_GET_PATHS` was the only pre-routing refusal on the tier's two GETs — and it was hand-maintained with nothing tying it to `ROUTE_POLICIES`. The requirement is now derived from the registry in both directions: `tests/test_authz_host_capability_16_3.py::test_every_untemplated_locality_get_is_on_the_read_blocked_belt` fails the build on a GET declared `local_owner_only`/`loopback_owner_only` without its entry (and pins the templated paths, which an exact-match frozenset cannot express, as a known gap), and `tests/test_architecture_guardrails.py::test_read_blocked_get_paths_name_declared_owner_class_gets` fails it on an entry naming no declared owner-class GET. The gate's own `_enforce_unscoped_owner` is the live enforcement for the tier and is pinned separately by `tests/test_authz_gate_step3.py::test_local_owner_only_get_refused_at_the_gate`, which empties the frozenset so the token actually reaches the gate. The frozenset is kept rather than deleted in favour of the single chokepoint because it is the layer that survives an `AUTHZ_GATE_ENFORCING = False` rollback.
 - `ALL`-scope tokens can only be minted by the owner (`create_token` refuses scoped callers, `auth.py:900`) and are necessarily unrestricted (an `ALL`+`resource_type` token can no longer be minted or used — see §16.2 item 4), and `require_local_for_write` (default on) blocks `ALL` tokens from non-local IPs. So a remote caller is blocked and the only `ALL`-token holder is the owner / the owner's own devices: `ALL == owner == operator` holds, and giving the operator filesystem access grants nothing they don't already have on their own box.
 - The path/write operations are further constrained by the system-directory blocklist ([`reference_folder_validator.py`](../pixlstash/utils/reference_folder_validator.py)) and sidecar-suffix validation (`reference_folders.py:_validate_sidecar_suffix`).
 
@@ -1390,7 +2972,61 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-07-23 — the locality total is now `18 = 13 local + 5 loopback`.** `POST /api/v1/test-hooks/ws-event` was added as the 5th `loopback_owner_only` route. It calls `vault.notify` with a caller-supplied payload, i.e. it synthesises arbitrary grid WebSocket events broadcast to **every connected client** (up to 500 per call) — authority over *other* clients' state, not over the caller's own data, which is the characteristic the loopback tier exists for. `LOOPBACK` rather than `LOCAL_OWNER_ONLY` specifically so that `allow_remote_host_ops` — a **filesystem**-operations flag — can never expose a test hook. The router mounts only under `enable_test_hooks`, which only `frontend/e2e/serve_e2e_backend.py` sets. Independently CSO-certified 2026-07-23 (loopback owner 200; LAN / Tailscale CGNAT / public all 403 *even with* `allow_remote_host_ops=true`).
 
+  - **Updated 2026-08-09 — the locality total is now `23 = 18 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`, not carried forward from the line above, and the re-derivation **also corrects pre-existing drift**: the `18 = 13 + 5` figure went stale on 2026-08-01 when `POST /api/v1/libraries/active` joined the local tier without this tally being touched, so the true starting point was `19 = 14 + 5`. The model shelf (shelf plan B5) adds **+4 `local_owner_only`** and no loopback route: `POST /api/v1/model-folders`, `PATCH` and `DELETE /api/v1/model-folders/{folder_id}`, and `POST /api/v1/model-folders/{folder_id}/rescan`. All four are the reference-folder class exactly — the first three take a caller-supplied host path, and the rescan *walks* one and reads every model file under it, which is the same authority as `reference-folders/detect-sidecars`. The shelf's read routes (`GET /adapters`, `GET /adapters/{sha256}`, `GET /checkpoints`, `GET /model-folders`) stay `owner_only`: they surface host paths but take none, mirroring `GET /libraries`. Arithmetic, not judgement. *(Superseded by the three updates below; the tally test is renamed with every change, so the live assertion is always the one named in the last update — today `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_25_local_5_loopback`. It does not assert this line's `23 = 18 + 5`, which is history.)*
+
+  - **Updated 2026-08-09 (second change the same day) — the locality total is now `26 = 21 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`, not carried forward from the line above. The model shelf's **move** block (shelf plan B7) adds **+3 `local_owner_only`** and no loopback route: `POST`, `GET` and `DELETE /api/v1/model-moves`. This is the shelf's strongest filesystem authority so far and the first shelf route that *writes and unlinks* files rather than reading or registering paths: per file it copies into a registered destination folder, verifies by SHA-256, repoints the `model_file` row and commits, and only then unlinks the source. That is strictly more than `POST /reference-folders/{folder_id}/move-pictures`, which is already on this tier, so the POST is settled by precedent.
+
+    **The `GET` is the one that needed a decision, and it is deliberately *not* on the shelf's `owner_only` read tier.** Every other shelf read (`GET /adapters`, `GET /model-folders`) surfaces host paths but takes none, which is why those stayed `owner_only`. `GET /model-moves` is not a shelf read at all: it is the **control surface of a host-filesystem operation**, the route a move is watched through, sitting next to the `DELETE` that stops one — so the tier that alone may start a move is the tier that may observe and steer it. The `DELETE` is the same authority as the `POST` seen from the other end.
+
+    **Corrected 2026-08-09 (B7 sign-off).** This paragraph previously justified the tier by saying a lower one "would let a caller who is barred from every route capable of producing a move read that move's filenames". That is false: a remote owner is refused on `/model-moves` and **200 on `GET /adapters`**, which serves `locations[].folder_path` and `locations[].relpath` for every copy of every model. The relpaths are not secret, so secrecy was never the reason; the tier is right for the control-surface reason above. Recorded rather than silently rewritten because a rationale nobody can check is how the last three false ones survived — cf. **#830**, which corrects two others in `docs/authz-coverage-matrix.md`.
+
+    **Path containment applies here and did not apply to B4 or B5** (§13, #776): B4 walks and B5 registers, and reads are deliberately never contained; B7 is the write/delete path. Every destination is resolved with `resolve_path_within` against the **destination** `model_folder.path` and every source against its **own** `model_folder.path`, so a `model_file.relpath` that a faulty scan, a restored hub or a bug put in the table cannot make the mover write outside a registered folder or unlink outside one. Containment is on the `open(…, "wb")` and the `os.unlink`, never on the read.
+
+    Arithmetic, not judgement.
+
+  - **Updated 2026-08-09 (third change the same day) — the locality total is now `28 = 23 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`. The shelf's **ai-toolkit import** block (shelf plan B7) adds **+2 `local_owner_only`**: `GET /api/v1/model-folders/{folder_id}/runs` and `POST /api/v1/model-imports`. The listing walks a registered output root and reads every run folder and `config.yaml` under it, which is `model-folders/{folder_id}/rescan`'s authority exactly; the import writes files into one registered folder and, when the source folder carries `delete_after_import`, unlinks them from the output root, which is `POST /model-moves`' authority exactly. **Neither takes a host path**: the import names a registered `source` folder id and a run *name*, and the server joins them with `resolve_path_within`, so a run name resolving outside the registered root is refused rather than read. They are on the locality tier for the authority they exercise, not for an input they accept. **Updated 2026-08-11 (F6): +1 `local_owner_only`** for `GET /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves one preview image so a step can be judged before it is imported. It is strictly *narrower* than the listing beside it — that already walks the whole output root — so it grants no authority the block did not already have. Two containment joins rather than one: the run name against the registered folder, then the filename against **that run's** `samples/` directory, because a single run-level join would let `samples/../config.yaml` through (it lands inside the run, so a run-level check passes it). The extension is checked against an allowlist rather than guessed, so nothing but an image can be served from our own origin.
+
+    Arithmetic, not judgement.
+
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that does not relocate — since #905 that is every folder but the managed store and PixlStash's own download folder; the tier is unchanged, the set of targets is not. **Updated 2026-08-14 (#906): the InsightFace packs join that set**, which again changes no arithmetic — no route was added and the tier is unchanged — only the targets. The authority is identical on all three branches (a caller-supplied host path, plus file movement), the same `validate_reference_folder_path` runs on the same input through the shared `_validated_destination`, and `relocatable_identity` remains the single place that says which folders qualify. What must still be refused — the HuggingFace cache above all, which is `foreign` and `root_only`'s neighbour and would be reachable if the route ever keyed on a column instead — is pinned in the negative direction by `tests/test_insightface_relocation.py`.
+
+    Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_25_local_5_loopback`.
+
+  - **Updated 2026-08-11 (shelf plan F6) — the locality total is now `30 = 25 local + 5 loopback`.** `GET /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}` serves one preview image out of a registered ai-toolkit output root, so a training step can be judged before it is imported. It is on this tier because it reads inside a registered host root and writes nothing, which is `rescan`'s authority class. An earlier draft of this note called it *strictly narrower* than the `.../runs` listing beside it; the adversarial review of #878 **refuted that** and it is corrected here. The listing returns metadata for sample names matching ai-toolkit's own regex; this returns raw bytes for any file carrying an allowlisted extension, including names the listing never reported. That is a new capability class rather than a subset — the tier still holds, but on the read-only argument alone. Like the rest of the import block it takes no host path: both path segments are *names*, joined to the registered path and contained, and the containment is **three joins, not one**: the run name against the registered folder; the `samples/` directory itself, because `resolve_path_within` realpaths the base it is handed and a symlinked `samples` would otherwise become its own safe base (a live escape the same review reproduced end-to-end — a `source` folder's contents are third-party tool output the owner merely pointed at, and tarballs and git repositories carry symlinks); then the filename against that resolved directory, because a single run-level join would pass `samples/../config.yaml`. The served extension is checked against an allowlist rather than guessed, so nothing but an image can leave this route on our own origin. Arithmetic, not judgement.
+
+    **The destination path is canonicalized before the blocklist runs (ruled 2026-08-09).** `POST /model-folders/{folder_id}/relocate` originally validated `os.path.normpath(payload.path)`, and two reviews disagreed about that. The PR review called it symlink traversal: `/mnt/models` may be a link to `/usr/share`, the lexical check passes, and the route then `makedirs`, moves every file of the store into, and `rmdir`s around a restricted system directory. The B7 security sign-off had listed "the lexical (non-realpath) blocklist" under **explicitly not a finding**, on the owner-trust ruling and the reference-folder precedent — an owner who may name any destination directly gains nothing by naming one through a link.
+
+    **Ruled for canonicalization, and the sign-off's entry is withdrawn rather than left to disagree with the code.** The question is what the blocklist is *for*. As a security boundary the sign-off is right and there is nothing to defend: no non-owner principal exists, and the owner may type `/usr` directly. But that is not this check's job. It exists so the owner does not relocate the model store onto a system directory *by accident*, and the accident it must catch is precisely the one the owner cannot see by reading the path they typed. A guard a symlink walks past is false assurance, and false assurance is worse than no guard. The reference-folder precedent the sign-off cited also points this way on inspection: `validate_reference_folder_accessible` already `realpath`s before validating, so reference folders canonicalize at the point where the filesystem is touched — which is exactly where relocation sits.
+
+    Consequences: the resolved path is what the blocklist sees, what is compared against the current store path, and what is registered in `model_folder.path`, so the store is recorded where it really lands rather than by the name it was reached through. `payload.path` is validated **first**, before `realpath`, because `realpath` makes a relative path absolute against the server's cwd and would otherwise turn the "must be absolute" refusal into an acceptance. Owner trust is unchanged and no path outside the blocklist became harder to use — pinned in both directions by `tests/test_model_shelf_api.py::test_a_symlink_into_a_system_directory_is_refused_not_followed` (a link into `/usr` refused; a link to an ordinary directory still relocates).
+
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
+
+  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular `MODEL_SUFFIX` file, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback` *(renamed with the change below; the live assertion is always the one named in the last update)*. Arithmetic, not judgement.
+
+  - **Updated 2026-08-15 (#326, user tagger plugins) — the locality total is now `32 = 27 local + 5 loopback`.** `GET /api/v1/taggers/plugin-diagnostics` is the first route on this tier for **disclosure alone**. It takes no path, walks nothing, reads no file and writes nothing. It returns two things, and both name paths on the server's disk: the folder the tagger registry scans for user-supplied plugins, which lives under the owner's home directory, and the import failures of the plugins in it, whose message is `str(exc)` from third-party code and therefore carries whatever absolute path that code was reaching for. Every other member of the tier is here for an authority it *exercises* or a path it *accepts*; this one is here because the route that used to carry both — `ANY_TOKEN` `GET /api/v1/taggers` — was handing them to every resource-scoped share-link holder, to render a settings screen they cannot act on. The split costs a remote owner nothing real, since acting on either means editing a file in that folder and restarting.
+
+    Two siblings made the identical disclosure and are fixed the other way, by **deletion**: `GET /api/v1/pictures/plugins` returned `plugin_dirs` *and* `plugin_errors` (each error carrying the full path of the plugin that failed), and `GET /api/v1/comfyui/workflows` returned `workflow_dirs`. Nothing in the UI ever read any of them, and an endpoint nobody calls is worse than no endpoint. **The sweep is the point**: the first pass moved only the tagger folder and was returned by the adversarial review with two live siblings and a leak on the very route it had just cleaned, because it fixed the field it knew about instead of enumerating the disclosure. The second pass was returned for the same reason one level up — having evicted `load_error` because it is third-party text, it left `display_name`, `description`, `parameter_schema` and the caller's own `settings` on the same `ANY_TOKEN` route. So **`GET /api/v1/taggers` is now `owner_only`** (`any_token` 14 -> 13, `owner_only` 127 -> 128; not a locality tier, so the `32 = 27 + 5` arithmetic above is unmoved). `settings` is the sharp one: it is this user's saved `tagger_settings` through `fill_defaults`, and the plugin guide blesses a `"string"` parameter, so a captioner declaring `model_path` puts whatever the owner typed into it in front of every share link. Nothing is lost — tagging and captioning are POSTs, which a READ token cannot make, so the list only ever rendered controls a non-owner could not use. **`GET /api/v1/pictures/plugins` moved with it** (`any_token` 13 -> 12, `owner_only` 128 -> 129): it serves `plugin_schema()` for every user-supplied *image* plugin, which is the same verbatim third-party text, and `POST /pictures/plugins/{name}` beside it is already unreachable to a READ token. Retargeting one and not the other would have been the same argument reaching two answers in one commit.
+
+    **Two disclosures these review rounds surfaced are deliberately NOT fixed here, and neither is this change's doing.** First, a picture-scoped token reads absolute host paths out of the picture row itself — `import_source_folder` and `tags_file` are documented columns (`pixlstash/db_models/picture.py`), served by `GET /pictures/{id}/{field}`, `GET /pictures/search`, `GET /stacks/{id}/pictures` and `GET /picture_sets/{id}`. That is a per-object disclosure behind a membership check, not a global one behind none, and deciding what a share viewer may see of a picture's provenance is a product call rather than a bug fix. Second, `GET /api/v1/network/info` (`any_token`) returns the server's LAN IP. Both predate #326 and both want their own issue; the regression test's comment is scoped to what it actually checks so that neither is implied to be closed. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_27_local_5_loopback` and by `test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path`. That test does two things a hand-written check would not: it greps each serialised body for the owner's **home directory** rather than checking a field name is absent (the weaker assertion passed while `load_error` still carried the folder, and an assertion anchored on the plugin folder would pass any leak one directory over), and it **derives** the routes to probe from `ROUTE_POLICIES` — every parameterless `GET` declared `any_token` or `public` — rather than naming them, because a written-down list is exactly what let two review rounds each miss a sibling. It runs them as the stated threat: a resource-scoped share token.
+
+    **Both tagger routes are also on the second belt**, `READ_BLOCKED_GET_PATHS` in `pixlstash/auth.py` — the middleware list that refuses a READ token a GET outright, where `GET /filesystem/browse` already sits. The gate alone is enough while it is enforcing, and that is the point: `AUTHZ_GATE_ENFORCING = False` is a documented one-line rollback, and with the gate off the diagnostics route served the owner's home directory to a share token. The review reproduced exactly that. `tests/test_authz_host_capability_16_3.py::test_the_plugin_routes_survive_the_documented_gate_rollback` turns the gate off deliberately and asserts both routes stay 403 for a share token while the owner still reaches them. The membership is **derived** rather than written down — `test_every_untemplated_locality_get_is_on_the_read_blocked_belt` asserts that every untemplated locality-tier GET is on the belt, so the next one fails the build instead of waiting for a review. Running that derivation for the first time found `GET /api/v1/model-moves` off it, which is fixed here: it serves the move queue's source and destination folders, so the rollback handed those to a READ token. `GET /pictures/plugins` is deliberately **not** on the belt: it is `owner_only` at the gate for the third-party text it serves, but `ImagePluginManager.list_plugins()` returns `plugin_schema()` and nothing else — no host path, no user settings — so it is not what this list is for. **The `author` header (#961) is the one identifying string in that payload**: it is a literal from a shipped or user-dropped class body, not derived from the host, and the route's existing `OWNER_ONLY` policy already keeps it away from a share token. It is on this route's ledger deliberately — a plugin list whose whole job is saying who wrote a plugin cannot also promise to name nobody. **What stays open** is the templated half: the frozenset matches literal paths, so `GET /model-folders/{folder_id}/runs` and its `samples/{filename}` sibling cannot join it at all. They are pinned as a known pair by the same test (a third fails it), and closing the gap needs prefix matching rather than another frozenset line. The follow-up is recorded in `tests/test_model_shelf_api.py`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-15 (the ComfyUI adapter loader's server half) — the locality total is now `33 = 28 local + 5 loopback`.** `GET /api/v1/adapters/{sha256}/file` streams one registered adapter's bytes, so a generator on another machine can *use* what this one catalogues. Without it the interop story stops at metadata: `GET /adapters` serves `locations[].folder_path` and `relpath`, but those are **this** host's paths and name nothing on the machine that asked, so a ComfyUI elsewhere on the network could see every LoRA and load none of them.
+
+    **It is the first shelf *read* off the `owner_only` tier, and the sentence that kept the others on it is what puts this one here.** That sentence is "they surface host paths but take none". This route takes none either — a sha256 the scanner already registered is the whole input, and the join of `model_folder.path` with `model_file.relpath` never touches caller data — but it does not *surface* a path: it returns the **raw bytes of a file inside a registered model folder**. That is `GET /model-folders/{folder_id}/runs/{run_name}/samples/{filename}`'s authority class exactly (reads inside a registered host root, writes nothing), and the correction recorded against that route in the 2026-08-11 note applies here too: bytes are a new capability rather than a narrower view of the metadata route beside it, so the "it is a subset of what `GET /adapters` already serves" argument is not available and is not being made.
+
+    The tier costs the feature nothing it needs. Loopback, RFC1918 LAN and Tailscale all pass, which is every deployment the route exists for — a generator on the owner's own machine or their own network, PixlStash in a container reached over the docker bridge. A genuinely remote generator needs `allow_remote_host_ops`, which is the safe direction to fail in for a route whose output is a multi-gigabyte file.
+
+    Three narrowings inside the handler, none of them the authz tier: only a `present` copy is served (`missing` says the scan looked and found nothing, `unreachable` says the drive is unplugged, and a forgotten folder leaves its rows **tombstoned rather than deleted** — so serving on any other state would hand out bytes from a folder the owner un-registered); a checkpoint hash is refused with the same 404 as the detail route beside it; and the join is contained with `path_is_within` even though neither half is caller-supplied, because on *this* route a `..` from a faulty scan or a restored hub would be an arbitrary-file reader rather than a wrong row — the same argument B7 makes for containing its writes. The containment is lexical first for the reason `path_is_within` documents: a model symlinked into a models directory is ordinary practice, and realpath-only containment refuses every one of them. A known hash with no readable copy is **409, not 404**, because "no such adapter" and "the file is not here right now" call for different behaviour from the caller. The digest is deliberately not re-verified on the way out: that reads every byte twice per request, and the caller addressed the file by the hash it can check itself. Both directions and both halves of the tier are pinned in `tests/test_model_shelf_api.py`; the share-token direction is asserted rather than reasoned about, because this is a **GET** and the `test_share_tokens_never_reach_a_folder_mutator` docstring warns in as many words that a GET on this tier is refused by the gate alone. Arithmetic, not judgement.
+
+    **It is the third member of the templated `READ_BLOCKED_GET_PATHS` gap, and the sharpest.** The belt matches literal paths, so no templated locality GET can be on it; the two already there serve a run listing and a preview image, and this one streams model weights. Under the documented `AUTHZ_GATE_ENFORCING = False` rollback a share token would therefore not read a directory but download every adapter on the shelf. It is recorded rather than closed here because closing it means prefix matching in a belt every request passes through — its own change with its own review — and a bespoke `startswith` for one route is the special case that rots. The gate refuses it today, proved by mutation in `tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file`; `tests/test_authz_host_capability_16_3.py::test_every_untemplated_locality_get_is_on_the_read_blocked_belt` fails the build if a fourth is added without this decision being made again.
+
+  - **Updated 2026-08-16 (#933, `Delete from disk`) — the locality total is now `34 = 29 local + 5 loopback`.** `POST /api/v1/model-files/delete` removes every registered copy of the named models — to the OS trash by default, permanently on request — and then drops their hub rows. It is the **unlink half of `POST /model-moves` standing alone**, without the copy that justifies it, and it is the first route on this tier for *destruction* alone. It takes **no host path**: the body is a list of hub `model.id`, and every path it touches is contained against the folder the scanner recorded, so a row that escapes its folder is refused rather than unlinked. The containment is `_contained_path` rather than the mover's `resolve_path_within`, and deliberately: that one returns a `realpath`, so on a symlinked model it would delete the bytes the link points at and leave the link. This contains the file lexically and `realpath`s the *directory* holding it, so a `..` cannot escape, a symlinked directory component cannot redirect the unlink, and what is removed is the name the shelf catalogues. Two narrowings inside the handler are not the authz tier and are worth reading beside it: only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; and a model with an `unreachable` copy is refused, because an unplugged drive is not a deletion. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_5_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -1497,7 +3133,7 @@ GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 {"detail":"Project not 
 GET /projects/{existing_id}                     -> 403      GET /projects/999999 -> 404
 ```
 
-Three distinguishable answers = which projects exist, and which hold the token's set. `enforce_project_path_scope(server, request, resolved_id_or_None)` now runs on the **resolved** id before the membership query on all four routes, and refuses with one constant 403 body whether the project holds the resource, exists but does not, or does not exist at all. An owner (`visible_project_ids` returns `None`) is not restricted and keeps the informative 404s. Both directions are pinned in the R1d section of `tests/test_multi_project_membership_authz.py`, including the over-blocking direction (a project token still reads its own project and both by-name routes under its own project's name).
+Three distinguishable answers = which projects exist, and which hold the token's set. `enforce_project_path_scope(server, request, resolved_id_or_None)` now runs on the **resolved** id before the membership query on all four routes, and refuses with one constant 403 body whether the project holds the resource, exists but does not, or does not exist at all. An owner (`visible_project_ids` returns `None`) is not restricted and keeps the informative 404s. Both directions are pinned in the R1d section of `tests/multi_project_authz/test_multi_project_membership_authz.py`, including the over-blocking direction (a project token still reads its own project and both by-name routes under its own project's name).
 
 **Residual: the refusal is uniform in content, not in time (accepted risk).** Uniform means status, body and headers; it does *not* mean constant-time. Both `id_or_name` routes resolve a numeric segment with `session.get(Project, int(v))` and, when that returns nothing, fall through to a second name-based `SELECT` — so an id naming an existing project costs one query and an id naming none costs two, before both reach the same 403. Reproduced with a `picture_set`-scoped token over 400 interleaved request pairs (status and body identical in every pair): the missing-project median ran **+141 µs (+6.5 %)** and **+210 µs (+9.6 %)** across two runs, and **+416 µs (+19.8 %)** in the second #708 review's 800-sample run. Magnitude is machine- and load-dependent; the direction is structural.
 
@@ -1506,7 +3142,7 @@ Deliberately **not** equalised — that is a runtime change to a hot read path, 
 - **Owner:** backend (`senior-backend-developer`), tracked on issue #708.
 - **Revisit trigger — any of:** (a) a resource-scoped share token becomes reachable by someone other than the owner (multi-user, or a hosted demo handing out scoped tokens), turning a local channel into a remote one; (b) these routes gain a lookup whose cost varies with *membership* rather than mere existence, which widens the leak from existence to the membership fact; (c) the name lookup becomes materially more expensive than the id lookup (an index change, a growing project table), raising the signal above the noise floor.
 
-**Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
+**Both directions are pinned** in `tests/multi_project_authz/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
 
 #### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
 
@@ -1537,7 +3173,7 @@ Deriving from the join table rather than intersecting the raw scalar is delibera
 
 `Picture.metadata_fields()` was **not** changed. Dropping `project_id` from it would fail closed for future routes, but it is also the default `select_fields` of `Picture.find` (`db_models/picture.py`) and feeds `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py`, so removing the column changes what internal callers load, not just what six handlers serialise. Tracked as the residual below.
 
-**Both directions are pinned** in the R1e section of `tests/test_multi_project_membership_authz.py`: the scoped token's scalar comes from its own narrowed membership, an entity-scoped token gets `null`, and the owner keeps the stored primary, and over-blocking is asserted as its own failure. Every site/token combination asserted there was confirmed to leak before the fix, so none of the assertions is vacuous. Two probes are **not** pinned by a live row and are recorded as such in the test: `GET /picture_sets/{id}?sort=SMART_SCORE` and `?sort=CHARACTER_LIKENESS` return no rows without a smart-score anchor / an assigned reference face, which that fixture does not build. Their narrowing is one line on each of the handler's other two return paths and is asserted opportunistically if a row ever appears.
+**Both directions are pinned** in the R1e section of `tests/multi_project_authz/test_multi_project_membership_authz.py`: the scoped token's scalar comes from its own narrowed membership, an entity-scoped token gets `null`, and the owner keeps the stored primary, and over-blocking is asserted as its own failure. Every site/token combination asserted there was confirmed to leak before the fix, so none of the assertions is vacuous. Two probes are **not** pinned by a live row and are recorded as such in the test: `GET /picture_sets/{id}?sort=SMART_SCORE` and `?sort=CHARACTER_LIKENESS` return no rows without a smart-score anchor / an assigned reference face, which that fixture does not build. Their narrowing is one line on each of the handler's other two return paths and is asserted opportunistically if a row ever appears.
 
 **The column set itself is now pinned.** `tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned` holds the exact 42 names `Picture.metadata_fields()` returns, so a new `picture` column fails the build until someone decides whether a scoped token may learn it. That is the part of #719 that generalises: the leak was not that one narrowing was forgotten, it was that "every column minus blobs" makes forgetting the default. Both mutants (a name dropped from the pin, a name added to it) were confirmed to fail the assertion.
 
@@ -1588,7 +3224,7 @@ The refusal is **`400`**, deliberately, and the three properties are asserted ra
 
 Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
 
-**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 256x256 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
 
 `faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
 
@@ -1608,7 +3244,7 @@ Design notes, each of which is a trap someone will otherwise re-open:
 
 **One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
 
-**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+**Both directions are pinned** in `tests/multi_project_authz/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
 
 - **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
 - **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
@@ -1658,7 +3294,7 @@ A snapshot is a full copy of the live SQLite database taken via `VACUUM INTO`, t
 <vault_root>/snapshots/YYYY/MM/DD/<uuid>.hashes.json   (per-picture metadata_hash map)
 ```
 
-Before compression, only the **live pipeline-state tables** (`picturelikeness` / `picturelikenessqueue` / `picturelikenessfrontier`) are emptied — the restore path reconstructs those from the live DB. The expensive GPU-regenerated blobs (CLIP image/text embeddings, InsightFace face features) and derived scores are **kept**, so a restore comes back fully populated without a re-embedding pass. zstd gives roughly a 3× reduction on embedding-heavy snapshots, which is what makes keeping the blobs affordable. SQLite cannot query a compressed file in place, so a snapshot is treated as an archive: it is decompressed to a scratch `.sqlite` only when actually read (restore / preview), via `materialize_snapshot()`.
+Before compression, the **live pipeline-state tables** (`picturelikeness` / `picturelikenessqueue` / `picturelikenessfrontier`) are emptied and the portable-identity tables (`user`, `usertoken`, `guest_session`, `guest_score`) are securely scrubbed. The restore path reconstructs pipeline state, while identity always remains hub-only. The expensive GPU-regenerated blobs (CLIP image/text embeddings, InsightFace face features) and derived scores are **kept**, so a restore comes back fully populated without a re-embedding pass. zstd gives roughly a 3× reduction on embedding-heavy snapshots, which is what makes keeping the blobs affordable. SQLite cannot query a compressed file in place, so a snapshot is treated as an archive: it is decompressed to a private scratch `.sqlite` only when actually read (restore / preview), via `materialize_snapshot()`, then scrubbed again after schema upgrade before any restore consumer opens it.
 
 The manifest JSON contains: `picture_count`, `picture_ids`, `picture_set_count`, `project_count`, `character_count`, `schema_version`. A complete `{picture_id: metadata_hash}` map is written to a **separate** `<uuid>.hashes.json` sidecar (not the manifest, so the snapshot-list endpoint — which parses every manifest for its small counts — never reads the multi-MB hash blob). The hash sidecar lets the interactive restore preview / hash-compare read per-picture hashes from an uncompressed file, so it never has to decompress the archive.
 
@@ -1698,7 +3334,7 @@ Whether such a legacy file needs upgrading is decided by **schema currency, not 
 
 ### 18.4 RestoreService
 
-**Service** — `pixlstash/services/restore_service.py`
+**Service**: `pixlstash/services/restore/` (facade in `__init__.py`)
 
 | Method | Behaviour |
 |---|---|
@@ -1760,7 +3396,7 @@ All snapshot routes require `auth.require_unscoped_owner` — scoped tokens are 
 
 `deleted_file_log` (`db_models/deleted_file_log.py`) is not a block-list that hides files forever — it is the record *restore* consults so it never resurrects content the user permanently deleted. A row keys on `path_sha` (SHA-256 of the picture's vault/absolute path — never cleartext) plus an optional `pixel_sha`, and carries a `file_removed` flag:
 
-- **`file_removed=True`** — a genuine hard delete: the on-disk file is gone. `restore_service._load_deleted_file_index` returns only these rows, so restore drops/never resurrects them. Pre-migration rows default to `True`.
+- **`file_removed=True`** means a genuine hard delete: the on-disk file is gone. `restore/full_restore.py::_load_deleted_file_index` returns only these rows, so restore drops/never resurrects them. Pre-migration rows default to `True`.
 - **`file_removed=False`** — the picture was removed from the library but its file was deliberately **kept** on disk (a protected reference-folder picture, `allow_delete_file=False`). Its content is *not* gone, so restore must **not** treat it as a permanent deletion. The row exists only so the routine scanner does not auto re-import that path.
 
 Two writers create rows — the scrapheap purge (`routes/pictures/_crud.py::delete_rows`) and the missing-file purge (`tasks/missing_file_purge_task.py`). Both **dedup by `path_sha`**, and on a genuine hard delete they **upgrade** an existing `file_removed=False` row to `True` (they never downgrade `True`→`False`), so a kept path that is later truly purged is recorded truthfully rather than relying solely on restore's ledger-independent missing-file pass.
@@ -1789,7 +3425,7 @@ flowchart LR
     subgraph Domain["Domain Layer"]
         Vault[Vault]
         Engine[InferenceEngine]
-        Scoring[picture_scoring]
+        Scoring[scoring]
         Stacking[stacking]
         Plugins[Image Plugins]
     end
@@ -1863,7 +3499,7 @@ flowchart TB
     Runner[task_runner.py]
     Planner[work_planner.py]
     Engine[inference/engine.py]
-    Scoring[picture_scoring.py]
+    Scoring[scoring/]
     StartCheck[startup_checks.py]
     Events[event_types.py]
 
@@ -2019,7 +3655,9 @@ Instead of teaching each mutating endpoint how to invert itself, the log snapsho
 - The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
 - Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
 
-**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), and the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1), and the EXIF **orientation** (see §21.5).
+
+**`undoable=True` iff the log stores the whole prior state.** That is the rule; "file-mutating operations are not undoable" is the consequence of it that holds for almost every file mutation, not the rule itself. A crop, a re-encode or a scale destroys information that exists nowhere but the prior file, so no snapshot short of the file itself can reverse them — they are *recorded* with `undoable=False` for audit and stay irreversible until copy-on-write versions land (v2.1). An in-place rotate is the one file mutation that does not: it replaces a single enumerated value 1–8 and copies the entropy-coded stream through byte for byte, so `{"orientation": n}` **is** the whole prior state and the ordinary facet machinery reverses it exactly (§21.5).
 
 **Derived values are re-derived, never snapshotted.** `Picture.anomaly_tag_uncertainty` is a function of the label state and `Picture.smart_score` is a cache of a function of it, so `apply_state_in_session` recomputes the first and drops the second — through the very same `recompute_anomaly_tag_uncertainty` / `invalidate_on_anomaly_change` guards the forward write paths use — instead of restoring a recorded copy. Snapshotting a derived value creates a second source of truth, and the moment its inputs are restored by one path and its cached value by another they drift.
 
@@ -2189,6 +3827,144 @@ Note the deliberate asymmetry between the two: an unusable *header* is dropped
 and ignored because a header is ambient; an unusable *body* field is a refusal,
 because the client named it on purpose and silently ignoring it would mis-group
 its undo.
+
+### 21.5 In-place rotate: orientation is a facet, not an inverse (#950)
+
+`POST /pictures/rotate` turns a photo by rewriting **only** its EXIF orientation
+tag. No pixel byte is re-encoded — `utils/image_processing/orientation.py` splices
+the JPEG APP1 segment or the PNG `eXIf` chunk and copies everything else through —
+so a JPEG takes no generational loss and a PNG keeps the `tEXt`/`iTXt` chunks the
+ComfyUI provenance lives in. A format with no writer (and any reference-folder
+original) is reported in `unsupported_picture_ids`, and the caller falls back to
+the `rotate` **image plugin**, which produces a rotated copy.
+
+**The tag is only half of it: one renderer in this stack is the browser, and it
+turns JPEG and nothing else.** Re-measured 2026-08-18 (Chromium 148.0.7778.96,
+Firefox 150.0.2) by writing a tag with `write_orientation` and reading back
+`naturalWidth`/`naturalHeight`: a JPEG's is applied by both, a PNG's `eXIf`
+chunk is ignored by both — exactly like WebP's. The compatibility table in
+`orientation.py` claimed PNG was honoured, nothing checked it, and a rotated PNG
+therefore showed a turned thumbnail (the backend transposes on every decode)
+beside an unturned full view. A ComfyUI library is around five-sixths PNG, so
+that was most of the feature.
+
+The fix keeps the write a metadata splice and moves the burden to the read:
+`GET /pictures/{id}.{ext}` (`routes/pictures/_serving.py`) serves any format
+outside `BROWSER_ORIENTED_FORMATS` **already transposed**, and JPEG untouched
+because transposing it too would turn it twice on screen. Three consequences
+worth knowing:
+
+- The render is disk-cached beside the original as `{stem}_oriented{ext}`, on
+  the same validity rule as the watermark cache — the cached file must be at
+  least as new as the source, so the next rotate invalidates it by rewriting the
+  original. Reference-folder pictures are rendered per request instead: this
+  library does not write beside the user's own files, the same rule that puts
+  their thumbnails under `.ref_thumbs`.
+- **Re-encoding drops PNG text chunks, so they are carried across explicitly.**
+  This response is what "Save image as" hands the user, and a saved copy of a
+  rotated picture that had quietly lost its `workflow` / `prompt` would be a
+  worse bug than the unturned view. The stored file is untouched regardless.
+- Anything already on the re-encode path — the HEIC→JPEG transcode, watermark
+  compositing — is transposed too, JPEG included, because PIL drops the EXIF
+  block on save and the tag would not survive to be applied.
+
+`tests/test_inline_rotate.py` asserts this on the **response bytes**, not on the
+file or the column: both of those were correct throughout, which is precisely
+why nothing caught it.
+
+| `op_type` | Recorded by | Undo | Redo | `summary` |
+|---|---|---|---|---|
+| `pictures.rotate` | `POST /pictures/rotate` (one row + a `batch_id`) | writes the orientation the files had | writes the orientation the rotate produced | "Rotated 5 pictures right" |
+
+**One `op_type` for all three directions, and the direction is not in the
+recorded state.** `before_state` / `after_state` of a `pictures.rotate` row
+contain exactly `{"orientation": n}` and nothing else. That is the whole design,
+and the alternative was built and rejected:
+
+- **A recorded *delta* ("this was turned CCW") is not idempotent.** Every other
+  restore in this log can be applied twice with no effect; a delta applied twice
+  turns the picture twice. Idempotence is not a nicety here — a retried undo is
+  ordinary.
+- **An empty diff would have walked around the locked-set freeze.** Encoding the
+  direction in the `op_type` and applying the inverse from a post-restore hook
+  (§21.3) leaves the recorded state empty, and `_restore` skips
+  `apply_state_in_session` entirely for an empty state — which is exactly where
+  `enforce_pictures_not_locked` lives. The rotate would have been the one write
+  path around a locked set.
+- **An absolute value converges.** If something outside PixlStash turned the file
+  in the meantime, `apply_orientation` reads what the file carries *now* and turns
+  it to the recorded value, rather than compounding a stale assumption.
+
+So there is no post-restore hook, no `empty_diff_target_ids`, no direction in the
+`op_type`, and **no second inverse function anywhere in the feature**:
+`operation_log_service.apply_orientation` is the single applier behind both the
+forward rotate and its undo/redo, which is what makes the two agree by
+construction rather than by review.
+
+**Backed by an additive `Picture.orientation` column** (migration
+`0104_add_picture_orientation`), which is a **mirror of the file, not the source
+of truth**. It exists because `capture_state_in_session` runs twice for every
+recorded operation over every affected picture: reading the tag off disk there
+would make a 2,700-row tag edit do 5,400 file opens on the single DB writer
+thread. The capture therefore reads the column; the *applier* reads the file.
+`MissingOrientationFinder` backfills rows predating the column, and the endpoint
+primes its own targets first — a target still `NULL` at capture time would record
+`{"orientation": null}` and its undo would have nothing to write back.
+
+**Everything except the orientation is derived and re-derived**, never
+snapshotted, exactly as §21's derived-value rule requires. `apply_orientation`
+re-derives, per picture:
+
+- `Face.bbox` **and** `Detection.bbox`. Both are stored in **EXIF-corrected**
+  space (the extraction tasks load through `load_image_bgr_reduced`, which runs
+  `ImageOps.exif_transpose`), so they move even though no pixel did. The corner
+  maths is *reused* from the `rotate` image plugin's `get_bbox_transform` rather
+  than copied. `Picture.width` / `height` are RAW and stay put; the display size
+  the transform needs is those two swapped iff the *current* orientation is one
+  of 5–8.
+- `pixel_sha` and `size_bytes` — the container changed even though the pixels
+  did not, so the tier-1 duplicate key must be recomputed (§22.6).
+- `thumbnail_width` / `thumbnail_height`, NULLed so `MissingThumbnailFinder`
+  regenerates the bitmap.
+
+**The thumbnail cache version had to grow an orientation component.**
+`ImageUtils.thumbnail_cache_version` was `"<W>x<H>"`, and thumbnails are served
+`Cache-Control: private, max-age=3600, must-revalidate`. A 180° rotate leaves W
+and H unchanged, as does a 90° rotate of a square picture — so the regenerated
+bitmap would have arrived at a byte-identical URL and the browser would have gone
+on painting the pre-rotate image for up to an hour. The token is now
+`"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
+one, so backfilling the mirror does not invalidate every thumbnail at once.
+
+**Authorization: `PICTURE_SCOPED` on `body_ids="picture_ids"`, the same tier and
+the same shape as `DELETE /pictures`.** It shipped `OWNER_ONLY` on the argument
+that an in-place write to the owner's original bytes is categorically different;
+that argument does not survive what the write actually is. The splice replaces one
+enumerated EXIF value and copies the entropy-coded stream through byte for byte,
+so the pixels are unchanged, `{"orientation": n}` **is** the whole prior state and
+the ordinary facet machinery reverses it exactly; a file on a reference folder is
+refused at the sink and reported `unsupported` rather than rewritten. A
+write-enabled grant that already reaches the picture is the right level for that,
+and holding the route at `OWNER_ONLY` was over-blocking rather than defence.
+
+Two layers, and only the second is this declaration. A **READ** token never
+reaches the gate on this route: the auth middleware refuses a non-GET from a READ
+token unless the path is in `READ_SAFE_POST_PATHS`, and this path deliberately is
+not (do not add it). That is what makes *write-enabled* the operative condition,
+leaving the gate to answer only *does this grant reach this picture*. The gate
+resolves `picture_ids` element by element and raises on the first id out of scope,
+before the handler body runs — so a batch naming one in-scope and one out-of-scope
+picture is refused **whole** and rotates neither file. Both directions, plus the
+mixed batch, are pinned in `tests/test_inline_rotate.py`. See the matrix row in
+`docs/authz-coverage-matrix.md`.
+
+**Known limits, stated rather than hidden.** `perceptual_hash` and
+`image_embedding` are computed from the *decoded* (transposed) image, so a rotate
+makes them stale; they are not invalidated here and near-duplicate detection can
+mis-group a rotated picture until they are recomputed. And the file write happens
+inside the DB transaction: if that transaction rolls back afterwards, the file
+stays turned while the mirror does not. The applier reads the file rather than the
+mirror precisely so the next rotate converges instead of compounding that.
 
 ---
 
@@ -2373,7 +4149,7 @@ as a string.
 |---|---|
 | `member_count` | the stack's **real live member count**, its depth. NOT the count within the group, and routinely larger: measured on a 17k-picture library, 36 of 116 stack-touching groups name only ONE member of a stack. |
 | `leader_picture_id` | the member at `stack_position` 0, ranked by exactly the window function in `Picture._get_stack_leader_ids`, so the deck's face is the same picture the grid leads that stack with. |
-| `leader_thumbnail_version` | the leader's `?v=` token (`ImageUtils.thumbnail_cache_token`), so the face renders from the queue payload alone. |
+| `leader_thumbnail_version` | the leader's `?v=` version (`ImageUtils.thumbnail_cache_version`), so the face renders from the queue payload alone. |
 | `matched_picture_ids` | which of the stack's members are in this group. |
 | `stackable` / `blocked_by_sets` | the **unit-level rollup** of the per-candidate values: false when ANY member is frozen, because a stack cannot be partially stacked. |
 

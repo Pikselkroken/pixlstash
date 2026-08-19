@@ -116,7 +116,7 @@ shrinks as automated coverage grows.
 | dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
 
 > ⚠️ **Drop → import completes is NOT automatable in this harness:**
-> `POST /pictures/import` returns 400 "Face worker is not running" and the e2e
+> `POST /pictures/import` returns 400 "Cannot import: …" (no face worker) and the e2e
 > backend boots with `disable_background_workers: true`. The import-completion
 > half of legacy §2 stays in the manual plan (Import & background processing)
 > until the harness grows a worker-enabled mode or a test hook.
@@ -246,7 +246,7 @@ notes in the spec. Un-`fixme` each as its behaviour is settled.
 ## Preferences round-trip — `preferences-persist.spec.js`
 | Test | Covers | Status |
 | --- | --- | --- |
-| a compact-mode change is PATCHed and survives a reload | The whole path a preference travels: control → store → the `useAppConfig` watcher's PATCH to `/users/me/config` → read back on the next load. Asserts the request body carried the new value rather than trusting the store, so a broken persistence watcher cannot pass | ✅ |
+| a compact-mode change is PATCHed and survives a reload | The whole path a preference travels: control → store → the `useAppConfig` watcher's PATCH to `/users/me/config` → read back on the next load. Waits for the PATCH *response* before reloading and asserts the request body carried the new value, so a broken persistence watcher cannot pass and a reload cannot cancel the write mid-flight (#973). Forces compact mode off through the API first, so a retry after a failed attempt cannot pass on the store's default | ✅ |
 
 ## Keyboard shortcuts dialog — `shortcuts-dialog.spec.js`
 | Test | Covers | Status |

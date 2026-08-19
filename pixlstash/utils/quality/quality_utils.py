@@ -23,34 +23,6 @@ class QualityUtils:
     def __init__(self, database):
         self._db = database
 
-    def group_pictures_by_format_and_size(self, pics: List[Picture]) -> dict:
-        """Group pictures into a dict keyed by (format, width, height)."""
-        groups = {}
-        current_key = None
-        current_group = []
-
-        for pic in pics:
-            if pic.format is None:
-                raise ValueError(f"Picture id={pic.id} is missing format")
-            if pic.width is None or pic.height is None:
-                raise ValueError(f"Picture id={pic.id} is missing width/height")
-
-            pic_format = pic.format.lower()
-            key = (pic_format, pic.width, pic.height)
-
-            if key != current_key:
-                if current_key is not None:
-                    groups[current_key] = current_group
-                current_key = key
-                current_group = [pic]
-            else:
-                current_group.append(pic)
-
-        if current_group:
-            groups[current_key] = current_group
-
-        return groups
-
     def calculate_quality(
         self,
         pics: List[Picture],

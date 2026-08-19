@@ -46,9 +46,11 @@ the gate's own algorithm would audit that algorithm with itself, so
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -77,6 +79,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "electron.yml",
         "pages.yml",
         "publish-pypi.yml",
+        "record-test-durations.yml",
         "release-test-issues.yml",
         "release-version.yml",
         "windows-installer.yml",
@@ -237,12 +240,34 @@ DEFERRED_FROM_GATE = frozenset(
         "test_tag_prediction_backfill.py",
         "test_tag_predictions_api.py",
         "test_tag_suggestions_api.py",
-        "test_tag_task.py",
         "test_tagger_plugin_registry.py",
         "test_tagger_runs_api.py",
         "test_user_settings_tagger_settings.py",
     }
 )
+
+# How much of the gate the committed durations map must still time before its
+# balance number stops meaning anything.
+#
+# Not zero, deliberately. The map is an optimisation input: a gated file it has
+# never timed costs a little shard skew and no coverage at all, because
+# `_time_balanced_shard_assignment` seeds every test on its round-robin position
+# and charges the unknown ones the median. Failing the build over that would
+# make refreshing the map a correctness obligation, which it is not — and would
+# do it non-locally, on whichever PR happens to run next rather than on the one
+# that added the file. That is not hypothetical: #832 added
+# tests/test_security_supported_versions.py and merged on a check that predated
+# this guardrail, so the guardrail could not block the PR that caused the hole
+# and then failed every unrelated PR afterwards.
+#
+# Not absent either. The defect this guardrail was written for (#833) was a
+# *silent* one: the balance was modelled over the map's own keys, so 28 of 119
+# gated files were structurally invisible and the ratio read a perfect 1.000
+# over data missing a quarter of the gate. A ratio computed over 76% of the gate
+# is not a measurement, and no warning would have been read. So: name the gaps
+# every run, and fail once the map has rotted far enough that the 1.05 assertion
+# below is describing something other than the gate.
+MINIMUM_GATE_COVERAGE = 0.9
 
 
 @pytest.fixture(scope="module")
@@ -414,6 +439,49 @@ def test_electron_apple_signing_requires_validated_release_tag():
     )
 
 
+def test_model_cache_saves_every_path_it_restores():
+    """A path only the restore step lists is warmed on every run and never kept.
+
+    The Windows ``downloaded_models`` directory was in the restore list and
+    absent from the save list, so ``warm_models_windows`` downloaded the WD14
+    and PixlStash taggers and saved an entry without them. That entry then went
+    on hitting its primary key, so the save step (`hit != 'true'`) never ran
+    again and could never repair it — every Windows shard re-fetched the
+    taggers, which is the HuggingFace stampede the warm job exists to prevent.
+    """
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github" / "actions" / "model-cache" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    steps = {}
+    for step in action["runs"]["steps"]:
+        uses = step.get("uses", "")
+        for mode in ("restore", "save"):
+            if f"/cache/{mode}@" in uses:
+                assert mode not in steps, f"Two {mode} steps in one path list"
+                steps[mode] = step
+
+    assert steps.keys() == {"restore", "save"}
+    # Both are guarded on `mode`, or one of them runs in the wrong direction.
+    assert steps["restore"]["if"] == "inputs.mode != 'save'"
+    assert steps["save"]["if"] == "inputs.mode == 'save'"
+
+    # One path per line, not `.split()`: a Windows path can contain a space.
+    paths = {
+        mode: {
+            line.strip() for line in step["with"]["path"].splitlines() if line.strip()
+        }
+        for mode, step in steps.items()
+    }
+    assert paths["restore"] == paths["save"], (
+        "Restore and save must cover the same model paths on every platform; "
+        f"restore-only: {sorted(paths['restore'] - paths['save'])}, "
+        f"save-only: {sorted(paths['save'] - paths['restore'])}"
+    )
+    assert "~/AppData/Local/pixlstash/pixlstash/downloaded_models" in paths["save"]
+
+
 def _shard_matrix(job: dict) -> list:
     """Return the ``shard`` matrix values declared by *job*."""
     matrix = job.get("strategy", {}).get("matrix", {})
@@ -443,6 +511,45 @@ def _shard_options(job: dict) -> set[str]:
     }
 
 
+def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> None:
+    """Name every gated file the map has not timed; fail only once too few remain.
+
+    Split out of the balance test so both branches can be exercised directly.
+    The failing branch is otherwise unreachable from a green tree — the map is
+    normally near-complete — and an unexercised fail branch is a guardrail on
+    paper, which is the specific way this repo has been bitten before.
+
+    Args:
+        gated: Every ``tests/...py`` path the Linux gate runs.
+        recorded_files: The files the durations map has at least one timing for.
+
+    Raises:
+        AssertionError: Coverage has fallen below :data:`MINIMUM_GATE_COVERAGE`.
+    """
+    unrecorded = sorted(gated - recorded_files)
+    if unrecorded:
+        # No ``stacklevel``: the interesting frame is this module, and pointing
+        # one level up lands in ``_pytest/python.py``, which helps nobody.
+        warnings.warn(
+            f"{len(unrecorded)} of {len(gated)} gated test files have no "
+            f"recorded durations: {unrecorded}. Every test in them is placed by "
+            "round-robin fallback at the median cost, so this balance assertion "
+            "says nothing about them. That costs shard skew, never coverage — "
+            "refresh the map by dispatching "
+            ".github/workflows/record-test-durations.yml when it is convenient."
+        )
+
+    coverage = (len(gated) - len(unrecorded)) / len(gated)
+    assert coverage >= MINIMUM_GATE_COVERAGE, (
+        f"The durations map now times only {coverage:.0%} of the {len(gated)} "
+        f"gated files, below the {MINIMUM_GATE_COVERAGE:.0%} floor. Below that "
+        "the balance asserted below is a measurement of a shrinking subset "
+        "rather than of the gate — which is exactly how it reported a perfect "
+        "1.000 over 76% of the gate. Refresh the map by dispatching "
+        f".github/workflows/record-test-durations.yml. Missing: {unrecorded}"
+    )
+
+
 def _gated_files(workflow: dict) -> set[str]:
     """Return the ``tests/...py`` paths the Linux gate runs."""
     job = workflow["jobs"][_GATE_JOB]
@@ -469,10 +576,15 @@ def test_every_test_file_is_classified(workflow):
     CI and nothing would say so. Requiring ``tests/`` to equal GATED + DEFERRED
     turns "I forgot" into a red test, and makes deferring a file a decision
     someone has to write down.
+
+    Discovery recurses. Suites that share one heavy environment live in a
+    sub-package with their own ``conftest.py`` (``tests/multi_project_authz/``),
+    and a non-recursive glob would let every file in one drop out of CI without
+    anything going red — the exact drift this test exists to stop.
     """
     gated = _gated_files(workflow)
     discovered = {
-        str(path.relative_to(REPO_ROOT)) for path in TESTS_DIR.glob("test_*.py")
+        str(path.relative_to(REPO_ROOT)) for path in TESTS_DIR.rglob("test_*.py")
     }
     deferred = {f"tests/{name}" for name in DEFERRED_FROM_GATE}
 
@@ -577,17 +689,15 @@ def test_release_critical_suites_cannot_remain_informational(workflow):
     )
 
 
-def test_stable_aggregate_requires_playwright_and_fixture_fails_closed(workflow):
-    """The stable check cannot pass when Playwright did not prove the RC UI."""
-    aggregate = workflow["jobs"]["build"]
-    needs = aggregate.get("needs", [])
-    assert "e2e" in needs, "The stable `build` aggregate must require e2e"
-    aggregate_steps = "\n".join(
-        step.get("run", "") for step in aggregate.get("steps", [])
-    )
-    assert "E2E_RESULT" in aggregate_steps
-    assert "e2e)" in aggregate_steps
+def test_e2e_fixture_check_fails_closed(workflow):
+    """The e2e job cannot go green by skipping Playwright.
 
+    The `build` aggregate that used to carry the other half of this test (that
+    the stable check required e2e at all) was removed in #796: there is no
+    branch protection consuming it, so there is no stable check to require.
+    What still matters is that this job reports red rather than green when the
+    committed fixture is missing.
+    """
     e2e = workflow["jobs"]["e2e"]
     fixture_steps = [
         step for step in e2e.get("steps", []) if step.get("id") == "fixture"
@@ -1197,9 +1307,25 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     show the difference in kind, and it is the *balanced* side that carries the
     assertion. If a single test ever grows past a shard's share this fails, and
     it should: no assignment can balance that, and the fix is the test.
+
+    The node list comes from the gate's own file list, never from the map's
+    keys. Grading the map on the tests it happens to contain is a tautology: it
+    reported 1.000 while 28 of 119 gated files were absent, and every test in
+    those files was being placed by round-robin fallback rather than by the
+    balance this claims to prove. So the coverage of the gate is reported every
+    run and asserted against ``MINIMUM_GATE_COVERAGE`` — a handful of freshly
+    added files is a refresh chore and warns, a map that has stopped describing
+    the gate fails.
     """
     durations = _load_recorded_durations(DURATIONS_PATH)
-    nodeids = sorted(durations)
+    gated = _gated_files(workflow)
+    recorded_files = {nodeid.split("::", 1)[0] for nodeid in durations}
+
+    _warn_or_fail_on_map_coverage(gated, recorded_files)
+
+    nodeids = sorted(
+        nodeid for nodeid in durations if nodeid.split("::", 1)[0] in gated
+    )
     total = len(_shard_matrix(workflow["jobs"][_GATE_JOB]))
 
     assignment = _time_balanced_shard_assignment(nodeids, total, durations)
@@ -1237,6 +1363,168 @@ def test_negligible_tests_do_not_all_land_on_one_shard():
 
     assert max(counts) <= 2 * min(counts), (
         f"Zero-cost tests piled onto one shard instead of being dealt: {counts}"
+    )
+
+
+class _BudgetStubReporter:
+    """The three pieces of the terminal reporter the budget check touches."""
+
+    def __init__(self, durations: list[float]):
+        self.stats = {"passed": [_BudgetStubReport(value) for value in durations]}
+        self.lines: list[str] = []
+
+    def write_sep(self, _sep, title, **_kwargs):
+        self.lines.append(title)
+
+    def write_line(self, line, **_kwargs):
+        self.lines.append(line)
+
+
+class _BudgetStubReport:
+    def __init__(self, duration: float):
+        self.duration = duration
+
+
+class _BudgetStubSession:
+    """A session whose exit status the budget check is allowed to change."""
+
+    def __init__(self, reporter, shard_spec, exitstatus=0):
+        self.exitstatus = exitstatus
+        self.config = _BudgetStubConfig(reporter, shard_spec)
+
+
+class _BudgetStubConfig:
+    def __init__(self, reporter, shard_spec):
+        self._shard_spec = shard_spec
+        self.pluginmanager = _BudgetStubPluginManager(reporter)
+
+    def getoption(self, name):
+        assert name == "--ci-shard", f"Unexpected option read: {name}"
+        return self._shard_spec
+
+
+class _BudgetStubPluginManager:
+    def __init__(self, reporter):
+        self._reporter = reporter
+
+    def get_plugin(self, name):
+        assert name == "terminalreporter", f"Unexpected plugin read: {name}"
+        return self._reporter
+
+
+def _budget_annotation(reporter) -> str | None:
+    """The ``::warning::`` line the budget check emits, if it emitted one."""
+    for line in reporter.lines:
+        if line.startswith("::warning title=Test-time budget exceeded::"):
+            return line
+    return None
+
+
+def test_test_time_budget_fires_on_over_budget_input():
+    """The ceiling trips on synthetic time, and stays quiet under it.
+
+    Both directions on purpose: a budget that can only be observed to fire is
+    no better evidenced than one that never fires, and a guard permanently red
+    gets muted within a week.
+
+    The signal asserted on is the annotation, not the exit status: a shard
+    failed for being slow cannot be harvested by
+    ``record-test-durations.yml``, which is the workflow that fixes it.
+    """
+    ceiling = shard_conftest.TEST_TIME_BUDGET_SECONDS / 4
+
+    over = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.6])
+    session = _BudgetStubSession(over, "1/4")
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 0, (
+        "The budget failed the shard; a slow gate cannot then be re-measured"
+    )
+    assert _budget_annotation(over), f"No budget annotation was emitted: {over.lines}"
+    assert any("TEST-TIME BUDGET EXCEEDED" in line for line in over.lines), (
+        f"No budget banner was printed: {over.lines}"
+    )
+    assert any("NOT A TEST FAILURE" in line for line in over.lines), (
+        "The banner must be unmistakable from a failing test"
+    )
+
+    under = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
+    session = _BudgetStubSession(under, "1/4")
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 0, "Under-budget shard was failed anyway"
+    assert under.lines == [], f"Under-budget shard printed a banner: {under.lines}"
+
+    # The ceiling is one total-suite constant divided by the shard count, so
+    # the same measured time is fine at N=4 and a breach at N=16.
+    resharded = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
+    session = _BudgetStubSession(resharded, "1/16")
+    shard_conftest._enforce_test_time_budget(session)
+    assert _budget_annotation(resharded), "A reshard silently kept the old ceiling"
+
+    # Not sharding at all means not measuring: a local partial run collects a
+    # fraction of the suite and must never be judged against a shard's share.
+    local = _BudgetStubReporter([ceiling * 99])
+    session = _BudgetStubSession(local, None)
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 0 and local.lines == [], (
+        "The budget applied to an unsharded run"
+    )
+
+    # A run that is already red is red for a better reason. The check must not
+    # downgrade that status, and must not print "this is not a test failure"
+    # directly above a real FAILURES section, which is triage misdirection.
+    interrupted = _BudgetStubReporter([ceiling * 99])
+    session = _BudgetStubSession(interrupted, "1/4", exitstatus=2)
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 2, "The budget downgraded a worse exit status"
+    assert interrupted.lines == [], (
+        f"The budget banner claimed nothing failed on a red run: {interrupted.lines}"
+    )
+
+
+def test_test_time_budget_annotates_without_failing_the_run(tmp_path):
+    """End to end: a passing shard over its ceiling still exits zero, loudly.
+
+    The stub test above proves the arithmetic; this proves the wiring, which is
+    where the previous guardrails in this repo failed. It runs the real hook,
+    against the real terminal reporter's stats, in a real pytest process, and
+    the only synthetic part is the shard count: ``1/100000000`` puts the
+    ceiling at 0.12 ms, which any real test exceeds.
+
+    The exit code stays 0 on purpose. ``record-test-durations.yml`` refuses any
+    source run whose conclusion is not ``success``, and refreshing that map is
+    the standard remedy for a slow gate, so failing the shard for slowness took
+    away the fix. ``1 passed`` is asserted as well, because a renamed target
+    would make pytest exit non-zero for "no tests ran" and the annotation would
+    then be missing for the wrong reason.
+    """
+    target = (
+        "tests/test_ci_shards.py::test_nonsense_duration_values_are_dropped_not_trusted"
+    )
+    summary = tmp_path / "step-summary.md"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", target, "--ci-shard=1/100000000"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
+    )
+    output = result.stdout + result.stderr
+
+    assert "1 passed" in output, f"The target test did not run:\n{output}"
+    assert result.returncode == 0, (
+        "A shard over its test-time ceiling exited non-zero, which makes the "
+        f"run ineligible for the durations refresh that fixes it:\n{output}"
+    )
+    assert "TEST-TIME BUDGET EXCEEDED" in output, (
+        f"No budget banner in the over-budget run:\n{output}"
+    )
+    assert "::warning title=Test-time budget exceeded::" in output, (
+        f"No GitHub annotation in the over-budget run:\n{output}"
+    )
+    assert summary.exists(), "The budget wrote no GITHUB_STEP_SUMMARY entry"
+    assert "TEST-TIME BUDGET EXCEEDED" in summary.read_text(encoding="utf-8"), (
+        f"The step summary does not name the breach: {summary.read_text()}"
     )
 
 
@@ -1405,3 +1693,59 @@ def test_invalid_shard_spec_is_rejected(option, spec):
     assert option in (result.stdout + result.stderr), (
         f"{option}={spec} failed without naming the option"
     )
+
+
+# ── the coverage floor itself ────────────────────────────────────────────────
+# `_warn_or_fail_on_map_coverage` is the only thing standing between a rotting
+# map and a balance figure computed over a shrinking subset. Its failing branch
+# never fires on a healthy tree, so without these it would be asserted by
+# nobody — the exact shape the guardrail was written to replace.
+
+
+def _coverage_case(recorded: int, total: int = 100) -> tuple[set[str], set[str]]:
+    """Build a (gated, recorded) pair with a known coverage ratio."""
+    gated = {f"tests/test_f{i}.py" for i in range(total)}
+    return gated, {f"tests/test_f{i}.py" for i in range(recorded)}
+
+
+@pytest.mark.parametrize(
+    "recorded, passes",
+    [
+        (100, True),  # complete map
+        (90, True),  # exactly at the floor
+        (89, False),  # one file below it
+        (76, False),  # the historical defect: 1.000 reported over 76%
+        (0, False),  # nothing timed at all
+    ],
+)
+def test_the_coverage_floor_fails_only_below_the_minimum(recorded, passes):
+    gated, recorded_files = _coverage_case(recorded)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if passes:
+            _warn_or_fail_on_map_coverage(gated, recorded_files)
+            return
+        with pytest.raises(AssertionError, match="below the .* floor"):
+            _warn_or_fail_on_map_coverage(gated, recorded_files)
+
+
+def test_an_untimed_file_warns_by_name_rather_than_failing():
+    """The whole point of the ruling: a stale map warns, it does not go red.
+
+    Named, because a warning that does not say which file is unactionable.
+    """
+    gated, recorded_files = _coverage_case(99)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_or_fail_on_map_coverage(gated, recorded_files)
+    assert len(caught) == 1, [str(w.message) for w in caught]
+    assert "tests/test_f99.py" in str(caught[0].message)
+
+
+def test_a_complete_map_warns_about_nothing():
+    """Over-warning is its own regression: a noisy guardrail stops being read."""
+    gated, recorded_files = _coverage_case(100)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_or_fail_on_map_coverage(gated, recorded_files)
+    assert caught == [], [str(w.message) for w in caught]

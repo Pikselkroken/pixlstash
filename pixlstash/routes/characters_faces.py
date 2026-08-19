@@ -24,7 +24,7 @@ from pixlstash.db_models import (
     Picture,
 )
 from pixlstash.event_types import EventType
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     compute_character_likeness_for_faces,
     select_reference_faces_for_character,
 )

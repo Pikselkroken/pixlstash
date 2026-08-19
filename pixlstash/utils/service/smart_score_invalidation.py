@@ -9,7 +9,7 @@ calibrated anomaly penalty applied in
 the human/model anomaly labels, which tag edits mutate. Without an explicit
 invalidation the stored score silently goes stale after a re-tag or a manual tag edit.
 
-The change signal is taken from :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`
+The change signal is taken from :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`
 — *the exact function the scorer feeds from* — rather than from a derived summary such as
 ``Picture.anomaly_tag_uncertainty``. That column is a ``max()`` over per-tag scores and is
 therefore lossy: two materially different anomaly states can collapse to the same value
@@ -25,6 +25,7 @@ and the stored score stands — over-invalidating here would re-score the whole 
 every routine re-tag, which is a serious throughput regression on a small box.
 """
 
+import json
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -35,7 +36,7 @@ from sqlmodel import select
 
 from pixlstash.db_models import Picture, Tag, TagPrediction
 from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
-from pixlstash.picture_scoring import fetch_anomaly_confidences
+from pixlstash.scoring import fetch_anomaly_confidences
 from pixlstash.utils.quality.anomaly_penalty import (
     ANOMALY_FAMILIES,
     ANOMALY_PENALTY_TAGS,
@@ -43,14 +44,13 @@ from pixlstash.utils.quality.anomaly_penalty import (
     normalise_tag_weights,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 
 if TYPE_CHECKING:
     from sqlmodel import Session
 
 logger = get_logger(__name__)
 
-# SQLite caps bound variables per statement (~999); chunk id lists to stay under it.
-_ID_CHUNK = 900
 
 # Confidences are stored as floats. Rounding before comparison stops pure float
 # representation noise from counting as a change, while staying far finer than any
@@ -157,16 +157,11 @@ def _normalise_ids(picture_ids: Iterable) -> list[int]:
     return sorted({int(pid) for pid in picture_ids if pid is not None})
 
 
-def _chunks(seq: list, size: int = _ID_CHUNK):
-    for i in range(0, len(seq), size):
-        yield seq[i : i + size]
-
-
 def anomaly_state_signature(session: "Session", picture_ids: Iterable) -> dict:
     """Return ``{picture_id: signature}`` capturing the scorer's anomaly inputs.
 
     The signature is a canonical, order-independent, hashable rendering of exactly the
-    two values :func:`pixlstash.picture_scoring.attach_anomaly_inputs` hands the scorer:
+    two values :func:`pixlstash.scoring.smart_score.attach_anomaly_inputs` hands the scorer:
     the per-tag anomaly probability map (with human POS/NEG already folded in) and the
     set of human-verified present tags.
 
@@ -183,7 +178,7 @@ def anomaly_state_signature(session: "Session", picture_ids: Iterable) -> dict:
         return {}
     signatures: dict[int, tuple] = {}
     # Chunked so a large batch stays under SQLite's bound-variable cap.
-    for chunk in _chunks(ids):
+    for chunk in chunked(ids):
         probs_map, human_map = fetch_anomaly_confidences(session, chunk)
         for pid in chunk:
             probs = probs_map.get(pid) or {}
@@ -221,7 +216,7 @@ def invalidate_smart_scores(session: "Session", picture_ids: Iterable) -> int:
     if not ids:
         return 0
     cleared = 0
-    for chunk in _chunks(ids):
+    for chunk in chunked(ids):
         result = session.exec(
             update(Picture)
             .where(Picture.id.in_(chunk), Picture.smart_score.is_not(None))
@@ -350,7 +345,7 @@ def invalidate_for_penalised_tag_change(
 
     "Carrying" spans both label sources the penalty reads: an applied :class:`Tag` row,
     or an anomaly :class:`TagPrediction` row (which is what
-    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` actually feeds the
+    :func:`~pixlstash.scoring.smart_score.fetch_anomaly_confidences` actually feeds the
     scorer, including human POS/NEG decisions). Predictions are matched without a
     confidence gate on purpose: a weight change must invalidate a picture whose
     prediction sits either side of the apply threshold, and over-invalidating a handful
@@ -374,7 +369,7 @@ def invalidate_for_penalised_tag_change(
         )
         return 0
     cleared = 0
-    for chunk in _chunks(tags):
+    for chunk in chunked(tags):
         tagged = select(Tag.picture_id).where(func.lower(Tag.tag).in_(chunk))
         predicted = select(TagPrediction.picture_id).where(
             func.lower(TagPrediction.tag).in_(chunk)
@@ -403,7 +398,7 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
 
     The tagger's ``threshold_offset`` moves *two* things at once for every anomaly
     detection: the apply gate in
-    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` (which decides whether a
+    :func:`~pixlstash.scoring.smart_score.fetch_anomaly_confidences` (which decides whether a
     model prediction reaches the scorer at all) and the acceptance threshold ``t`` that the
     penalty normalises each detection against via ``u = (p - t) / (1 - t)``. A change to
     the offset therefore invalidates *every* cached score that has an anomaly component,
@@ -438,7 +433,7 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
         )
         return 0
     cleared = 0
-    for chunk in _chunks(tags):
+    for chunk in chunked(tags):
         predicted = select(TagPrediction.picture_id).where(
             func.lower(TagPrediction.tag).in_(chunk)
         )
@@ -505,3 +500,126 @@ def invalidate_on_anomaly_change(
         registry=registry,
         origin_client_id=origin_client_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Durable pending invalidations (hub/vault split)
+# ---------------------------------------------------------------------------
+
+
+def invalidate_all_smart_scores(session: "Session") -> int:
+    """NULL every cached smart score in this library. Does not commit.
+
+    The blunt instrument, for the one case where a narrow diff is not available:
+    the owner's penalty weights changed while this library was closed, and the
+    library stores only a keyed hash of those weights, never the weights
+    themselves (see
+    :func:`pixlstash.services.library_settings_service.reconcile_settings_fingerprint`).
+    Knowing *that* something changed without knowing *what* leaves no way to
+    scope it.
+
+    Cheaper than it sounds: recomputing a smart score reads tags and quality
+    metrics and runs no AI models, and it happens in background batches.
+
+    Returns:
+        The number of cached scores cleared.
+    """
+    result = session.exec(
+        update(Picture).where(Picture.smart_score.is_not(None)).values(smart_score=None)
+    )
+    cleared = int(getattr(result, "rowcount", 0) or 0)
+    logger.info("Invalidated %d cached smart score(s) library-wide", cleared)
+    return cleared
+
+
+def record_pending_invalidation(session: "Session", changed_tags: Iterable[str]) -> int:
+    """Record that *changed_tags* are owed a score invalidation. Does not commit.
+
+    Written to the vault **before** the setting that caused it is committed to
+    the hub, which is what makes the pair safe without a cross-database
+    transaction. See
+    :class:`~pixlstash.db_models.pending_score_invalidation.PendingScoreInvalidation`
+    for why the ordering is that way round.
+
+    Args:
+        session: Active vault session. The caller owns the transaction.
+        changed_tags: Lowercase tag names whose weight changed.
+
+    Returns:
+        The number of tags recorded, or 0 when there was nothing to record.
+    """
+    from pixlstash.db_models.pending_score_invalidation import PendingScoreInvalidation
+
+    tags = sorted({str(t).strip().lower() for t in changed_tags if t})
+    if not tags:
+        return 0
+
+    session.add(PendingScoreInvalidation(tags=json.dumps(tags)))
+    logger.info(
+        "Recorded a pending smart-score invalidation for %d tag(s): %s",
+        len(tags),
+        ", ".join(tags),
+    )
+    return len(tags)
+
+
+def apply_pending_invalidations(session: "Session") -> int:
+    """Apply and clear every recorded pending invalidation. Commits.
+
+    Consuming the record and NULLing the scores happen in one vault transaction,
+    so that half cannot tear: either the scores are invalidated and the row is
+    gone, or neither happened and the row is retried.
+
+    A row whose application fails keeps its place with an incremented
+    ``attempts`` count and a logged error, so a permanently failing entry is
+    visible rather than retried forever in silence.
+
+    Args:
+        session: Active vault session.
+
+    Returns:
+        The number of cached scores cleared.
+    """
+    from pixlstash.db_models.pending_score_invalidation import PendingScoreInvalidation
+
+    pending = session.exec(select(PendingScoreInvalidation)).all()
+    if not pending:
+        return 0
+
+    cleared = 0
+    for row in pending:
+        try:
+            tags = json.loads(row.tags)
+        except (TypeError, ValueError) as exc:
+            logger.error(
+                "Pending invalidation %s holds unreadable tags (%r): %s. Dropping "
+                "it; re-save the penalised-tag setting to rebuild it.",
+                row.id,
+                row.tags,
+                exc,
+            )
+            session.delete(row)
+            continue
+
+        try:
+            cleared += invalidate_for_penalised_tag_change(session, tags)
+            session.delete(row)
+        except Exception:
+            row.attempts = (row.attempts or 0) + 1
+            session.add(row)
+            logger.exception(
+                "Could not apply pending smart-score invalidation %s for tags %s "
+                "(attempt %d). Scores for pictures carrying those tags stay stale "
+                "until this succeeds.",
+                row.id,
+                ", ".join(tags),
+                row.attempts,
+            )
+
+    session.commit()
+    if cleared:
+        logger.info(
+            "Applied pending smart-score invalidations; %d cached score(s) cleared",
+            cleared,
+        )
+    return cleared

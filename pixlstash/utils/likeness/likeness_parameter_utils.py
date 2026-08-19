@@ -84,33 +84,6 @@ class LikenessParameterUtils:
         return LikenessParameterUtils.count_pending_parameters(session) > 0
 
     @staticmethod
-    def fetch_stuck_pictures(session: Session, limit: int = 20) -> list:
-        """Return diagnostic rows for pictures counted-as-pending but not being resolved."""
-        rows = session.exec(
-            select(
-                Picture.id,
-                Picture.width,
-                Picture.height,
-                Picture.size_bin_index,
-                Picture.likeness_parameters,
-            )
-            .where(Picture.size_bin_index.is_(None))
-            .where(Picture.width.is_not(None))
-            .where(Picture.height.is_not(None))
-            .limit(limit)
-        ).all()
-        return [
-            {
-                "id": int(r[0]),
-                "width": r[1],
-                "height": r[2],
-                "size_bin_index": r[3],
-                "likeness_parameters_null": r[4] is None,
-            }
-            for r in rows
-        ]
-
-    @staticmethod
     def _find_size_bin_batch(
         session: Session, max_ids: int
     ) -> Optional[List[Tuple[int, int, int]]]:
@@ -134,74 +107,6 @@ class LikenessParameterUtils:
         if not rows:
             return None
         return [(int(pid), int(w), int(h)) for pid, w, h in rows]
-
-    @staticmethod
-    def update_size_bin(
-        session: Session,
-        ids: List[int],
-        size_bin_by_id: Dict[int, int],
-        vector_length: int,
-    ) -> None:
-        """Assign a per-picture size-bin index to a batch of pictures.
-
-        Each picture's ``size_bin_index`` is looked up from ``size_bin_by_id``
-        so pictures with different resolutions can be processed in one batch.
-        """
-        logger.debug(
-            "LikenessParams: assigning size_bin_index to %d pictures (ids=%s)",
-            len(ids),
-            ids[:10],
-        )
-        rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
-        ).all()
-        updates = []
-        for pic_id, blob in rows:
-            sbi = size_bin_by_id.get(int(pic_id))
-            if sbi is None:
-                continue
-            vec = LikenessParameterUtils.decode_parameters(blob, vector_length)
-            vec[int(LikenessParameter.SIZE_BIN)] = float(sbi)
-            updates.append(
-                {
-                    "id": int(pic_id),
-                    "likeness_parameters": vec.tobytes(),
-                    "size_bin_index": sbi,
-                }
-            )
-        if updates:
-            session.execute(sa_update(Picture), updates)
-            session.commit()
-
-    @staticmethod
-    def update_parameter_values(
-        session: Session,
-        ids: List[int],
-        param_index: int,
-        values: List[float],
-        vector_length: int,
-    ) -> None:
-        """Update a single parameter dimension for a batch of pictures."""
-        if not ids:
-            return
-        logger.debug(
-            "LikenessParams: updating param_index=%d (sentinel fill) for %d pictures",
-            param_index,
-            len(ids),
-        )
-        values_by_id = dict(zip(ids, values))
-        rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
-        ).all()
-        updates = []
-        for pic_id, blob in rows:
-            vec = LikenessParameterUtils.decode_parameters(blob, vector_length)
-            vec[param_index] = float(values_by_id.get(int(pic_id), 0.0))
-            updates.append({"id": int(pic_id), "likeness_parameters": vec.tobytes()})
-        if updates:
-            session.execute(sa_update(Picture), updates)
-            session.commit()
-        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     @staticmethod
     def fetch_blobs_for_ids(
@@ -483,14 +388,6 @@ class LikenessParameterUtils:
             logger.debug("Could not compute dHash for image (%s).", exc)
             return None
 
-    def compute_phash_from_file(
-        self, full_path: str, rel_path: Optional[str]
-    ) -> Optional[str]:
-        """Compute a perceptual hash for an image or video file."""
-        return LikenessParameterUtils.compute_phash_from_file_static(
-            full_path, rel_path
-        )
-
     @staticmethod
     def compute_phash_from_file_static(
         full_path: str, rel_path: Optional[str]
@@ -518,14 +415,6 @@ class LikenessParameterUtils:
             )
             return None
 
-    def compute_created_at_from_file(
-        self, full_path: str, rel_path: Optional[str]
-    ) -> Optional[datetime]:
-        """Extract (or infer) the creation datetime for an image or video file."""
-        return LikenessParameterUtils.compute_created_at_from_file_static(
-            full_path, rel_path
-        )
-
     @staticmethod
     def compute_created_at_from_file_static(
         full_path: str, rel_path: Optional[str]
@@ -548,74 +437,6 @@ class LikenessParameterUtils:
                 exc,
             )
             return None
-
-    @staticmethod
-    def update_quality_values(
-        session: Session,
-        ids: List[int],
-        quality_by_id: Dict[int, Dict[str, float]],
-        vector_length: int,
-    ) -> None:
-        """Update quality-derived parameter dimensions for a batch of pictures."""
-        logger.debug(
-            "LikenessParams: updating quality params for %d pictures (quality data for %d)",
-            len(ids),
-            len(quality_by_id),
-        )
-        LikenessParameterUtils._update_values_for_parameters(
-            session=session,
-            ids=ids,
-            values_by_id=quality_by_id,
-            parameter_fields=QUALITY_PARAM_FIELDS,
-            vector_length=vector_length,
-        )
-        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
-
-    @staticmethod
-    def update_picture_values(
-        session: Session,
-        ids: List[int],
-        picture_by_id: Dict[int, Dict[str, float]],
-        vector_length: int,
-    ) -> None:
-        """Update picture-derived parameter dimensions for a batch of pictures."""
-        logger.debug(
-            "LikenessParams: updating picture params for %d pictures (data for %d)",
-            len(ids),
-            len(picture_by_id),
-        )
-        LikenessParameterUtils._update_values_for_parameters(
-            session=session,
-            ids=ids,
-            values_by_id=picture_by_id,
-            parameter_fields=PICTURE_PARAM_FIELDS,
-            vector_length=vector_length,
-        )
-        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
-
-    @staticmethod
-    def _update_values_for_parameters(
-        session: Session,
-        ids: List[int],
-        values_by_id: Dict[int, Dict[str, float]],
-        parameter_fields: Dict[LikenessParameter, str],
-        vector_length: int,
-    ) -> None:
-        if not ids:
-            return
-        rows = session.exec(
-            select(Picture.id, Picture.likeness_parameters).where(Picture.id.in_(ids))
-        ).all()
-        updates = []
-        for pic_id, blob in rows:
-            vec = LikenessParameterUtils.decode_parameters(blob, vector_length)
-            values = values_by_id.get(int(pic_id), {})
-            for param, field in parameter_fields.items():
-                vec[int(param)] = float(values.get(field, LIKENESS_PARAMETER_SENTINEL))
-            updates.append({"id": int(pic_id), "likeness_parameters": vec.tobytes()})
-        if updates:
-            session.execute(sa_update(Picture), updates)
-            session.commit()
 
     @staticmethod
     def reset_likeness_for_pictures(session: Session, ids: List[int]) -> None:

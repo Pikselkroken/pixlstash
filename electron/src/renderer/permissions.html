@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <title>PixlStash needs safer permissions</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="winbar" class="winbar"></div>
+    <div class="app setup repair">
+      <div class="setup-header">
+        <!-- An open padlock over a folder: the whole problem in one glance.
+             Inline so it needs no asset and inherits the theme's colours. -->
+        <svg
+          class="repair-art"
+          viewBox="0 0 96 72"
+          role="img"
+          aria-label="An unlocked folder"
+          focusable="false"
+        >
+          <path
+            class="repair-art-folder"
+            d="M8 20a6 6 0 0 1 6-6h20l7 8h41a6 6 0 0 1 6 6v30a6 6 0 0 1-6 6H14a6 6 0 0 1-6-6z"
+          />
+          <path class="repair-art-shackle" d="M40 30v-8a8 8 0 0 1 16 0" />
+          <rect class="repair-art-body" x="34" y="30" width="28" height="22" rx="4" />
+          <circle class="repair-art-keyhole" cx="48" cy="40" r="3" />
+        </svg>
+        <h1 class="setup-title">Your library folder is open to other accounts</h1>
+        <p class="setup-intro">
+          Anyone else with an account on this computer can change these folders, so
+          they could replace your pictures database or read private credentials.
+          PixlStash will not open your library until that is fixed.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="hw">PixlStash will change</div>
+        <ul id="issues" class="repair-list"></ul>
+        <div class="sub">
+          Nothing is moved, renamed or deleted &mdash; only the permissions on the
+          folders listed above. Your own access is unchanged.
+        </div>
+      </div>
+
+      <div id="error" class="error hidden"></div>
+
+      <div class="repair-actions">
+        <button id="quit" class="secondary" type="button">Quit</button>
+        <button id="fix" type="button">Fix it</button>
+      </div>
+    </div>
+    <script src="winbar.js"></script>
+    <script src="permissions.js"></script>
+  </body>
+</html>

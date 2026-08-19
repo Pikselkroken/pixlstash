@@ -505,7 +505,7 @@ Three rules on top, none of which the store enforces today:
 3. **The timer pauses** on `:hover`, on `:focus-within`, and while `document.hidden`;
    it resumes on leave / on visibility. Required by WCAG 2.2.1 (Pause, Stop, Hide) —
    `setTimeout` alone cannot satisfy it. §9.3.
-4. **A notice that describes the current context dies with it.** Rules 1 and 3 mean a card
+2. **A notice that describes the current context dies with it.** Rules 1 and 3 mean a card
    carrying an action has *no* deadline at all, which is right for "Undo" (true forever)
    and wrong for "3 of the selected pictures are in locked sets" (true only of that
    selection). The second kind declares a scope; when the scope changes, it is dismissed.

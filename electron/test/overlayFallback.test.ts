@@ -80,6 +80,16 @@ describe('launchWithOverlayFallback — a broken overlay must never prevent laun
     assert.deepEqual(rec.notifications, [], 'no misleading "running on CPU" message');
   });
 
+  it('does not deactivate the overlay for a failure explicitly classified as unrelated', async () => {
+    const rec = recordingHooks(['cu128']);
+    rec.hooks.shouldFallback = () => false;
+
+    await assert.rejects(launchWithOverlayFallback('cu128', rec.hooks), /libcudart/);
+    assert.deepEqual(rec.starts, ['cu128']);
+    assert.equal(rec.deactivations, 0);
+    assert.deepEqual(rec.notifications, []);
+  });
+
   it('overlay launch fails AND the CPU retry fails → rethrows the CPU error, exactly two attempts', async () => {
     // Both fail: the overlay fallback ran (deactivate + notify), and then the
     // bundled-env failure propagates to the caller's fatal path. The retry is a

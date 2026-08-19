@@ -21,6 +21,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -85,7 +86,7 @@ async function handleCreate() {
     }, 3000);
   } catch (err) {
     createError.value =
-      err?.response?.data?.detail ||
+      errorDetail(err) ||
       err?.message ||
       "Failed to create snapshot.";
   } finally {
@@ -122,7 +123,7 @@ async function saveLabel(id) {
   } catch (err) {
     saveLabelError.value = {
       ...saveLabelError.value,
-      [id]: err?.response?.data?.detail || err?.message || "Save failed.",
+      [id]: errorDetail(err) || err?.message || "Save failed.",
     };
   } finally {
     savingLabel.value = { ...savingLabel.value, [id]: false };
@@ -137,7 +138,7 @@ async function handleToggleDailySnapshots(enabled) {
   } catch (err) {
     // The store already rolled back the optimistic value; surface why.
     dailyToggleError.value =
-      err?.response?.data?.detail ||
+      errorDetail(err) ||
       err?.message ||
       "Failed to update daily snapshot setting.";
   }
@@ -160,8 +161,7 @@ async function handleDelete(cp) {
   try {
     await store.deleteSnapshot(cp.id);
   } catch (err) {
-    deleteError.value =
-      err?.response?.data?.detail || err?.message || "Delete failed.";
+    deleteError.value = errorDetail(err) || err?.message || "Delete failed.";
   } finally {
     deletingId.value = null;
   }

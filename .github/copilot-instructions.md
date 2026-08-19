@@ -1,5 +1,130 @@
 # Copilot and Claude Instructions for PixlStash
 
+## The repository layout: peer checkouts, no privileged one
+
+Several agent sessions run against this repository at once, and they used to
+collide: a session that started work on `develop` could find itself on someone
+else's branch mid-task, holding someone else's uncommitted files, with its own
+branch renamed out from under it. Nothing warned you, and the first symptom was
+usually a commit that picked up the wrong files.
+
+`~/Projects/pixlstash` is therefore **a container, not a checkout**:
+
+```
+~/Projects/pixlstash/
+  .bare/         the git dir
+  .git           one line: gitdir: ./.bare
+  develop/       a worktree pinned to develop, never anything else
+  main/          a worktree pinned to main
+  worktrees/     one per session
+```
+
+**The layout is what enforces this, not the rule.** Git refuses to have one
+branch checked out in two worktrees, so once `develop/` holds `develop` no
+session can take it away, and no session can silently retarget it. That is a
+mechanical guarantee where the previous "never edit the shared checkout"
+instruction was a remembered one, and remembered ones are what failed.
+
+`develop/` and `main/` are **test rigs**. They are kept current and are never
+edited or branched off in place. All work happens in `worktrees/`.
+
+### Starting work
+
+`EnterWorktree` creates under `<repo>/.claude/worktrees/`, which is not
+configurable, so a session started in `develop/` would put its worktree inside
+the test rig. Create it as a peer instead and enter it by path:
+
+```
+git worktree add ~/Projects/pixlstash/worktrees/<name>
+# then: EnterWorktree with path: ~/Projects/pixlstash/worktrees/<name>
+git fetch origin && git checkout -B <branch> origin/<base>
+ln -s ~/Projects/pixlstash/develop/frontend/node_modules frontend/node_modules
+```
+
+Set the base explicitly: the default is `origin/main` and feature work is
+almost always based on `develop`. The `node_modules` symlink is what makes the
+worktree actually runnable: without it `npm run dev` and `vitest` both fail on
+a fresh worktree, which is most of why worktrees were awkward to test in.
+
+**The hub and the vault live outside the repo** (platformdirs user data dir), so
+every checkout runs against the same library you already have configured. That
+is why any worktree is testable at all. Do not "fix" it into per-checkout data.
+
+Commit and push from the worktree, open the PR, then remove the worktree when it
+merges. Never stage a file you did not write in this session: stage by name, not
+`git add -A`.
+
+Sessions that only read (questions, reviewing pushed code) can stay put.
+
+### Say where the work can be tested
+
+A session that changes behaviour ends by stating the path and the commands,
+because the person testing is not in your worktree and cannot guess it:
+
+```
+Test at: ~/Projects/pixlstash/worktrees/<name>   (branch <branch>, based on <base>)
+  backend:  cd ~/Projects/pixlstash/worktrees/<name> && python -m pixlstash.app
+  frontend: cd ~/Projects/pixlstash/worktrees/<name>/frontend && npm run dev
+```
+
+If the work is already merged, say `develop/` instead and say to pull. "It's on
+the branch" is not a test path.
+
+### Say what to test, not only where — and say it in the session, never in the PR
+
+**A path is not a handoff.** The session that wrote the change is the only party
+that knows which screen it lands on, what number should appear, and which of its
+own steps it is least sure about. Ending at "test at `<path>`" leaves the person
+testing to reverse-engineer all three from a diff, and the honest answer they
+give back is *"I don't know what to test."*
+
+**The handoff goes to the person, in the session. It does not go in the PR.**
+A test plan written against the machine the work was done on is made of that
+machine's absolute paths, its library, its folder names and its disk figures —
+`/home/<user>/...`, the models they happen to own, how full their drive is. A PR
+is published, permanent and public, and none of that belongs in one. This was
+learned by doing it: a `## Test this` section went into a PR body carrying the
+owner's home directory and an inventory of their private model collection, and
+had to be edited back out. **Do not put a test plan, a path under `$HOME`, a
+listing of the owner's library, or their disk usage into a PR body, a commit
+message or a PR comment.** The PR describes the change; the session describes
+how to try it.
+
+Aggregate engineering figures that justify a decision are fine and already house
+style — "0.01 s to read the index", "a 339 MB tagger". The line is between *this
+mechanism costs this much* and *here is what is on that person's disk*.
+
+**So end the session with the plan, and always name a folder to run it from.**
+Five parts, and the last two are the ones that get skipped:
+
+1. **Where** — the worktree block above, always, even when the answer is
+   `develop/`. Plus any step that has to happen first: *"restart the backend,
+   the declaration runs at start-up"* is the difference between a working
+   feature and a bug report.
+2. **What to look at**, as numbered checks against a named screen or control.
+   "Model folders dialog, toolbar folder icon", not "the folders UI".
+3. **The expected values, concretely** — the row count, the size, *"no size at
+   all rather than `0 B`"*. Read off the machine and written down, because a
+   tester cannot confirm a number nobody stated and a wrong one is invisible
+   next to a vague one. This is exactly the part that must not be published.
+4. **What "wrong" looks like**, per check. State the failure, not only the pass:
+   *"wrong if a locked row offers scan or forget"*. That is what lets someone
+   who does not know the design spot a regression rather than assume the screen
+   is meant to look that way.
+5. **What you could not test yourself**, named and separated. Cold-boot cost,
+   whether a long list is pleasant, anything needing hardware or a judgement
+   call. This is the part actually being handed off — the rest is verification —
+   and folding it into the checks above buries the only items that genuinely
+   require a human.
+
+**Order the checks by risk, and say which one matters.** If a change opens a
+path that could destroy data, that check goes near the top, says so, and tells
+the tester to stop rather than complete the gesture: *"the drag must never
+start; if the row picks up, say so and do not drop it."*
+
+**Automated coverage is not a test-this item.** If a suite already proves it,
+say so in a line and spend the human's attention on what the suite cannot see.
+
 ## Patch Reliability Policy
 
 - **Read before you edit.** Read enough surrounding context (at least 50 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.
@@ -49,6 +174,16 @@ Scope, once you are reading by section:
    shadow, or `em`/`px` font-size outside the ramp. A genuinely new value is a design
    decision: route it to the `lead-designer` skill, do not inline a one-off. Anything
    that changes a flow, a state, or what a control does also goes past the `ui-ux-expert`.
+
+   **And read the design system before you build the surface.** It is a
+   published Claude Design project,
+   <https://claude.ai/design/p/ac544c9e-b278-4439-be75-e442fca29d41>, readable
+   through the `DesignSync` tool. `/docs/design/` tells you what the *values*
+   are; the design system tells you what the *surface* is made of, and
+   `ui_kits/app/` already holds real specs for the app's screens. Building a
+   screen that exists there without reading it is how a surface gets invented
+   twice and disagrees with itself. Full contract in
+   `docs/frontend_architecture.md` §7.
 
 Task classification rules:
 - If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task **and apply the design manual (item 4)**.
@@ -145,18 +280,291 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 
 - **Install dependencies:** `pip install -e .`
 - **Run server:** `python -m pixlstash.app`
-- **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
+- **Run tests:** `python -m pytest -s -vvv --fast-captions`
 - **Check formatting:** `ruff check pixlstash`
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
+
+### Do not pass `--force-cpu` locally
+
+**`--force-cpu` is a CI flag, not a local one.** The gate passes it in
+`PYTEST_FLAGS` (`.github/workflows/ci.yml`) because GitHub's runners have no
+GPU. A development box here does, and forcing CPU inference throws it away:
+every model in the suite runs on the CPU instead, for no coverage that the GPU
+path does not already give.
+
+Copying the CI invocation verbatim is the easy mistake, and this file used to
+invite it by listing the flag under **Run tests**.
+
+**Also do not run the whole suite in one local process.** The gate shards it
+eight ways for a reason (`--ci-shard N/8`), and a single serial `pytest tests/`
+does all eight shards' work. Run the files your change actually touches and let
+the sharded gate cover the rest. When a change is to something shared enough
+that "the files it touches" is most of the suite, shard it locally the same way
+CI does rather than waiting on one process.
+
+## Never open a PR onto another PR
+
+**A PR's base must be a long-lived branch — `develop`, `main`, a release branch.
+Never another PR's branch.** Stacking reads as tidy and loses work.
+
+It lost work here on 2026-08-11. Three shelf PRs merged inside forty seconds:
+
+* **#873** had **#871**'s branch as its base. #871 merged to `develop`; #873 then
+  merged **into #871's branch**, not into `develop`. GitHub only auto-retargets a
+  PR when its base branch is *deleted*, and this one was not. The badge said
+  merged, the content was not in the product, and it was found by chance two
+  hours later — `grep -c withEmptyFolders frontend/src/utils/modelShelf.js`
+  returned **0** on `develop`.
+* **#872** merged at the head GitHub had recorded, which was one commit behind
+  what had just been pushed to it. The newer commit was simply left on the
+  branch. Same silent shape, different cause.
+
+Neither was recoverable by looking at the PR list, because both said MERGED.
+
+**This rule is about the BASE, not about waiting.** It does not say "wait for the
+open PR to merge before you start". Depending on unmerged work is fine and
+normal; *targeting its branch* is what is banned. There are exactly two ways:
+
+1. **Push the commits onto that PR's own branch.** Right when the new work
+   *belongs* to that PR — a review fix, a test it was missing. The PR updates,
+   its checks re-run, and there is one thing to merge.
+2. **Branch off the open PR to get its content, and target `develop` anyway.**
+   Right when the new work is its own step that merely needs the other's code,
+   which is the common case. The new PR carries the old one's commits in its
+   history and in its diff until the old PR merges, at which point they become
+   common ancestors and drop out of the diff by themselves. Nothing has to be
+   rebased and nothing has to wait.
+
+   The same shape *replaces* a PR: carry its full history, target the base it
+   targeted, close the old one.
+
+Both keep a single merge into a long-lived branch. Neither creates a base that
+can be merged, deleted or retargeted out from under you.
+
+**The misreading to guard against**, which happened the day this was written:
+treating option 2 as "open a PR only once the other has landed". That serialises
+every dependent piece of work behind a review queue and buys nothing — the risk
+was never *depending* on an open PR, only *merging into* one.
+
+**Corollary — verify the merge, not the badge.** After a PR you care about is
+merged, confirm its content actually reached the target:
+`git merge-base --is-ancestor <head-at-merge> origin/develop`, or grep for a
+symbol the PR introduced. `MERGED` is a statement about a pull request, not about
+the branch you are going to build on next.
+
+## Fixing a CI failure: update the existing PR, do not open another
+
+**One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
+checks). A PR is not free to open and it is not free to leave open — every push
+to it, and every push to anything it is stacked on, runs the whole gate again.
+On 2026-08-09 this repo had **13 PRs open at once** and opened **47 in a day**.
+Treat runner time as a budget you are spending, because you are.
+
+So, in order:
+
+1. **A CI failure on a PR is fixed on that PR's branch.** Even when the cause is
+   somewhere else entirely — a stale map, another PR's merge, an unrelated
+   flake. Pushing the fix to the red PR turns it green in the run it was already
+   going to spend. Opening a second PR to fix the first spends a second run and
+   leaves the first red until the second lands.
+2. **Check `gh pr list --state open` before opening anything.** Several agent
+   sessions run against this repository at once and cannot see each other. On
+   2026-08-09 two sessions independently fixed the same red guardrail (#848 and
+   #851), which is ~400 runner-minutes for one change. This check costs one
+   second.
+3. **Fold the unblock into the fix.** If the guardrail is wrong *and* its data is
+   stale, that is one PR, not two. Splitting them doubles the CI for no review
+   benefit — the reviewer reads the same diff either way.
+4. **Close a superseded PR the moment it is superseded**, not at merge time. A PR
+   left open after its content moved elsewhere keeps drawing runs from every push
+   to its base, and it is a live hazard: merging it can reintroduce exactly the
+   code a later fix corrected.
+5. **Prefer one PR per work step, with clean separated commits.** Split into a
+   stack only when the pieces can genuinely **merge independently** — not merely
+   because the diff is large. Review granularity comes from commits; a reviewer
+   reads commits either way. A six-PR stack whose parts must all land together
+   re-runs the gate on growing supersets and buys nothing.
+
+The corollary for anyone orchestrating parallel agents: per-agent instructions
+bound each agent's diff, and nothing bounds the *aggregate*. Counting the PRs
+across all in-flight lanes is the orchestrator's job, and it is the one that was
+not being done when the number reached 13.
+
+## Answering a review: reply and resolve, don't just push a fix
+
+**Addressing a review comment is three acts, not one: push the fix, reply on the
+thread, resolve the thread.** A fix pushed in silence is invisible as an answer.
+The reviewer is left with an open thread and a changed file, and has to
+reconstruct whether the two are related, which is the work they asked you to do.
+
+- **Reply on each thread**, naming the commit and what actually changed:
+  `gh api repos/OWNER/REPO/pulls/N/comments/<comment_id>/replies -f body=...`
+- **Then resolve it.** Only GraphQL can:
+  `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<id>"}) { thread { isResolved } } }'`
+  Thread ids come from `pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved path comments(first: 1) { nodes { databaseId body } } } } }`.
+- **Resolving without replying is worse than leaving it open**, because it reads
+  as answered. Never resolve a thread you did not act on.
+- **Disagreeing is a reply, not a silence.** If the comment is wrong, or the fix
+  is deliberately different from what it asked for, say so on the thread and
+  leave it for a human to resolve.
+- **Collapsed "suppressed comments" have no thread**, so there is nothing to
+  resolve and nothing tracking them. Pick them up in a top-level PR comment or
+  they are simply lost. A Copilot review hides them in a `<details>` block below
+  the per-file summary, which is easy to skim past.
+
+**Verify the fix is on the PR head before calling the review answered**, by
+grepping the *remote* branch for a symbol the fix introduces:
+`git grep -q '<symbol>' origin/<branch>`. Do not use `headRefOid` for this. As
+the corollary in "Never open a PR onto another PR" says of merges: for a merged
+PR that value *is* the merged commit, so comparing against it is a tautology
+that cannot fail. On 2026-08-11 two review fixes went missing behind exactly
+that, one to a merge that beat the push by 40 seconds, and one to a push made 14
+minutes after the merge and then "verified" with `headRefOid` and reported as
+landed.
 
 ## New test files must be gated in CI
 
 Every file under `tests/` must be either listed in the `backend` job's file list in `.github/workflows/ci.yml` (preferred, since it then blocks PRs) or listed in `DEFERRED_FROM_GATE` in `tests/test_ci_shards.py` with a reason if it is not green yet. `tests/test_ci_shards.py::test_every_test_file_is_classified` fails the build on anything unclassified, so a new suite that is written and passing locally still breaks CI until it is listed. Add the file in alphabetical position as part of the same change that adds the test.
 
-**Do not try to place a test in a particular shard.** The blocking gate runs `--ci-shard N/8`, which deals every collected test round-robin by position (`tests/conftest.py`), so all eight shards share one file list and a single file's tests spread across all of them. There is no per-shard list to pick, and assignment shifts for every test collected after an insertion point, so per-shard timings reshuffle on each run anyway.
+**Do not try to place a test in a particular shard.** The blocking gate runs `--ci-shard N/8`, which splits by *test* rather than by file (`tests/conftest.py`), so all eight shards share one file list and a single file's tests spread across all of them. There is no per-shard list to pick and no placement decision to make when you add a test file.
 
-Shards are therefore equal in test *count*, never in test *time*, and the residual imbalance (measured at 1.62x, roughly 460 s of idle runner) cannot be improved by where a file is added. Closing it needs time-aware assignment fed by real per-test durations, which the gate does not currently record: `PYTEST_FLAGS` carries no `--durations`, so CI exposes per-shard step totals only. That is its own change, not something to improvise while adding a test.
+The deal is time-balanced, not round-robin. `_time_balanced_shard_assignment` (`tests/conftest.py`) seeds every test on its round-robin position and then re-places the ones it has timings for, longest-processing-time-first, over the committed `tests/ci_test_durations.json`; a test missing from the map keeps its seeded position and is charged the median cost. Shards therefore come out level on recorded *time* (max/min 1.000 at N=8), and `tests/test_ci_shards.py::test_recorded_durations_actually_balance_the_gate` fails the build above 1.05, reading N from the workflow so a resize has to re-prove it. CI records the data that feeds this: `PYTEST_FLAGS` carries `--durations=0 --durations-min=0`, and `scripts/record_test_durations.py` turns that output back into the committed map. Adding a test file therefore imposes no obligation on the map: refreshing it is an optimisation chore, never a correctness obligation, and a stale map costs a little balance and never coverage. The guardrail names every gated file it has not timed as a warning rather than a failure, because that failure could only ever land on an unrelated PR — the file is already on `develop` by the time the map is stale. It does fail once the map times less than `MINIMUM_GATE_COVERAGE` (90%) of the gated files, at which point the 1.05 balance figure is describing a shrinking subset rather than the gate. Refresh it by dispatching `.github/workflows/record-test-durations.yml`, which harvests a green `backend` gate run and pushes the regenerated map to a branch.
+
+## Stand-in values: what is safe to write down
+
+Pushes are scanned for secrets and private information, and the scan reads
+**added lines** — which is why a literal already merged to `develop` is not
+somebody else's problem: merging `develop` into a branch re-presents it as an
+added line, and #963 was blocked by a literal it had never touched. The rules
+below are the vocabulary that scan is quiet about.
+
+| You need | Write | Why |
+|---|---|---|
+| A private IPv4 in a test | `LAN_IPV4`, `PRIVATE_10_IPV4` or `PRIVATE_172_IPV4` from `tests/network_vectors.py` | Three literals — the first host of each RFC 1918 block — identify nobody. Any other quad is read as somebody's network. |
+| RFC 1918 itself | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | A definition, not a machine. |
+| A private IP in prose | `<lan-ip>`, `<your-server-ip>`, or name the block | A worked example is where a real address gets copied in. |
+| A non-private example address | `192.0.2.x`, `198.51.100.x`, `203.0.113.x`, `2001:db8::` (RFC 5737 / 3849) | Reserved for documentation; never a finding. |
+| Loopback, wildcard, CGNAT, a public sentinel | `127.0.0.1`, `0.0.0.0`, `100.64.0.x`, `8.8.8.8` | Not private; never a finding. |
+| A fixture password, token or key | A value starting `test-`, `example-`, `dummy-`, `fake-`, `placeholder-`, or `$…`/`os.environ[…]` | The marker records that the value was invented. It is **not** a way to quieten a real one. |
+| An email | `me@example.com`, or any name under `.test` / `.invalid` / `.localhost` | RFC 2606. |
+| A home path | `/home/me/`, `/home/you/`, `~/` | Placeholder logins. A real login is private information. |
+
+Never write another RFC 1918 quad, `/home/<a real login>/`, `/Users/<anybody>/`,
+or a real address of any kind. There is no allowlist and no `# not a secret`
+comment: the answer to a false positive is to change the line, which is only an
+answer because the stand-ins above are named.
+
+`tests/test_architecture_guardrails.py::test_no_unsanctioned_private_address_literal`
+fails the build on a new private-address literal under `tests/`, `docs/`,
+`pixlstash/`, `frontend/e2e/` or `README.md`, so this does not drift back.
+
+### The owner's address is published on purpose
+
+**One real email address appears in this repository, it is the owner's own, and
+every occurrence is a deliberate declaration** — the plugin `author` field
+(`pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py`),
+package authorship (`pyproject.toml`, `electron/package.json`), and the contact
+a reporter is told to use (`SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`,
+`website/privacy.html`, and the gated test that asserts it,
+`tests/test_security_supported_versions.py`). A published authorship or contact
+declaration is not a leaked credential. Do not remove or rewrite any of them:
+editing the contact out of `SECURITY.md` reds the gate *and* deletes the address
+somebody is supposed to report a vulnerability to.
+
+**Why it is worth writing down.** Push scans read *added lines*, so merging
+`develop` re-presents every one of those declarations as an added line and
+blocks a branch that never opened those files. That has happened twice. When it
+does: **prove each cited line is one of these** — already on `develop`, in a
+file your branch does not touch — with `git diff origin/develop...HEAD` and
+`git log -S`, then say so and leave the release to a person. Clear the lines one
+by one; a scan reports several things at once, and "my branch didn't touch those
+files" is not a reading of the report.
+
+This is not an allowlist for anything else. A finding outside those files is a
+finding, the fixture rules in the table above are untouched (an address that is
+not the owner's own is still `me@example.com` or a `.test` / `.invalid` name),
+and none of it licenses repeating the address anywhere new.
+
+## Tests: reuse the environment, don't rebuild it
+
+The expensive thing in this suite is **not the test, it is the environment
+rebuild**. Measured: standing up a `Server` costs ~1.35 s; the assertion it
+serves costs 0.003-0.25 s. Sixty-eight of eighty-nine `Server`-using files
+rebuilt that environment *inside every test body*, which is most of how the
+backend gate reached 45 min per shard. Converting three files to a shared
+module-scoped environment cut them 8.5x, 8.2x and 1.4x.
+
+`--durations` will not show you this. Work done in the test body is reported as
+`call`, so a test spending 2.5 s building a server reads `setup 0.00s`.
+
+**Before adding a test, look for a module whose environment already gives you
+what you need, and put your assertion there.** Stand up a new environment only
+when the state you need genuinely conflicts with what is already there. A new
+assertion in a warm module is close to free; a new `with Server(...)` block is
+not.
+
+When a file does need its own fixture:
+
+- **Module scope, not class scope.** The gate shards *individual tests* across 8
+  shards, so a class-scoped fixture is rebuilt once per shard per class and
+  barely amortises. `tests/test_authentication.py` is the reference shape;
+  `tests/test_reviews_api.py` and `tests/test_operation_log.py` are the worked
+  examples.
+- **Reset every global observable the module touches, not just the obvious one.**
+  `test_operation_log` needed the Scrapheap cleared as well as the `operation`
+  table, because `POST /pictures/scrapheap/restore` with no body restores *all*
+  soft-deleted pictures.
+- **Assert on identity, not counts.** State accumulates across a shared module, so
+  a test counting a global collection breaks — or worse, passes for the wrong
+  reason.
+- **Integrity checks belong in the autouse fixture, never a trailing "canary"
+  test.** The sharder partitions individual tests, so a trailing canary lands in
+  one shard while the tests it was meant to guard land in others.
+- **A shared server runs the background work a per-test server used to suppress.**
+  A fresh vault has nothing to backfill and no models loaded, so sweeps sit in a
+  long backoff; a warm one lands *inside* your test and overwrites hand-written
+  fixture data (`ImageEmbeddingTask` owns the embedding *and* the perceptual
+  hash; `TagTask` deletes existing `Tag` rows before writing its own). Pull the
+  conflicting finders out of the planner for the module's lifetime — waiting for
+  it to settle measured *slower* than the per-test servers it replaces. Keep the
+  planner itself running; the import endpoint refuses while workers are down.
+- **Stop the schedulers before wiping tables.** `BaseTaskFinder._claimed_picture_ids`
+  and `WorkPlanner._inflight_by_finder` drain only on a task's completion path, so
+  a cancelled task never releases its ids — and SQLite reuses picture ids from 1
+  after a wipe, so a finder then permanently refuses the next test's pictures.
+- **Order the wipe instead of reaching for a PRAGMA.** Restore or insert parents
+  first, then delete children, and no foreign-key trickery is needed at all.
+  `PRAGMA defer_foreign_keys = ON` does not work here: with pysqlite a PRAGMA
+  issued before any DML runs in autocommit, so the deferral is already gone by
+  the time the DELETEs open their own transaction. #822 measured it reading back
+  `0`. Never `PRAGMA foreign_keys` off/on either: if a delete raises in between,
+  enforcement stays OFF on that pooled connection and silently weakens every
+  later test. Whichever approach you pick, demonstrate it took effect rather
+  than assume it did.
+- **Anything that used to die with the per-test engine now leaks** — `connect`
+  listeners, patched SQLite limits, monkeypatched globals. Undo them in a
+  `finally`.
+- **Anchor a mutation check, then confirm it landed.** Proving an assertion can
+  fail means editing the thing it asserts on, and a first-occurrence replace
+  often hits prose instead of code. `AUTHZ_GATE_ENFORCING = True` appears twice
+  in `pixlstash/authz/gate.py`, once inside a docstring: mutate that one and
+  behaviour is unchanged, the suite stays green, and the green reads as "this
+  assertion is dead". Anchor on `^AUTHZ_GATE_ENFORCING = True$` and verify the
+  mutation is in the line you meant.
+- **Assert the route resolves before trusting an authz negative.** Those paths
+  are guarded twice, by the READ-token middleware and by the gate, and the
+  middleware runs ahead of routing. A request to a renamed or nonexistent route
+  therefore returns the same 403 as a genuine in-scope refusal, so a negative
+  test that names its path as a string can pass against a dead path.
+
+For an authz or security suite the shared environment also has to keep the
+negative assertions honest. Re-mint credentials in the autouse fixture, keep the
+in-scope positive control next to every negative one, and prove the result can
+still fail: remove one scope guard in `pixlstash/`, confirm the suite goes red,
+restore it. A negative assertion that passes because the credential was missing,
+rather than because the scope was refused, is a silent coverage loss — and it is
+the specific failure this repo has to design against.
 
 ## Reviews
 

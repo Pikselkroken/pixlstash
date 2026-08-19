@@ -15,6 +15,7 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -27,6 +28,80 @@ const BACKEND_URL = API_BASE_URL;
 // events accumulates over this window and applies once per category instead of
 // one fetch-and-rebuild per event.
 const GRID_WS_COALESCE_MS = 200;
+
+/**
+ * Apply the server's WebSocket close contract.
+ *
+ * Code 1012 with the switch reason is not a transient disconnect: every id and
+ * store value in this SPA belongs to the retired library. Reload the document
+ * instead of reconnecting the socket underneath stale client state.
+ */
+export function handleUpdatesSocketClose(event, { reload, reconnect }) {
+  if (event?.code === 1012 && event?.reason === "Library switched") {
+    reload();
+    return;
+  }
+  reconnect();
+}
+
+/** Coalescing key for the GPU-memory notice: one card, updated in place, so a
+ *  retry sequence reads as one event rather than three stacked warnings. */
+export const VRAM_OOM_NOTICE_KEY = "vram-oom";
+
+// How long a "retrying" card stays up. Stated explicitly rather than left to
+// the level default (6 s), which is shorter than the backend's pause between
+// attempts — the card would expire and the next frame would open a NEW one, so
+// the key would coalesce nothing and the user would get a flicker of three
+// separate warnings. This has to outlive `TaskRunner.VRAM_OOM_RETRY_PAUSE_S`.
+const VRAM_OOM_RETRY_NOTICE_MS = 15000;
+
+// Why the card names another program: the app's own models are sized against
+// the configured budget, so the usual reason there is suddenly no room is
+// something else on the card — a ComfyUI run, a game, another app's model. That
+// is also the one thing the person reading the toast can act on.
+const VRAM_CULPRIT = "another program is probably holding the card";
+
+/**
+ * The card shown while a GPU task is fighting for VRAM, in its four states.
+ *
+ * @param {object} payload - the `vram_oom` event.
+ * @param {number} payload.attempt - the attempt this frame is about (1-based).
+ * @param {number} payload.max_attempts - attempts the task gets in total.
+ * @param {boolean} payload.gave_up - the retry sequence ended without the work.
+ * @param {boolean} payload.recovered - a later attempt succeeded.
+ * @returns {{level: string, text: string, timeout: number|undefined}}
+ */
+export function vramOomNotice({
+  attempt,
+  max_attempts: max,
+  gave_up,
+  recovered,
+}) {
+  const used = Number(attempt) || 0;
+  const total = Number(max) || 0;
+  if (recovered) {
+    return {
+      level: "success",
+      text: `GPU memory freed up — the work finished on attempt ${used} of ${total}.`,
+      timeout: undefined,
+    };
+  }
+  if (gave_up) {
+    // Only an exhausted sequence can promise the two things below. A sequence
+    // that ended early — the task died of something else, or the app is
+    // shutting down — says what happened and promises nothing.
+    const text =
+      used >= total
+        ? `Ran out of GPU memory after ${total} attempts — ${VRAM_CULPRIT}. Nothing was changed; this work will be tried again later.`
+        : `Ran out of GPU memory, and the work stopped on attempt ${used} of ${total}.`;
+    return { level: "warning", text, timeout: undefined };
+  }
+  return {
+    level: "warning",
+    text: `Ran out of GPU memory — ${VRAM_CULPRIT}. Retrying — attempt ${used} of ${total} used.`,
+    timeout: VRAM_OOM_RETRY_NOTICE_MS,
+  };
+}
 
 /**
  * The live-updates channel: the /updates WebSocket, the filter handshake that
@@ -56,6 +131,7 @@ export function useUpdatesSocket({
   const operationStore = useOperationStore();
   const snapshotsStore = useSnapshotsStore();
   const dedupStore = useDedupStore();
+  const noticeStore = useNoticeStore();
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
@@ -81,9 +157,7 @@ export function useUpdatesSocket({
     // middleware does not cover WebSockets). A full session authenticates via
     // the same-origin session cookie; a share/read-only session has no cookie,
     // so append its READ token as ?token= the same way HTTP requests do.
-    return appendShareToken(
-      toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`),
-    );
+    return appendShareToken(toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`));
   }
 
   // A `pictures_changed` event may carry a `fields` list naming the columns that
@@ -103,6 +177,12 @@ export function useUpdatesSocket({
     // detection change never affects grid membership or order — don't reload or
     // raise the "view changed" pill for it.
     if (field === "detections") return false;
+    // Neither does a rotate: `pixels` means the file's own bytes changed (an
+    // in-place rotate, or an undo/redo of one). The card renders differently but
+    // does not move — no sort reads orientation, and no filter selects on it —
+    // so reloading the grid or raising the "view changed" pill would both be
+    // wrong for what is really a repaint of one tile.
+    if (field === "pixels") return false;
     // Unknown field → assume it can affect the view, so refresh to be safe.
     return true;
   }
@@ -135,6 +215,10 @@ export function useUpdatesSocket({
       gridContainer.value?.insertGridImagesById?.(ids),
     refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
     refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
+    refreshThumbnailUrls: (ids) =>
+      gridContainer.value?.refreshThumbnailUrls?.(ids),
+    applyRotatedCards: (ids) =>
+      gridContainer.value?.applyRotatedCards?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
@@ -325,6 +409,14 @@ export function useUpdatesSocket({
           key: Date.now(),
           payload,
         };
+      } else if (payload?.type === "vram_oom" && !isReadOnly.value) {
+        // A fact about the machine, not about the library, so no grid-filter or
+        // origin decision applies. The backend only delivers it to owner-level
+        // sockets; the read-only guard matches the sibling branches rather than
+        // relying on that alone. One keyed card: the retries and the closing
+        // frame update it in place rather than stacking three warnings.
+        const notice = vramOomNotice(payload);
+        noticeStore.push({ ...notice, key: VRAM_OOM_NOTICE_KEY });
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
@@ -371,32 +463,46 @@ export function useUpdatesSocket({
 
     ws.onclose = (event) => {
       if (updatesSocket === ws) updatesSocket = null;
-      if (event?.code === 1012) {
-        // The restore barrier deliberately uses Service Restart (1012). The
-        // initiating tab must keep its long-running HTTP request alive; every
-        // other tab immediately clears session stores and bootstraps afresh.
-        if (isFullRestoreRequestInFlight()) {
-          reconnectEnabled = false;
+      // Close code 1012 is overloaded. A library switch sends it with an
+      // explicit "Library switched" reason; the restore barrier and the
+      // WebSocket admission refusal send it with no reason at all. Only the
+      // reason separates them, so match the switch before the restore branches
+      // or a switch would be transitioned as though it were a restore.
+      const isLibrarySwitch =
+        event?.code === 1012 && event?.reason === "Library switched";
+      if (!isLibrarySwitch) {
+        if (event?.code === 1012) {
+          // The restore barrier deliberately uses Service Restart (1012). The
+          // initiating tab must keep its long-running HTTP request alive; every
+          // other tab immediately clears session stores and bootstraps afresh.
+          if (isFullRestoreRequestInFlight()) {
+            reconnectEnabled = false;
+            return;
+          }
+          transitionAfterFullRestore();
           return;
         }
-        transitionAfterFullRestore();
-        return;
+        if (fullRestorePending) {
+          // Once STARTED was observed, even a network-shaped close cannot make
+          // incremental reconnection safe: the tab has already discarded its
+          // pre-restore state and must bootstrap a coherent session.
+          transitionAfterFullRestore();
+          return;
+        }
+        if (!reconnectEnabled) return;
       }
-      if (fullRestorePending) {
-        // Once STARTED was observed, even a network-shaped close cannot make
-        // incremental reconnection safe: the tab has already discarded its
-        // pre-restore state and must bootstrap a coherent session.
-        transitionAfterFullRestore();
-        return;
-      }
-      if (!reconnectEnabled) return;
       if (updatesReconnectTimer) {
         clearTimeout(updatesReconnectTimer);
       }
-      updatesReconnectTimer = setTimeout(() => {
-        updatesReconnectTimer = null;
-        connectUpdatesSocket();
-      }, 2000);
+      handleUpdatesSocketClose(event, {
+        reload: () => window.location.reload(),
+        reconnect: () => {
+          updatesReconnectTimer = setTimeout(() => {
+            updatesReconnectTimer = null;
+            connectUpdatesSocket();
+          }, 2000);
+        },
+      });
     };
   }
 

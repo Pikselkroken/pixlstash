@@ -19,8 +19,7 @@
         ref="ateProjectRef"
         type="project"
         placement="right"
-        :backend-url="backendUrl"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -30,8 +29,7 @@
         ref="ateCharacterRef"
         type="character"
         placement="right"
-        :backend-url="backendUrl"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -42,8 +40,7 @@
         ref="ateSetRef"
         type="set"
         placement="right"
-        :backend-url="backendUrl"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -293,6 +290,38 @@
         <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
         Segment
       </button>
+      <!-- ── Rotate in place ───────────────────────────────
+           Selection-scoped like Segment, and the context menu's counterpart of
+           this pair is gated identically, so it belongs here as well: #403
+           holds the two menus to the same action list for a multi-selection.
+           Applied on click — no dialog, no direction picker, no confirmation,
+           because two clicks give 180° and undo is the safety net. Greyed
+           rather than hidden when nothing in the selection can carry a
+           rotation, since the tooltip is what points at the copy route. -->
+      <button
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly || !!rotateBlockReason"
+        :title="rotateLeftTitle"
+        @click="
+          $emit('rotate-left');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon" size="15">mdi-rotate-left</v-icon>
+        {{ rotateLeftLabel }}
+      </button>
+      <button
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly || !!rotateBlockReason"
+        :title="rotateRightTitle"
+        @click="
+          $emit('rotate-right');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon" size="15">mdi-rotate-right</v-icon>
+        {{ rotateRightLabel }}
+      </button>
       <div class="ctx-sep" />
     </template>
 
@@ -354,6 +383,7 @@ import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
+import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
@@ -362,7 +392,6 @@ const props = defineProps({
   open: Boolean,
   selectedCount: Number,
   selectedImageIds: { type: Array, default: () => [] },
-  backendUrl: String,
   isReadOnly: Boolean,
   isScrapheapView: Boolean,
   groupingLockReason: { type: String, default: null },
@@ -381,6 +410,11 @@ const props = defineProps({
   // set. A mixed selection stays enabled and the dialog reports the skips,
   // which is the same rule the shipped Delete item follows.
   keepCoverOnlyLockReason: { type: String, default: null },
+  // Reason string when NOTHING in the selection can be rotated in place (every
+  // picture a WebP/TIFF/video, or a reference-folder original). Greys the pair
+  // and doubles as their tooltip; null while at least one can be turned, since
+  // a mixed selection rotates what it can and reports the skips.
+  rotateBlockReason: { type: String, default: null },
   showRemoveFromStack: Boolean,
 });
 
@@ -400,6 +434,8 @@ const emit = defineEmits([
   "open-comfyui-panel",
   "reverse-image-search",
   "segment",
+  "rotate-left",
+  "rotate-right",
   "remove-from-group",
   "keep-cover-only",
   "delete-selected",
@@ -467,6 +503,22 @@ const keepCoverOnlyLabel = computed(() =>
     stackCount: props.keepCoverOnlyStackCount,
     selectedCount: props.selectedCount,
   }),
+);
+
+// Same copy as the context menu's pair, from the same helper, because the two
+// menus are held to label-for-label parity (#403) and a second wording here
+// would be a silent divergence rather than a visible one.
+const rotateLeftLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CCW, props.selectedCount),
+);
+const rotateRightLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CW, props.selectedCount),
+);
+const rotateLeftTitle = computed(
+  () => props.rotateBlockReason || rotateLeftLabel.value,
+);
+const rotateRightTitle = computed(
+  () => props.rotateBlockReason || rotateRightLabel.value,
 );
 
 const showRemoveButton = computed(() => {

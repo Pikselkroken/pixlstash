@@ -122,7 +122,7 @@ def test_confirm_records_pos_and_snapshots_prediction():
         assert lmv == "epoch-50"
         assert abs(lconf - 0.88) < 1e-6
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -143,7 +143,7 @@ def test_reject_records_neg_and_snapshots_prediction():
         assert lmv == "epoch-50"
         assert abs(lconf - 0.92) < 1e-6
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -171,7 +171,7 @@ def test_manual_remove_records_neg_that_survives_lost_tag():
         )
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("NEG", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -185,7 +185,7 @@ def test_manual_add_of_content_tag_is_not_recorded():
         assert resp.status_code == 200
         assert _ledger(server, pic_id, "beach sunset") is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -201,7 +201,7 @@ def test_accept_remove_suggestion_records_neg():
 
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("NEG", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -217,7 +217,7 @@ def test_dismiss_add_suggestion_records_neg():
 
         assert _ledger(server, pic_id, "bad anatomy")[:2] == ("NEG", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -233,7 +233,7 @@ def test_dismiss_remove_suggestion_records_pos():
 
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("POS", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -251,7 +251,7 @@ def test_reopen_clears_dismiss_ledger():
         assert state == "UNKNOWN"
         assert source is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -271,7 +271,7 @@ def test_tagger_does_not_clobber_human_label():
         tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("NEG", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -333,7 +333,7 @@ def test_retag_status_flip_preserves_accepted_human_label():
         # The durable human label is untouched.
         assert _ledger(server, pic_id, "malformed hand")[:2] == ("POS", "human")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -386,7 +386,7 @@ def test_retag_updates_live_confidence_on_confirmed_human_row():
         # The frozen human-label ledger is untouched.
         assert _ledger(server, pic_id, "malformed hand") == ledger_before
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -420,6 +420,6 @@ def test_retag_updates_live_confidence_on_rejected_human_row():
         )
         assert _ledger(server, pic_id, "malformed hand") == ledger_before
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

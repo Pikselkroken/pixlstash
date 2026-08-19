@@ -75,7 +75,32 @@ def _strip_credentials(db_path: Path) -> None:
             sidecar.unlink()
 
 
+def _harden_permissions(root: Path) -> None:
+    """Strip group/world write bits from the throwaway work directory.
+
+    ``shutil.copytree`` runs ``copystat`` on every directory it creates, so the
+    committed fixture's 0775 directories (and its 0664 ``vault.db``) are
+    reproduced verbatim in the work copy. ``pixlstash.trusted_sqlite`` refuses
+    to open a SQLite database whose file or immediate parent is
+    group/world-writable, which fails the launch outright on any machine whose
+    umask is not 0022. The umask set in ``main()`` does not cover this: an
+    explicit ``chmod`` ignores it. Tightening a throwaway copy is always safe.
+    """
+    for path in (root, *root.rglob("*")):
+        if path.is_symlink():
+            continue
+        try:
+            path.chmod(path.stat().st_mode & ~0o022)
+        except OSError as exc:
+            print(f"[e2e-backend] could not tighten permissions on {path}: {exc}")
+
+
 def main() -> int:
+    # Everything below lives in a throwaway directory that holds a SQLite
+    # database, so create it private rather than at the developer's umask. The
+    # exec'd server inherits this and writes its own snapshots the same way.
+    os.umask(0o077)
+
     if not (SRC_IMAGES / "vault.db").exists():
         print(
             f"[e2e-backend] ERROR: fixture vault not found at {SRC_IMAGES / 'vault.db'}.\n"
@@ -86,7 +111,7 @@ def main() -> int:
 
     if WORK_DIR.exists():
         shutil.rmtree(WORK_DIR)
-    WORK_DIR.mkdir(parents=True)
+    WORK_DIR.mkdir(parents=True, mode=0o700)
 
     work_images = WORK_DIR / "images"
     print(f"[e2e-backend] copying fixture -> {work_images}")
@@ -124,6 +149,8 @@ def main() -> int:
     )
     config_path = WORK_DIR / "server-config.json"
     config_path.write_text(json.dumps(base_config, indent=2))
+
+    _harden_permissions(WORK_DIR)
 
     print(f"[e2e-backend] starting server on http://127.0.0.1:{PORT}")
     os.execvp(

@@ -1,71 +1,116 @@
 <template>
   <AppDialog
     :open="open"
-    :title="character?.id ? 'Edit person' : 'New person'"
-    :width="480"
+    :title="isExisting ? 'Edit person' : 'New person'"
+    :width="isExisting ? 720 : 480"
     @close="emit('close')"
   >
-    <div class="editor-body">
-      <AppInput
-        ref="nameInputRef"
-        v-model="localCharacter.name"
-        label="Name *"
-        placeholder="Name"
-        icon="account-outline"
-        @enter="save"
-      />
-      <AppTextarea
-        v-model="localCharacter.description"
-        label="Description"
-        placeholder="A short description of this person…"
-        :rows="3"
-      />
-      <AppTextarea
-        v-model="localCharacter.extra_metadata"
-        label="Metadata"
-        placeholder="Notes, source, tags…"
-        :rows="2"
-      />
-      <AppSelect
-        v-model="projectSelection"
-        label="Projects"
-        :options="projectOptions"
-        :multiple="true"
-      />
-      <div v-if="character?.id" class="ref-pictures-section">
-        <div class="ref-pictures-header">
-          <span class="ref-pictures-title">Reference Images</span>
-        </div>
-        <p class="ref-pictures-help">
-          Automatically selected from the highest-scoring images of this person.
-        </p>
-        <div v-if="referencePictures.length > 0" class="ref-pictures-grid">
-          <div
-            v-for="pic in referencePictures"
-            :key="pic.id"
-            class="ref-picture-item"
-            @click="previewPic = pic"
-          >
-            <img
-              :src="
-                appendShareToken(
-                  `${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`,
-                )
-              "
-              class="ref-picture-thumb"
-              loading="lazy"
-            />
-            <StarRatingOverlay
-              :score="pic.score || 0"
-              :max="5"
-              :compact="true"
-            />
-          </div>
-        </div>
-        <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
-          No reference images yet — add more scored pictures of this person.
-        </p>
+    <!-- Two columns rather than one tall stack, so the form stops outgrowing
+         the viewport and scrolling its own body. The columns are a CSS reflow
+         of unchanged source order: everything writable is in the first column,
+         the read-only reference grid in the second, so tab order is exactly
+         what it was single-column. Tabs were the stated alternative and were
+         rejected — a field hidden behind a tab is a field you cannot check
+         before Ctrl+Enter saves. Creating a person has no right column (no
+         reference images, no adapters yet), so it stays the narrow one-column
+         dialog it has always been. -->
+    <div class="editor-body" :class="{ 'editor-body--split': isExisting }">
+      <div class="editor-col">
+        <AppInput
+          ref="nameInputRef"
+          v-model="localCharacter.name"
+          label="Name *"
+          placeholder="Name"
+          icon="account-outline"
+          @enter="save"
+        />
+        <AppTextarea
+          v-model="localCharacter.description"
+          label="Description"
+          placeholder="A short description of this person…"
+          :rows="3"
+        />
+        <AppTextarea
+          v-model="localCharacter.extra_metadata"
+          label="Metadata"
+          placeholder="Notes, source, tags…"
+          :rows="2"
+        />
+        <AppSelect
+          v-model="projectSelection"
+          label="Projects"
+          :options="projectOptions"
+          :multiple="true"
+        />
       </div>
+      <div v-if="isExisting" class="editor-col">
+        <div class="ref-pictures-section">
+          <div class="ref-pictures-header">
+            <span :id="refsHeadingId" class="section-label">Reference Images</span>
+          </div>
+          <p class="ref-pictures-help">
+            Automatically selected from the highest-scoring images of this
+            person.
+          </p>
+          <!-- Named through its heading, or the group is an unlabelled pile of
+               images — the same wiring AdapterTray puts on its list, and it
+               matters more here now that the block is its own column rather
+               than the thing directly under the heading in one stack. -->
+          <div
+            v-if="referencePictures.length > 0"
+            class="ref-pictures-grid"
+            role="group"
+            :aria-labelledby="refsHeadingId"
+          >
+            <div
+              v-for="pic in referencePictures"
+              :key="pic.id"
+              class="ref-picture-item"
+              @click="previewPic = pic"
+            >
+              <img
+                :src="
+                  appendShareToken(
+                    `${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`,
+                  )
+                "
+                class="ref-picture-thumb"
+                alt="Reference image"
+                loading="lazy"
+              />
+              <StarRatingOverlay
+                :score="pic.score || 0"
+                :max="5"
+                :compact="true"
+              />
+            </div>
+          </div>
+          <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
+            No reference images yet — add more scored pictures of this person.
+          </p>
+        </div>
+      </div>
+      <!-- Keyed on the open count rather than gated on `open`. Vuetify does
+           unboot the dialog body once the transition finishes, so the key is
+           belt-and-braces for the re-read — the freshness of a list written on
+           ANOTHER surface (the shelf) should not rest on that lazy-mount
+           behaviour, which is a detail rather than a contract — but unlike
+           `v-if` it does NOT unmount the tray as the dialog closes. That is
+           what this is really for. `v-if="props.open"` did,
+           and since this row spans both columns it took the widest block in the
+           dialog out from under a leave transition still playing. Same reason
+           the id comes from the latched local copy: the host nulls the prop on
+           the way out. Spans both columns: its cards auto-fill at 180px, so a
+           full-width row holds three of them instead of one (670px of inner
+           width — 720 less the border and the --space-6 padding — against a
+           180px minimum track and a --space-3 gap). -->
+      <AdapterTray
+        v-if="openCount > 0"
+        :key="openCount"
+        class="editor-span"
+        entity-type="character"
+        :entity-id="localCharacter.id"
+      />
     </div>
     <template #footer>
       <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
@@ -94,6 +139,7 @@
           )
         "
         class="ref-preview-img"
+        alt="Reference image, enlarged"
         @click="previewPic = null"
       />
     </div>
@@ -101,8 +147,8 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onUnmounted } from "vue";
-import { appendShareToken } from "../../utils/apiClient";
+import { computed, ref, useId, watch, nextTick, onUnmounted } from "vue";
+import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import {
   createCharacter,
   patchCharacter,
@@ -118,6 +164,8 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import AdapterTray from "../widgets/AdapterTray.vue";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -126,9 +174,23 @@ const noticeStore = useNoticeStore();
 const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
+
+// An existing person is the only case with a right column: reference images are
+// `v-if`'d on the id and the adapter tray renders nothing without one. Creating
+// therefore keeps the 480 single-column dialog rather than a 720 one with an
+// empty half. Written by the watcher below rather than computed off the prop —
+// see the note there for why the close path must not recompute it.
+const isExisting = ref(false);
+
+// Bumped on every open. Keys the adapter tray so it remounts and re-reads each
+// time the dialog is opened, without unmounting it as the dialog closes.
+const openCount = ref(0);
+
+// Ties the reference grid to its heading (see the template).
+const refsHeadingId = useId();
 
 const projectOptions = computed(() =>
   props.projects.map((p) => ({ value: String(p.id), label: p.name })),
@@ -157,38 +219,84 @@ const referencePictures = ref([]);
 const referencePicturesLoading = ref(false);
 const previewPic = ref(null);
 
-async function fetchReferencePictures(characterId) {
+// The read this fetch answers is two sequential round trips wide, and the
+// dialog is a shared, permanently-mounted instance: the user can close it or
+// open a different person inside that window, and the late response would then
+// paint one person's reference images — their FACE — under another's name. Only
+// the newest request may write anything, including the loading flag.
+//
+// A counter, not a comparison against `props.character.id`: the same person can
+// be closed and reopened while the first read is still in flight, and an id
+// equal to itself would let that abandoned request through — its late failure
+// would then wipe the list the reopened dialog had already filled. Identity of
+// the REQUEST is the question, and only a counter answers it.
+let referenceRequestId = 0;
+
+async function fetchReferencePictures(characterId, requestId) {
+  const superseded = () => requestId !== referenceRequestId;
   referencePicturesLoading.value = true;
   try {
-    const refBody = await getReferencePictures(characterId, {
-      baseUrl: props.backendUrl,
-    });
+    const refBody = await getReferencePictures(characterId);
     const ids = refBody?.reference_picture_ids ?? [];
     if (!ids.length) {
-      referencePictures.value = [];
+      if (!superseded()) referencePictures.value = [];
       return;
     }
-    const rows = await listPicturesByIds(ids, { baseUrl: props.backendUrl });
+    const rows = await listPicturesByIds(ids);
+    if (superseded()) return;
     const pics = Array.isArray(rows) ? rows : [];
     const picsById = new Map(pics.map((p) => [String(p.id), p]));
     referencePictures.value = ids
       .map((id) => picsById.get(String(id)))
       .filter(Boolean);
   } catch {
-    referencePictures.value = [];
+    if (!superseded()) referencePictures.value = [];
   } finally {
-    referencePicturesLoading.value = false;
+    // Only the newest request owns the flag: an older one clearing it would
+    // drop a mid-fetch person to `[]` + not-loading, which renders as "No
+    // reference images yet". A closing dialog starts no new request, so this
+    // one is still the newest and does clear it — the flag cannot stick.
+    if (!superseded()) referencePicturesLoading.value = false;
   }
 }
 
+// One watcher over `[open, id]` owns both the layout branch and the reference
+// list, because both answer the same question and a second copy of the source
+// would only drift.
+//
+// It does nothing on the way OUT, and that is the point. The hosts null
+// `character` in the same tick they set `open` false
+// (`SideBar.closeCharacterEditor`) while Vuetify keeps the body mounted for the
+// leave transition, so anything recomputed here plays out on screen: the dialog
+// would snap 720 → 480 and lose its right column, and emptying the list would
+// put "No reference images yet" under a person who has them, for the length of
+// the animation. Leave the closing dialog exactly as the user last saw it; the
+// next open recomputes everything before it is visible.
 watch(
   () => [props.open, props.character?.id],
   ([isOpen, charId]) => {
-    if (isOpen && charId) {
-      fetchReferencePictures(charId);
-    } else {
-      referencePictures.value = [];
-    }
+    // The preview is the one exception to "change nothing on the way out", and
+    // it is an exception because it is not part of the dialog: it is teleported
+    // to <body> at z-index 9999 and covers the whole app. Left up, it outlives
+    // the dialog that owned it — Ctrl+Enter saves and closes from underneath an
+    // open preview, and the Escape that would dismiss it goes with the dialog's
+    // own listener, so the scrim strands with only a mouse click to clear it.
+    // Dropped on both edges: out, so nothing is orphaned; in, so a preview that
+    // somehow survives cannot greet the next person.
+    previewPic.value = null;
+    if (!isOpen) return;
+    openCount.value += 1;
+    isExisting.value = !!charId;
+    // Every open invalidates whatever was in flight, the create path included —
+    // otherwise the previous person's read stays "newest" and writes under a
+    // dialog that has moved on.
+    const requestId = ++referenceRequestId;
+    // Cleared on the way IN, so the previous person's thumbnails are not what
+    // fills the new one's column while its own read is in flight. What keeps a
+    // late response off the wrong person is that counter; this is about the gap
+    // before any response, and both are needed.
+    referencePictures.value = [];
+    if (charId) fetchReferencePictures(charId, requestId);
   },
   { immediate: true },
 );
@@ -211,9 +319,15 @@ watch(
   },
 );
 
+// Also gated on `open`, for the same reason as the watcher above: the hosts
+// null `character` as they close, and this one would blank all four fields
+// under a dialog that is still on screen playing its leave transition. The
+// form's contents are only ever read while it is open, so filling it on the way
+// in is the whole contract.
 watch(
-  () => props.character,
-  (newChar) => {
+  () => [props.open, props.character],
+  ([isOpen, newChar]) => {
+    if (!isOpen) return;
     if (newChar) {
       localCharacter.value = {
         id: newChar.id,
@@ -316,7 +430,7 @@ async function saveCharacter(charData) {
   } catch (e) {
     console.error("Failed to save character", e);
     noticeStore.error(
-      `Couldn't save that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "character-save" },
     );
   }
@@ -339,18 +453,55 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>
+/* One column by default (create), two when there is a right column to fill.
+   `minmax(0, 1fr)` and not a bare `1fr`: a bare track takes its min-content
+   width from the widest child, and a long project name or a fixed-width
+   control would then push the row wider than the dialog. */
 .editor-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: var(--space-6);
+  row-gap: var(--space-5);
+}
+
+.editor-body--split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.editor-col {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  min-width: 0;
 }
 
+.editor-span {
+  grid-column: 1 / -1;
+}
+
+/* Vuetify caps the dialog at `calc(100% - 48px)`, so it stops being 720 wide
+   below a 768px viewport and each column falls under the ~300px the fields
+   want (299px at a 720px viewport). 720 is where that is unambiguous. Drop to
+   the single column the editor has always had — and give the reference block
+   back the rule that separates it from the fields stacked above it there. */
+@media (max-width: 720px) {
+  .editor-body--split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ref-pictures-section {
+    padding-top: var(--space-2);
+    border-top: 1px solid rgba(var(--v-theme-border, 127 127 127), 0.25);
+  }
+}
+
+/* No border-top in the two-column layout: the rule earned its place under a
+   stack of fields, and at the top of its own column it is a hairline with
+   nothing above it, aligning with nothing on the other side. */
 .ref-pictures-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding-top: var(--space-2);
-  border-top: 1px solid rgba(var(--v-theme-border, 127 127 127), 0.25);
 }
 
 .ref-pictures-header {
@@ -359,25 +510,28 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   gap: var(--space-3);
 }
 
-.ref-pictures-title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
+/* --text-xs, not --text-sm: this hint sits under a `.section-label` heading at
+   --text-2xs, and it was a full two ramp steps above it. --text-xs over
+   --text-2xs is the pairing AdapterTray already uses for exactly this — one
+   step, with the heading carrying its rank on case, weight and tracking.
+   Alpha 0.7 for the same reason AdapterTray's lines carry it: at 12px this is
+   SMALL text and owes 4.5:1 (visual-language.md §4). It shipped at 0.5, which
+   measures 3.19:1 light; 0.7 measures 5.94:1. Shrinking a line without
+   re-checking its contrast is how that floor gets missed. */
 .ref-pictures-help {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.5);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.7);
   margin: 0;
   font-style: italic;
   line-height: 1.4;
 }
 
+/* --text-xs and alpha 0.7 for the same reasons as the hint above it: these two
+   render adjacently when the list is empty, and 0.4 measured 2.43:1 — the
+   quietest thing in the dialog was the one line explaining why it is empty. */
 .ref-pictures-empty {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.7);
   font-style: italic;
   margin: 0;
 }

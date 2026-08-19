@@ -107,6 +107,7 @@ function onKeydown(e) {
   flex-direction: column;
   max-height: 100%;
   overflow: hidden;
+  max-width: 100%;
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgb(var(--v-theme-border));
@@ -159,11 +160,8 @@ function onKeydown(e) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-md);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.6);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);
@@ -172,11 +170,6 @@ function onKeydown(e) {
 .app-dialog__close:hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
-}
-
-.app-dialog__close:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .app-dialog__body {

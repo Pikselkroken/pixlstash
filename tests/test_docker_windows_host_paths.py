@@ -18,7 +18,7 @@ def test_docker_accepts_windows_absolute_host_paths(monkeypatch):
     """Windows absolute host paths should be accepted in Linux Docker mode."""
 
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
-    windows_host_path = "C:\\Users\\lindk\\Pictures\\Test"
+    windows_host_path = "C:\\Users\\<user>\\Pictures\\Test"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = f"{temp_dir}/server-config.json"
@@ -52,7 +52,7 @@ def test_docker_rejects_relative_host_paths(monkeypatch):
     """Relative host paths must still be rejected in Docker mode."""
 
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
-    relative_host_path = "Users\\lindk\\Pictures\\Test"
+    relative_host_path = "Users\\<user>\\Pictures\\Test"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = f"{temp_dir}/server-config.json"
@@ -139,7 +139,7 @@ def test_detect_install_type_invalid_override_ignored(monkeypatch):
 
 
 def test_detect_install_type_always_in_allowed_set(monkeypatch):
-    """Whatever the inputs, the result is always one of the three values."""
+    """Whatever the inputs, the result is always one of the allowed values."""
     for env_value in ("1", "0", "", "true"):
         monkeypatch.setenv("PIXLSTASH_IN_DOCKER", env_value)
         monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)

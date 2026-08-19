@@ -9,6 +9,8 @@ function makeHarness(overrides = {}) {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
     refreshStackFacets: vi.fn(),
+    refreshThumbnailUrls: vi.fn(),
+    applyRotatedCards: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -37,6 +39,7 @@ function makeHarness(overrides = {}) {
       // Detections are an opt-in overlay layer, never a sort/filter field —
       // mirror App.vue.pictureChangeFieldAffectsView.
       if (f === "detections") return false;
+      if (f === "pixels") return false;
       return true; // unknown field assumed relevant
     });
   });
@@ -770,6 +773,8 @@ function makeCoalescingHarness(overrides = {}) {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
     refreshStackFacets: vi.fn(),
+    refreshThumbnailUrls: vi.fn(),
+    applyRotatedCards: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -1065,5 +1070,75 @@ describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
       picture_ids: [3],
     });
     expect(res.reason).toBe("foreign-ui-updated");
+  });
+});
+
+describe("useGridRealtimeSync — a rotate's pixels changed", () => {
+  // The card's thumbnail URL comes from the batch-thumbnail endpoint, never
+  // from /metadata, so refreshGridImage alone repaints the pre-rotate bitmap.
+  // The forward rotate hides this because the tab that issued it refreshes the
+  // URL itself; an undo arrives over the socket with no such local hook, which
+  // is the bug this covers.
+  it("own-origin undo echo -> refreshes the thumbnail URL, not just metadata", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [11, 12],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("card-content-refresh");
+    // One applier, not a metadata refresh followed by a thumbnail refresh: the
+    // tile's shape and its bitmap have to land in the same frame or the picture
+    // turns twice on screen. Asserting the old pair is asserting the bug.
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([11, 12]);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    expect(h.grid.refreshThumbnailUrls).not.toHaveBeenCalled();
+  });
+
+  it("a foreign tab's rotate also repaints here", () => {
+    const h = makeHarness();
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [13],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([13]);
+  });
+
+  it("never reloads the grid or raises a pill — a turned photo does not move", () => {
+    const h = makeHarness();
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [14],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+  });
+
+  it("leaves the thumbnail alone for a change that did not touch the file", () => {
+    const h = makeHarness();
+    h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [15],
+      change_kind: "updated",
+      fields: ["detections"],
+    });
+    // `detections` leaves the FILE alone, so it keeps the plain metadata
+    // refresh and must not take the rotate applier's decode-then-commit path.
+    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(15);
+    expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
   });
 });

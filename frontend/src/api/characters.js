@@ -8,31 +8,51 @@
 //
 // See docs/frontend_architecture.md §8 ("The `src/api/` resource layer").
 
-import { apiClient } from "../utils/apiClient";
+import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * Build a characters route, optionally under an explicit backend base.
  * @param {string} [path=""] - the route below `/characters`.
- * @param {string} [baseUrl=""]
  * @returns {string}
  */
-function charactersUrl(path = "", baseUrl = "") {
-  return `${baseUrl}/characters${path}`;
+function charactersUrl(path = "") {
+  return `/characters${path}`;
+}
+
+/**
+ * The URL of a character's thumbnail, for an `<img src>`.
+ *
+ * The other half of {@link getCharacterThumbnail}, for callers that draw MANY
+ * of them: a blob costs a request and an object URL per character, while a
+ * `src` lets the browser fetch and cache one response however many marks name
+ * that character (the model shelf's assignment ring, #892/#904). The blob form
+ * stays for the sidebar, which wants the failure as a rejection.
+ *
+ * The route is cookie-authenticated, so a share token has to ride in the query
+ * — an `<img>` sends no header.
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function characterThumbnailUrl(id) {
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
+  return appendShareToken(
+    `${API_BASE_URL}${charactersUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+  );
 }
 
 /**
  * List characters.
  * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @param {Object} [options.params] - optional query params.
  * @returns {Promise<Array<Object>>} the character list (the response body).
  */
-export async function listCharacters({ baseUrl = "", params } = {}) {
-  const res = await apiClient.get(
-    charactersUrl("", baseUrl),
-    params ? { params } : undefined,
+export async function listCharacters({ params } = {}) {
+  return unwrap(
+    apiClient.get(charactersUrl(""), params ? { params } : undefined),
   );
-  return res.data;
 }
 
 /**
@@ -44,14 +64,11 @@ export async function listCharacters({ baseUrl = "", params } = {}) {
  * must unwrap; reading `.id` off the envelope silently yields undefined.
  *
  * @param {Object} body - the character's fields (name, notes, ...).
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<{status: string, character: Object|null}>} the response
  *   body: the mutation envelope, NOT the bare character.
  */
-export async function createCharacter(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(charactersUrl("", baseUrl), body);
-  return res.data;
+export async function createCharacter(body) {
+  return unwrap(apiClient.post(charactersUrl(""), body));
 }
 
 /**
@@ -62,61 +79,50 @@ export async function createCharacter(body, { baseUrl = "" } = {}) {
  *
  * @param {number|string} id
  * @param {Object} body - only the keys to change.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<{status: string, character: Object|null}>} the response
  *   body: the mutation envelope, NOT the bare character.
  */
-export async function patchCharacter(id, body, { baseUrl = "" } = {}) {
-  const res = await apiClient.patch(charactersUrl(`/${id}`, baseUrl), body);
-  return res.data;
+export async function patchCharacter(id, body) {
+  return unwrap(apiClient.patch(charactersUrl(`/${id}`), body));
 }
 
 /**
  * Delete a character by id.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function deleteCharacter(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.delete(charactersUrl(`/${id}`, baseUrl));
-  return res.data;
+export async function deleteCharacter(id) {
+  return unwrap(apiClient.delete(charactersUrl(`/${id}`)));
 }
 
 /**
  * Ask which of the given pictures show which people.
  *
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: character id → picture ids,
  *   plus `pictures_with_faces` — the subset that has a face at all, which is
  *   the only subset an assignment can ever apply to.
  */
-export async function getCharacterMembership(
-  pictureIds,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.post(charactersUrl("/membership", baseUrl), {
-    picture_ids: pictureIds,
-  });
-  return res.data;
+export async function getCharacterMembership(pictureIds) {
+  return unwrap(
+    apiClient.post(charactersUrl("/membership"), {
+      picture_ids: pictureIds,
+    }),
+  );
 }
 
 /**
  * Assign a character to the faces found in the given pictures.
  * @param {number|string} id
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function addCharacterFaces(id, pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(charactersUrl(`/${id}/faces`, baseUrl), {
-    picture_ids: pictureIds,
-  });
-  return res.data;
+export async function addCharacterFaces(id, pictureIds) {
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      picture_ids: pictureIds,
+    }),
+  );
 }
 
 /**
@@ -127,31 +133,23 @@ export async function addCharacterFaces(id, pictureIds, { baseUrl = "" } = {}) {
  *
  * @param {number|string} id
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function removeCharacterFaces(
-  id,
-  pictureIds,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.delete(charactersUrl(`/${id}/faces`, baseUrl), {
-    data: { picture_ids: pictureIds },
-  });
-  return res.data;
+export async function removeCharacterFaces(id, pictureIds) {
+  return unwrap(
+    apiClient.delete(charactersUrl(`/${id}/faces`), {
+      data: { picture_ids: pictureIds },
+    }),
+  );
 }
 
 /**
  * Read one character.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the character (the response body).
  */
-export async function getCharacter(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(charactersUrl(`/${id}`, baseUrl));
-  return res.data;
+export async function getCharacter(id) {
+  return unwrap(apiClient.get(charactersUrl(`/${id}`)));
 }
 
 /**
@@ -161,13 +159,10 @@ export async function getCharacter(id, { baseUrl = "" } = {}) {
  * and does not need the rest of the record.
  *
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `name` is the name.
  */
-export async function getCharacterName(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(charactersUrl(`/${id}/name`, baseUrl));
-  return res.data;
+export async function getCharacterName(id) {
+  return unwrap(apiClient.get(charactersUrl(`/${id}/name`)));
 }
 
 /**
@@ -180,40 +175,32 @@ export async function getCharacterName(id, { baseUrl = "" } = {}) {
  * @param {Object} [options]
  * @param {string|number} [options.cacheBuster] - forces a fresh image past the
  *   HTTP cache after the thumbnail has been regenerated.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Blob>} the image data.
  */
-export async function getCharacterThumbnail(
-  id,
-  { cacheBuster, baseUrl = "" } = {},
-) {
+export async function getCharacterThumbnail(id, { cacheBuster } = {}) {
   const path =
     cacheBuster != null
       ? `/${id}/thumbnail?cb=${cacheBuster}`
       : `/${id}/thumbnail`;
-  const res = await apiClient.get(charactersUrl(path, baseUrl), {
-    responseType: "blob",
-  });
-  return res.data;
+  return unwrap(
+    apiClient.get(charactersUrl(path), {
+      responseType: "blob",
+    }),
+  );
 }
 
 /**
  * Assign a character to specific FACES (rather than to whole pictures).
  * @param {number|string} id
  * @param {Array<number|string>} faceIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function addCharacterFacesByFaceId(
-  id,
-  faceIds,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.post(charactersUrl(`/${id}/faces`, baseUrl), {
-    face_ids: faceIds,
-  });
-  return res.data;
+export async function addCharacterFacesByFaceId(id, faceIds) {
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      face_ids: faceIds,
+    }),
+  );
 }
 
 /**
@@ -222,15 +209,12 @@ export async function addCharacterFacesByFaceId(
  * suggestion has already identified its winning face and must not be rescored
  * between review and assignment.
  */
-export async function addCharacterFaceAssignments(
-  id,
-  faceAssignments,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.post(charactersUrl(`/${id}/faces`, baseUrl), {
-    face_assignments: faceAssignments,
-  });
-  return res.data;
+export async function addCharacterFaceAssignments(id, faceAssignments) {
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      face_assignments: faceAssignments,
+    }),
+  );
 }
 
 /**
@@ -242,17 +226,16 @@ export async function addCharacterFaceAssignments(
  * @param {number|string} id
  * @param {Object} [params] - optional scope params such as `project_id` or
  *   `apply_tag_filter`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `image_count` is the
  *   number of pictures in scope.
  */
-export async function getCharacterSummary(id, params, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(
-    charactersUrl(`/${id}/summary`, baseUrl),
-    params ? { params } : undefined,
+export async function getCharacterSummary(id, params) {
+  return unwrap(
+    apiClient.get(
+      charactersUrl(`/${id}/summary`),
+      params ? { params } : undefined,
+    ),
   );
-  return res.data;
 }
 
 /**
@@ -264,32 +247,22 @@ export async function getCharacterSummary(id, params, { baseUrl = "" } = {}) {
  *
  * @param {number|string} id
  * @param {Array<number|string>} faceIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function removeCharacterFacesByFaceId(
-  id,
-  faceIds,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.delete(charactersUrl(`/${id}/faces`, baseUrl), {
-    data: { face_ids: faceIds },
-  });
-  return res.data;
+export async function removeCharacterFacesByFaceId(id, faceIds) {
+  return unwrap(
+    apiClient.delete(charactersUrl(`/${id}/faces`), {
+      data: { face_ids: faceIds },
+    }),
+  );
 }
 
 /**
  * List the picture ids chosen as a character's reference pictures.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose
  *   `reference_picture_ids` is the ordered list.
  */
-export async function getReferencePictures(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(
-    charactersUrl(`/${id}/reference_pictures`, baseUrl),
-  );
-  return res.data;
+export async function getReferencePictures(id) {
+  return unwrap(apiClient.get(charactersUrl(`/${id}/reference_pictures`)));
 }

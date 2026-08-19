@@ -377,10 +377,6 @@ function zoomToRegion(box) {
   gap: 10px;
   width: 100%;
 }
-.rs-bin :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-bin-banner {
   flex-shrink: 0;
@@ -451,7 +447,6 @@ function zoomToRegion(box) {
   color: rgba(var(--v-theme-on-dark-surface), 0.8);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
   white-space: nowrap;
 }
 .rs-region-toggle--on {
@@ -518,7 +513,6 @@ function zoomToRegion(box) {
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
-  cursor: pointer;
 }
 .rs-manual-tag:hover {
   background: rgba(0, 0, 0, 0.85);
@@ -545,7 +539,6 @@ function zoomToRegion(box) {
   border: 2px dashed
     color-mix(in srgb, rgb(var(--v-theme-accent)) 80%, white);
   border-radius: 4px;
-  background: transparent;
   color: #fff;
   cursor: zoom-in;
   pointer-events: auto;
@@ -559,7 +552,6 @@ function zoomToRegion(box) {
   align-items: center;
   gap: 8px;
   padding: 10px 0;
-  cursor: pointer;
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-dark-surface), 0.05);
@@ -602,9 +594,6 @@ function zoomToRegion(box) {
 .rs-similar-hide {
   display: inline-flex;
   padding: 2px;
-  border: none;
-  background: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-similar-why {

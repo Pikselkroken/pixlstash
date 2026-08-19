@@ -9,7 +9,9 @@ import {
 import { getPictureId } from "../utils/media.js";
 import { toggleScore } from "../utils/utils.js";
 import { useSortStore } from "../stores/useSortStore";
+import { useFilterStore } from "../stores/useFilterStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { errorDetail } from "../utils/apiError";
 
 /**
  * Scoring, and everything the grid has to do about it.
@@ -50,9 +52,10 @@ export function useGridScoring({
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
-  errorDetail,
+  removeImagesById,
 }) {
   const sortStore = useSortStore();
+  const filterStore = useFilterStore();
   const noticeStore = useNoticeStore();
 
   // SCORING
@@ -97,7 +100,7 @@ export function useGridScoring({
   async function _submitGuestScores(scores, setCookie) {
     const sid = _getOrCreateGuestSessionId();
     const payload = { session_id: sid, set_cookie: setCookie, scores };
-    await submitGuestScores(payload, { baseUrl: backendUrl });
+    await submitGuestScores(payload);
   }
 
   function setGuestScore(img, n) {
@@ -486,7 +489,6 @@ export function useGridScoring({
     try {
       const rows = await listPicturesByIds(toFetch, {
         fields: "grid",
-        baseUrl: backendUrl,
       });
       fetched = Array.isArray(rows) ? rows : [];
     } catch (e) {
@@ -572,7 +574,7 @@ export function useGridScoring({
       scoresPayload[String(id)] = Number(score);
     }
 
-    await applyScores(scoresPayload, { baseUrl: backendUrl });
+    await applyScores(scoresPayload);
 
     const scoreMap = new Map(
       entries.map(([id, score]) => [String(id), Number(score)]),
@@ -614,6 +616,18 @@ export function useGridScoring({
     if (updateSort && isSmartScoreSortActive()) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
+    }
+
+    // The unscored filter is the one view a score can throw a picture out of.
+    // Drop it here rather than refetching: scoring straight through a backlog
+    // is the workflow this filter exists for, and a refetch per keystroke would
+    // be both janky and needless. A score of 0 is still unscored (the filter is
+    // `score IS NULL OR score = 0`), so only 1-5 leaves.
+    if (filterStore.unscoredOnlyFilter && removeImagesById) {
+      const scoredIds = entries
+        .filter(([, score]) => Number(score) > 0)
+        .map(([id]) => id);
+      if (scoredIds.length) removeImagesById(scoredIds);
     }
 
     if (emitRefreshSidebar) {

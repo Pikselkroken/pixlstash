@@ -5,31 +5,25 @@
 // it here is the pattern-setter for the Phase 1 API layer: one place owns the
 // URL, so a contract change (or the §13 error normalisation) happens once.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Path of the per-user config blob. */
 const CONFIG_URL = "/users/me/config";
 
 /**
  * Fetch the current user's configuration blob.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base, for the call
- *   sites that address the backend absolutely.
  * @returns {Promise<Object>} the config object (the response body).
  */
-export async function getUserConfig({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}${CONFIG_URL}`);
-  return res.data;
+export async function getUserConfig() {
+  return unwrap(apiClient.get(`${CONFIG_URL}`));
 }
 
 /**
  * Patch a partial slice of the current user's configuration.
  * @param {Object} partial - only the keys to change.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the updated config (the response body).
  */
-export async function patchUserConfig(partial, { baseUrl = "" } = {}) {
-  const res = await apiClient.patch(`${baseUrl}${CONFIG_URL}`, partial);
-  return res.data;
+export async function patchUserConfig(partial) {
+  return unwrap(apiClient.patch(`${CONFIG_URL}`, partial));
 }

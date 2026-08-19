@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.florence2 import FLORENCE_PER_IMAGE_VRAM_MB
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.vram_utils import is_vram_oom
 
 if TYPE_CHECKING:
     from pixlstash.inference.engine import InferenceEngine
@@ -37,8 +39,11 @@ class DescriptionWorkflow:
         self._image_root = image_root
 
     def generate_batch(
-        self, pictures: list, engine_override: str | None = None
-    ) -> dict[int, str]:
+        self,
+        pictures: list,
+        engine_override: str | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> dict[int, str | None]:
         """Generate captions for a batch of picture-like objects.
 
         Dispatches to the active description plugin (from tagger_settings).
@@ -49,12 +54,22 @@ class DescriptionWorkflow:
                 exposes ``id`` and ``file_path``).
             engine_override: If supplied, use this plugin instead of
                 ``active_description_plugin`` for this batch.
+            stop_event: Optional :class:`threading.Event` the caller sets to
+                cancel.  It is checked between images and handed to the plugin,
+                so a cancel stops the batch instead of running it out.  The
+                event belongs to the caller — ``DescriptionTask`` passes its own
+                — because the workflow object running a batch is not always the
+                one the task was constructed with (CPU spillover builds a fresh
+                one on every access).
 
         Returns:
             A ``{picture_id: caption_str}`` mapping.  Missing or failed
             captions are stored as ``None``.  An empty dict is returned when
-            *pictures* is empty.
+            *pictures* is empty or the batch was cancelled before it began.
         """
+        if stop_event is not None and stop_event.is_set():
+            return {}
+
         if not pictures:
             return {}
 
@@ -73,13 +88,19 @@ class DescriptionWorkflow:
 
         if active and active != "florence2":
             explicit = engine_override is not None
-            return self._generate_batch_plugin(pictures, active, explicit=explicit)
+            return self._generate_batch_plugin(
+                pictures, active, explicit=explicit, stop_event=stop_event
+            )
 
-        return self._generate_batch_florence(pictures)
+        return self._generate_batch_florence(pictures, stop_event=stop_event)
 
     def _generate_batch_plugin(
-        self, pictures: list, plugin_name: str, explicit: bool = False
-    ) -> dict[int, str]:
+        self,
+        pictures: list,
+        plugin_name: str,
+        explicit: bool = False,
+        stop_event: threading.Event | None = None,
+    ) -> dict[int, str | None]:
         """Dispatch description generation to a named TaggerPlugin."""
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
@@ -97,7 +118,7 @@ class DescriptionWorkflow:
                 "falling back to Florence-2.",
                 plugin_name,
             )
-            return self._generate_batch_florence(pictures)
+            return self._generate_batch_florence(pictures, stop_event=stop_event)
 
         plugins_cfg = self._engine.tagger_settings.get("plugins", {})
         cfg = plugins_cfg.get(plugin_name, {})
@@ -107,7 +128,17 @@ class DescriptionWorkflow:
             if hasattr(plugin, "setup"):
                 plugin.setup(self._engine.device)
             plugin.init(params)
-        except Exception:
+        except Exception as exc:
+            if is_vram_oom(exc):
+                # Transient: the card was full this second, not this plugin is
+                # broken. Let it out so the task retries the batch instead of
+                # clearing every caption in it (BaseTask.run).
+                logger.warning(
+                    "Description plugin %r ran out of GPU memory while loading: %s",
+                    plugin_name,
+                    exc,
+                )
+                raise
             logger.exception(
                 "Failed to initialise description plugin %r; %s.",
                 plugin_name,
@@ -117,7 +148,7 @@ class DescriptionWorkflow:
             )
             if explicit:
                 return {}
-            return self._generate_batch_florence(pictures)
+            return self._generate_batch_florence(pictures, stop_event=stop_event)
 
         image_paths = []
         path_to_id: dict[str, int] = {}
@@ -134,12 +165,21 @@ class DescriptionWorkflow:
             path_to_id[picture_path] = picture.id
 
         try:
-            captions = plugin.generate_descriptions(image_paths, parameters=params)
+            captions = plugin.generate_descriptions(
+                image_paths, parameters=params, stop_event=stop_event
+            )
             for path, caption in captions.items():
                 pic_id = path_to_id.get(str(path))
                 if pic_id is not None:
                     results[pic_id] = caption
-        except Exception:
+        except Exception as exc:
+            if is_vram_oom(exc):
+                logger.warning(
+                    "Description plugin %r ran out of GPU memory while captioning: %s",
+                    plugin_name,
+                    exc,
+                )
+                raise
             logger.exception(
                 "Description plugin %r raised during generation; results may be partial.",
                 plugin_name,
@@ -147,7 +187,9 @@ class DescriptionWorkflow:
 
         return results
 
-    def _generate_batch_florence(self, pictures: list) -> dict[int, str]:
+    def _generate_batch_florence(
+        self, pictures: list, stop_event: threading.Event | None = None
+    ) -> dict[int, str | None]:
         """Caption a batch using Florence-2 (original implementation)."""
         if not pictures:
             return {}
@@ -158,6 +200,11 @@ class DescriptionWorkflow:
         batch_items: list[tuple[int, str]] = []
 
         for picture in pictures:
+            # Videos are captioned one at a time in this loop, and a video is
+            # the slowest single item there is — so the check belongs here and
+            # not only on the still-image chunks below.
+            if stop_event is not None and stop_event.is_set():
+                break
             picture_path = ImageUtils.resolve_picture_path(
                 self._image_root, getattr(picture, "file_path", None)
             )
@@ -174,10 +221,12 @@ class DescriptionWorkflow:
 
         batch_size = self._engine.florence_service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
+            if stop_event is not None and stop_event.is_set():
+                break
             chunk = batch_items[idx : idx + batch_size]
             chunk_paths = [picture_path for _, picture_path in chunk]
             captions = self._engine.florence_service.generate_captions_batch(
-                chunk_paths
+                chunk_paths, stop_event=stop_event
             )
             for picture_id, picture_path in chunk:
                 results[picture_id] = captions.get(picture_path)

@@ -347,7 +347,9 @@ import {
   runRecipe,
 } from "../../api/comfyui";
 import { getPictureMetadata } from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /** The right-clicked picture. The dialog always acts on this one. */
@@ -356,7 +358,7 @@ const props = defineProps({
   selectedImageIds: { type: Array, default: () => [] },
   /** Ties ComfyUI progress events back to this tab. */
   clientId: { type: String, default: "" },
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   /** Whether generated outputs join the source's stack. */
   stackOutputs: { type: Boolean, default: true },
 });
@@ -772,8 +774,8 @@ async function onOpen() {
   selectedMode.value = "";
   await Promise.all([
     loadTemplates(generation, imageId, backendUrl),
-    loadRecipe(generation, imageId, backendUrl),
-    loadDescription(generation, imageId, backendUrl),
+    loadRecipe(generation, imageId),
+    loadDescription(generation, imageId),
   ]);
   if (!isCurrentLoad(generation, imageId)) return;
   // Fixed defaults to the seed the original run used — flagged as "same as
@@ -812,12 +814,10 @@ function normaliseDescription(value) {
  * "this image has no description yet" for pictures that plainly have one.
  * Only runs when the prop didn't already provide a usable description.
  */
-async function loadDescription(generation, imageId, backendUrl) {
+async function loadDescription(generation, imageId) {
   if (description.value || !imageId) return;
   try {
-    const data = await getPictureMetadata(imageId, {
-      baseUrl: backendUrl,
-    });
+    const data = await getPictureMetadata(imageId);
     if (!isCurrentLoad(generation, imageId)) return;
     const fetched = normaliseDescription(data?.description);
     if (!fetched) return;
@@ -877,21 +877,19 @@ async function loadTemplates(generation, imageId, backendUrl) {
   }
 }
 
-async function loadRecipe(generation, imageId, backendUrl) {
+async function loadRecipe(generation, imageId) {
   if (!imageId) return;
   recipeLoading.value = true;
   recipeError.value = "";
   try {
-    const nextRecipe = await getPictureRecipe(imageId, {
-      baseUrl: backendUrl,
-    });
+    const nextRecipe = await getPictureRecipe(imageId);
     if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = nextRecipe;
   } catch (err) {
     if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = null;
     recipeError.value =
-      err?.response?.data?.detail ||
+      errorDetail(err) ||
       "Could not check this image for an embedded workflow.";
     console.error("Failed to read remix recipe:", err);
   } finally {
@@ -922,7 +920,7 @@ async function recheckRecipe() {
   liveMessage.value = "";
   const generation = loadGeneration;
   const imageId = props.image?.id;
-  await loadRecipe(generation, imageId, props.backendUrl);
+  await loadRecipe(generation, imageId);
   if (!isCurrentLoad(generation, imageId)) return;
   await nextTick();
   if (recipeState.value === "unreachable") {
@@ -1037,7 +1035,6 @@ async function submit() {
               // be submitted from this surface at all, and the backend
               // refuses it independently.
             },
-            { baseUrl: props.backendUrl },
           )
         : await runImageToImage(
             {
@@ -1049,7 +1046,6 @@ async function submit() {
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
             },
-            { baseUrl: props.backendUrl },
           );
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("run", {
@@ -1063,7 +1059,7 @@ async function submit() {
     // A submission error is a FORM error: keep the dialog and every input.
     submitting.value = false;
     submitError.value =
-      err?.response?.data?.detail || err?.message || "Could not start the run.";
+      errorDetail(err) || err?.message || "Could not start the run.";
   }
 }
 </script>
@@ -1086,13 +1082,10 @@ async function submit() {
 }
 
 .remix-link {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
 }
 
 .remix-link:focus-visible {
@@ -1131,11 +1124,6 @@ async function submit() {
 
 .remix-mode:hover {
   background: var(--hover-wash);
-}
-
-.remix-mode:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-mode--on {
@@ -1250,11 +1238,6 @@ async function submit() {
   border-radius: var(--radius-md);
 }
 
-.remix-select:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .remix-select-chevron {
   position: absolute;
   right: var(--space-3);
@@ -1273,11 +1256,6 @@ async function submit() {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-}
-
-.remix-textarea:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-hint,
@@ -1398,19 +1376,11 @@ async function submit() {
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  background: transparent;
-  border: none;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
 .remix-seg-btn:hover {
   background: var(--hover-wash);
-}
-
-.remix-seg-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-seg-btn--on {
@@ -1432,11 +1402,6 @@ async function submit() {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-}
-
-.remix-num:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-error {

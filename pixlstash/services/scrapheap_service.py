@@ -106,6 +106,7 @@ from pixlstash.db_models import DeletedFileLog, Picture, ReferenceFolder
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
@@ -1161,6 +1162,8 @@ class DeleteConfirmation:
     fingerprint: str
     total_count: int
     expires_at: float
+    library_uuid: Optional[str] = None
+    generation: Optional[int] = None
 
 
 class ScrapheapDeleteConfirmations:
@@ -1190,13 +1193,22 @@ class ScrapheapDeleteConfirmations:
         self._lock = threading.Lock()
         self._outstanding: dict[str, DeleteConfirmation] = {}
 
-    def issue(self, ids: Optional[list[int]], total_count: int) -> str:
+    def issue(
+        self,
+        ids: Optional[list[int]],
+        total_count: int,
+        *,
+        library_uuid: Optional[str] = None,
+        generation: Optional[int] = None,
+    ) -> str:
         """Mint a confirmation for ``ids`` and return the opaque token."""
         token = secrets.token_urlsafe(32)
         record = DeleteConfirmation(
             fingerprint=selection_fingerprint(ids),
             total_count=int(total_count),
             expires_at=time.monotonic() + self._ttl_seconds,
+            library_uuid=library_uuid,
+            generation=generation,
         )
         with self._lock:
             self._prune_locked()
@@ -1216,7 +1228,12 @@ class ScrapheapDeleteConfirmations:
         return token
 
     def redeem(
-        self, token: Optional[str], ids: Optional[list[int]]
+        self,
+        token: Optional[str],
+        ids: Optional[list[int]],
+        *,
+        library_uuid: Optional[str] = None,
+        generation: Optional[int] = None,
     ) -> tuple[bool, str]:
         """Spend ``token`` for the selection ``ids``.
 
@@ -1247,7 +1264,11 @@ class ScrapheapDeleteConfirmations:
                 self._ttl_seconds,
             )
             return False, CONFIRM_UNKNOWN
-        if record.fingerprint != wanted:
+        if (
+            record.fingerprint != wanted
+            or record.library_uuid != library_uuid
+            or record.generation != generation
+        ):
             logger.warning(
                 "Delete-forever: REFUSED — the confirmation was minted for a "
                 "different selection (preview covered %s picture(s); this "
@@ -1296,22 +1317,56 @@ def file_location_is_unreachable(file_path: str) -> bool:
 def remove_picture_files(
     image_root: str,
     targets: list[tuple[Optional[int], str, bool]],
+    reference_roots: tuple[str, ...] = (),
 ) -> list[str]:
     """Delete the on-disk originals (and thumbnails) for a purged selection.
 
+    ``Picture.file_path`` is a database value, and this is the one unattended
+    ``os.remove`` that follows it wherever it points. A path outside the
+    library's legitimate roots is therefore skipped rather than deleted
+    (#776): a wrong absolute path written by an import or a bug cannot reach
+    a delete. Skipping is the safe direction, because an undeleted file is
+    reported as unconfirmed and the ledger is corrected so restore can still
+    resurrect the row.
+
+    Args:
+        image_root: The vault's image root. Relative paths resolve under it.
+        targets: ``(picture id, stored path, was_reference_protected)``.
+        reference_roots: Configured reference-folder roots, which pictures may
+            legitimately live under even though they are outside *image_root*.
+            Pass :meth:`Vault.reference_folder_roots`. Defaulting to empty
+            means only *image_root* is honoured.
+
     Returns:
         ``path_sha`` of every target whose file is NOT confirmed gone — the
-        removal raised, or the location is unreachable so we cannot tell. The
-        caller must correct those ledger rows to ``file_removed=False``; see
-        :func:`mark_files_kept_in_session`.
+        removal raised, the path was refused, or the location is unreachable
+        so we cannot tell. The caller must correct those ledger rows to
+        ``file_removed=False``; see :func:`mark_files_kept_in_session`.
     """
     unconfirmed: list[str] = []
+    allowed_roots = (image_root, *reference_roots)
 
     def _unconfirmed(rel_path: str) -> None:
         unconfirmed.append(DeletedFileLog.hash_path(rel_path))
 
     for pic_id, rel_path, was_reference_protected in targets:
         file_path = ImageUtils.resolve_picture_path(image_root, rel_path)
+        if file_path and not any(
+            path_is_within(file_path, root) for root in allowed_roots if root
+        ):
+            logger.error(
+                "Delete-forever: refusing to remove the file for picture "
+                "id=%s because its stored path %s resolves to %s, which is "
+                "outside the library roots %s; neither it nor its thumbnail "
+                "is touched and the ledger will be corrected to "
+                "file_removed=False",
+                pic_id,
+                rel_path,
+                file_path,
+                allowed_roots,
+            )
+            _unconfirmed(rel_path)
+            continue
         if file_path and os.path.isfile(file_path):
             logger.info(
                 "Delete-forever: destroying file for picture id=%s "
@@ -1461,7 +1516,9 @@ def remove_picture_files_and_reconcile_ledger(
     ``owned_path_shas`` comes from the :func:`purge_rows_in_session` call that
     wrote those rows, and bounds the correction to them.
     """
-    unconfirmed = remove_picture_files(vault.image_root, targets)
+    unconfirmed = remove_picture_files(
+        vault.image_root, targets, vault.reference_folder_roots()
+    )
     if unconfirmed:
         vault.db.run_task(
             mark_files_kept_in_session,

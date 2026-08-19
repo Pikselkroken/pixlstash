@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_models import builtin_model_dir
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -384,16 +385,6 @@ class InferenceEngine:
         """Return the version integer from the PixlStash tagger meta.json."""
         return self.pixlstash_tagger_service.version()
 
-    def pixlstash_tagger_batch_size(self) -> int:
-        """Return the effective batch size for the PixlStash tagger."""
-        return self._effective_pixlstash_tagger_batch_size()
-
-    def pixlstash_tagger_ready(self) -> bool:
-        """Return ``True`` if the PixlStash tagger is enabled and loaded."""
-        return bool(
-            self._pixlstash_tagger_enabled and self.pixlstash_tagger_service.is_loaded()
-        )
-
     def ensure_pixlstash_tagger_ready(self) -> bool:
         """Load the PixlStash anomaly tagger on demand (idempotent).
 
@@ -458,10 +449,6 @@ class InferenceEngine:
         self.ensure_captioning_ready()
         return self.florence_service.detect_objects(image_paths, prompt=prompt)
 
-    def is_captioning_initialized(self) -> bool:
-        """Return ``True`` if Florence-2 is currently loaded."""
-        return self.florence_service.is_loaded()
-
     def _effective_pixlstash_tagger_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for the PixlStash tagger."""
         return self.tagging_workflow.effective_pixlstash_tagger_batch_size()
@@ -469,20 +456,6 @@ class InferenceEngine:
     def _effective_wd14_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for WD14."""
         return self.tagging_workflow.effective_wd14_batch_size()
-
-    def loaded_model_state(self) -> dict:
-        """Return a dict snapshot of which models are currently loaded."""
-        state = self.florence_service.state_info()
-        state.update(
-            {
-                "clip_loaded": self.clip_service.is_loaded(),
-                "wd14_onnx_loaded": self.wd14_service.is_loaded(),
-                "sbert_loaded": self.sbert_service.is_loaded(),
-                "pixlstash_tagger_loaded": self.pixlstash_tagger_service.is_loaded(),
-                "keep_models_in_memory": self._keep_models_in_memory,
-            }
-        )
-        return state
 
     # ------------------------------------------------------------------
     # Factory
@@ -528,14 +501,13 @@ class InferenceEngine:
             A fully constructed :class:`InferenceEngine` ready for use.
         """
         import torch
-        from platformdirs import user_data_dir
         from pixlstash.tagger_plugins.clip_service import ClipService
         from pixlstash.tagger_plugins.sbert import SBertService
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
         from pixlstash.tagger_plugins.wd14 import WD14Service
         from pixlstash.tagger_plugins.florence2 import Florence2Service
 
-        model_dir = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
+        model_dir = builtin_model_dir()
 
         if force_cpu:
             device = "cpu"

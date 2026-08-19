@@ -101,7 +101,7 @@ def test_adding_collapsed_stack_to_project_adds_every_member():
         for pid in ids:
             assert pid in in_project, f"{pid} should be in project (atomic stack add)"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -135,7 +135,7 @@ def test_removing_collapsed_stack_from_project_removes_every_member():
                 f"{pid} should be removed (atomic stack remove)"
             )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -158,7 +158,7 @@ def test_adding_collapsed_stack_to_set_adds_every_member():
         members = _set_member_ids(server, set_id)
         assert members == set(ids), f"all members expected in set, got {members}"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -181,7 +181,7 @@ def test_removing_collapsed_stack_from_set_removes_every_member():
         assert resp.status_code == 200, resp.text
         assert _set_member_ids(server, set_id) == set()
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -255,7 +255,7 @@ def test_dragging_stack_to_character_moves_every_member():
             f"all members should move to new character, got {char_by_pic}"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -282,6 +282,6 @@ def test_stacking_unions_project_membership():
         for pid in ids:
             assert pid in in_project, f"{pid} should be in project after union"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

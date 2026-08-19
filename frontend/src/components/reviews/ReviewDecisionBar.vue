@@ -244,10 +244,6 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   min-height: 44px;
 }
-.rs-decide :is(button, input):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-decide-btn {
   display: inline-flex;
@@ -255,7 +251,6 @@ onUnmounted(() => {
   gap: var(--space-2);
   height: 36px;
   padding: 0 14px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

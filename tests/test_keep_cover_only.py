@@ -218,7 +218,7 @@ def _scoped_token(client, server, picture_id: int) -> str:
 
 
 def _teardown(temp_dir, server):
-    server.vault.close()
+    server.close()
     temp_dir.cleanup()
     gc.collect()
 

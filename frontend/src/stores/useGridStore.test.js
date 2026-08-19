@@ -6,6 +6,7 @@ import { ref } from "vue";
 // pick its read-only defaults, so mock it and drive the flag per test.
 const isReadOnly = ref(false);
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   get isReadOnly() {
     return isReadOnly;
   },

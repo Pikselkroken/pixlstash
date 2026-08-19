@@ -70,8 +70,8 @@ from pixlstash.db_models.mixed_stack import MixedStackDismissal, StackCohesion
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service, operation_log_service
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK as ID_CHUNK
 from pixlstash.services.dedup_tier_service import (
-    ID_CHUNK,
     MIN_THRESHOLD,
     PHASH_BITS,
     PHASH_HEX_LEN,

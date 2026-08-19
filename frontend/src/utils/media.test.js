@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest'
-import { buildMediaUrl, isFileDrag, isInternalImageDrag } from './media.js'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  buildMediaUrl,
+  displayedAspectRatio,
+  isFaceDrag,
+  isFileDrag,
+  isInternalImageDrag,
+  isPictureDrag,
+  setInternalDragPayload,
+  FACE_DRAG_MIME,
+  PICTURE_DRAG_MIME,
+} from './media.js'
 
 // Minimal DataTransfer stand-in: only `types` (array) and `files` (array-like)
 // are read by the drag predicates.
@@ -43,6 +53,78 @@ describe('isFileDrag', () => {
   })
 })
 
+// A drop target may only read `types` during dragover, so the payload kind has
+// to be a key. Before this, a face drag and a picture drag were indistinguishable
+// until the drop had already happened (issue #757).
+describe('internal drag payload markers', () => {
+  function writer() {
+    const store = {}
+    return {
+      store,
+      dataTransfer: {
+        setData: (type, value) => {
+          store[type] = value
+        },
+        get types() {
+          return Object.keys(store)
+        },
+      },
+    }
+  }
+
+  it('marks a picture payload so dragover can recognise it', () => {
+    const { store, dataTransfer } = writer()
+    setInternalDragPayload(dataTransfer, { type: 'image-ids', imageIds: [1] })
+
+    expect(JSON.parse(store['application/json'])).toEqual({
+      type: 'image-ids',
+      imageIds: [1],
+    })
+    expect(isPictureDrag(dataTransfer)).toBe(true)
+    expect(isFaceDrag(dataTransfer)).toBe(false)
+    expect(isInternalImageDrag(dataTransfer)).toBe(true)
+  })
+
+  it('marks a face payload distinctly, despite it carrying imageIds too', () => {
+    const { dataTransfer } = writer()
+    setInternalDragPayload(dataTransfer, {
+      type: 'face-bbox',
+      faceIds: [9],
+      imageIds: [1],
+    })
+
+    expect(isFaceDrag(dataTransfer)).toBe(true)
+    expect(isPictureDrag(dataTransfer)).toBe(false)
+    expect(isInternalImageDrag(dataTransfer)).toBe(true)
+  })
+
+  it('reports neither kind for an external file drag', () => {
+    expect(isPictureDrag(dt({ types: ['Files'] }))).toBe(false)
+    expect(isFaceDrag(dt({ types: ['Files'] }))).toBe(false)
+    expect(isPictureDrag(null)).toBe(false)
+    expect(isFaceDrag(null)).toBe(false)
+  })
+
+  it('keeps the two marker types apart', () => {
+    expect(PICTURE_DRAG_MIME).not.toBe(FACE_DRAG_MIME)
+  })
+
+  it('leaves an unmapped payload kind unmarked rather than calling it a picture',
+     () => {
+       const {store, dataTransfer} = writer()
+       const complained =
+           vi.spyOn(console, 'error').mockImplementation(() => {})
+
+       setInternalDragPayload(dataTransfer, {type: 'something-new', ids: [1]})
+
+       expect(JSON.parse(store['application/json']).type).toBe('something-new')
+       expect(isPictureDrag(dataTransfer)).toBe(false)
+       expect(isFaceDrag(dataTransfer)).toBe(false)
+       expect(complained).toHaveBeenCalled()
+       complained.mockRestore()
+     })
+})
+
 describe('buildMediaUrl', () => {
   it('builds an extension-qualified native-media URL', () => {
     expect(
@@ -50,10 +132,69 @@ describe('buildMediaUrl', () => {
         backendUrl: '/api/v1',
         image: { id: 7, format: 'PNG', pixel_sha: 'abc' },
       }),
-    ).toBe('/api/v1/pictures/7.png?v=abc')
+    ).toBe('/api/v1/pictures/7.png')
+  })
+
+  // The buster is the EXIF orientation, not the content hash: an in-place
+  // rotate copies every pixel through, so the hash cannot express the one edit
+  // that needs busting — and `orientation` is in the grid projection, so the
+  // lightbox and both full-image preloaders build the same URL from the same
+  // record. A picture that has never been turned keeps its bare URL.
+  it('busts the URL on the orientation, not the content hash', () => {
+    expect(
+      buildMediaUrl({
+        backendUrl: '/api/v1',
+        image: { id: 7, format: 'PNG', pixel_sha: 'abc', orientation: 6 },
+      }),
+    ).toBe('/api/v1/pictures/7.png?v=o6')
+    expect(
+      buildMediaUrl({
+        backendUrl: '/api/v1',
+        image: { id: 7, format: 'PNG', orientation: 1 },
+      }),
+    ).toBe('/api/v1/pictures/7.png')
   })
 
   it('does not turn an id-only placeholder into a JSON endpoint media URL', () => {
     expect(buildMediaUrl({ backendUrl: '/api/v1', image: { id: 7 } })).toBe('')
+  })
+})
+
+describe('displayedAspectRatio', () => {
+  it('takes the thumbnail bitmap as-is — it is already EXIF-transposed', () => {
+    expect(
+      displayedAspectRatio({
+        thumbnail_width: 300,
+        thumbnail_height: 200,
+        width: 3000,
+        height: 2000,
+        orientation: 6,
+      }),
+    ).toBeCloseTo(1.5)
+  })
+
+  // The window an in-place rotate opens: apply_orientation NULLs the thumbnail
+  // dimensions to re-queue the bitmap, so a turned card sits on the RAW
+  // width/height — which do not swap — until the sweep lands. Unswapped here,
+  // the tile keeps its pre-rotate shape and then jumps.
+  it('swaps the raw dimensions for a quarter-turned picture', () => {
+    expect(displayedAspectRatio({ width: 4000, height: 3000 })).toBeCloseTo(4 / 3)
+    expect(
+      displayedAspectRatio({ width: 4000, height: 3000, orientation: 1 }),
+    ).toBeCloseTo(4 / 3)
+    // 3 and 2 are the 180deg / mirrored-horizontal cases: still landscape.
+    expect(
+      displayedAspectRatio({ width: 4000, height: 3000, orientation: 3 }),
+    ).toBeCloseTo(4 / 3)
+    for (const orientation of [5, 6, 7, 8]) {
+      expect(
+        displayedAspectRatio({ width: 4000, height: 3000, orientation }),
+      ).toBeCloseTo(3 / 4)
+    }
+  })
+
+  it('falls back to square rather than dividing by zero', () => {
+    expect(displayedAspectRatio(null)).toBe(1)
+    expect(displayedAspectRatio({ width: 0, height: 0 })).toBe(1)
   })
 })

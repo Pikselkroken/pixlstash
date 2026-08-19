@@ -26,10 +26,15 @@ class TaskType(str, Enum):
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
     SCRAPHEAP_RETENTION_PURGE = "ScrapheapRetentionPurgeTask"
+    PENDING_SCORE_INVALIDATION = "PendingScoreInvalidationTask"
     THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
     PIXEL_SHA = "PixelShaTask"
+    ORIENTATION = "OrientationTask"
     DEDUP_SCAN = "DedupScanTask"
     STACK_COHESION = "StackCohesionTask"
+    SNAPSHOT_IDENTITY_SCRUB = "SnapshotIdentityScrubTask"
+    CHECKPOINT_HASH = "CheckpointHashTask"
+    MODEL_FOLDER_SCAN = "ModelFolderScanTask"
 
     @staticmethod
     def all():

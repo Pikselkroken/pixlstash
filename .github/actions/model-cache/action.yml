@@ -1,0 +1,93 @@
+name: HuggingFace model cache
+description: >-
+  Restore (default) or save the HuggingFace model set the backend tests load.
+  The single source of truth for the cache's paths and key: every job restores,
+  and exactly one job — `warm_models` in ci.yml — saves.
+
+  Covers Linux and Windows. Windows had its own inline copy of this cache in
+  ci.yml, with different paths and a key that hashed three of these six files;
+  the two definitions could not share an entry and the Windows one was never
+  warmed on a branch. The writers are now `warm_models` and
+  `warm_models_windows` in ci.yml — two jobs rather than one matrix, because
+  `needs:` on a matrix job waits for every leg and that would put a Windows
+  runner on the Linux gate's critical path.
+
+  RESTORE-ONLY for readers, deliberately. `actions/cache` writes only on a key
+  MISS, so a model missing from an entry that keeps hitting its primary key can
+  never be added to it. CLIP was missing from the 1.77 GB entry for exactly that
+  reason, so every shard re-fetched ~600 MB of weights on every run until
+  HuggingFace 429'd `backend shard 8` (run 31304213276).
+
+inputs:
+  mode:
+    description: "'restore' (the default, for readers) or 'save'."
+    required: false
+    default: restore
+  key:
+    description: "Required with mode: save — the key `restore` reported."
+    required: false
+    default: ''
+
+outputs:
+  key:
+    description: The primary key the cache was looked up under.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+  hit:
+    description: '"true" when the cache restored on its primary key.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # Two distinct on-disk locations, both required:
+    #  * ~/.cache/huggingface — the HF hub cache used by CLIP, SBert and
+    #    Florence.
+    #  * ~/.local/share/pixlstash/downloaded_models — platformdirs
+    #    user_data_dir, where the WD14 and PixlStash taggers land because they
+    #    call hf_hub_download(local_dir=...), which bypasses the hub cache
+    #    entirely.
+    #  * ~/AppData/Local/pixlstash/pixlstash/downloaded_models — the same
+    #    user_data_dir on Windows (the doubled "pixlstash" is platformdirs'
+    #    appauthor=appname default). Listed unconditionally rather than behind
+    #    a `runner.os` branch so there stays exactly ONE path list and ONE key
+    #    expression; `actions/cache` skips a path that does not exist, so each
+    #    OS simply ignores the other's.
+    # A warm cache makes needs_download() (a pure file-existence check) return
+    # False, so download() is never issued; and for the models that have no such
+    # check, a cache hit lets huggingface_hub fall back to the cached file when
+    # its HEAD revalidation 429s, instead of raising LocalEntryNotFoundError.
+    #
+    # The key hashes EVERY file that names a model, plus the prefetch script
+    # itself, so any change to the model set busts it. restore-keys keeps the
+    # previous set warm across unrelated commits, so a bust only costs the
+    # delta.
+    #
+    # `-v2-` is a manual bust, and it is not decoration. `actions/cache` writes
+    # only on a key MISS and `warm_models*` skips its save on a hit, so widening
+    # the path list alone can never reach an entry that keeps hitting: the
+    # Windows entry saved without `downloaded_models` would have gone on hitting
+    # forever, exactly as CLIP did (see the header). Widening the paths and
+    # bumping this literal are one change, never two. restore-keys deliberately
+    # stays on the unversioned prefix, so the bust falls back to the previous
+    # entry and costs only the delta.
+    - name: Restore the model cache
+      id: restore
+      if: inputs.mode != 'save'
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          ~/.cache/huggingface
+          ~/.local/share/pixlstash/downloaded_models
+          ~/AppData/Local/pixlstash/pixlstash/downloaded_models
+        key: hf-models-${{ runner.os }}-v2-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
+        restore-keys: hf-models-${{ runner.os }}-
+
+    - name: Save the model cache
+      if: inputs.mode == 'save'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          ~/.cache/huggingface
+          ~/.local/share/pixlstash/downloaded_models
+          ~/AppData/Local/pixlstash/pixlstash/downloaded_models
+        key: ${{ inputs.key }}

@@ -20,6 +20,8 @@ from pixlstash.database import DBPriority, _compute_picture_metadata_hash
 from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.portable_identity import sanitize_vault_file
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.snapshot_compression import (
     COMPRESSED_SUFFIX,
     compress_snapshot,
@@ -135,7 +137,10 @@ class SnapshotService:
             try:
                 self._vacuum_into(tmp_sqlite)
                 self._prepare_snapshot_for_archive(tmp_sqlite)
+                sanitize_vault_file(tmp_sqlite)
                 byte_size = compress_snapshot(tmp_sqlite, abs_snapshot)
+                if os.name != "nt":
+                    os.chmod(abs_snapshot, 0o600)
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -161,6 +166,12 @@ class SnapshotService:
                 picture_count=manifest.get("picture_count", 0),
                 schema_version=manifest.get("schema_version", ""),
                 label=label,
+                # Stamped because ``sanitize_vault_file`` above already scrubbed
+                # the scratch database this archive was compressed from. Marking
+                # it here is what makes NULL mean exactly one thing: a legacy
+                # archive written before the hub, which the background scrub
+                # (MissingSnapshotIdentityScrubFinder) still owes work to.
+                identity_scrubbed_at=now,
             )
             session.add(cp)
             session.commit()
@@ -269,14 +280,25 @@ class SnapshotService:
             cp = session.get(Snapshot, snapshot_id)
             if cp is None:
                 return False
-            abs_snapshot = os.path.join(vault_root, cp.relative_path)
-            abs_manifest = os.path.join(vault_root, cp.manifest_relative_path)
-            abs_hashes = os.path.join(
-                vault_root, self._hashes_relative_path(cp.manifest_relative_path)
+            rel_paths = (
+                cp.relative_path,
+                cp.manifest_relative_path,
+                self._hashes_relative_path(cp.manifest_relative_path),
             )
             session.delete(cp)
             session.commit()
-            for path in (abs_snapshot, abs_manifest, abs_hashes):
+            for rel_path in rel_paths:
+                try:
+                    path = resolve_path_within(vault_root, rel_path)
+                except ValueError as exc:
+                    logger.warning(
+                        "SnapshotService: refusing to remove snapshot file "
+                        "outside the vault root (snapshot id=%d, rel_path=%s): %s",
+                        snapshot_id,
+                        rel_path,
+                        exc,
+                    )
+                    continue
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -676,7 +698,18 @@ class SnapshotService:
                         cp.manifest_relative_path,
                         self._hashes_relative_path(cp.manifest_relative_path),
                     ):
-                        abs_path = os.path.join(vault_root, rel_path)
+                        try:
+                            abs_path = resolve_path_within(vault_root, rel_path)
+                        except ValueError as exc:
+                            logger.warning(
+                                "SnapshotService: GFS prune refusing to remove "
+                                "a file outside the vault root (snapshot id=%d, "
+                                "rel_path=%s): %s",
+                                cp.id,
+                                rel_path,
+                                exc,
+                            )
+                            continue
                         try:
                             if os.path.exists(abs_path):
                                 os.remove(abs_path)

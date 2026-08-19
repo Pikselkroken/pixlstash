@@ -5,7 +5,8 @@
 // property of the installation rather than of the user row: it lives beside the
 // server config so a snapshot restore or a library switch cannot change it.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 const INSTALL_ID_URL = "/telemetry/install-id";
 
@@ -20,8 +21,7 @@ const INSTALL_ID_URL = "/telemetry/install-id";
  *   them.
  */
 export async function getInstallId() {
-  const res = await apiClient.get(INSTALL_ID_URL);
-  return res.data;
+  return unwrap(apiClient.get(INSTALL_ID_URL));
 }
 
 /**
@@ -32,6 +32,5 @@ export async function getInstallId() {
  * @returns {Promise<Object>} The new identity, same shape as getInstallId.
  */
 export async function recreateInstallId() {
-  const res = await apiClient.post(`${INSTALL_ID_URL}/recreate`);
-  return res.data;
+  return unwrap(apiClient.post(`${INSTALL_ID_URL}/recreate`));
 }

@@ -1,7 +1,9 @@
 <template>
   <v-dialog :model-value="open" max-width="720" @update:model-value="!$event && emit('close')">
     <v-card class="browser-card">
-      <v-card-title class="browser-header">Browse for Folder</v-card-title>
+      <v-card-title class="browser-header">{{
+        pickModelFile ? "Choose a model file" : "Browse for Folder"
+      }}</v-card-title>
       <v-card-text style="padding: 0">
         <div class="browse-path-bar">
           <v-icon size="16" style="opacity: 0.6; margin-right: 4px">mdi-folder</v-icon>
@@ -76,7 +78,10 @@
               v-for="entry in browseEntries"
               :key="entry.path"
               class="browse-entry"
-              :class="{ 'browse-entry--disabled': !!entryDisabledReason(entry.path) }"
+              :class="{
+                'browse-entry--disabled': !!entryDisabledReason(entry.path),
+                'browse-entry--picked': entry.path === pickedFile,
+              }"
               :title="entryDisabledReason(entry.path) || entry.path"
               @click="entryClick(entry)"
             >
@@ -100,10 +105,10 @@
         <v-btn
           variant="flat"
           color="primary"
-          :disabled="!browsePath"
+          :disabled="pickModelFile ? !pickedFile : !browsePath"
           @click="selectPath"
         >
-          Select "{{ selectedName }}"
+          {{ selectedName ? `Select "${selectedName}"` : "Select" }}
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -117,6 +122,7 @@ import {
   createFilesystemFolder,
 } from "../../api/folders";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -125,11 +131,18 @@ const props = defineProps({
   alreadyRegisteredLabel: { type: String, default: "Already registered" },
   initialPath: { type: String, default: null },
   allowCreateFolder: { type: Boolean, default: false },
+  // Pick a model FILE rather than the directory being browsed (the shelf's
+  // `Add file`). The same dialog rather than a second one: navigating the host
+  // filesystem is the whole interaction either way, and only what a click on a
+  // row means and what the footer selects differ.
+  pickModelFile: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["select", "close"]);
 
 const browsePath = ref("");
+/** The file a click chose, in file mode. Cleared by navigating. */
+const pickedFile = ref("");
 const browseEntries = ref([]);
 const browseLoading = ref(false);
 const browseError = ref("");
@@ -140,8 +153,9 @@ const createFolderError = ref("");
 const createFolderInputRef = ref(null);
 
 const selectedName = computed(() => {
-  if (!browsePath.value) return "";
-  const parts = browsePath.value.replace(/[\\/]+$/, "").split(/[\\/]/);
+  const path = props.pickModelFile ? pickedFile.value : browsePath.value;
+  if (!path) return "";
+  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || "/";
 });
 
@@ -185,15 +199,18 @@ function entryDisabledReason(entryPath) {
 async function browseDir(path) {
   browseLoading.value = true;
   browseError.value = "";
+  // A choice belongs to the directory it was made in: keeping it across a
+  // navigation would leave the footer offering a file the list no longer shows.
+  pickedFile.value = "";
   try {
     const listing = await browseFilesystem(path, {
       showHidden: browseShowHidden.value,
+      includeModelFiles: props.pickModelFile,
     });
     browseEntries.value = listing?.entries ?? [];
     browsePath.value = listing?.path ?? path ?? "/";
   } catch (error) {
-    browseError.value =
-      error?.response?.data?.detail || "Cannot browse this directory.";
+    browseError.value = errorDetail(error) || "Cannot browse this directory.";
     browseEntries.value = [];
   } finally {
     browseLoading.value = false;
@@ -211,6 +228,7 @@ watch(
     browseError.value = "";
     browseEntries.value = [];
     browsePath.value = "";
+    pickedFile.value = "";
     browseShowHidden.value = false;
     creatingFolder.value = false;
     newFolderName.value = "";
@@ -220,7 +238,13 @@ watch(
 );
 
 function entryClick(entry) {
-  if (entry.is_file) return;
+  if (entry.is_file) {
+    // Selecting rather than confirming: a double-click is not the only way in
+    // (the footer button is), and a single click that started a copy would be
+    // one slip of the pointer away from writing a file nobody chose.
+    if (props.pickModelFile) pickedFile.value = entry.path;
+    return;
+  }
   if (entryDisabledReason(entry.path)) return;
   browseDir(entry.path);
 }
@@ -231,8 +255,9 @@ function browseUp() {
 }
 
 function selectPath() {
-  if (!browsePath.value) return;
-  emit("select", browsePath.value);
+  const chosen = props.pickModelFile ? pickedFile.value : browsePath.value;
+  if (!chosen) return;
+  emit("select", chosen);
   emit("close");
 }
 
@@ -266,8 +291,7 @@ async function submitNewFolder() {
     newFolderName.value = "";
     await browseDir(created?.path || target);
   } catch (error) {
-    createFolderError.value =
-      error?.response?.data?.detail || "Could not create folder.";
+    createFolderError.value = errorDetail(error) || "Could not create folder.";
   }
 }
 
@@ -394,6 +418,13 @@ const { pending: createFolderLoading, run: createFolder } =
 .browse-entry--disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* The picked file in file mode. A wash plus a left bar, the same pair the shelf
+   marks a selected row with, so selection reads the same way in both places. */
+.browse-entry--picked {
+  background: rgba(var(--v-theme-primary), 0.12);
+  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
 }
 
 .browse-entry-name {

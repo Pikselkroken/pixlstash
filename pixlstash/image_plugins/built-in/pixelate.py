@@ -39,6 +39,9 @@ class PixelatePlugin(ImagePlugin):
         "hair boundaries, stray colour pixels) while leaving smooth skin and "
         "plain backgrounds intact."
     )
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = False
 
@@ -329,11 +332,3 @@ class PixelatePlugin(ImagePlugin):
 
         result = Image.fromarray(result_arr, "RGB")
         return result.convert(orig_mode) if orig_mode != "RGB" else result
-
-    @staticmethod
-    def _coerce_positive_number(value: Any, default: float) -> float:
-        try:
-            v = float(value)
-            return v if v > 0 else default
-        except (TypeError, ValueError):
-            return default

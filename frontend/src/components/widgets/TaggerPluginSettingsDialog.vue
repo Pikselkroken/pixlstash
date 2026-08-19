@@ -14,6 +14,7 @@ import { computed, ref, watch } from "vue";
 import { getLabelThresholds } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   /** Plugin object from GET /taggers (includes parameter_schema, etc.) */
@@ -77,7 +78,7 @@ async function save() {
     emit("saved", { name: props.plugin.name, params: { ...formParams.value } });
     open.value = false;
   } catch (e) {
-    saveError.value = e?.response?.data?.detail || "Failed to save settings.";
+    saveError.value = errorDetail(e) || "Failed to save settings.";
   } finally {
     saving.value = false;
   }

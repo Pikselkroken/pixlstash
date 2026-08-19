@@ -249,8 +249,7 @@
           v-if="entityLists.canSeeProjects"
           type="project"
           placement="right"
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
@@ -260,8 +259,7 @@
           type="character"
           placement="right"
           allow-create
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
@@ -272,8 +270,7 @@
         <AddToEntityControl
           type="set"
           placement="right"
-          :backend-url="backendUrl"
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
@@ -439,6 +436,29 @@
         >
           <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
           Segment
+        </button>
+        <!-- Rotate in place: applied on click, no dialog and no confirmation.
+             The label counts the selection because a bare "Rotate left" over
+             twelve tiles reads as an action on the one under the cursor.
+             Greyed rather than hidden when nothing in the selection can carry a
+             rotation, since the tooltip is what points at the copy route. -->
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+          :title="rotateLeftTitle"
+          @click="onAction('rotate-left')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-rotate-left</v-icon>
+          {{ rotateLeftLabel }}
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+          :title="rotateRightTitle"
+          @click="onAction('rotate-right')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-rotate-right</v-icon>
+          {{ rotateRightLabel }}
         </button>
         <div class="ctx-sep" />
       </template>
@@ -625,7 +645,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
@@ -634,6 +654,7 @@ import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
+import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
@@ -648,13 +669,10 @@ const props = defineProps({
     default: () => ({ hasImages: false, hasVideos: false }),
   },
   selectedCharacter: { type: String, default: "" },
-  selectedSet: { type: String, default: "" },
   selectedGroupName: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
-  allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
@@ -668,6 +686,12 @@ const props = defineProps({
   // the same rule the shipped Delete item follows.
   keepCoverOnlyLockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
+  // Reason string when NOTHING in the selection can be rotated in place (every
+  // picture is a WebP/TIFF/BMP/GIF/video, or lives in a reference folder), used
+  // as the rotate items' tooltip. Null while at least one can: a mixed
+  // selection stays enabled and the receipt reports what was left alone, the
+  // same rule Delete and Keep cover only follow.
+  rotateBlockReason: { type: String, default: null },
   // Reason string when at least one selected picture is frozen by a locked set;
   // gates the label-data actions (tag / auto-tag / description / delete) and is
   // shown as their tooltip. Null when nothing in the selection is locked.
@@ -746,6 +770,8 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
+  "rotate-left",
+  "rotate-right",
 ]);
 
 const menuRef = ref(null);
@@ -850,9 +876,7 @@ async function loadFaceCharacterNames() {
   await Promise.all(
     pending.map(async (face) => {
       try {
-        const body = await getCharacterName(face.character_id, {
-          baseUrl: props.backendUrl,
-        });
+        const body = await getCharacterName(face.character_id);
         faceCharacterNames.value = {
           ...faceCharacterNames.value,
           [face.id]: body?.name || null,
@@ -943,9 +967,20 @@ async function clampPosition() {
 // mouse-driven, focus-neutral behaviour).
 let previouslyFocused = null;
 
+// The Project / Person / Set triggers are `.ate-btn`, not `.ctx-item`. Left out
+// of this selector they were unreachable by arrow keys, which made assignment a
+// pointer-only action in the grid (#759).
+const MENU_ITEM_SELECTOR =
+  ".ctx-item:not([disabled]), .ate-btn:not([disabled])";
+
+// A trigger's own flyout holds `.ate-item` buttons, never `.ate-btn`, so nothing
+// inside an open flyout can leak into this outer roving order.
+function menuItems() {
+  return Array.from(menuRef.value?.querySelectorAll(MENU_ITEM_SELECTOR) || []);
+}
+
 function focusFirstItem() {
-  const first = menuRef.value?.querySelector(".ctx-item:not([disabled])");
-  first?.focus();
+  menuItems()[0]?.focus();
 }
 
 watch(
@@ -986,7 +1021,29 @@ watch(
 // would otherwise navigate prev/next on arrows or toggle chrome on Space while
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
-function onMenuKeydown(event) {
+async function onMenuKeydown(event) {
+  // Inside an open Add-to flyout the control owns the keyboard (it has to: with
+  // `floatMenu` its menu is teleported and never bubbles here at all). Only stop
+  // the keystroke from leaking to the overlay's global handlers.
+  if (event.target?.closest?.(".ate-menu")) {
+    event.stopPropagation();
+    return;
+  }
+  // ArrowRight opens the focused Add-to trigger's flyout and puts the caret in
+  // its search box; ArrowLeft back out is the control's own job. Mirrors
+  // SelectionMenu.vue, which already drives these controls this way.
+  if (
+    event.key === "ArrowRight" &&
+    event.target?.classList?.contains("ate-btn")
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const ateRoot = event.target.closest(".ate");
+    if (!ateRoot?.classList.contains("open")) event.target.click();
+    await nextTick();
+    ateRoot?.querySelector(".ate-menu.open input")?.focus();
+    return;
+  }
   if (
     props.overlayMode &&
     (event.ctrlKey || event.metaKey) &&
@@ -1009,9 +1066,7 @@ function onMenuKeydown(event) {
     }
   }
   if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-    const items = Array.from(
-      menuRef.value?.querySelectorAll(".ctx-item:not([disabled])") || [],
-    );
+    const items = menuItems();
     if (items.length) {
       event.preventDefault();
       const current = items.indexOf(document.activeElement);
@@ -1100,6 +1155,21 @@ const keepCoverOnlyLabel = computed(() =>
   }),
 );
 
+const rotateLeftLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CCW, selectedCount.value),
+);
+const rotateRightLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CW, selectedCount.value),
+);
+// The refusal replaces the label as the tooltip when there is one: a greyed
+// item whose tooltip only repeats its own label explains nothing.
+const rotateLeftTitle = computed(
+  () => props.rotateBlockReason || rotateLeftLabel.value,
+);
+const rotateRightTitle = computed(
+  () => props.rotateBlockReason || rotateRightLabel.value,
+);
+
 const showAnyStackAction = computed(
   () =>
     showRemoveStackButton.value ||
@@ -1159,6 +1229,12 @@ function onDocumentMousedown(event) {
 
 function onDocumentKeydown(event) {
   if (!props.visible) return;
+  // Escape inside an open Add-to flyout dismisses that flyout, not this menu —
+  // same exemption `onDocumentMousedown` already makes for clicks. Without it
+  // this capture-phase handler tore the whole menu down on the first Escape
+  // while the user was typing in the flyout's search box (#759). The control
+  // returns focus to its trigger, so a second Escape lands here and closes.
+  if (event.target?.closest?.(".ate-menu")) return;
   if (event.key === "Escape") {
     event.stopImmediatePropagation();
     emit("close");

@@ -49,6 +49,16 @@ class MyPlugin(ImagePlugin):
     # Short description shown in the UI (optional).
     description = "Describe what your plugin does."
 
+    # Who wrote it and under what terms.  Keep these plain literals: tools read
+    # the header straight off the source with ``ast``, without importing you.
+    author = "Your Name <you@example.com>"  # an email address or a URL
+    license = "MIT"  # your *code*, an SPDX identifier where there is one
+
+    # One entry per model or remote service you load, empty when you load none.
+    # This is the one a user actually needs — your code's license says nothing
+    # about the weights you download.
+    models = []
+
     # Set to True if this plugin can process still images (almost always True).
     supports_images = True
 
@@ -58,8 +68,11 @@ class MyPlugin(ImagePlugin):
     def parameter_schema(self) -> list[dict[str, Any]]:
         """Declare the parameters your plugin exposes in the UI.
 
-        Supported types: "number", "string", "boolean", "select".
-        For "select" type, include an "options" key listing the allowed values.
+        Supported types: "number", "integer", "boolean", "string".
+
+        A dropdown is "string" plus an "enum" list — there is no "select"
+        type in the image-plugin UI, and a field declared that way renders as
+        a free-text input.  See docs/writing-image-filter-plugins.md §3.
         """
         return [
             {
@@ -69,13 +82,14 @@ class MyPlugin(ImagePlugin):
                 "default": 1.0,
                 "description": "Effect strength (higher = stronger).",
             },
-            # Add more parameters as needed, for example:
+            # Add more parameters as needed, for example a dropdown:
             # {
             #     "name": "mode",
             #     "label": "Mode",
-            #     "type": "select",
+            #     "type": "string",
             #     "default": "option_a",
-            #     "options": ["option_a", "option_b"],
+            #     "enum": ["option_a", "option_b"],
+            #     "enumLabels": {"option_a": "Option A", "option_b": "Option B"},
             #     "description": "Which mode to use.",
             # },
         ]

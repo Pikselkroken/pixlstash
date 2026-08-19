@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
@@ -51,10 +52,10 @@ describe("api/users", () => {
     expect(result).toEqual([{ id: 1 }]);
   });
 
-  it("listTokens prefixes an explicit backend base", async () => {
+  it("listTokens requests the token route", async () => {
     apiClient.get.mockResolvedValue({ data: [] });
-    await listTokens({ baseUrl: "/be" });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/users/me/token");
+    await listTokens();
+    expect(apiClient.get).toHaveBeenCalledWith("/users/me/token");
   });
 
   // The plaintext token comes back once, in the create response; losing it
@@ -62,8 +63,8 @@ describe("api/users", () => {
   it("createToken returns the minted secret", async () => {
     apiClient.post.mockResolvedValue({ data: { id: 3, token: "s3cret" } });
     const body = { scope: "READ", resource_type: "project", resource_id: 2 };
-    const result = await createToken(body, { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/users/me/token", body);
+    const result = await createToken(body);
+    expect(apiClient.post).toHaveBeenCalledWith("/users/me/token", body);
     expect(result.token).toBe("s3cret");
   });
 

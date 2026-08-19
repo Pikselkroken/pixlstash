@@ -34,7 +34,7 @@ import {
 
 /** Snap-stop slack: within 1% of a stop counts as being ON it (shared feel,
  * same tolerance the Compare surface ships). */
-export const NEAR_SCALE_SLACK = 0.01;
+const NEAR_SCALE_SLACK = 0.01;
 
 /** The announcer's settle window: a wheel gesture announces once, 500 ms
  * after its last scale change; snap stops announce immediately. */

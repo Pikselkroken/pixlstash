@@ -167,6 +167,57 @@ def test_score_range(session):
     _assert_matches_agrees(session, flt, {mid.id})
 
 
+def test_unscored_covers_null_and_zero(session):
+    """Never-rated is both states, because both are reachable in production.
+
+    A picture nobody touched keeps ``score IS NULL``; clicking the current star
+    again writes a literal 0 that nothing normalises back. Narrowing the filter to
+    either one alone hides half the pictures the user means.
+    """
+    never = _add_picture(session, file_path="never.jpg", score=None)
+    cleared = _add_picture(session, file_path="cleared.jpg", score=0)
+    _add_picture(session, file_path="one.jpg", score=1)
+    _add_picture(session, file_path="five.jpg", score=5)
+
+    flt = PredicateFilter(unscored=True)
+    _assert_matches_agrees(session, flt, {never.id, cleared.id})
+
+
+def test_unscored_off_by_default_filters_nothing(session):
+    """The over-blocking direction: an unset flag must not touch the result."""
+    never = _add_picture(session, file_path="never.jpg", score=None)
+    cleared = _add_picture(session, file_path="cleared.jpg", score=0)
+    rated = _add_picture(session, file_path="five.jpg", score=5)
+
+    flt = PredicateFilter()
+    _assert_matches_agrees(session, flt, {never.id, cleared.id, rated.id})
+
+
+def test_score_range_still_excludes_the_unscored(session):
+    """min/max drop NULL by SQL's semantics but treat 0 as a number, so they are
+    not a substitute for ``unscored``: ``max_score=5`` keeps a cleared 0 in."""
+    never = _add_picture(session, file_path="never.jpg", score=None)
+    _add_picture(session, file_path="cleared.jpg", score=0)
+    rated = _add_picture(session, file_path="three.jpg", score=3)
+
+    _assert_matches_agrees(session, PredicateFilter(min_score=1), {rated.id})
+    # max_score=5 is the "any rating" spelling the sidebar sends; NULL rows drop
+    # out of it by SQL's NULL comparison, and score 0 is a real 0 <= 5 match.
+    assert _matching_ids(session, PredicateFilter(max_score=5)) == {
+        pid for pid in _all_ids(session) if pid != never.id
+    }
+
+
+def test_unscored_composes_with_another_predicate(session):
+    """ANDed with the rest, not ORed: a wrapper bug here would leak every row."""
+    match = _add_picture(session, file_path="m.png", format="PNG", score=0)
+    _add_picture(session, file_path="wrong_format.jpg", format="JPEG", score=0)
+    _add_picture(session, file_path="rated.png", format="PNG", score=4)
+
+    flt = PredicateFilter(unscored=True, format=["PNG"])
+    _assert_matches_agrees(session, flt, {match.id})
+
+
 def test_smart_score_bucket_unscored(session):
     unscored = _add_picture(session, file_path="a.jpg", smart_score=None)
     _add_picture(session, file_path="b.jpg", smart_score=2.5)
@@ -544,6 +595,7 @@ def test_from_query_params_full_vocabulary():
             ("format", "JPEG"),
             ("min_score", "2"),
             ("max_score", "8"),
+            ("unscored", "1"),
             ("smart_score_bucket", "3-4"),
             ("resolution_bucket", "1-4mp"),
             ("comfyui_model", "m1"),
@@ -565,6 +617,7 @@ def test_from_query_params_full_vocabulary():
     assert flt.format == ["PNG", "JPEG"]
     assert flt.min_score == 2
     assert flt.max_score == 8
+    assert flt.unscored is True
     assert flt.smart_score_bucket == "3-4"
     assert flt.resolution_bucket == "1-4mp"
     assert flt.comfyui_models_filter == ["m1"]
@@ -585,10 +638,21 @@ def test_from_query_params_empty_leaves_defaults():
     flt = PredicateFilter.from_query_params(_FakeRequest([]))
     assert flt.format is None
     assert flt.min_score is None
+    assert flt.unscored is False
     assert flt.tags_filter is None
     assert flt.face_filter is None
     # Defaults describe the "live pictures" predicate.
     assert flt.apply_deleted_filter is True
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("1", True), ("true", True), ("True", True), ("0", False), ("false", False)],
+)
+def test_from_query_params_unscored_flag_spellings(raw, expected):
+    """``unscored=1`` is the contract; ``0``/``false`` must not switch it on."""
+    flt = PredicateFilter.from_query_params(_FakeRequest([("unscored", raw)]))
+    assert flt.unscored is expected
 
 
 def test_from_query_params_children_only_override():

@@ -1,0 +1,288 @@
+name: Record test durations
+
+# Refresh `tests/ci_test_durations.json`, the map that balances the eight-way
+# `--ci-shard` deal in the `backend` gate, and push a branch ready to open as a
+# PR.
+#
+# MANUAL ONLY, deliberately not scheduled. The map goes stale after a refactor
+# wave, not on a timer, and staleness costs balance rather than correctness
+# (see the docstring of scripts/record_test_durations.py). A cron job would
+# churn the file, and the diff, for nothing.
+#
+# ## It does not run the test suite
+#
+# Every PR already runs the gate with `--durations=0 --durations-min=0` over
+# exactly the file list this map describes (`PYTEST_FLAGS` in ci.yml). Those
+# logs ARE the measurement, so this job harvests them and runs no pytest of its
+# own beyond the guardrails.
+#
+# ## It harvests the `backend` gate, never `backend_release_sweep`
+#
+# A map must be measured in the conditions it is used to predict. The sweep
+# runs `--ci-block-shard`, i.e. contiguous collection order, so a module-scoped
+# fixture is built ONCE for the whole file. The gate deals tests LPT across
+# eight shards, so that same fixture is rebuilt on every shard the file's tests
+# land on, up to eight times. After the #796 fixture wave that gap is large and
+# systematic, and it falls on exactly the files the wave converted: a
+# sweep-measured map would understate them and then mis-balance them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: >-
+          CI run id to harvest. Default: the newest successful CI run on develop.
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  record:
+    name: record test durations
+    runs-on: ubuntu-latest
+    permissions:
+      # Read the source run's job logs.
+      actions: read
+      # Push the bot branch. No pull-requests scope: this job deliberately does
+      # not open the PR (see the "Open the pull request" note in the summary).
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-backend
+
+      - name: Resolve and validate the source run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          run_id="${INPUT_RUN_ID:-}"
+          if [ -z "$run_id" ]; then
+            run_id="$(gh run list --workflow CI --branch develop --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId')"
+          fi
+          case "$run_id" in
+            ''|*[!0-9]*)
+              echo "::error::Not a run id: '$run_id'. Pass a numeric CI run id."
+              exit 1
+              ;;
+          esac
+
+          gh api "repos/$GH_REPO/actions/runs/$run_id" > run.json
+          name="$(jq -r '.name' run.json)"
+          conclusion="$(jq -r '.conclusion' run.json)"
+          head_repo="$(jq -r '.head_repository.full_name' run.json)"
+          branch="$(jq -r '.head_branch' run.json)"
+          sha="$(jq -r '.head_sha' run.json)"
+
+          # A fork's run executes the fork's code, so its log is attacker-shaped
+          # text that would end up in a committed file. Same-repo only.
+          if [ "$head_repo" != "$GH_REPO" ]; then
+            echo "::error::Run $run_id came from $head_repo, not $GH_REPO." \
+              "Only same-repository runs may seed the durations map."
+            exit 1
+          fi
+          if [ "$name" != "CI" ]; then
+            echo "::error::Run $run_id is workflow '$name', not 'CI'."
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::Run $run_id concluded '$conclusion', not 'success'." \
+              "A red or cancelled run has shards that never reported their" \
+              "durations, which would silently unbalance the map."
+            exit 1
+          fi
+
+          # Not an error: the newest green run is normally a commit or two
+          # behind the branch you dispatch from, and that costs nothing. A
+          # RENAME between the two does cost something — the map keeps 36 keys
+          # under the old path and the live file gets none — so say where the
+          # measurement came from while the guardrail step below is still ahead
+          # of you. That step is the enforcement; this is the explanation.
+          head="$(git rev-parse HEAD)"
+          if [ "$sha" != "$head" ]; then
+            echo "::notice::Run $run_id is at $sha, the checkout is at $head." \
+              "If a test file was renamed or moved between the two, the" \
+              "guardrail step will fail with 'no recorded durations'."
+          fi
+
+          {
+            echo "run_id=$run_id"
+            echo "branch=$branch"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "Harvesting CI run $run_id ($branch @ $sha)"
+
+      - name: Download the gate shards' logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p shard-logs
+          # Per-job fetches, not one `gh run view --log`: a whole-run log for a
+          # 14-job matrix is large enough to be flaky to retrieve, and a partial
+          # one is indistinguishable from a complete one.
+          gh run view "$RUN_ID" --json jobs --jq '
+            .jobs[]
+            | select(.name | startswith("backend shard"))
+            | "\(.databaseId) \(.conclusion)"' > shard-jobs.txt
+
+          if [ ! -s shard-jobs.txt ]; then
+            echo "::error::Run $RUN_ID has no 'backend shard' jobs." \
+              "Only the eight-way Linux gate produces the timings this map needs."
+            exit 1
+          fi
+          while read -r job_id conclusion; do
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::Gate job $job_id concluded '$conclusion'."
+              exit 1
+            fi
+            # </dev/null so the child can never eat the job list this loop is
+            # reading from. gh does not read stdin today; a shard silently
+            # skipped because a future version does is not a failure mode worth
+            # leaving open.
+            gh run view --job "$job_id" --log < /dev/null > "shard-logs/$job_id.log"
+          done < shard-jobs.txt
+          echo "Fetched $(wc -l < shard-jobs.txt) shard logs."
+
+      - name: Rebuild the durations map
+        env:
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_BRANCH: ${{ steps.source.outputs.branch }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # --min-tests guards against a truncated log replacing a good map with
+          # the handful of lines it happened to contain. The real completeness
+          # check is the guardrail step below: a short log means gated files with
+          # no recorded durations, and test_ci_shards.py fails on exactly that.
+          python scripts/record_test_durations.py shard-logs/*.log \
+            --min-tests 1000 \
+            --source "GitHub Actions CI run $RUN_ID ($SOURCE_BRANCH @ $SOURCE_SHA), backend gate shards"
+
+      - name: Prove the new map still partitions and still balances
+        run: |
+          set -euo pipefail
+          # Runs BEFORE anything is pushed. A PR opened by a bot token does not
+          # start `on: pull_request` workflows, so the map cannot rely on being
+          # checked after the fact; it is checked here or nowhere.
+          python -m pytest -q tests/test_ci_shards.py
+
+      - name: Summarise the new map
+        id: report
+        env:
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_BRANCH: ${{ steps.source.outputs.branch }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > pr-body.md
+          import json
+          import os
+
+          import yaml
+
+          from tests.conftest import (
+              _load_recorded_durations,
+              _time_balanced_shard_assignment,
+          )
+          from tests.test_ci_shards import (
+              DURATIONS_PATH,
+              WORKFLOW_PATH,
+              _gated_files,
+              _shard_loads,
+          )
+
+          workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+          gated = _gated_files(workflow)
+          durations = _load_recorded_durations(DURATIONS_PATH)
+          document = json.loads(DURATIONS_PATH.read_text(encoding="utf-8"))
+          nodeids = sorted(n for n in durations if n.split("::", 1)[0] in gated)
+          total = len(workflow["jobs"]["backend"]["strategy"]["matrix"]["shard"])
+          loads = _shard_loads(
+              nodeids, _time_balanced_shard_assignment(nodeids, total, durations),
+              total, durations,
+          )
+          recorded_files = {n.split("::", 1)[0] for n in durations}
+          missing = sorted(gated - recorded_files)
+
+          print(f"Regenerated from CI run {os.environ['RUN_ID']} "
+                f"(`{os.environ['SOURCE_BRANCH']}` @ `{os.environ['SOURCE_SHA'][:8]}`), "
+                "harvested from the `backend` gate's own `--durations` output.\n")
+          print(f"- source run: {os.environ['RUN_ID']}")
+          print(f"- measured: {document['total_seconds']:.1f}s over "
+                f"{document['test_count']} tests")
+          print(f"- gated: {len(nodeids)} tests across "
+                f"{len(gated & recorded_files)} of {len(gated)} gated files")
+          print(f"- balance at N={total}: max/min = "
+                f"{max(loads) / min(loads):.3f} (slowest shard {max(loads):.0f}s)")
+          if missing:
+              print(f"- still unrecorded ({len(missing)}): "
+                    + ", ".join(f"`{name}`" for name in missing))
+          PY
+          cat pr-body.md >> "$GITHUB_STEP_SUMMARY"
+          if git diff --quiet -- tests/ci_test_durations.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The committed map already matches this run. Nothing to push." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the branch
+        if: steps.report.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          branch="bot/test-durations-$RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add tests/ci_test_durations.json
+          git commit -m "Regenerate the test durations map from CI run $RUN_ID"
+          # No --force. The branch is named after the run, so a second push to
+          # it means a re-dispatch on the same measurement, and refusing is the
+          # right answer: someone may already have opened a PR from it. Delete
+          # the branch if you really want to redo it.
+          #
+          # persist-credentials is false on the checkout above, so the token is
+          # supplied here and only here. Actions masks it in the log.
+          git push "https://x-access-token:$GH_TOKEN@github.com/$GH_REPO.git" \
+            "HEAD:refs/heads/$branch"
+          {
+            echo
+            echo "## Open the pull request"
+            echo
+            echo "Pushed \`$branch\`. Open the PR yourself:"
+            echo
+            echo '```'
+            echo "gh pr create --base develop --head $branch \\"
+            echo "  --title 'Regenerate the test durations map' --body-file -"
+            echo '```'
+            echo
+            echo "This job deliberately does NOT open it. A PR created with a"
+            echo "bot token does not trigger \`on: pull_request\`, so the gate"
+            echo "would never run on the new map, and the alternative - reusing"
+            echo "the release-signing PAT for a routine chore - widens that"
+            echo "credential's blast radius for one click's convenience."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: durations-map
+          path: |
+            tests/ci_test_durations.json
+            pr-body.md
+          if-no-files-found: warn

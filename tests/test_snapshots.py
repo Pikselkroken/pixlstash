@@ -9,9 +9,8 @@ from contextlib import closing, contextmanager
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import delete
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, User
 from pixlstash.db_models.picture_likeness import (
     PictureLikeness,
     PictureLikenessFrontier,
@@ -21,6 +20,7 @@ from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 from pixlstash.services.snapshot_service import GFS_KEEP_MONTHLY, GFS_KEEP_WEEKLY
 from pixlstash.utils.snapshot_compression import materialize_snapshot
+from tests.utils import wipe_tables
 
 
 @contextmanager
@@ -57,17 +57,16 @@ def server():
 def clean_db(server):
     """Wipe DB rows and snapshot files before each test."""
 
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        session.exec(delete(PictureLikeness))
-        session.exec(delete(PictureLikenessQueue))
-        session.exec(delete(PictureLikenessFrontier))
-        session.exec(delete(Picture))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            PictureLikeness,
+            PictureLikenessQueue,
+            PictureLikenessFrontier,
+            Picture,
+        ],
+    )
 
     cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):
@@ -86,6 +85,45 @@ def _count_db_snapshots(server) -> int:
     return server.vault.db.run_immediate_read_task(
         lambda s: s.exec(select(func.count()).select_from(Snapshot)).one()
     )
+
+
+def test_new_snapshot_contains_no_portable_identity_and_is_private(server):
+    marker = "NEW-SNAPSHOT-PORTABLE-SECRET-19ab"
+
+    def _seed(session):
+        session.add(
+            User(
+                username=f"user-{marker}",
+                password_hash=f"password-{marker}",
+                hidden_tags=f'["{marker}"]',
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_seed)
+    try:
+        snapshot = server.vault.snapshot_service.create_snapshot("MANUAL")
+        archive = os.path.join(server.vault.image_root, snapshot.relative_path)
+        if os.name != "nt":
+            # Windows synthesises st_mode from the read-only attribute (0o666
+            # for any writable file), so no chmod can ever make this hold
+            # there; access is the directory ACL's job. The identity
+            # assertions below are the test's point and run everywhere.
+            assert os.stat(archive).st_mode & 0o777 == 0o600
+        with _open_snapshot(server, snapshot) as connection:
+            for table in ("user", "usertoken", "guest_session", "guest_score"):
+                assert connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone() == (0,)
+            database_path = connection.execute("PRAGMA database_list").fetchone()[2]
+            assert marker.encode() not in open(database_path, "rb").read()
+    finally:
+        server.vault.db.run_task(
+            lambda session: (
+                session.exec(text("DELETE FROM user")),
+                session.commit(),
+            )
+        )
 
 
 def _add_pictures(server, count: int = 3):

@@ -193,9 +193,18 @@
           class="tag-menu-input"
           placeholder="Tag name..."
           autocomplete="off"
+          aria-label="New tag"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="tb-tag-suggestions"
+          :aria-expanded="suggestionsVisible ? 'true' : 'false'"
+          :aria-activedescendant="activeSuggestionId"
           @keydown.enter.prevent="applyTag"
           @keydown="handleTagKey"
         />
+        <p class="visually-hidden" role="status" aria-live="polite">
+          {{ suggestionStatus }}
+        </p>
         <div class="plugin-menu-actions">
           <button
             class="stack-btn"
@@ -206,8 +215,10 @@
             {{ tagLoading ? "Applying..." : "Apply to All" }}
           </button>
         </div>
-        <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
-        <div v-if="tagSuccess" class="plugin-menu-success">
+        <div v-if="tagError" class="plugin-menu-error" role="alert">
+          {{ tagError }}
+        </div>
+        <div v-if="tagSuccess" class="plugin-menu-success" role="status">
           {{ tagSuccess }}
         </div>
         <div v-if="!isReadOnly" class="tag-autogen-section">
@@ -257,7 +268,6 @@
                     v-for="plugin in taggerPlugins"
                     :key="plugin.name"
                     :title="plugin.display_name || plugin.name"
-                    :disabled="!!plugin.load_error"
                     @click="generateTagsForAll(plugin.name)"
                   />
                   <v-list-item
@@ -283,34 +293,43 @@
   <!-- Autocomplete dropdown (teleported to body) -->
   <Teleport to="body">
     <div
-      v-if="tagSuggestions.length && tagInputRect"
+      v-if="suggestionsVisible"
+      id="tb-tag-suggestions"
       class="sb-tag-autocomplete-dropdown"
+      role="listbox"
+      aria-label="Tag suggestions"
       :style="{
         top: `${tagInputRect.bottom + 4}px`,
         left: `${tagInputRect.left}px`,
         width: `${tagInputRect.width}px`,
       }"
     >
-      <button
+      <!-- mousedown only keeps the input from blurring; selection happens on
+           click, so a tap works on touch and a press-and-drag-away does not
+           write the tag. -->
+      <div
         v-for="(item, i) in tagSuggestions"
+        :id="`tb-tag-suggestion-${i}`"
         :key="item.tag"
         :class="[
           'sb-tag-autocomplete-item',
           { 'sb-tag-autocomplete-item--active': i === tagSuggestionIndex },
         ]"
-        type="button"
+        role="option"
+        :aria-selected="i === tagSuggestionIndex"
+        @mousedown.prevent
         @click="selectTagSuggestion(item)"
       >
         {{ item.tag }}
         <span v-if="i === 0" class="sb-tag-autocomplete-tab-hint">TAB</span>
-      </button>
+      </div>
     </div>
   </Teleport>
 </template>
 
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
-import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   addPictureTag,
@@ -324,12 +343,13 @@ import { resetPictureTags } from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
+import { errorDetail } from "../../utils/apiError";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedCount: { type: Number, default: 0 },
   selectedImageIds: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
@@ -396,6 +416,11 @@ const tagSuccess = ref("");
 const allTagsSB = ref([]);
 let allTagsFetchedAt = 0;
 const tagSuggestionIndex = ref(-1);
+// The input value the suggestion list was last dismissed for. Comparing against
+// the live value means typing re-opens the list without a second watcher, and
+// completing the field from a suggestion leaves it dismissed even though the
+// startsWith filter still matches the completed tag.
+const dismissedFor = ref(null);
 const tagInputRect = ref(null);
 const tagActionLoading = ref([]);
 const fetchedTagData = ref([]);
@@ -446,7 +471,7 @@ async function fetchSelectedImageTags() {
   }
   if (!fetchedTagData.value.length) tagDataLoading.value = true;
   try {
-    const rows = await bulkFetchTags(toFetch, { baseUrl: props.backendUrl });
+    const rows = await bulkFetchTags(toFetch);
     fetchedTagData.value = Array.isArray(rows) ? rows : [];
   } catch {
     fetchedTagData.value = [];
@@ -472,7 +497,6 @@ async function fetchSelectedImagePredictions() {
       ids.map((id) =>
         listTagPredictions(id, {
           status: "REJECTED",
-          baseUrl: props.backendUrl,
         })
           .then((payload) => {
             const predictions = Array.isArray(payload)
@@ -613,7 +637,6 @@ async function confirmPredictionOnAll(
     await Promise.all(
       predEntry.ids.map((id) =>
         confirmTagPrediction(id, predEntry.tag, {
-          baseUrl: props.backendUrl,
           batchId,
         }),
       ),
@@ -628,7 +651,7 @@ async function confirmPredictionOnAll(
       fetchSelectedImagePredictions(),
     ]);
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     predActionLoading.value = predActionLoading.value.filter(
       (n) => n !== predEntry.tag,
@@ -668,7 +691,6 @@ async function removeTagFromAll(
         .filter(([, tagId]) => tagId != null)
         .map(([imgId, tagId]) =>
           removePictureTag(imgId, tagId, {
-            baseUrl: props.backendUrl,
             batchId,
           }),
         ),
@@ -680,7 +702,7 @@ async function removeTagFromAll(
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -698,7 +720,7 @@ async function addTagToRemaining(tagEntry) {
   try {
     await Promise.all(
       missingIds.map((id) =>
-        addPictureTag(id, tagEntry.name, { baseUrl: props.backendUrl }),
+        addPictureTag(id, tagEntry.name),
       ),
     );
     emit("tags-applied", {
@@ -708,7 +730,7 @@ async function addTagToRemaining(tagEntry) {
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -743,15 +765,14 @@ async function generateTagsForAll(model = null) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
+        resetPictureTags(id, body),
       ),
     );
     const suffix = model ? ` with ${model}` : "";
     generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });
   } catch (err) {
-    generateTagsError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    generateTagsError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     generateTagsLoading.value = false;
   }
@@ -777,14 +798,39 @@ const tagSuggestions = computed(() => {
     .slice(0, 8);
 });
 
+const suggestionsOpen = computed(
+  () =>
+    tagSuggestions.value.length > 0 && dismissedFor.value !== tagInput.value,
+);
+
+// What the combobox is allowed to claim. `tagInputRect` only lands on the next
+// tick, so gating the ARIA on `suggestionsOpen` alone told assistive tech the
+// list was expanded, and pointed `aria-activedescendant` at an option id, for a
+// tick in which no listbox existed in the DOM.
+const suggestionsVisible = computed(
+  () => suggestionsOpen.value && Boolean(tagInputRect.value),
+);
+
+const activeSuggestionId = computed(() =>
+  suggestionsVisible.value && tagSuggestionIndex.value >= 0
+    ? `tb-tag-suggestion-${tagSuggestionIndex.value}`
+    : null,
+);
+
+const suggestionStatus = computed(() => {
+  if (!suggestionsOpen.value) return "";
+  const n = tagSuggestions.value.length;
+  return `${n} tag suggestion${n !== 1 ? "s" : ""}. Arrow keys to browse, Tab to complete, Enter to apply.`;
+});
+
 watch(tagInput, () => {
   tagSuggestionIndex.value = -1;
 });
 
 watch(
-  () => [tagInput.value, tagSuggestions.value.length],
+  () => [tagInput.value, suggestionsOpen.value],
   () => {
-    if (tagInput.value && tagSuggestions.value.length) {
+    if (tagInput.value && suggestionsOpen.value) {
       nextTick(() => {
         tagInputRect.value = tagInputRef.value
           ? tagInputRef.value.getBoundingClientRect()
@@ -804,6 +850,7 @@ watch(
       tagError.value = "";
       tagSuccess.value = "";
       tagSuggestionIndex.value = -1;
+      dismissedFor.value = null;
       fetchedTagData.value = [];
       fetchedPredictionData.value = [];
       tagDataCapped.value = false;
@@ -882,39 +929,57 @@ async function fetchTagsSB() {
   }
 }
 
-function selectTagSuggestion(item) {
+/** Complete the field from a suggestion and dismiss the list. Does not commit. */
+function fillFromSuggestion(item) {
   tagInput.value = typeof item === "string" ? item : item.tag;
   tagSuggestionIndex.value = -1;
+  dismissedFor.value = tagInput.value;
+}
+
+/** Clicking a suggestion is an explicit choice, so it fills and commits. */
+function selectTagSuggestion(item) {
+  fillFromSuggestion(item);
   nextTick(() => applyTag());
 }
 
 function handleTagKey(event) {
   if (event.key === "ArrowDown") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.min(
-        tagSuggestionIndex.value + 1,
-        tagSuggestions.value.length - 1,
-      );
+    if (!tagSuggestions.value.length) return;
+    event.preventDefault();
+    if (!suggestionsOpen.value) {
+      // Re-open a dismissed list rather than moving inside a hidden one.
+      dismissedFor.value = null;
+      tagSuggestionIndex.value = 0;
+      return;
     }
+    tagSuggestionIndex.value = Math.min(
+      tagSuggestionIndex.value + 1,
+      tagSuggestions.value.length - 1,
+    );
   } else if (event.key === "ArrowUp") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
-    }
+    if (!suggestionsOpen.value) return;
+    event.preventDefault();
+    tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
   } else if (event.key === "Tab") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
-      selectTagSuggestion(tagSuggestions.value[idx]);
-    }
+    // Tab completes the field, it never writes to the selection. With the list
+    // dismissed it falls through so focus leaves the field (WCAG 2.1.2).
+    if (!suggestionsOpen.value) return;
+    event.preventDefault();
+    const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
+    fillFromSuggestion(tagSuggestions.value[idx]);
   } else if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
       event.stopImmediatePropagation();
     }
-    emit("close");
+    // First Escape dismisses the suggestions, a second one closes the panel.
+    if (suggestionsOpen.value) {
+      dismissedFor.value = tagInput.value;
+      tagSuggestionIndex.value = -1;
+    } else {
+      emit("close");
+    }
   }
 }
 
@@ -923,11 +988,7 @@ async function applyTag() {
     tagSuggestionIndex.value >= 0 &&
     tagSuggestions.value.length > tagSuggestionIndex.value
   ) {
-    const item = tagSuggestions.value[tagSuggestionIndex.value];
-    tagInput.value = typeof item === "string" ? item : item.tag;
-    tagSuggestionIndex.value = -1;
-    nextTick(() => applyTag());
-    return;
+    fillFromSuggestion(tagSuggestions.value[tagSuggestionIndex.value]);
   }
   const tag = tagInput.value.trim();
   if (!tag) return;
@@ -942,7 +1003,7 @@ async function applyTag() {
   tagSuccess.value = "";
   try {
     await Promise.all(
-      ids.map((id) => addPictureTag(id, tag, { baseUrl: props.backendUrl })),
+      ids.map((id) => addPictureTag(id, tag)),
     );
     tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with "${tag}"`;
     tagInput.value = "";
@@ -950,7 +1011,7 @@ async function applyTag() {
     emit("tags-applied", { tag, pictureIds: ids });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagLoading.value = false;
   }
@@ -1004,14 +1065,13 @@ async function rejectTagOnAll(tagEntry, { batchId } = {}) {
     await Promise.all(
       imageIds.map((id) =>
         rejectTagPrediction(id, tagEntry.name, {
-          baseUrl: props.backendUrl,
           batchId,
         }),
       ),
     );
     await fetchSelectedImagePredictions();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   }
 }
 
@@ -1132,15 +1192,12 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-current-toggle {
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
   opacity: inherit;
   padding: 0;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1200,7 +1257,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   border-radius: var(--radius-lg);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
-  cursor: pointer;
   transition:
     background 0.15s,
     opacity 0.15s;
@@ -1225,7 +1281,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chip--some {
-  background: transparent;
   border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
   color: rgb(var(--v-theme-on-surface));
   opacity: 0.7;
@@ -1344,13 +1399,11 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 .sb-tag-autocomplete-item {
   display: block;
   width: 100%;
+  cursor: pointer;
   text-align: left;
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-surface));
-  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1479,12 +1532,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;

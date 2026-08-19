@@ -29,8 +29,11 @@ from sqlalchemy import event
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Picture,
+    PictureProjectMember,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
+    Project,
     Tag,
 )
 from pixlstash.server import Server
@@ -90,6 +93,144 @@ def _seed_sets(server, set_count: int, members_per_set: int, hidden_every=None):
         return created, hidden
 
     return server.vault.db.run_task(_insert, priority=DBPriority.IMMEDIATE)
+
+
+def _seed_scoped_sets(server):
+    """Seed the two member conditions the listing applies but nothing pinned.
+
+    ``member_conditions`` in ``GET /picture_sets`` carries three filters. The
+    hidden-tag one is covered by the tests above; the other two, ``deleted IS
+    FALSE`` and the ``project_id`` membership predicate, survived deletion by
+    every test in this file (R13 and R14 of the PR #706 QA review), because the
+    fixture seeded no soft-deleted member and no project.
+
+    Two sets, so both branches of the project filter are reachable:
+
+    * ``Scoped Set`` belongs to a project, so it is the set listed under
+      ``?project_id=<id>``. Members: one in the project, one in the project but
+      soft-deleted, one outside it.
+    * ``Unscoped Set`` belongs to no project, so it is the set listed under
+      ``?project_id=UNASSIGNED``. That sentinel is a second branch of the same
+      handler, and its character equivalent was a live scope bypass once, so it
+      gets its own case rather than riding on the numeric one. Members mirror
+      the above: one unassigned, one in the project, one unassigned but
+      soft-deleted.
+
+    Scores descend in the order the members are written, and no two are equal,
+    so the expected preview list is simply the surviving members in that order.
+    """
+
+    def _insert(session):
+        project = Project(name="Scoped Project")
+        session.add(project)
+        session.flush()
+        base = datetime(2026, 1, 1)
+        ids = {"project_id": project.id}
+
+        def _picture(name, score, in_project, deleted):
+            picture = Picture(
+                file_path=f"{name}.jpg",
+                score=score,
+                imported_at=base + timedelta(minutes=score),
+                deleted=deleted,
+            )
+            session.add(picture)
+            session.flush()
+            if in_project:
+                session.add(
+                    PictureProjectMember(picture_id=picture.id, project_id=project.id)
+                )
+            return picture.id
+
+        scoped = PictureSet(name="Scoped Set")
+        unscoped = PictureSet(name="Unscoped Set")
+        session.add(scoped)
+        session.add(unscoped)
+        session.flush()
+        session.add(PictureSetProjectMember(set_id=scoped.id, project_id=project.id))
+        ids["scoped_set"] = scoped.id
+        ids["unscoped_set"] = unscoped.id
+
+        ids["in_project"] = _picture("in_project", 9, True, False)
+        ids["in_project_deleted"] = _picture("in_project_deleted", 8, True, True)
+        ids["out_of_project"] = _picture("out_of_project", 7, False, False)
+        ids["unassigned"] = _picture("unassigned", 6, False, False)
+        ids["assigned"] = _picture("assigned", 5, True, False)
+        ids["unassigned_deleted"] = _picture("unassigned_deleted", 4, False, True)
+
+        for key in ("in_project", "in_project_deleted", "out_of_project"):
+            session.add(PictureSetMember(set_id=scoped.id, picture_id=ids[key]))
+        for key in ("unassigned", "assigned", "unassigned_deleted"):
+            session.add(PictureSetMember(set_id=unscoped.id, picture_id=ids[key]))
+
+        session.commit()
+        return ids
+
+    return server.vault.db.run_task(_insert, priority=DBPriority.IMMEDIATE)
+
+
+def test_soft_deleted_members_are_excluded_from_counts_and_previews():
+    """R14: the listing must not count or preview a soft-deleted member.
+
+    Asserted in both directions. A count of 3 means ``deleted IS FALSE`` was
+    dropped from ``member_conditions``; a count of 1 means it over-filtered and
+    took a live member with it.
+    """
+    tmp, client, server = _setup_server()
+    try:
+        ids = _seed_scoped_sets(server)
+
+        resp = client.get("/picture_sets")
+        assert resp.status_code == 200
+        by_id = {row["id"]: row for row in resp.json()}
+
+        scoped = by_id[ids["scoped_set"]]
+        assert scoped["picture_count"] == 2
+        assert scoped["top_picture_ids"] == [ids["in_project"], ids["out_of_project"]]
+
+        unscoped = by_id[ids["unscoped_set"]]
+        assert unscoped["picture_count"] == 2
+        assert unscoped["top_picture_ids"] == [ids["unassigned"], ids["assigned"]]
+    finally:
+        server.close()
+        tmp.cleanup()
+        gc.collect()
+
+
+def test_project_filter_applies_to_counts_and_previews():
+    """R13: ``project_id`` narrows the members, not just the listed sets.
+
+    The set-level filter and the member-level filter are separate conditions
+    built from the same parameter, so a set can be correctly listed while its
+    count and previews still come from every project. Both branches are
+    covered: a numeric id and the ``UNASSIGNED`` sentinel.
+    """
+    tmp, client, server = _setup_server()
+    try:
+        ids = _seed_scoped_sets(server)
+
+        resp = client.get(
+            "/picture_sets", params={"project_id": str(ids["project_id"])}
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert [row["id"] for row in rows] == [ids["scoped_set"]]
+        # Not 2: the out-of-project member is a member of this set, and the
+        # soft-deleted one is in the project. Not 0: the in-project member must
+        # survive, or the filter is excluding everything.
+        assert rows[0]["picture_count"] == 1
+        assert rows[0]["top_picture_ids"] == [ids["in_project"]]
+
+        resp = client.get("/picture_sets", params={"project_id": "UNASSIGNED"})
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert [row["id"] for row in rows] == [ids["unscoped_set"]]
+        assert rows[0]["picture_count"] == 1
+        assert rows[0]["top_picture_ids"] == [ids["unassigned"]]
+    finally:
+        server.close()
+        tmp.cleanup()
+        gc.collect()
 
 
 class _MemberQueryCounter:
@@ -153,7 +294,7 @@ def test_query_count_does_not_grow_with_the_number_of_sets():
             f"{large.count} for 10. The per-set loop is back."
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -175,7 +316,7 @@ def test_counts_and_previews_are_unchanged():
             # first three members, in that order.
             assert row["top_picture_ids"] == member_ids[:3]
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -214,7 +355,7 @@ def test_hidden_tags_are_excluded_from_counts_and_previews():
             assert row["top_picture_ids"] == visible[:3]
             assert not set(row["top_picture_ids"]) & hidden
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -248,6 +389,6 @@ def test_set_thumbnail_applies_the_same_hidden_tag_rule():
             "condition is excluding too much"
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()

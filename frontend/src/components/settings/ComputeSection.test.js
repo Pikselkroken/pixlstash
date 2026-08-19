@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn().mockResolvedValue({ data: {} }) },
   login: vi.fn(),
 }));
@@ -53,7 +54,8 @@ async function mountCompute(accelState) {
 // Helpers to read the SettingsRow-based runtime list.
 const rows = (wrapper) => wrapper.findAll(".s-row");
 const rowLabel = (row) => row.find(".s-row__label").text();
-const rowSub = (row) => (row.find(".s-row__sub").exists() ? row.find(".s-row__sub").text() : "");
+const rowSub = (row) =>
+  row.find(".s-row__sub").exists() ? row.find(".s-row__sub").text() : "";
 const rowButtons = (row) => row.findAll("button").map((b) => b.text());
 
 const gpuActiveState = () => ({
@@ -142,9 +144,7 @@ describe("ComputeSection unified runtime list", () => {
     expect(rowSub(gpuRow)).toBe("Installed");
     expect(rowButtons(gpuRow)).toEqual(["Use", "Remove"]);
 
-    const gpuUse = gpuRow
-      .findAll("button")
-      .find((b) => b.text() === "Use");
+    const gpuUse = gpuRow.findAll("button").find((b) => b.text() === "Use");
     expect(gpuUse.attributes("aria-label")).toBe("Use NVIDIA GPU (CUDA)");
     await gpuUse.trigger("click");
     expect(desktop.useAccelerator).toHaveBeenCalledWith("cuda");
@@ -173,5 +173,104 @@ describe("ComputeSection unified runtime list", () => {
     );
     await installBtn.trigger("click");
     expect(desktop.installAccelerator).toHaveBeenCalledWith("cuda");
+  });
+});
+
+// The desktop CLI shim toggle. Its whole job is to be absent where there is
+// nothing to install (Windows, or an unpackaged dev run) — the main process
+// signals that by reporting shellCommand as null rather than a boolean, and a
+// switch that silently does nothing is worse than no switch.
+describe("Desktop › Shell command", () => {
+  async function mountBackend(prefs) {
+    const desktop = installDesktop({ runtime: null, accelerators: [] });
+    desktop.getDesktopPrefs = vi.fn().mockResolvedValue(prefs);
+    desktop.setDesktopPrefs = vi.fn().mockResolvedValue(prefs);
+    const wrapper = mount(ComputeSection, { props: { view: "backend" } });
+    await flushPromises();
+    return { wrapper, desktop };
+  }
+
+  const shellRow = (wrapper) =>
+    rows(wrapper).find((r) => rowLabel(r) === "Shell command");
+
+  it("is hidden where the app has no shim to install", async () => {
+    const { wrapper } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: null,
+    });
+    expect(shellRow(wrapper)).toBeUndefined();
+  });
+
+  it("offers the toggle, off by default, where a shim can be installed", async () => {
+    const { wrapper } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    const row = shellRow(wrapper);
+    expect(row).toBeDefined();
+    // The stub declares no props, so the bound value arrives as an attr.
+    expect(
+      row.findComponent({ name: "v-switch" }).vm.$attrs["model-value"],
+    ).toBe(false);
+  });
+
+  it("turning it on asks the main process to install the shim", async () => {
+    const { wrapper, desktop } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    await shellRow(wrapper)
+      .findComponent({ name: "v-switch" })
+      .vm.$emit("update:modelValue", true);
+    expect(desktop.setDesktopPrefs).toHaveBeenCalledWith({
+      shellCommand: true,
+    });
+  });
+
+  it("snaps back with a reason when the install is refused", async () => {
+    // A `pixlstash` the user wrote themselves is never overwritten, so enabling
+    // can fail. A switch left sitting on over a command that does not exist is
+    // the failure worth avoiding.
+    const { wrapper, desktop } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    desktop.setDesktopPrefs.mockRejectedValue(
+      new Error("~/.local/bin/pixlstash already exists"),
+    );
+
+    await shellRow(wrapper)
+      .findComponent({ name: "v-switch" })
+      .vm.$emit("update:modelValue", true);
+    await flushPromises();
+
+    expect(
+      shellRow(wrapper).findComponent({ name: "v-switch" }).vm.$attrs[
+        "model-value"
+      ],
+    ).toBe(false);
+    expect(wrapper.text()).toContain("already exists");
+  });
+
+  it("follows the state the main process reports, not the one requested", async () => {
+    const { wrapper, desktop } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    desktop.setDesktopPrefs.mockResolvedValue({
+      hideToTrayOnClose: true,
+      shellCommand: true,
+    });
+
+    await shellRow(wrapper)
+      .findComponent({ name: "v-switch" })
+      .vm.$emit("update:modelValue", true);
+    await flushPromises();
+
+    expect(
+      shellRow(wrapper).findComponent({ name: "v-switch" }).vm.$attrs[
+        "model-value"
+      ],
+    ).toBe(true);
   });
 });

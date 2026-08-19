@@ -1,6 +1,7 @@
 <script setup>
-// Custom window title bar for the Electron desktop shell. Renders nothing in a
-// plain browser. It uses the toolbar colour so it reads as one continuous strip
+// Custom window title bar for the Electron desktop shell, plus the compact
+// active-library identity strip used by browser owners. The desktop bar uses
+// the toolbar colour so it reads as one continuous strip
 // with the app toolbar below it, is a drag region for moving the (frameless)
 // window, and draws min/maximize/close controls on non-mac platforms (macOS
 // keeps its native traffic lights).
@@ -17,7 +18,10 @@ import WordmarkLogo from "./WordmarkLogo.vue";
 const props = defineProps({
   installType: { type: String, default: "pip" },
   checkForUpdates: { type: Boolean, default: null },
+  activeLibraryName: { type: String, default: "" },
 });
+
+const emit = defineEmits(["open-libraries"]);
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 const isMac = /mac/i.test(
@@ -71,6 +75,16 @@ const close = () => desktop?.windowClose?.();
         <img src="/Logo.png" alt="PixlStash logo" class="titlebar-logo" />
       </a>
       <WordmarkLogo class="titlebar-name" />
+      <button
+        v-if="activeLibraryName"
+        type="button"
+        class="titlebar-library"
+        :title="`Open Libraries settings. Active library: ${activeLibraryName}`"
+        @click="emit('open-libraries')"
+      >
+        <v-icon size="15" aria-hidden="true">mdi-bookshelf</v-icon>
+        <span>{{ activeLibraryName }}</span>
+      </button>
       <nav
         v-if="breadcrumb.length"
         class="titlebar-breadcrumb"
@@ -262,6 +276,34 @@ const close = () => desktop?.windowClose?.();
   padding: 0 var(--space-4);
 }
 
+.titlebar-library {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 220px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-background));
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-library span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar-library:hover {
+  border-color: rgb(var(--v-theme-accent));
+  background: var(--hover-wash);
+}
+
 /* Breadcrumb: current-view path, inline after the version. */
 .titlebar-breadcrumb {
   display: flex;
@@ -376,9 +418,6 @@ const close = () => desktop?.windowClose?.();
   height: 12px;
   font-size: var(--text-2xs);
   line-height: 1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-background), 0.5);
 }
 
@@ -397,8 +436,6 @@ const close = () => desktop?.windowClose?.();
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
   color: inherit;
   opacity: 0.8;
   cursor: default;
@@ -413,5 +450,24 @@ const close = () => desktop?.windowClose?.();
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
   opacity: 1;
+}
+
+/* At the desktop floor the active library is safety-critical identity. The
+   current-view trail and update affordance yield before that name is squeezed
+   into an unreadable sliver. The document title still carries both pieces. */
+@media (max-width: 1000px) {
+  .titlebar-breadcrumb {
+    display: none;
+  }
+
+  .titlebar-library {
+    min-width: 120px;
+  }
+}
+
+@media (max-width: 850px) {
+  .titlebar-update {
+    display: none;
+  }
 }
 </style>

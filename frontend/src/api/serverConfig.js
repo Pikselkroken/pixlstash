@@ -8,7 +8,8 @@
 // Per the §src/api rules the URL strings live only here, so a contract change
 // is a one-line edit rather than a hunt through components and stores.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** The scrapheap-retention topic of the server config (GET + PATCH). */
 const SCRAPHEAP_RETENTION_URL = "/server-config/scrapheap-retention";
@@ -23,8 +24,7 @@ const SNAPSHOTS_URL = "/server-config/snapshots";
  *   whether the server takes an automatic snapshot once a day.
  */
 export async function getSnapshotSettings() {
-  const res = await apiClient.get(SNAPSHOTS_URL);
-  return res.data;
+  return unwrap(apiClient.get(SNAPSHOTS_URL));
 }
 
 /**
@@ -34,10 +34,9 @@ export async function getSnapshotSettings() {
  * @returns {Promise<Object>} the updated snapshot settings (the response body).
  */
 export async function setDailySnapshotsEnabled(enabled) {
-  const res = await apiClient.patch(SNAPSHOTS_URL, {
+  return unwrap(apiClient.patch(SNAPSHOTS_URL, {
     daily_snapshots: enabled,
-  });
-  return res.data;
+  }));
 }
 
 /** Response/request key carrying the retention window. */
@@ -62,8 +61,7 @@ export const SCRAPHEAP_RETENTION_GRACE_FIELD = "scrapheap_retention_grace_days";
  *   - `scrapheap_retention_reduced_at`: ISO 8601 of the last reduction, or null
  */
 export async function getScrapheapRetention() {
-  const res = await apiClient.get(SCRAPHEAP_RETENTION_URL);
-  return res.data;
+  return unwrap(apiClient.get(SCRAPHEAP_RETENTION_URL));
 }
 
 /**
@@ -76,10 +74,9 @@ export async function getScrapheapRetention() {
  * @returns {Promise<Object>} the updated retention config (the response body).
  */
 export async function setScrapheapRetentionDays(days) {
-  const res = await apiClient.patch(SCRAPHEAP_RETENTION_URL, {
+  return unwrap(apiClient.patch(SCRAPHEAP_RETENTION_URL, {
     [SCRAPHEAP_RETENTION_FIELD]: days,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -98,8 +95,7 @@ export async function setScrapheapRetentionDays(days) {
  * @returns {Promise<{would_purge_count: number, first_purge_at: string|null}>}
  */
 export async function getScrapheapRetentionImpact(days) {
-  const res = await apiClient.get(`${SCRAPHEAP_RETENTION_URL}/impact`, {
+  return unwrap(apiClient.get(`${SCRAPHEAP_RETENTION_URL}/impact`, {
     params: { days },
-  });
-  return res.data;
+  }));
 }

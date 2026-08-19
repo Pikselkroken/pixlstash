@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
@@ -324,16 +325,16 @@ describe("api/dedup — verdicts", () => {
 
   it("reopenGroup posts the signature alone by default", async () => {
     apiClient.post.mockResolvedValue({ data: { previous_verdict: "stacked" } });
-    await reopenGroup("sig-3", { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/dedup/verdicts/reopen", {
+    await reopenGroup("sig-3");
+    expect(apiClient.post).toHaveBeenCalledWith("/dedup/verdicts/reopen", {
       signature: "sig-3",
     });
   });
 
   it("reopenGroup carries a gesture batch id when given one", async () => {
     apiClient.post.mockResolvedValue({ data: { previous_verdict: "stacked" } });
-    await reopenGroup("sig-3", { batchId: "cli-clear-1", baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/dedup/verdicts/reopen", {
+    await reopenGroup("sig-3", { batchId: "cli-clear-1" });
+    expect(apiClient.post).toHaveBeenCalledWith("/dedup/verdicts/reopen", {
       signature: "sig-3",
       batch_id: "cli-clear-1",
     });
@@ -513,28 +514,27 @@ describe("api/dedup: mixed stacks", () => {
     );
   });
 
-  // Every route honours an explicit backend origin: the SPA and the backend are
-  // different origins in the dev server, the demo and Electron.
-  it("honours an explicit backend base on every route", async () => {
+  // Every route is spelled relative. The SPA and the backend are different
+  // origins in the dev server, the demo and Electron; that origin is now the
+  // apiClient instance's baseURL rather than a per-call argument, so what these
+  // functions must get right is the path.
+  it("spells every mixed-stack route relative to the api root", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
     apiClient.post.mockResolvedValue({ data: {} });
     apiClient.delete.mockResolvedValue({ data: {} });
-    const baseUrl = "http://backend.test/api/v1";
-    await listMixedStacks({ baseUrl });
-    await splitMixedStack(1, { baseUrl });
-    await unstackMixedStack(1, { baseUrl });
-    await keepMixedStack(1, { baseUrl });
-    await clearMixedStackKeep(1, { baseUrl });
-    expect(apiClient.get.mock.calls[0][0]).toBe(
-      "http://backend.test/api/v1/dedup/mixed-stacks",
-    );
+    await listMixedStacks();
+    await splitMixedStack(1);
+    await unstackMixedStack(1);
+    await keepMixedStack(1);
+    await clearMixedStackKeep(1);
+    expect(apiClient.get.mock.calls[0][0]).toBe("/dedup/mixed-stacks");
     expect(apiClient.post.mock.calls.map((c) => c[0])).toEqual([
-      "http://backend.test/api/v1/dedup/mixed-stacks/1/split",
-      "http://backend.test/api/v1/dedup/mixed-stacks/1/unstack",
-      "http://backend.test/api/v1/dedup/mixed-stacks/1/keep",
+      "/dedup/mixed-stacks/1/split",
+      "/dedup/mixed-stacks/1/unstack",
+      "/dedup/mixed-stacks/1/keep",
     ]);
     expect(apiClient.delete.mock.calls[0][0]).toBe(
-      "http://backend.test/api/v1/dedup/mixed-stacks/1/keep",
+      "/dedup/mixed-stacks/1/keep",
     );
   });
 });

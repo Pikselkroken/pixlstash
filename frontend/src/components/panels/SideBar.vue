@@ -7,6 +7,7 @@ import {
   watch,
   nextTick,
 } from "vue";
+import { MODEL_SHELF_ROUTES } from "../../router/routeNames";
 import ImageImporter from "../io/ImageImporter.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
@@ -20,6 +21,7 @@ import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
+  API_BASE_URL,
   appendShareToken,
   isReadOnly,
   sessionContext,
@@ -51,7 +53,13 @@ import {
 import { setPicturesProject } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
-import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
+import {
+  extractSupportedImportFilesFromDataTransfer,
+  isFaceDrag,
+  isFileDrag,
+  isInternalImageDrag,
+  isPictureDrag,
+} from "../../utils/media.js";
 import {
   characterCountUpdates,
   projectCountUpdates,
@@ -83,6 +91,8 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { errorDetail } from "../../utils/apiError";
+import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -107,7 +117,7 @@ const noticeStore = useNoticeStore();
  * @param {unknown} e
  */
 function noticeDetail(e) {
-  return e?.response?.data?.detail || e?.message || "Please try again.";
+  return errorDetail(e) || e?.message || "Please try again.";
 }
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
@@ -151,6 +161,9 @@ const hasFolderFilter = computed(
 // Duplicates is addressed by route name, not by a selection sentinel: it shows
 // no pictures, so there is no selection to express.
 const isDuplicatesView = computed(() => route.name === "duplicates");
+// Both of the shelf's routes, from the one list, so the runs tab cannot fall
+// out of this the way it did when the two predicates were separate literals.
+const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature
@@ -160,14 +173,22 @@ const isDuplicatesView = computed(() => route.name === "duplicates");
 const READ_ONLY_DEDUP_HINT =
   "Duplicate review is only available in your own library";
 
+// The shelf is the same shape of refusal: every /models, /adapters,
+// /checkpoints and /model-* route is owner-only, because the shelf lists files
+// on the machine PixlStash runs on. Same show-but-disable rule as Duplicates —
+// the destination stays visible and says why (issue #1014).
+const READ_ONLY_SHELF_HINT =
+  "The model shelf is only available in your own library";
+
 const props = defineProps({
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
 });
 
 const emit = defineEmits([
   "select-duplicates",
+  "select-models",
   "select-character",
   "select-set",
   "import-finished",
@@ -176,10 +197,8 @@ const emit = defineEmits([
   "images-assigned-to-character",
   "faces-assigned-to-character",
   "images-moved",
-  "search-images",
   "empty-scrapheap",
   "suggest-pictures-for-character",
-  "open-import-dialog",
   "view-project",
   "update:check-for-updates",
   "select-folder",
@@ -299,6 +318,8 @@ const projectMenuRef = ref(null);
 const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
 const collapsedProjectSubMenuRef = ref(null);
+const collapsedProjectsMenuTriggerRef = ref(null);
+const collapsedFoldersMenuTriggerRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
 
 const dockedScrollRef = ref(null);
@@ -544,7 +565,7 @@ async function relocateReferenceFolder() {
     referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
   } catch (error) {
     referenceFolderRelocateError.value =
-      error?.response?.data?.detail || error?.message || "Relocation failed.";
+      errorDetail(error) || error?.message || "Relocation failed.";
   } finally {
     referenceFolderRelocateLoading.value = false;
   }
@@ -842,6 +863,35 @@ async function browseFolderPath(path, prefetchChildren = false) {
       [path]: { entries: [], loading: false, image_count: null, error: true },
     };
   }
+}
+
+/* Whether a project's People / Sets caption has anything under it.
+   One helper per caption rather than the test inlined twice, because the
+   chevron's visibility and the row's inert state must never disagree: a live
+   caption with no chevron, or a dimmed caption you can still collapse, are both
+   worse than either state on its own. */
+function projectHasPeople(projectId) {
+  return sortedCharacters.value.some((c) =>
+    entityBelongsToProject(c, projectId),
+  );
+}
+
+function projectHasSets(projectId) {
+  return nonReferenceSets.value.some((s) =>
+    entityBelongsToProject(s, projectId),
+  );
+}
+
+/* Whether a reference-folder row can disclose children, i.e. whether its
+   chevron is drawn. The slot is reserved either way (`.sidebar-row-glyph`), so
+   this only decides visibility and never the row's left edge. Not browsable in
+   Docker, and not-yet-browsed counts as "can", so the affordance is there
+   before the first browse returns. */
+function referenceFolderCanDisclose(rf) {
+  if (inDocker.value) return false;
+  const cached = folderBrowseCache.value[rf.folder];
+  if (!cached || cached.loading) return true;
+  return (cached.entries?.length ?? 0) > 0;
 }
 
 function handleFolderNodeSelect(key, payload) {
@@ -1144,12 +1194,38 @@ function createSet() {
   setEditorOpen.value = true;
 }
 
-function toggleProjectMenu() {
-  if (
-    !projectMenuOpen.value &&
-    sidebarStore.effectiveDocked &&
-    collapsedProjectBtnRef.value
-  ) {
+function projectMenuItems(container) {
+  return Array.from(container?.children ?? []).filter(
+    (item) => item.matches?.('button[role="menuitem"]') && !item.disabled,
+  );
+}
+
+function focusProjectMenuItem(container, index) {
+  const items = projectMenuItems(container);
+  if (!items.length) return;
+  const wrappedIndex = ((index % items.length) + items.length) % items.length;
+  items[wrappedIndex].focus();
+}
+
+function closeProjectMenu({ restoreFocus = false } = {}) {
+  clearTimeout(_projectSubCloseTimer);
+  projectMenuSection.value = null;
+  projectMenuOpen.value = false;
+  if (restoreFocus) {
+    nextTick(() => collapsedProjectBtnRef.value?.focus());
+  }
+}
+
+function closeProjectMenuForTab() {
+  // The menus are teleported to <body>, so their DOM order is unrelated to the
+  // opener. Put focus back on the opener before the browser performs Tab's
+  // default move; forward and reverse Tab then continue from the logical place.
+  collapsedProjectBtnRef.value?.focus();
+  closeProjectMenu();
+}
+
+function openProjectMenu({ focusFirst = false } = {}) {
+  if (sidebarStore.effectiveDocked && collapsedProjectBtnRef.value) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = _flyoutPos(rect);
     if (
@@ -1161,16 +1237,134 @@ function toggleProjectMenu() {
     }
   }
   projectMenuSection.value = null;
-  projectMenuOpen.value = !projectMenuOpen.value;
+  projectMenuOpen.value = true;
+  if (focusFirst) {
+    nextTick(() => focusProjectMenuItem(collapsedProjectMenuRef.value, 0));
+  }
+}
+
+function toggleProjectMenu(event) {
+  if (projectMenuOpen.value) {
+    closeProjectMenu();
+    return;
+  }
+  openProjectMenu({ focusFirst: event?.detail === 0 });
+}
+
+function onCollapsedProjectTriggerKeydown(event) {
+  if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+    event.preventDefault();
+    openProjectMenu({ focusFirst: true });
+    return;
+  }
+  if (event.key === "Escape" && projectMenuOpen.value) {
+    event.preventDefault();
+    closeProjectMenu({ restoreFocus: true });
+  }
 }
 
 let _projectSubCloseTimer = null;
 
-function openProjectSubMenu(section, event) {
+function openProjectSubMenu(section, event, focusFirst = false) {
   clearTimeout(_projectSubCloseTimer);
   const rect = event.currentTarget.getBoundingClientRect();
   projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
   projectMenuSection.value = section;
+  if (focusFirst) {
+    nextTick(() =>
+      focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0),
+    );
+  }
+}
+
+function focusProjectSubMenuTrigger(section) {
+  const trigger =
+    section === "projects"
+      ? collapsedProjectsMenuTriggerRef.value
+      : collapsedFoldersMenuTriggerRef.value;
+  nextTick(() => trigger?.focus());
+}
+
+function closeProjectSubMenu({ restoreFocus = false } = {}) {
+  const section = projectMenuSection.value;
+  projectMenuSection.value = null;
+  if (restoreFocus && section) focusProjectSubMenuTrigger(section);
+}
+
+function moveProjectMenuFocus(event, container) {
+  const items = projectMenuItems(container);
+  if (!items.length) return false;
+  const currentIndex = items.indexOf(document.activeElement);
+  let nextIndex = null;
+  if (event.key === "ArrowDown") nextIndex = currentIndex + 1;
+  if (event.key === "ArrowUp")
+    nextIndex = currentIndex < 0 ? items.length - 1 : currentIndex - 1;
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = items.length - 1;
+  if (nextIndex === null) return false;
+  event.preventDefault();
+  focusProjectMenuItem(container, nextIndex);
+  return true;
+}
+
+function onProjectMenuKeydown(event) {
+  if (moveProjectMenuFocus(event, collapsedProjectMenuRef.value)) return;
+  if (event.key === "ArrowRight") {
+    const section = document.activeElement?.dataset?.projectSubmenu;
+    if (section) {
+      event.preventDefault();
+      openProjectSubMenu(
+        section,
+        { currentTarget: document.activeElement },
+        true,
+      );
+    }
+    return;
+  }
+  if (event.key === "Escape" || event.key === "ArrowLeft") {
+    event.preventDefault();
+    closeProjectMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") closeProjectMenuForTab();
+}
+
+function onProjectSubMenuKeydown(event) {
+  if (moveProjectMenuFocus(event, collapsedProjectSubMenuRef.value)) return;
+  if (event.key === "Escape" || event.key === "ArrowLeft") {
+    event.preventDefault();
+    closeProjectSubMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") closeProjectMenuForTab();
+}
+
+function selectGlobalFromProjectMenu() {
+  selectLibraryTab("global");
+  selectCharacter(ALL_PICTURES_ID, "All Pictures");
+  closeProjectMenu({ restoreFocus: true });
+}
+
+function selectProjectFromProjectMenu(project) {
+  selectLibraryTab("project");
+  selectProjectNode(project);
+  closeProjectMenu({ restoreFocus: true });
+}
+
+function openAddFolderFromProjectMenu() {
+  closeProjectMenu();
+  openAddFolderTypeDialog();
+}
+
+function selectFolderFromProjectMenu(folder, kind) {
+  selectFoldersTab();
+  handleFolderNodeSelect(`${kind === "reference" ? "rf" : "if"}-${folder.id}`, {
+    ...(kind === "reference"
+      ? { referenceFolderId: folder.id, pathPrefix: folder.folder }
+      : { importSourceFolder: folder.folder, importFolderId: folder.id }),
+    label: folder.label || folder.folder,
+  });
+  closeProjectMenu({ restoreFocus: true });
 }
 
 function scheduleCloseProjectSubMenu() {
@@ -1219,7 +1413,7 @@ function selectProject(id) {
 }
 
 function createProject() {
-  projectMenuOpen.value = false;
+  closeProjectMenu();
   projectEditorProject.value = null;
   projectEditorOpen.value = true;
 }
@@ -1277,7 +1471,7 @@ async function deleteProjectById(project) {
   )
     return;
   try {
-    await deleteProject(project.id, { baseUrl: props.backendUrl });
+    await deleteProject(project.id);
     await projectDeleted(project.id);
   } catch (e) {
     console.error("Failed to delete project", e);
@@ -1384,8 +1578,8 @@ const selectedProjectObj = computed(() =>
 
 const visibleCharacters = computed(() => {
   if (projectViewMode.value === "global") return sortedCharacters.value;
-  return sortedCharacters.value.filter(
-    (c) => entityBelongsToProject(c, selectedProjectId.value),
+  return sortedCharacters.value.filter((c) =>
+    entityBelongsToProject(c, selectedProjectId.value),
   );
 });
 
@@ -1441,8 +1635,8 @@ const projectMenuSetGroups = computed(() => {
 
 const visibleSets = computed(() => {
   if (projectViewMode.value === "global") return nonReferenceSets.value;
-  return nonReferenceSets.value.filter(
-    (s) => entityBelongsToProject(s, selectedProjectId.value),
+  return nonReferenceSets.value.filter((s) =>
+    entityBelongsToProject(s, selectedProjectId.value),
   );
 });
 
@@ -1925,7 +2119,7 @@ async function deleteSetById(id) {
   )
     return;
   try {
-    await deletePictureSet(id, { baseUrl: props.backendUrl });
+    await deletePictureSet(id);
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -1955,11 +2149,7 @@ async function deleteSetsByIds(ids) {
   if (!window.confirm(msg)) return;
 
   try {
-    await Promise.all(
-      normalizedIds.map((id) =>
-        deletePictureSet(id, { baseUrl: props.backendUrl }),
-      ),
-    );
+    await Promise.all(normalizedIds.map((id) => deletePictureSet(id)));
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -2301,7 +2491,7 @@ async function applySetAppearance(setId, icon, color) {
   if (icon !== null) payload.set_icon = icon;
   if (color !== null) payload.set_color = color;
   try {
-    await patchPictureSet(setId, payload, { baseUrl: props.backendUrl });
+    await patchPictureSet(setId, payload);
     refreshSidebar();
   } catch (e) {
     console.error("Failed to update set appearance", e);
@@ -2317,11 +2507,7 @@ async function toggleSetLock(set) {
   closeSidebarCtxMenu();
   if (!set?.id) return;
   try {
-    await patchPictureSet(
-      set.id,
-      { locked: !set.locked },
-      { baseUrl: props.backendUrl },
-    );
+    await patchPictureSet(set.id, { locked: !set.locked });
     refreshSidebar();
     lockedSetsStore.fetch();
   } catch (e) {
@@ -2429,14 +2615,18 @@ function showNotice(
   }, duration);
 }
 
-function dragOverSetItem(setId) {
+function dragOverSetItem(setId, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
   // projects — that drag is not an image assignment.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures", "files"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverSet.value = setId;
 }
 
-function dragLeaveSetItem() {
+function dragLeaveSetItem(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverSet.value = null;
 }
 
@@ -2447,14 +2637,16 @@ function isCountSelected(id) {
 
 /**
  * Whether a selection-driven row may render as active at all. The Duplicates
- * view is addressed by ROUTE, not by the selection system, so while it is open
+ * view and the model shelf are addressed by ROUTE, not by the selection
+ * system, so while either is open
  * the underlying selection (kept so back-navigation restores it) must yield
  * the highlight — otherwise the sidebar shows two active destinations. A live
  * folder filter suppresses the same rows for the same reason, so the two
  * guards travel together.
  */
 const selectionOwnsHighlight = computed(
-  () => !hasFolderFilter.value && !isDuplicatesView.value,
+  () =>
+    !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -2531,8 +2723,8 @@ async function fetchSidebarData() {
   // computing the key instead would be a bug: a cold list landing mid-flight
   // changes the key and every count write would be discarded as stale.)
   const [characterRows, projectRows] = await Promise.all([
-    entityLists.refresh("characters", { baseUrl: props.backendUrl }),
-    entityLists.refresh("projects", { baseUrl: props.backendUrl }),
+    entityLists.refresh("characters"),
+    entityLists.refresh("projects"),
   ]);
   const requestKey = sidebarCountRequestKey();
   const isCurrentRequest = () =>
@@ -2563,9 +2755,7 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined);
     if (isCurrentRequest())
       setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
@@ -2585,7 +2775,6 @@ async function fetchSidebarData() {
     const data = await getCharacterSummary(
       UNASSIGNED_PICTURES_ID,
       unassignedParams,
-      { baseUrl: props.backendUrl },
     );
     if (isCurrentRequest())
       setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
@@ -2593,9 +2782,7 @@ async function fetchSidebarData() {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined);
     if (isCurrentRequest())
       setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
@@ -2616,9 +2803,7 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const nextCharacters = await entityLists.refresh("characters", {
-      baseUrl: props.backendUrl,
-    });
+    const nextCharacters = await entityLists.refresh("characters");
     entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
@@ -2706,16 +2891,14 @@ async function fetchSortOptions() {
 async function fetchProjects() {
   // The store declines the call outright for a token scoped to a non-project
   // resource, which cannot read the projects list.
-  const rows = await entityLists.refresh("projects", {
-    baseUrl: props.backendUrl,
-  });
+  const rows = await entityLists.refresh("projects");
   entityNames.mergeProjectNames(rows);
 }
 
 async function fetchPictureSets() {
   // Always fetch all sets — in the flat project tree each project filters
   // its own sets client-side, so we must not scope this call to a single project.
-  const sets = await entityLists.refresh("sets", { baseUrl: props.backendUrl });
+  const sets = await entityLists.refresh("sets");
   entityNames.mergeSetNames(sets);
   await updateSetThumbnails(sets);
 }
@@ -2918,18 +3101,9 @@ async function handleDropOnSet(setId, event) {
     imageImporterRef.value?.startImport(files, options);
     return;
   }
-  // Get the dragged image IDs from the drag event
-  let draggedIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (data.imageIds && Array.isArray(data.imageIds)) {
-      draggedIds = data.imageIds;
-    }
-  } catch (e) {
-    console.error("Could not parse drag data:", e);
-    return;
-  }
-
+  // Get the dragged image IDs from the drag event. A face drag is not a
+  // picture drag, and readDraggedImageIds() returns nothing for one.
+  const draggedIds = readDraggedImageIds(event);
   if (draggedIds.length === 0) {
     return;
   }
@@ -2940,7 +3114,7 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      await addPictureToSet(setId, picId, { baseUrl: props.backendUrl });
+      await addPictureToSet(setId, picId);
     });
 
     await Promise.all(addPromises);
@@ -2951,7 +3125,7 @@ async function handleDropOnSet(setId, event) {
     // Emit event to parent to remove images from grid
     emit("images-moved", { imageIds: draggedIds });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     if (typeof detail === "string" && detail.includes("already in set")) {
       showNotice("Picture already in set", setId);
       return;
@@ -2960,34 +3134,38 @@ async function handleDropOnSet(setId, event) {
   }
 }
 
-function handleDragOverCharacter(id) {
+function handleDragOverCharacter(id, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
   // projects — that drag is not an image assignment.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures", "faces", "files"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverCharacter.value = id;
 }
 
-function handleDragLeaveCharacter() {
+function handleDragLeaveCharacter(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverCharacter.value = null;
 }
 
 // --- Project drop target (assign dragged pictures to a specific project) ---
 const dragOverProjectId = ref(null);
 
-function handleDragOverProject(id) {
+function handleDragOverProject(id, event) {
   // Suppress the picture-drop highlight while an entity (character/set) is
   // being dragged between projects — that drag is handled by the project
   // header's entity-move zone (onProjectHeaderDrop), not by a picture assign.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverProjectId.value = id;
 }
 
-function handleDragLeaveProject() {
+function handleDragLeaveProject(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverProjectId.value = null;
-}
-
-function isInternalImageDrag(event) {
-  return event?.dataTransfer?.types?.includes("application/json");
 }
 
 function readDraggedImageIds(event) {
@@ -2995,6 +3173,9 @@ function readDraggedImageIds(event) {
     const data = JSON.parse(
       event?.dataTransfer?.getData("application/json") || "{}",
     );
+    // A face drag carries imageIds too (the pictures the faces were found in),
+    // so the payload kind, not the presence of imageIds, decides.
+    if (data.type !== "image-ids") return [];
     return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
   } catch (e) {
     console.error("Could not parse drag data:", e);
@@ -3002,16 +3183,58 @@ function readDraggedImageIds(event) {
   }
 }
 
+// Marks the currently hovered row as one that will not take this payload, so
+// the row can say no during the drag instead of after it (see .not-droppable).
+const dropRejected = ref(false);
+
+/**
+ * Decide whether a row takes this drag, and accept it if so.
+ *
+ * `@dragover.prevent` in the template cannot do this: the modifier calls
+ * preventDefault() before the handler runs, which accepts every payload on the
+ * page. preventDefault() therefore belongs here, only for the kinds listed.
+ *
+ * @param {DragEvent} event
+ * @param {string[]} kinds - any of "pictures", "faces", "files".
+ * @returns {"accept"|"reject"|"ignore"} - "ignore" means the drag is not ours
+ *   to judge (an external file drag the window-level importer still handles),
+ *   so the row stays unpainted rather than claiming it will refuse the drop.
+ */
+function acceptDrop(event, kinds) {
+  const dt = event?.dataTransfer;
+  const accepted =
+    (kinds.includes("pictures") && isPictureDrag(dt)) ||
+    (kinds.includes("faces") && isFaceDrag(dt)) ||
+    (kinds.includes("files") && isFileDrag(dt));
+  if (accepted) {
+    event.preventDefault();
+    if (dt) dt.dropEffect = "move";
+    return "accept";
+  }
+  return isInternalImageDrag(dt) ? "reject" : "ignore";
+}
+
+// dragleave also fires when the pointer crosses from a row into one of its own
+// children, which flickers the highlight off; only a leave that lands outside
+// the row is a real leave.
+function leftDropRow(event) {
+  const row = event?.currentTarget;
+  if (!row?.contains) return true;
+  return !row.contains(event.relatedTarget);
+}
+
 function handleReferenceFolderDragOver(folderId, scopePath, event) {
-  if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverReferenceTargetKey.value = scopePath
     ? `path-${scopePath}`
     : `rf-${folderId}`;
 }
 
-function handleReferenceFolderDragLeave(folderId, scopePath) {
+function handleReferenceFolderDragLeave(folderId, scopePath, event) {
+  if (event && !leftDropRow(event)) return;
   const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
   if (dragOverReferenceTargetKey.value === key) {
     dragOverReferenceTargetKey.value = null;
@@ -3069,14 +3292,7 @@ async function onProjectDrop(projectId, event) {
   if (draggingEntityKind.value) return;
   if (projectId == null) return;
   // Internal grid drag carries the selected image ids as application/json.
-  let imageIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (Array.isArray(data.imageIds)) imageIds = data.imageIds;
-  } catch (e) {
-    console.error("Could not parse drag data for project drop:", e);
-    return;
-  }
+  const imageIds = readDraggedImageIds(event);
   if (!imageIds.length) return;
   try {
     // Picture↔Project is many-to-many (PictureProjectMember); membership is
@@ -3085,7 +3301,6 @@ async function onProjectDrop(projectId, event) {
     // membership the project view queries — that returns 200 but shows nothing.)
     await setPicturesProject(imageIds, projectId, {
       mode: "add",
-      baseUrl: props.backendUrl,
     });
     emit("images-moved", { imageIds });
   } catch (e) {
@@ -3155,7 +3370,7 @@ async function onCharacterDrop(characterId, event) {
     // the grid against not-yet-committed data and also fire wrongly for
     // face-only drags.
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     console.error("Error parsing drag data:", detail);
     if (typeof detail === "string") {
       showNotice(detail, characterId, "character");
@@ -3172,9 +3387,7 @@ async function onCharacterDrop(characterId, event) {
   if (dragType === "face-bbox" && faceIds.length > 0) {
     // Assign faces to character
     try {
-      await addCharacterFacesByFaceId(characterId, faceIds, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFacesByFaceId(characterId, faceIds);
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
@@ -3194,14 +3407,12 @@ async function onCharacterDrop(characterId, event) {
 
   try {
     // Fallback: assign images to character
-    await addCharacterFaces(characterId, imageIds, {
-      baseUrl: props.backendUrl,
-    });
+    await addCharacterFaces(characterId, imageIds);
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     console.error("Error assignning character:", detail);
     if (typeof detail === "string") {
       showNotice(detail, characterId, "character");
@@ -3574,11 +3785,7 @@ async function toggleCharacterProjectMembership(charId) {
     selectedProjectId.value,
   );
   try {
-    await patchCharacter(
-      charId,
-      membershipPatch,
-      { baseUrl: props.backendUrl },
-    );
+    await patchCharacter(charId, membershipPatch);
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = withEntityProjectIds(
@@ -3601,11 +3808,7 @@ async function toggleSetProjectMembership(setId) {
     selectedProjectId.value,
   );
   try {
-    await patchPictureSet(
-      setId,
-      membershipPatch,
-      { baseUrl: props.backendUrl },
-    );
+    await patchPictureSet(setId, membershipPatch);
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = withEntityProjectIds(
@@ -3657,11 +3860,7 @@ async function moveCharacterToProject(charId, projectId) {
   )
     return;
   try {
-    await patchCharacter(
-      charId,
-      { project_id: projectId },
-      { baseUrl: props.backendUrl },
-    );
+    await patchCharacter(charId, { project_id: projectId });
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = withEntityProjectIds(characters.value[idx], [
@@ -3687,11 +3886,7 @@ async function moveSetToProject(setId, projectId) {
   )
     return;
   try {
-    await patchPictureSet(
-      setId,
-      { project_id: projectId },
-      { baseUrl: props.backendUrl },
-    );
+    await patchPictureSet(setId, { project_id: projectId });
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = withEntityProjectIds(pictureSets.value[idx], [
@@ -3790,16 +3985,11 @@ defineExpose({
 <template>
   <ImageImporter
     ref="imageImporterRef"
-    :backend-url="props.backendUrl"
-    :selected-character-id="selectionStore.selectedCharacter"
-    :all-pictures-id="ALL_PICTURES_ID"
-    :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
     @import-finished="handleImportFinished"
   />
   <CharacterEditor
     :open="characterEditorOpen"
     :character="characterEditorCharacter"
-    :backendUrl="props.backendUrl"
     :projects="projects"
     @close="closeCharacterEditor"
     @saved="characterSaved"
@@ -3810,7 +4000,6 @@ defineExpose({
     :thumbnailUrl="
       setEditorSet ? (setThumbnails[setEditorSet.id] ?? null) : null
     "
-    :backendUrl="props.backendUrl"
     :projects="projects"
     @close="closeSetEditor"
     @refresh-sidebar="refreshSidebar"
@@ -3818,7 +4007,6 @@ defineExpose({
   <ProjectEditor
     :open="projectEditorOpen"
     :project="projectEditorProject"
-    :backend-url="props.backendUrl"
     @close="closeProjectEditor"
     @saved="projectSaved"
     @deleted="projectDeleted"
@@ -4089,12 +4277,17 @@ defineExpose({
       <div
         class="sidebar-collapsed-row sidebar-collapsed-row--has-flyout sidebar-collapsed-row--project"
       >
-        <div
+        <button
+          type="button"
           class="sidebar-collapsed-item sidebar-collapsed-item--has-flyout"
           style="margin: 0 auto"
           :title="collapsedProjectBtnTitle"
           ref="collapsedProjectBtnRef"
+          aria-haspopup="menu"
+          :aria-expanded="projectMenuOpen"
+          aria-controls="sidebar-project-menu"
           @click.stop="toggleProjectMenu"
+          @keydown="onCollapsedProjectTriggerKeydown"
         >
           <v-icon size="20">{{
             sidebarPrimaryTab === "folders"
@@ -4103,41 +4296,53 @@ defineExpose({
                 ? "mdi-earth"
                 : "mdi-briefcase-outline"
           }}</v-icon>
-        </div>
+        </button>
       </div>
       <Teleport to="body">
         <div
           v-if="projectMenuOpen && sidebarStore.effectiveDocked"
+          id="sidebar-project-menu"
           ref="collapsedProjectMenuRef"
           class="sidebar-collapsed-project-menu"
+          role="menu"
+          aria-label="Library navigation"
           :style="{
             top: collapsedProjectMenuPos.top + 'px',
             left: collapsedProjectMenuPos.left + 'px',
           }"
           @mouseleave="scheduleCloseProjectSubMenu"
+          @keydown="onProjectMenuKeydown"
         >
           <!-- Global -->
-          <div
+          <button
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item"
             :class="{
               active:
                 projectViewMode === 'global' && sidebarPrimaryTab !== 'folders',
             }"
-            @mouseenter="scheduleCloseProjectSubMenu"
-            @click="
-              selectLibraryTab('global');
-              selectCharacter(ALL_PICTURES_ID, 'All Pictures');
-              projectMenuOpen = false;
+            :aria-current="
+              projectViewMode === 'global' && sidebarPrimaryTab !== 'folders'
+                ? 'page'
+                : undefined
             "
+            @mouseenter="scheduleCloseProjectSubMenu"
+            @click="selectGlobalFromProjectMenu"
           >
             <v-icon size="14">mdi-earth</v-icon>
             <span class="sidebar-project-menu-item-label">Global</span>
-          </div>
+          </button>
 
-          <div class="sidebar-project-menu-separator"></div>
+          <div class="sidebar-project-menu-separator" role="separator"></div>
 
           <!-- Projects row → flyout submenu on hover or click -->
-          <div
+          <button
+            ref="collapsedProjectsMenuTriggerRef"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item sidebar-project-menu-has-sub"
             :class="{
               active:
@@ -4145,32 +4350,48 @@ defineExpose({
                 sidebarPrimaryTab !== 'folders',
               'sub-open': projectMenuSection === 'projects',
             }"
+            data-project-submenu="projects"
+            aria-haspopup="menu"
+            :aria-expanded="projectMenuSection === 'projects'"
+            aria-controls="sidebar-project-submenu"
             @mouseenter="openProjectSubMenu('projects', $event)"
-            @click.stop="openProjectSubMenu('projects', $event)"
+            @click.stop="
+              openProjectSubMenu('projects', $event, $event.detail === 0)
+            "
           >
             <v-icon size="14">mdi-briefcase-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Projects</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
             >
-          </div>
+          </button>
 
           <!-- Folders row → flyout submenu on hover or click -->
-          <div
+          <button
+            ref="collapsedFoldersMenuTriggerRef"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item sidebar-project-menu-has-sub"
             :class="{
               active: sidebarPrimaryTab === 'folders',
               'sub-open': projectMenuSection === 'folders',
             }"
+            data-project-submenu="folders"
+            aria-haspopup="menu"
+            :aria-expanded="projectMenuSection === 'folders'"
+            aria-controls="sidebar-project-submenu"
             @mouseenter="openProjectSubMenu('folders', $event)"
-            @click.stop="openProjectSubMenu('folders', $event)"
+            @click.stop="
+              openProjectSubMenu('folders', $event, $event.detail === 0)
+            "
           >
             <v-icon size="14">mdi-folder-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Folders</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
             >
-          </div>
+          </button>
         </div>
       </Teleport>
 
@@ -4182,73 +4403,89 @@ defineExpose({
             projectMenuOpen &&
             sidebarStore.effectiveDocked
           "
+          id="sidebar-project-submenu"
           ref="collapsedProjectSubMenuRef"
           class="sidebar-collapsed-project-submenu"
+          role="menu"
+          :aria-label="
+            projectMenuSection === 'projects'
+              ? 'Projects'
+              : 'Library folders'
+          "
           :style="{
             top: projectMenuSubPos.top + 'px',
             left: projectMenuSubPos.left + 'px',
           }"
           @mouseenter="cancelCloseProjectSubMenu"
           @mouseleave="scheduleCloseProjectSubMenu"
+          @keydown="onProjectSubMenuKeydown"
         >
           <!-- Projects submenu -->
           <template v-if="projectMenuSection === 'projects'">
-            <div
+            <button
               v-if="!isReadOnly"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item sidebar-project-menu-add"
-              @click="
-                createProject();
-                projectMenuSection = null;
-              "
+              @click="createProject"
             >
               <v-icon size="14">mdi-plus</v-icon>
               <span class="sidebar-project-menu-item-label"
                 >Add new project</span
               >
-            </div>
-            <div
+            </button>
+            <button
               v-for="p in sortedProjects"
               :key="p.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
                   projectStore.projectViewMode === 'project' &&
                   projectStore.selectedProjectId === p.id,
               }"
-              @click="
-                selectLibraryTab('project');
-                selectProjectNode(p);
-                projectMenuSection = null;
+              :aria-current="
+                projectStore.projectViewMode === 'project' &&
+                projectStore.selectedProjectId === p.id
+                  ? 'page'
+                  : undefined
               "
+              @click="selectProjectFromProjectMenu(p)"
             >
               <v-icon size="14">mdi-folder</v-icon>
               <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
-            </div>
+            </button>
           </template>
 
           <!-- Folders submenu -->
           <template v-if="projectMenuSection === 'folders'">
-            <div
+            <button
               v-if="!isReadOnly"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item sidebar-project-menu-add"
-              @click="
-                openAddFolderTypeDialog();
-                projectMenuOpen = false;
-                projectMenuSection = null;
-              "
+              @click="openAddFolderFromProjectMenu"
             >
               <v-icon size="14">mdi-plus</v-icon>
               <span class="sidebar-project-menu-item-label">Add folder</span>
-            </div>
+            </button>
             <div
               v-if="referenceFolders.length"
               class="sidebar-project-menu-section-label"
+              role="presentation"
             >
               Reference Folders
             </div>
-            <div
+            <button
               v-for="rf in referenceFolders"
               :key="'rf-' + rf.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
@@ -4256,31 +4493,33 @@ defineExpose({
                   selectedFolderKey === 'rf-' + rf.id &&
                   !isDuplicatesView,
               }"
-              @click="
-                selectFoldersTab();
-                handleFolderNodeSelect('rf-' + rf.id, {
-                  referenceFolderId: rf.id,
-                  pathPrefix: rf.folder,
-                  label: rf.label || rf.folder,
-                });
-                projectMenuOpen = false;
-                projectMenuSection = null;
+              :aria-current="
+                sidebarPrimaryTab === 'folders' &&
+                selectedFolderKey === 'rf-' + rf.id &&
+                !isDuplicatesView
+                  ? 'page'
+                  : undefined
               "
+              @click="selectFolderFromProjectMenu(rf, 'reference')"
             >
               <v-icon size="14">mdi-folder-network-outline</v-icon>
               <span class="sidebar-project-menu-item-label">{{
                 rf.label || rf.folder
               }}</span>
-            </div>
+            </button>
             <div
               v-if="importFolders.length"
               class="sidebar-project-menu-section-label"
+              role="presentation"
             >
               Import Folders
             </div>
-            <div
+            <button
               v-for="imf in importFolders"
               :key="'if-' + imf.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
@@ -4288,22 +4527,20 @@ defineExpose({
                   selectedFolderKey === 'if-' + imf.id &&
                   !isDuplicatesView,
               }"
-              @click="
-                selectFoldersTab();
-                handleFolderNodeSelect('if-' + imf.id, {
-                  importSourceFolder: imf.folder,
-                  importFolderId: imf.id,
-                  label: imf.label || imf.folder,
-                });
-                projectMenuOpen = false;
-                projectMenuSection = null;
+              :aria-current="
+                sidebarPrimaryTab === 'folders' &&
+                selectedFolderKey === 'if-' + imf.id &&
+                !isDuplicatesView
+                  ? 'page'
+                  : undefined
               "
+              @click="selectFolderFromProjectMenu(imf, 'import')"
             >
               <v-icon size="14">mdi-folder-open-outline</v-icon>
               <span class="sidebar-project-menu-item-label">{{
                 imf.label || imf.folder
               }}</span>
-            </div>
+            </button>
           </template>
         </div>
       </Teleport>
@@ -4422,10 +4659,19 @@ defineExpose({
                       selectionOwnsHighlight,
                   },
                 ]"
+                role="button"
+                tabindex="0"
+                :aria-pressed="
+                  selectionStore.selectedCharacter === char.id &&
+                  selectionOwnsHighlight
+                    ? 'true'
+                    : 'false'
+                "
                 :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                 @click="
                   selectCharacter(char.id, char.name || 'Character', $event)
                 "
+                @keydown="activateOnEnterOrSpace"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('character', char, $event)
                 "
@@ -4445,7 +4691,10 @@ defineExpose({
               <div
                 class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
                 title="Add person"
+                role="button"
+                tabindex="0"
                 @click="createCharacter()"
+                @keydown="activateOnEnterOrSpace"
               >
                 <i
                   class="mdi mdi-account sidebar-collapsed-item--add-bg-icon"
@@ -4468,7 +4717,10 @@ defineExpose({
             <div
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
               title="Add person"
+              role="button"
+              tabindex="0"
               @click="createCharacter()"
+              @keydown="activateOnEnterOrSpace"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'people', $event)
               "
@@ -4506,7 +4758,12 @@ defineExpose({
                 selectedCharacterObj ? selectedCharacterObj.name : 'People'
               "
               ref="collapsedCharBtnRef"
+              role="button"
+              tabindex="0"
+              aria-haspopup="menu"
+              :aria-expanded="collapsedCharMenuOpen"
               @click.stop="toggleCollapsedCharMenu"
+              @keydown="activateOnEnterOrSpace"
             >
               <img
                 v-if="
@@ -4641,7 +4898,15 @@ defineExpose({
                   },
                 ]"
                 :title="pset.name || 'Picture Set'"
+                role="button"
+                tabindex="0"
+                :aria-pressed="
+                  selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                    ? 'true'
+                    : 'false'
+                "
                 @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
+                @keydown="activateOnEnterOrSpace"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('set', pset, $event)
                 "
@@ -4684,7 +4949,10 @@ defineExpose({
               <div
                 class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
                 title="Add picture set"
+                role="button"
+                tabindex="0"
                 @click="createSet()"
+                @keydown="activateOnEnterOrSpace"
               >
                 <i
                   class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon"
@@ -4707,7 +4975,10 @@ defineExpose({
             <div
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
               title="Add picture set"
+              role="button"
+              tabindex="0"
               @click="createSet()"
+              @keydown="activateOnEnterOrSpace"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'sets', $event)
               "
@@ -4737,7 +5008,12 @@ defineExpose({
               ]"
               :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
               ref="collapsedSetBtnRef"
+              role="button"
+              tabindex="0"
+              aria-haspopup="menu"
+              :aria-expanded="collapsedSetMenuOpen"
               @click.stop="toggleCollapsedSetMenu"
+              @keydown="activateOnEnterOrSpace"
             >
               <template v-if="selectedSetObj">
                 <v-icon
@@ -4883,9 +5159,7 @@ defineExpose({
           <!-- Duplicates keeps its dock row so the count stays reachable when
                the sidebar is narrow; the badge is the only thing here that
                reports pending work. -->
-          <div
-            :class="['sidebar-collapsed-row', { active: isDuplicatesView }]"
-          >
+          <div :class="['sidebar-collapsed-row', { active: isDuplicatesView }]">
             <button
               type="button"
               :class="[
@@ -4907,6 +5181,26 @@ defineExpose({
                 class="sidebar-collapsed-dedup-badge"
                 title="There are duplicates to review"
               ></span>
+            </button>
+          </div>
+
+          <!-- The shelf's dock mirror. Same <button> reasoning as the
+               expanded row, and the same read-only treatment as Duplicates
+               above it. -->
+          <div :class="['sidebar-collapsed-row', { active: isModelsView }]">
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{
+                active: isModelsView,
+                'sidebar-collapsed-item--unavailable': isReadOnly,
+              }"
+              :aria-current="isModelsView ? 'page' : undefined"
+              :aria-disabled="isReadOnly || undefined"
+              :title="isReadOnly ? READ_ONLY_SHELF_HINT : 'Models'"
+              @click="isReadOnly || emit('select-models')"
+            >
+              <v-icon>mdi-layers-outline</v-icon>
             </button>
           </div>
 
@@ -5030,7 +5324,12 @@ defineExpose({
                 class="sidebar-folder-row sidebar-folder-root-row"
                 :class="{
                   active: selectedFolderKey === 'rf-' + rf.id,
-                  droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
+                  droppable:
+                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
+                    !dropRejected,
+                  'not-droppable':
+                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
+                    dropRejected,
                 }"
                 :title="
                   inDocker
@@ -5043,7 +5342,8 @@ defineExpose({
                   handleReferenceFolderDragOver(rf.id, null, $event)
                 "
                 @dragleave="
-                  !inDocker && handleReferenceFolderDragLeave(rf.id, null)
+                  !inDocker &&
+                  handleReferenceFolderDragLeave(rf.id, null, $event)
                 "
                 @drop.prevent="
                   !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
@@ -5063,16 +5363,9 @@ defineExpose({
               >
                 <v-icon
                   size="12"
-                  class="sidebar-folder-chevron"
-                  :style="{
-                    visibility:
-                      !inDocker &&
-                      (!folderBrowseCache[rf.folder] ||
-                        folderBrowseCache[rf.folder].loading ||
-                        (folderBrowseCache[rf.folder]?.entries?.length ?? 0) >
-                          0)
-                        ? 'visible'
-                        : 'hidden',
+                  class="sidebar-row-glyph sidebar-folder-chevron"
+                  :class="{
+                    'sidebar-row-glyph--empty': !referenceFolderCanDisclose(rf),
                   }"
                   @click.stop="
                     if (!inDocker) {
@@ -5087,7 +5380,7 @@ defineExpose({
                       : "mdi-chevron-right"
                   }}
                 </v-icon>
-                <v-icon size="16" class="sidebar-folder-icon"
+                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
                   >mdi-folder-network-outline</v-icon
                 >
                 <span class="sidebar-folder-label">{{
@@ -5182,6 +5475,7 @@ defineExpose({
                       :folder-browse-cache="folderBrowseCache"
                       :expanded-folder-ids="expandedFolderIds"
                       :drop-target-key="dragOverReferenceTargetKey"
+                      :drop-rejected="dropRejected"
                       @select="handleFolderNodeSelect"
                       @toggle="handleFolderNodeToggle"
                       @drag-over="
@@ -5189,8 +5483,8 @@ defineExpose({
                           handleReferenceFolderDragOver(rfId, path, event)
                       "
                       @drag-leave="
-                        ({ rfId, path }) =>
-                          handleReferenceFolderDragLeave(rfId, path)
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDragLeave(rfId, path, event)
                       "
                       @drop="
                         ({ rfId, path, event }) =>
@@ -5262,12 +5556,11 @@ defineExpose({
               >
                 <v-icon
                   size="12"
-                  class="sidebar-folder-chevron"
-                  style="visibility: hidden"
+                  class="sidebar-row-glyph sidebar-row-glyph--empty sidebar-folder-chevron"
                 >
                   mdi-chevron-right
                 </v-icon>
-                <v-icon size="16" class="sidebar-folder-icon"
+                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
                   >mdi-folder-download-outline</v-icon
                 >
                 <span class="sidebar-folder-label">
@@ -5369,6 +5662,39 @@ defineExpose({
               </button>
             </div>
 
+            <!-- The shelf is a destination, not a filter: it lists the LoRAs
+                 and checkpoints on this machine, which no picture view can
+                 express. A <button>, unlike the rows above it, because a new
+                 destination must not be born unreachable by keyboard; the
+                 other three are filed to follow.
+
+                 Inert rather than hidden for a READ session, exactly like
+                 Duplicates above and for the same reason: the demo site is a
+                 READ session, and hiding a feature there advertises a smaller
+                 product than PixlStash is (`e2e/specs/read-only-features.spec.js`).
+                 Every /models route is owner-only, so the row must be quiet as
+                 well as inert — it can carry no count and start no fetch
+                 (issue #1014). -->
+            <div class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                class="sidebar-list-item sidebar-destination-btn"
+                :class="{
+                  active: isModelsView,
+                  'sidebar-list-item--unavailable': isReadOnly,
+                }"
+                :aria-current="isModelsView ? 'page' : undefined"
+                :aria-disabled="isReadOnly || undefined"
+                :title="isReadOnly ? READ_ONLY_SHELF_HINT : undefined"
+                @click="isReadOnly || emit('select-models')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-layers-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Models</span>
+              </button>
+            </div>
+
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
               <button
                 type="button"
@@ -5402,22 +5728,30 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="togglePeopleSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'people', $event)
                 "
               >
-                <v-icon class="sidebar-section-chevron" size="16">{{
-                  peopleSectionCollapsed
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}</v-icon>
-                People
+                <button
+                  type="button"
+                  class="sidebar-section-toggle"
+                  :aria-expanded="!peopleSectionCollapsed"
+                  @click.stop="togglePeopleSection()"
+                >
+                  <v-icon class="sidebar-section-chevron" size="16">{{
+                    peopleSectionCollapsed
+                      ? "mdi-chevron-right"
+                      : "mdi-chevron-down"
+                  }}</v-icon>
+                  <span>People</span>
+                </button>
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions" @click.stop>
                   <button
                     v-if="selectedCharacterIdSet.size > 1"
+                    type="button"
                     class="clear-selection-inline"
+                    aria-label="Clear character selection"
                     @click.stop="
                       selectCharacter(ALL_PICTURES_ID, 'All Pictures')
                     "
@@ -5425,18 +5759,20 @@ defineExpose({
                   >
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
-                  <v-icon
+                  <button
                     v-if="
                       selectedCharacterObj &&
                       hasSingleSelectedCharacter &&
                       !isReadOnly
                     "
+                    type="button"
                     class="edit-character-inline"
+                    aria-label="Edit selected character"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
-                    >mdi-pencil</v-icon
+                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="
                       !isReadOnly &&
                       selectionStore.selectedCharacter &&
@@ -5445,18 +5781,21 @@ defineExpose({
                         UNASSIGNED_PICTURES_ID &&
                       selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
                     "
+                    type="button"
                     class="delete-character-inline"
-                    color="white"
+                    aria-label="Delete selected character"
                     @click.stop="deleteCharacter"
                     title="Delete selected character"
-                    >mdi-trash-can-outline</v-icon
+                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly"
+                    type="button"
                     class="add-character-inline"
+                    aria-label="Add character"
                     @click.stop="createCharacter"
                     title="Add character"
-                    >mdi-plus</v-icon
+                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
                 </div>
               </div>
@@ -5500,19 +5839,33 @@ defineExpose({
                             ? selectedCharacterIdSet.has(char.id)
                             : selectionStore.selectedCharacter === char.id) &&
                           selectionOwnsHighlight,
-                        droppable: dragOverCharacter === char.id,
+                        droppable:
+                          dragOverCharacter === char.id && !dropRejected,
+                        'not-droppable':
+                          dragOverCharacter === char.id && dropRejected,
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
+                    role="button"
+                    tabindex="0"
+                    :aria-pressed="
+                      (selectedCharacterIdSet.size > 0
+                        ? selectedCharacterIdSet.has(char.id)
+                        : selectionStore.selectedCharacter === char.id) &&
+                      selectionOwnsHighlight
+                        ? 'true'
+                        : 'false'
+                    "
                     :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                     @click="
                       selectCharacter(char.id, char.name || 'Character', $event)
                     "
+                    @keydown="activateOnEnterOrSpace"
                     @contextmenu.prevent="
                       openSidebarCtxMenu('character', char, $event)
                     "
-                    @dragover.prevent="handleDragOverCharacter(char.id)"
-                    @dragleave="handleDragLeaveCharacter"
+                    @dragover="handleDragOverCharacter(char.id, $event)"
+                    @dragleave="handleDragLeaveCharacter($event)"
                     @drop.prevent="
                       handleDropOnCharacter({
                         characterId: char.id,
@@ -5580,52 +5933,65 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="toggleSetsSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'sets', $event)
                 "
               >
-                <v-icon class="sidebar-section-chevron" size="16">{{
-                  setsSectionCollapsed
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}</v-icon>
-                Sets
+                <button
+                  type="button"
+                  class="sidebar-section-toggle"
+                  :aria-expanded="!setsSectionCollapsed"
+                  @click.stop="toggleSetsSection()"
+                >
+                  <v-icon class="sidebar-section-chevron" size="16">{{
+                    setsSectionCollapsed
+                      ? "mdi-chevron-right"
+                      : "mdi-chevron-down"
+                  }}</v-icon>
+                  <span>Sets</span>
+                </button>
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions">
                   <button
                     v-if="selectedSetIdSet.size > 1"
+                    type="button"
                     class="clear-selection-inline"
+                    aria-label="Clear set selection"
                     @click.stop="emit('select-set', null)"
                     title="Clear set selection"
                   >
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
-                  <v-icon
+                  <button
                     v-if="selectedSetObj && hasSingleSelectedSet && !isReadOnly"
+                    type="button"
                     class="edit-set-inline"
+                    aria-label="Edit selected set"
                     @click.stop="openSetEditor(selectedSetObj)"
                     title="Edit selected set"
-                    >mdi-pencil</v-icon
+                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly && selectedSetIdSet.size > 0"
+                    type="button"
                     class="delete-character-inline"
-                    color="white"
+                    aria-label="Delete selected sets"
                     @click.stop="handleDeleteSet"
                     :title="
                       selectedSetIdSet.size > 1
                         ? `Delete ${selectedSetIdSet.size} selected sets`
                         : 'Delete selected set'
                     "
-                    >mdi-trash-can-outline</v-icon
+                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly"
+                    type="button"
                     class="add-character-inline"
+                    aria-label="Create new set"
                     @click.stop="createSet"
                     title="Create new set"
-                    >mdi-plus</v-icon
+                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
                 </div>
               </div>
@@ -5647,19 +6013,29 @@ defineExpose({
                         active:
                           selectedSetIdSet.has(pset.id) &&
                           selectionOwnsHighlight,
-                        droppable: dragOverSet === pset.id,
+                        droppable: dragOverSet === pset.id && !dropRejected,
+                        'not-droppable':
+                          dragOverSet === pset.id && dropRejected,
                       },
                     ]"
                     :ref="(el) => registerSetRef(pset.id, el)"
+                    role="button"
+                    tabindex="0"
+                    :aria-pressed="
+                      selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                        ? 'true'
+                        : 'false'
+                    "
                     :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
                     @click="
                       selectSet(pset.id, pset.name || 'Picture Set', $event)
                     "
+                    @keydown="activateOnEnterOrSpace"
                     @contextmenu.prevent="
                       openSidebarCtxMenu('set', pset, $event)
                     "
-                    @dragover.prevent="dragOverSetItem(pset.id)"
-                    @dragleave="dragLeaveSetItem"
+                    @dragover="dragOverSetItem(pset.id, $event)"
+                    @dragleave="dragLeaveSetItem($event)"
                     @drop.prevent="handleDropOnSet(pset.id, $event)"
                   >
                     <span class="sidebar-list-icon">
@@ -5779,7 +6155,9 @@ defineExpose({
                         selectionStore.selectedCharacter === ALL_PICTURES_ID &&
                         selectedSetIdSet.size === 0 &&
                         selectionOwnsHighlight,
-                      droppable: dragOverProjectId === p.id,
+                      droppable: dragOverProjectId === p.id && !dropRejected,
+                      'not-droppable':
+                        dragOverProjectId === p.id && dropRejected,
                       'project-move-target': moveDragOverProjectId === p.id,
                     },
                   ]"
@@ -5788,12 +6166,12 @@ defineExpose({
                   @contextmenu.prevent="
                     openSidebarCtxMenu('project', p, $event)
                   "
-                  @dragover.prevent="
-                    handleDragOverProject(p.id);
+                  @dragover="
+                    handleDragOverProject(p.id, $event);
                     onProjectHeaderDragOver(p.id, $event);
                   "
                   @dragleave="
-                    handleDragLeaveProject();
+                    handleDragLeaveProject($event);
                     onProjectHeaderDragLeave();
                   "
                   @drop.prevent="
@@ -5801,15 +6179,18 @@ defineExpose({
                     onProjectDrop(p.id, $event);
                   "
                 >
+                  <v-icon
+                    class="sidebar-row-glyph sidebar-project-tree-chevron"
+                    size="14"
+                    @click.stop="toggleProjectExpanded(p.id)"
+                    >{{
+                      expandedProjectIds.has(p.id)
+                        ? "mdi-chevron-down"
+                        : "mdi-chevron-right"
+                    }}</v-icon
+                  >
                   <span class="sidebar-project-tree-name-group">
                     <span class="sidebar-project-tree-label">{{ p.name }}</span>
-                    <v-icon
-                      class="sidebar-project-tree-expand-indicator"
-                      :class="{ expanded: expandedProjectIds.has(p.id) }"
-                      size="14"
-                      @click.stop="toggleProjectExpanded(p.id)"
-                      >mdi-chevron-down</v-icon
-                    >
                   </span>
                   <v-icon
                     v-if="sharedProjectIds.has(p.id)"
@@ -5862,16 +6243,21 @@ defineExpose({
                   >
                     <div
                       class="sidebar-project-tree-subheader"
-                      @click.stop="toggleProjectTreePeople(p.id)"
+                      :class="{
+                        'sidebar-project-tree-subheader--empty':
+                          !projectHasPeople(p.id),
+                      }"
+                      :aria-disabled="!projectHasPeople(p.id) || undefined"
+                      @click.stop="
+                        projectHasPeople(p.id) && toggleProjectTreePeople(p.id)
+                      "
                     >
                       <v-icon
-                        v-show="
-                          sortedCharacters.filter((c) =>
-                            entityBelongsToProject(c, p.id),
-                          ).length > 0
-                        "
                         size="14"
-                        class="sidebar-project-tree-sub-chevron"
+                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
+                        :class="{
+                          'sidebar-row-glyph--empty': !projectHasPeople(p.id),
+                        }"
                         >{{
                           projectTreePeopleCollapsed.has(p.id)
                             ? "mdi-chevron-right"
@@ -5982,9 +6368,11 @@ defineExpose({
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
                                 : selectionStore.selectedCharacter ===
-                                  char.id) &&
-                              selectionOwnsHighlight,
-                            droppable: dragOverCharacter === char.id,
+                                  char.id) && selectionOwnsHighlight,
+                            droppable:
+                              dragOverCharacter === char.id && !dropRejected,
+                            'not-droppable':
+                              dragOverCharacter === char.id && dropRejected,
                           },
                         ]"
                         :draggable="!isReadOnly"
@@ -6003,8 +6391,8 @@ defineExpose({
                         @contextmenu.prevent="
                           openSidebarCtxMenu('character', char, $event)
                         "
-                        @dragover.prevent="handleDragOverCharacter(char.id)"
-                        @dragleave="handleDragLeaveCharacter"
+                        @dragover="handleDragOverCharacter(char.id, $event)"
+                        @dragleave="handleDragLeaveCharacter($event)"
                         @drop.prevent="
                           handleDropOnCharacter({
                             characterId: char.id,
@@ -6079,16 +6467,21 @@ defineExpose({
                   >
                     <div
                       class="sidebar-project-tree-subheader"
-                      @click.stop="toggleProjectTreeSets(p.id)"
+                      :class="{
+                        'sidebar-project-tree-subheader--empty':
+                          !projectHasSets(p.id),
+                      }"
+                      :aria-disabled="!projectHasSets(p.id) || undefined"
+                      @click.stop="
+                        projectHasSets(p.id) && toggleProjectTreeSets(p.id)
+                      "
                     >
                       <v-icon
-                        v-show="
-                          nonReferenceSets.filter((s) =>
-                            entityBelongsToProject(s, p.id),
-                          ).length > 0
-                        "
                         size="14"
-                        class="sidebar-project-tree-sub-chevron"
+                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
+                        :class="{
+                          'sidebar-row-glyph--empty': !projectHasSets(p.id),
+                        }"
                         >{{
                           projectTreeSetsCollapsed.has(p.id)
                             ? "mdi-chevron-right"
@@ -6198,7 +6591,9 @@ defineExpose({
                             active:
                               selectedSetIdSet.has(pset.id) &&
                               selectionOwnsHighlight,
-                            droppable: dragOverSet === pset.id,
+                            droppable: dragOverSet === pset.id && !dropRejected,
+                            'not-droppable':
+                              dragOverSet === pset.id && dropRejected,
                           },
                         ]"
                         :draggable="!isReadOnly"
@@ -6211,8 +6606,8 @@ defineExpose({
                         @contextmenu.prevent="
                           openSidebarCtxMenu('set', pset, $event)
                         "
-                        @dragover.prevent="dragOverSetItem(pset.id)"
-                        @dragleave="dragLeaveSetItem"
+                        @dragover="dragOverSetItem(pset.id, $event)"
+                        @dragleave="dragLeaveSetItem($event)"
                         @drop.prevent="handleDropOnSet(pset.id, $event)"
                       >
                         <span class="sidebar-list-icon">
@@ -6291,11 +6686,7 @@ defineExpose({
                         sidebarThumbnailSizeModel + 'px',
                     }"
                   >
-                    <ProjectFiles
-                      :projectId="p.id"
-                      :backendUrl="props.backendUrl"
-                      compact
-                    />
+                    <ProjectFiles :projectId="p.id" compact />
                   </div>
                 </template>
               </div>
@@ -6399,7 +6790,10 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('character', sidebarCtxCharacter) === 0"
+          :disabled="
+            isReadOnly ||
+            duplicateCountFor('character', sidebarCtxCharacter) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('character', sidebarCtxCharacter)"
         >
@@ -6492,7 +6886,9 @@ defineExpose({
       <template v-if="sidebarCtxSet">
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('set', sidebarCtxSet) === 0"
+          :disabled="
+            isReadOnly || duplicateCountFor('set', sidebarCtxSet) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('set', sidebarCtxSet)"
         >
@@ -6714,7 +7110,9 @@ defineExpose({
       <template v-if="sidebarCtxProject">
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('project', sidebarCtxProject) === 0"
+          :disabled="
+            isReadOnly || duplicateCountFor('project', sidebarCtxProject) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('project', sidebarCtxProject)"
         >
@@ -6995,7 +7393,6 @@ defineExpose({
     :resource-id="shareDialogPending?.resourceId"
     :resource-label="shareDialogPending?.label"
     :embed-watermark="userPrefsStore.embedWatermark"
-    :backend-url="props.backendUrl"
     :public-url="userPrefsStore.publicUrl"
     @update:embed-watermark="userPrefsStore.embedWatermark = $event"
   />

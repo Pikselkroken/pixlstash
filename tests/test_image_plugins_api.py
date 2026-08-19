@@ -48,7 +48,7 @@ def test_list_plugins_returns_rotate():
         plugin_names = [p["name"] for p in data.get("plugins", [])]
         assert "rotate" in plugin_names
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -88,7 +88,7 @@ def test_rotate_plugin_swaps_dimensions():
             assert new_meta.get("width") == orig_height
             assert new_meta.get("height") == orig_width
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -103,7 +103,7 @@ def test_run_plugin_with_unknown_name_returns_404():
         )
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -117,6 +117,6 @@ def test_run_plugin_without_picture_ids_returns_400():
         )
         assert resp.status_code == 400
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

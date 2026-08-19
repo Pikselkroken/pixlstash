@@ -284,7 +284,6 @@ watch(
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   padding: var(--space-4);
-  cursor: pointer;
   font: inherit;
   transition:
     border-color var(--dur-1) var(--ease-standard),
@@ -294,11 +293,6 @@ watch(
 .tc__opt:hover {
   border-color: rgb(var(--v-theme-accent));
   background: rgba(var(--v-theme-accent), 0.06);
-}
-
-.tc__opt:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .tc__opt[aria-checked="true"] {

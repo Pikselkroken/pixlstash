@@ -336,7 +336,6 @@ import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
-import { API_BASE_URL } from "../../utils/apiClient";
 import {
   candidateSmartScore,
   groupUnits,
@@ -598,7 +597,6 @@ function thumbUrl(unit) {
   // the dev server, the demo and Electron, so a relative /pictures/... 404s.
   return pictureThumbnailUrl(unit.coverPictureId, {
     version: unit.thumbnailVersion,
-    baseUrl: API_BASE_URL,
   });
 }
 
@@ -1167,12 +1165,10 @@ function onDblClick(event) {
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-border));
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard);
@@ -1181,12 +1177,6 @@ function onDblClick(event) {
 .gbtn:hover:not(:disabled),
 .gcompare:hover {
   background: var(--hover-wash);
-}
-
-.gbtn:focus-visible,
-.gcompare:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 .gbtn:disabled {

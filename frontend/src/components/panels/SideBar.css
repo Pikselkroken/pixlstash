@@ -1,8 +1,6 @@
-.sidebar-project-header {
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
-  justify-content: center;
-}
+/* The row system lives in SideBar.global.css, NOT here. Scoped rules cannot
+   reach a child component's internals, and FolderTreeNode renders rows of the
+   same family. See docs/design/visual-language.md §5.1. */
 
 .sidebar-section-divider {
   height: 1px;
@@ -59,25 +57,6 @@
   container: sidebartabs / inline-size;
 }
 
-.sidebar-view-tabs-icon {
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-view-tabs-label {
-  flex-shrink: 0;
-  font-size: var(--text-2xs);
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: rgb(var(--v-theme-sidebar-text));
-  white-space: nowrap;
-}
-
-.sidebar-view-tabs-arrow {
-  font-size: var(--text-sm);
-  opacity: 0.7;
-}
-
 .sidebar-view-tabs {
   display: flex;
   align-items: stretch;
@@ -99,15 +78,12 @@
   min-width: 0;
   overflow: hidden;
   border-radius: 0;
-  border: none;
   border-bottom: 2px solid transparent;
   /* Overlap the header's 1px bottom border so the active underline sits on it. */
   margin-bottom: -1px;
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  cursor: pointer;
-  background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.55);
   transition:
     color 0.15s,
@@ -270,10 +246,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
   min-height: 28px;
   cursor: pointer;
-  border-left: 3px solid transparent;
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
   border-radius: 0;
   background: transparent;
@@ -295,7 +269,7 @@
 .sidebar-project-tree-row.active {
   background: var(--active-wash);
   color: var(--active-text);
-  border-left: 3px solid var(--active-bar);
+  border-left-color: var(--active-bar);
   border-radius: 0;
 }
 
@@ -322,6 +296,9 @@
   border-radius: var(--radius-sm);
 }
 
+/* Still used by the two Folders-tab section bands, whose caret sits at the far
+   right AFTER the actions. That is a self-consistent band pattern, unlike the
+   project row's old mid-row caret, so it is left alone. */
 .sidebar-project-tree-expand-indicator {
   flex-shrink: 0;
   opacity: 0.5;
@@ -340,11 +317,29 @@
   opacity: 0.9;
 }
 
-.sidebar-project-tree-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
+/* The project's disclosure, in the leading glyph column like every other
+   collapsible row here. It swaps glyph rather than rotating one, so a single
+   mechanism expresses disclosure across the sidebar. */
+.sidebar-project-tree-chevron {
   color: inherit;
 }
+
+/* ---------------------------------------------------------------------------
+   NOTHING IN THIS COLUMN IS DIMMED. Rank comes from size, weight, tracking and
+   indent; every structural label and every caret sits at the row's own colour.
+
+   Two failed attempts are why this is spelled out. Dimming the caption to 0.7
+   made it the quietest thing in the column, between a full-strength project
+   above and full-strength names below: a header must never be quieter than the
+   rows it heads, or the hierarchy inverts. And when only the caption was
+   dimmed, its caret was not, so the caret read brighter than its own label
+   while the project's read much dimmer than its own.
+
+   The rule that survives both: a caret takes its row's colour and never carries
+   its own opacity. `SideBarRowSystem.test.js` enforces it. This also keeps a
+   selected project following `--active-text`, which an explicit colour here
+   would break.
+   --------------------------------------------------------------------------- */
 
 .sidebar-project-tree-name-group {
   flex: 1;
@@ -355,12 +350,18 @@
   overflow: hidden;
 }
 
+/* Two ramp steps above the section captions nested under it. Rank is carried by
+   TYPE, depth by indent. When a project and a section caption were set
+   identically, indentation had to signal both, which is what forced the step up
+   to 24px and pushed names off the end of the rail. The separation is size and
+   tracking rather than emphasis, because the only thing below a caption is
+   content, and dimming a header under its own content inverts the hierarchy. */
 .sidebar-project-tree-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-2xs);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -402,7 +403,9 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  --depth: 1;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   min-height: 24px;
   cursor: pointer;
@@ -421,19 +424,8 @@
   color: inherit;
 }
 
-/* v-show sets display:none — override to visibility:hidden so the space is preserved */
-.sidebar-project-tree-sub-chevron[style*="display: none"],
-.sidebar-project-tree-sub-chevron[style*="display:none"] {
-  display: inline-flex !important;
-  visibility: hidden;
-}
-
-.sidebar-project-tree-subheader-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
+/* A caption for the list beneath it, one rank below the project. Subordinate by
+   size and tracking, never by being dimmer than the rows it heads. */
 .sidebar-project-tree-subheader-label {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -443,16 +435,27 @@
   flex: 1;
 }
 
-/* Child items indented under a project sub-section */
-.sidebar-project-tree-child {
-  padding-left: var(--space-5) !important;
+/* A caption with nothing under it is not a disclosure. The row goes inert and
+   dims, which is what explains the empty chevron slot; the slot itself stays
+   reserved so the caption does not shift when the first entity arrives. The
+   `+` action deliberately does NOT inherit the fade and stays operable: it is
+   the only way out of the empty state. */
+.sidebar-project-tree-subheader--empty {
+  cursor: default;
 }
 
-.sidebar-project-tree-empty {
-  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-5);
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  font-style: italic;
+.sidebar-project-tree-subheader--empty:hover {
+  background: transparent;
+}
+
+.sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label {
+  opacity: var(--opacity-disabled, 0.38);
+}
+
+/* Child items sit one step under their sub-section header, which is itself one
+   step under the project row. Depth, not a hardcoded inset. */
+.sidebar-project-tree-child {
+  --depth: 2;
 }
 
 .sidebar-project-tree-files {
@@ -491,15 +494,15 @@
   color: rgb(var(--v-theme-on-surface));
 }
 
+/* The rail is reserved on the base (see .sidebar-project-menu-item) so `.active`
+   only recolours it. The previous rule added the border here and tried to cancel
+   it with padding the base already carried, moving the label 3px on select. */
 .sidebar-collapsed-project-menu .sidebar-project-menu-item.active,
 .sidebar-collapsed-project-submenu .sidebar-project-menu-item.active {
   background: rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-primary));
   font-weight: 600;
-  border-left: 3px solid rgb(var(--v-theme-primary));
-  padding-left: var(
-    --space-3
-  ); /* compensate for the 3px border so text stays aligned */
+  border-left-color: rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-project-submenu {
@@ -668,84 +671,6 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-.sidebar-project-menu-wrap {
-  position: relative;
-  padding: 0;
-  border-bottom: none;
-}
-
-.sidebar-project-label {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  font-size: var(--text-sm);
-  font-weight: 500;
-  min-height: 26px;
-}
-
-.sidebar-project-trigger {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: 0;
-  border: none;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  font-size: var(--text-sm);
-  font-weight: 500;
-  min-height: 26px;
-  cursor: pointer;
-  transition:
-    background 0.12s,
-    color 0.12s;
-  text-align: left;
-}
-
-.sidebar-project-trigger:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-trigger-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-
-.sidebar-project-trigger-chevron {
-  flex-shrink: 0;
-  opacity: 0.6;
-}
-
-.sidebar-project-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 200;
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-tertiary)) 38%,
-    rgb(var(--v-theme-sidebar))
-  );
-  border: none;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.5);
-  border-radius: 0;
-  box-shadow: 0 4px 8px rgba(var(--v-theme-shadow), 0.15);
-  overflow: hidden;
-}
-
 /* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
    solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
    `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
@@ -754,9 +679,17 @@
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
+  width: 100%;
+  box-sizing: border-box;
   padding: var(--space-2) var(--space-3);
+  /* Reserved rail: `.active` recolours it, never adds it. */
+  border-left: 3px solid transparent;
   cursor: pointer;
+  appearance: none;
+  background: transparent;
+  font-family: inherit;
   font-size: var(--text-sm);
+  text-align: left;
   color: rgb(var(--v-theme-on-surface));
   transition:
     background 0.1s,
@@ -783,21 +716,6 @@
   white-space: nowrap;
 }
 
-.sidebar-project-menu-item-action {
-  flex-shrink: 0;
-  opacity: 0;
-  color: rgb(var(--v-theme-on-surface));
-  transition: opacity 0.12s;
-}
-
-.sidebar-project-menu-item:hover .sidebar-project-menu-item-action {
-  opacity: 0.6;
-}
-
-.sidebar-project-menu-item-action:hover {
-  opacity: 1 !important;
-}
-
 .sidebar-project-menu-add {
   display: flex;
   align-items: center;
@@ -819,56 +737,6 @@
   color: rgb(var(--v-theme-on-surface));
 }
 
-.sidebar-project-select {
-  flex: 1;
-  width: 100%;
-  margin-left: 0;
-}
-
-.sidebar-native-select {
-  background: rgba(var(--v-theme-surface), 0.3);
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-sm);
-  min-height: 32px;
-  height: 32px;
-  font-size: var(--text-md);
-  box-shadow: 2px 2px 6px rgba(var(--v-theme-shadow), 0.2);
-  margin-left: var(--space-3);
-  box-sizing: border-box;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-  border: 1px solid rgba(var(--v-theme-border), 0.5);
-  width: 230px;
-  transition: border 0.15s;
-}
-.sidebar-native-select:focus {
-  border: 1.5px solid rgb(var(--v-theme-accent));
-}
-.sidebar-native-select-chevron {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: rgb(var(--v-theme-on-surface));
-  display: flex;
-  align-items: center;
-  height: 18px;
-  z-index: 2;
-}
-
-.sidebar-search-result-label {
-  display: flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 var(--space-4);
-  margin-left: var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-surface), 0.2);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  font-size: var(--text-md);
-}
 /* Sidebar right edge for counts */
 .sidebar {
   width: 240px;
@@ -944,15 +812,8 @@
   height: var(--badge-size-dot);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-accent));
-  border: 0;
   padding: 0;
-  cursor: pointer;
   flex-shrink: 0;
-}
-
-.sidebar-telemetry-dot:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar.sidebar-docked .sidebar-brand {
@@ -1070,9 +931,6 @@
   height: 10px;
   font-size: var(--text-2xs);
   line-height: 1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.4);
   opacity: 0.7;
 }
@@ -1096,24 +954,6 @@
 
 .sidebar-update-security--high:hover {
   color: #c62828;
-}
-
-.sidebar-brand-task-btn {
-  min-width: 30px;
-  min-height: 30px;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  opacity: 0.6;
-}
-
-.sidebar-brand-task-btn:hover {
-  opacity: 1;
-  background-color: rgba(var(--v-theme-accent), 0.25);
 }
 
 .sidebar-collapsed-list {
@@ -1272,89 +1112,6 @@
   position: relative;
 }
 
-.sidebar-collapsed-thumb {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-  border: none;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-  outline: none;
-  box-shadow: none;
-  transition:
-    background 0.18s ease,
-    box-shadow 0.18s ease,
-    filter 0.18s ease;
-}
-
-.sidebar-collapsed-thumb img {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  object-fit: contain;
-  border-radius: var(--sidebar-item-radius);
-  display: block;
-  position: relative;
-  z-index: 1;
-}
-
-.sidebar-collapsed-thumb::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-md);
-  pointer-events: none;
-  opacity: 0;
-  z-index: 2;
-  box-shadow: inset 0 0 0 3px transparent;
-  transition:
-    box-shadow 0.18s ease,
-    opacity 0.18s ease;
-}
-
-.sidebar-collapsed-thumb .sidebar-character-thumb {
-  filter: drop-shadow(0 2px 6px rgba(var(--v-theme-shadow), 0.35));
-}
-
-.sidebar-collapsed-thumb:focus,
-.sidebar-collapsed-thumb:focus-visible,
-.sidebar-collapsed-thumb:active,
-.sidebar-collapsed-thumb img:focus,
-.sidebar-collapsed-thumb img:focus-visible,
-.sidebar-collapsed-thumb img:active {
-  outline: none;
-  box-shadow: none;
-}
-
-.sidebar-collapsed-thumb.active {
-  background: rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb.active::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb:hover {
-  filter: brightness(1.03);
-  background-color: rgba(var(--v-theme-accent), 0.18);
-  transform: translateY(-1px) scale(1.02);
-}
-
-.sidebar-collapsed-thumb:hover::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgba(var(--v-theme-accent), 0.7);
-}
-
-.sidebar-collapsed-thumb.droppable {
-  background: rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb.droppable::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
-}
-
 .sidebar-collapsed-divider {
   width: 70%;
   height: 1px;
@@ -1375,8 +1132,8 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3)
-    var(--space-1) var(--space-3);
+  padding-top: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px);
+  padding-bottom: var(--space-1);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
@@ -1386,6 +1143,34 @@
 .sidebar-section-header--collapsible {
   cursor: pointer;
   user-select: none;
+}
+
+.sidebar-section-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  align-self: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.sidebar-section-toggle:focus-visible,
+.sidebar-list-item:focus-visible,
+.sidebar-collapsed-item:focus-visible,
+.sidebar-collapsed-flyout-item:focus-visible,
+.sidebar-project-menu-item:focus-visible,
+.sidebar-header-actions button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar-section-header--collapsible:hover {
@@ -1400,26 +1185,12 @@
   transition: transform 0.15s;
 }
 
-.sidebar-section-header-icon {
-  display: none;
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-.sidebar-list-item,
-.sidebar-list-item.active {
+.sidebar-list-item {
   display: flex;
   align-items: center;
   min-height: calc(var(--sidebar-thumb-size) + 6px);
-  padding: var(--space-2) var(--space-3);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
@@ -1433,12 +1204,15 @@
     color 0.12s,
     border-color 0.12s;
   /* The destination rows are <button>s (keyboard reach); the rest of this class
-     is still on <div>s. Neutralise the UA button chrome so both render alike. */
+     is still on <div>s. Neutralise the UA button chrome so both render alike.
+     The left rail belongs to the row system in SideBar.global.css, so only the
+     other three sides are zeroed here. */
   appearance: none;
   font-family: inherit;
   text-align: left;
-  border: 0;
-  border-left: 3px solid transparent;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
 }
 
 /* Inset, not the token's outer ring: these rows run edge to edge in the
@@ -1448,10 +1222,6 @@
 .sidebar-collapsed-item:focus-visible {
   outline: none;
   box-shadow: inset var(--focus-ring);
-}
-
-.sidebar-footer-spacer {
-  flex: 1 1 auto;
 }
 
 .sidebar-scroll {
@@ -1554,22 +1324,10 @@
   display: block;
 }
 
-.sidebar-collapsed .sidebar-readonly-notice {
-  display: none;
-}
-
-.sidebar-footer {
-  padding: var(--space-2) 0 0 0;
-}
-
-.sidebar-footer-item {
-  margin-bottom: 0;
-}
-
 .sidebar-list-item.active {
   background: var(--active-wash);
   color: var(--active-text);
-  border-left: 3px solid var(--active-bar);
+  border-left-color: var(--active-bar);
   position: relative;
   border-radius: 0;
 }
@@ -1611,6 +1369,13 @@
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
+
+/* Rejected drop target — the row is under the pointer but will not take the
+   payload being dragged (a face bbox over a picture set, say). It must not be
+   mistaken for `.droppable`, and it must not rely on colour alone: the hatch
+   texture carries the state, the mdi-cancel glyph names it, and the disabled
+   fade (the one legal fade, visual-language.md §11) drops the row's own
+   content back. Shared by character/set rows, project rows and folder rows. */
 
 .sidebar-header-spacer {
   flex: 1 1 auto;
@@ -1721,28 +1486,14 @@
   overflow: visible;
 }
 
-/* For items that never have a thumbnail — keep the icon slot compact */
-.sidebar-list-icon--fixed {
-  width: min(var(--sidebar-thumb-size), 24px) !important;
-  height: min(var(--sidebar-thumb-size), 24px) !important;
-}
-
 /* Top-level nav rows (All Pictures, Scrapheap) — slightly larger than --fixed */
 .sidebar-list-icon--toplevel {
   width: min(var(--sidebar-thumb-size), 26px) !important;
   height: min(var(--sidebar-thumb-size), 26px) !important;
 }
 
-.sidebar.sidebar-docked .sidebar-brand-toggle .v-icon {
-  font-size: calc(var(--sidebar-thumb-size) * 0.5) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.5) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.5) !important;
-}
-
 .sidebar-list-icon .v-icon,
-.sidebar-collapsed-item .v-icon,
-.sidebar-brand-toggle .v-icon,
-.sidebar-brand-task-btn .v-icon {
+.sidebar-collapsed-item .v-icon {
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -1818,8 +1569,7 @@
   border-color: rgba(var(--v-theme-accent), 0.6);
 }
 
-.sidebar-collapsed-item,
-.sidebar-collapsed-thumb {
+.sidebar-collapsed-item {
   position: relative;
   overflow: hidden;
 }
@@ -1998,31 +1748,13 @@
   z-index: 2;
 }
 
-.sidebar-shared-icon--inline {
-  opacity: 0.5;
-  color: rgb(var(--v-theme-primary));
-  flex-shrink: 0;
-  pointer-events: none;
-  margin-right: var(--space-1);
-}
-
-.sidebar-character-toggle {
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 0.8;
-  margin-right: var(--space-2);
-}
-
-.sidebar-character-toggle:hover {
-  opacity: 1;
-  color: rgb(var(--v-theme-on-primary));
-}
-
 .add-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
+  border: 0;
+  padding: 0;
   border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
@@ -2066,6 +1798,8 @@
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
+  border: 0;
+  padding: 0;
   border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
@@ -2084,56 +1818,13 @@
   color: rgb(var(--v-theme-primary)) !important;
 }
 
-.sidebar-all-pictures-actions {
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 0;
-  flex-shrink: 0;
-}
-
-.sidebar-inline-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  width: max(52px, calc(var(--sidebar-thumb-size) + 8px));
-  flex-shrink: 0;
-  border-radius: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 0.55;
-  transition:
-    background 0.18s,
-    opacity 0.18s,
-    color 0.18s;
-}
-
-.sidebar-inline-btn .v-icon {
-  color: inherit;
-}
-
-.sidebar-inline-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-inline-btn--upload:hover {
-  color: rgb(var(--v-theme-success));
-}
-
-.sidebar-inline-btn--scrapheap:hover {
-  color: rgb(var(--v-theme-error));
-}
-
-.sidebar-inline-btn--scrapheap.active {
-  opacity: 1;
-  color: rgb(var(--v-theme-error));
-}
-
 .delete-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
   cursor: pointer;
   background: transparent;
+  border: 0;
+  padding: 0;
   border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
@@ -2151,46 +1842,10 @@
   color: rgb(var(--v-theme-error)) !important;
 }
 
-.sidebar-sort {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-sort-select {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-md) !important;
-  min-height: 36px !important;
-  height: 36px !important;
-  font-size: var(--text-md);
-  box-shadow: none;
-  margin-top: 0px;
-  margin-bottom: var(--space-1);
-  align-items: center;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-}
-
-/* Remove extra height from v-input root for select */
-.sidebar-sort-select .v-input__control,
-.sidebar-sort-select .v-field {
-  min-height: 32px !important;
-  height: 32px !important;
-  border-radius: var(--radius-lg) !important;
-  box-shadow: none !important;
-}
-
-.sidebar-sort-select .v-field__input {
-  min-height: 28px !important;
-  height: 28px !important;
-  padding-top: var(--space-1) !important;
-  padding-bottom: var(--space-1) !important;
-  align-items: center;
-}
-
-/* Items within People/Sets sections get a tree indent */
+/* Items within People/Sets sit one step under their section header, which puts
+   the thumbnail directly below the header's label. */
 .sidebar-section-scroll .sidebar-list-item {
-  padding-left: var(--space-5);
+  --depth: 1;
 }
 
 .sidebar-section-block .sidebar-section-header {
@@ -2217,12 +1872,6 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-.sidebar-all-pictures-row.drag-over-project {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
-  background: rgba(var(--v-theme-primary), 0.1);
-}
-
 .sidebar-all-pictures-row .sidebar-list-item {
   flex: 1 1 0;
   width: 0;
@@ -2244,20 +1893,22 @@
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .sidebar-list-item,
-  .sidebar-list-item.active {
+  /* Touch targets grow VERTICALLY only. A `padding` shorthand here would reset
+     padding-left and flatten every row back to depth 0. */
+  .sidebar-list-item {
     min-height: 56px;
-    padding: var(--space-3) var(--space-3);
+    padding-top: var(--space-3);
+    padding-bottom: var(--space-3);
   }
 
   .sidebar-section-header {
     min-height: 48px;
   }
 
-  .sidebar-all-pictures-row .sidebar-list-item,
-  .sidebar-all-pictures-row .sidebar-list-item.active {
+  .sidebar-all-pictures-row .sidebar-list-item {
     min-height: 48px;
-    padding: var(--space-3) var(--space-3);
+    padding-top: var(--space-3);
+    padding-bottom: var(--space-3);
   }
 
   .sidebar-list-icon {
@@ -2309,14 +1960,12 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-1);
   min-height: 28px;
   cursor: pointer;
   color: rgb(var(--v-theme-sidebar-text));
   background: transparent;
   border-top: 1px solid rgba(var(--v-theme-border), 0.22);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  border-left: 3px solid transparent;
   user-select: none;
   transition:
     background 0.12s,
@@ -2335,18 +1984,6 @@
     ),
     rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-section-chevron {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
-.sidebar-folder-section-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
 }
 
 .sidebar-folder-section-title {
@@ -2383,65 +2020,13 @@
   flex-direction: column;
 }
 
-.sidebar-folder-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  user-select: none;
-  min-height: 28px;
-  border-left: 3px solid transparent;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-
 .sidebar-folder-root-row {
   font-size: var(--text-sm);
 }
 
-.sidebar-folder-row:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-row.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left: 3px solid rgb(var(--v-theme-primary));
-}
-
-.sidebar-folder-row.active:hover {
-  background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-folder-row.droppable {
-  filter: brightness(1.2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-folder-children {
-  padding-left: var(--space-2);
-  border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: var(--space-1);
-}
-
-.sidebar-folder-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
+/* .sidebar-folder-row and its states, .sidebar-folder-children and
+   .sidebar-folder-label live in SideBar.global.css: FolderTreeNode renders them
+   too, and a scoped rule cannot reach into a child component. */
 
 .sidebar-folder-actions {
   display: inline-flex;
@@ -2466,11 +2051,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: 4px;
-  background: transparent;
   color: inherit;
-  cursor: pointer;
   opacity: 0.72;
 }
 
@@ -2479,43 +2061,8 @@
   opacity: 1;
 }
 
-.sidebar-folder-chevron,
-.sidebar-folder-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-/* All folder icons fixed at 16px regardless of thumbnail size */
-.sidebar-folders-list :deep(.sidebar-folder-icon) {
-  font-size: var(--text-md) !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-.sidebar-folders-list :deep(.sidebar-folder-chevron) {
-  font-size: var(--text-md) !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-
-.sidebar-folder-status-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-1);
-  opacity: 0.75;
-}
-
-.sidebar-folder-count-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-2);
-  min-width: 22px;
-  text-align: right;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-row.active .sidebar-folder-count-badge {
-  color: rgba(var(--v-theme-on-primary), 0.65);
-}
+/* The folder glyph and badge rules also live in SideBar.global.css, for the
+   same reason. */
 
 .sidebar-folder-status--active {
   color: rgb(var(--v-theme-sidebar-text));
@@ -2584,9 +2131,6 @@
   padding: var(--space-3) var(--space-4);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
-  cursor: pointer;
   text-align: left;
   white-space: nowrap;
   transition: background 0.1s;
@@ -2656,14 +2200,6 @@ button.sidebar-ctx-item:disabled:hover {
   overflow-y: auto;
 }
 
-.sidebar-ctx-appearance-label {
-  font-size: var(--text-2xs);
-  opacity: 0.55;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  margin-bottom: var(--space-3);
-}
-
 .sidebar-ctx-icon-section-wrap {
   display: flex;
   gap: var(--space-3);
@@ -2703,8 +2239,6 @@ button.sidebar-ctx-item:disabled:hover {
   height: 48px;
   border-radius: var(--radius-md);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2745,8 +2279,6 @@ button.sidebar-ctx-item:disabled:hover {
   height: 28px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2794,7 +2326,6 @@ button.sidebar-ctx-item:disabled:hover {
   height: 26px;
   border-radius: var(--radius-md);
   border: 2px solid transparent;
-  cursor: pointer;
   outline: none;
   padding: 0;
   box-sizing: border-box;
@@ -2857,7 +2388,6 @@ button.sidebar-ctx-item:disabled:hover {
   background: rgba(var(--v-theme-surface), 0.4);
   padding: var(--space-3) var(--space-4);
   text-align: left;
-  cursor: pointer;
   color: rgb(var(--v-theme-on-surface));
 }
 
@@ -2959,4 +2489,20 @@ button.sidebar-ctx-item:disabled:hover {
 
 .relocate-actions {
   padding: 10px 16px 14px;
+}
+
+/* A fixed destination rendered as a real button rather than a clickable div,
+   so it is reachable by Tab. It carries the row classes and needs only the
+   defaults a <button> does not inherit: full width, left-aligned text, and the
+   UI font. The three older destinations are still divs; making them buttons is
+   the same four-line change and is filed, not forgotten. */
+.sidebar-destination-btn {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.sidebar-collapsed-item.sidebar-destination-btn {
+  text-align: center;
 }

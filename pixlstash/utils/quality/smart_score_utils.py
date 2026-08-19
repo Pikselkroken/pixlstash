@@ -211,7 +211,7 @@ class SmartScoreUtils:
             # graded directly (see anomaly_penalty._confidence_evidence).
             "tag_thresholds": {},
             # {tag: weight} — the owner's resolved User.smart_score_penalised_tags, from
-            # picture_scoring.resolve_penalised_tag_weights. A tag absent from it is not
+            # scoring.smart_score.resolve_penalised_tag_weights. A tag absent from it is not
             # penalised. None falls back to DEFAULT_SMART_SCORE_PENALIZED_TAGS, which is
             # only right for callers with no user config (e.g. unit tests).
             "penalised_tag_weights": None,

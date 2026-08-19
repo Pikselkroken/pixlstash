@@ -3,20 +3,39 @@
 // Membership is per-picture: a set is joined or left one picture at a time
 // (`/picture_sets/{id}/members/{pictureId}`), so bulk actions are the caller's
 // loop over these calls, not a bulk endpoint.
-//
-// Several call sites address the backend through an explicit base rather than
-// a relative path, so the functions take an optional `baseUrl`.
 
-import { apiClient } from "../utils/apiClient";
+import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * Build a picture-sets route, optionally under an explicit backend base.
  * @param {string} [path=""] - the route below `/picture_sets`.
- * @param {string} [baseUrl=""]
  * @returns {string}
  */
-function setsUrl(path = "", baseUrl = "") {
-  return `${baseUrl}/picture_sets${path}`;
+function setsUrl(path = "") {
+  return `/picture_sets${path}`;
+}
+
+/**
+ * The URL of a set's thumbnail, for an `<img src>`.
+ *
+ * The list row carries a `thumbnail_url` too, and the sidebar uses that because
+ * it also wants the row's `top_picture_ids` as a cache-versioning key. This is
+ * the plain form for a caller that has only an id — the model shelf's
+ * assignment ring, which resolves from an attachment rather than a row.
+ *
+ * The route is cookie-authenticated, so a share token has to ride in the query
+ * — an `<img>` sends no header.
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function pictureSetThumbnailUrl(id) {
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
+  return appendShareToken(
+    `${API_BASE_URL}${setsUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+  );
 }
 
 /**
@@ -26,66 +45,49 @@ function setsUrl(path = "", baseUrl = "") {
  * sets filter them out themselves.
  *
  * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @param {Object} [options.params] - optional query params.
  * @returns {Promise<Array<Object>>} the picture-set list (the response body).
  */
-export async function listPictureSets({ baseUrl = "", params } = {}) {
-  const res = await apiClient.get(
-    setsUrl("", baseUrl),
-    params ? { params } : undefined,
-  );
-  return res.data;
+export async function listPictureSets({ params } = {}) {
+  return unwrap(apiClient.get(setsUrl(""), params ? { params } : undefined));
 }
 
 /**
  * Read one picture set.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, which nests the set itself
  *   under `set` alongside its membership details.
  */
-export async function getPictureSet(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(setsUrl(`/${id}`, baseUrl));
-  return res.data;
+export async function getPictureSet(id) {
+  return unwrap(apiClient.get(setsUrl(`/${id}`)));
 }
 
 /**
  * Create a picture set.
  * @param {Object} body - the set's fields (name, icon, colour, ...).
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the created set (the response body).
  */
-export async function createPictureSet(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(setsUrl("", baseUrl), body);
-  return res.data;
+export async function createPictureSet(body) {
+  return unwrap(apiClient.post(setsUrl(""), body));
 }
 
 /**
  * Patch a picture set.
  * @param {number|string} id
  * @param {Object} body - only the keys to change.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the updated set (the response body).
  */
-export async function patchPictureSet(id, body, { baseUrl = "" } = {}) {
-  const res = await apiClient.patch(setsUrl(`/${id}`, baseUrl), body);
-  return res.data;
+export async function patchPictureSet(id, body) {
+  return unwrap(apiClient.patch(setsUrl(`/${id}`), body));
 }
 
 /**
  * Delete a picture set. The pictures themselves are untouched.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function deletePictureSet(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.delete(setsUrl(`/${id}`, baseUrl));
-  return res.data;
+export async function deletePictureSet(id) {
+  return unwrap(apiClient.delete(setsUrl(`/${id}`)));
 }
 
 /**
@@ -95,52 +97,38 @@ export async function deletePictureSet(id, { baseUrl = "" } = {}) {
  * @param {Object} [options]
  * @param {boolean} [options.includeDeleted=false] - count scrapheaped pictures
  *   as members, so a set does not look empty while its pictures are recoverable.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: set id → member picture ids.
  */
 export async function getPictureSetMembership(
   pictureIds,
-  { includeDeleted = false, baseUrl = "" } = {},
+  { includeDeleted = false } = {},
 ) {
-  const res = await apiClient.post(setsUrl("/membership", baseUrl), {
-    picture_ids: pictureIds,
-    include_deleted: includeDeleted,
-  });
-  return res.data;
+  return unwrap(
+    apiClient.post(setsUrl("/membership"), {
+      picture_ids: pictureIds,
+      include_deleted: includeDeleted,
+    }),
+  );
 }
 
 /**
  * Add one picture to a set.
  * @param {number|string} setId
  * @param {number|string} pictureId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function addPictureToSet(setId, pictureId, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    setsUrl(`/${setId}/members/${pictureId}`, baseUrl),
-  );
-  return res.data;
+export async function addPictureToSet(setId, pictureId) {
+  return unwrap(apiClient.post(setsUrl(`/${setId}/members/${pictureId}`)));
 }
 
 /**
  * Remove one picture from a set.
  * @param {number|string} setId
  * @param {number|string} pictureId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function removePictureFromSet(
-  setId,
-  pictureId,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.delete(
-    setsUrl(`/${setId}/members/${pictureId}`, baseUrl),
-  );
-  return res.data;
+export async function removePictureFromSet(setId, pictureId) {
+  return unwrap(apiClient.delete(setsUrl(`/${setId}/members/${pictureId}`)));
 }
 
 /**
@@ -153,6 +141,5 @@ export async function removePictureFromSet(
  *   locked set and its frozen members.
  */
 export async function getLockedMembers() {
-  const res = await apiClient.get(setsUrl("/locked-members"));
-  return res.data;
+  return unwrap(apiClient.get(setsUrl("/locked-members")));
 }

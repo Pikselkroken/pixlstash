@@ -16,6 +16,7 @@ import {
   setDailySnapshotsEnabled as patchDailySnapshotsEnabled,
 } from "../api/serverConfig";
 import { onSessionReset } from "../utils/apiClient";
+import { errorDetail } from "../utils/apiError";
 
 export const useSnapshotsStore = defineStore("snapshots", () => {
   // ── State ─────────────────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     } catch (err) {
       if (requestEpoch !== epoch) return;
       error.value =
-        err?.response?.data?.detail || err?.message || "Failed to load snapshots.";
+        errorDetail(err) || err?.message || "Failed to load snapshots.";
     } finally {
       if (requestEpoch === epoch) loading.value = false;
     }

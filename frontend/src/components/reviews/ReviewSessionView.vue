@@ -721,10 +721,6 @@ defineExpose({ handleKey });
   display: flex;
   flex-direction: column;
 }
-.rs-session :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-session-head {
   flex-shrink: 0;
@@ -766,7 +762,6 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-warning));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
 }
 
 .rs-xp-pill {
@@ -863,10 +858,14 @@ defineExpose({ handleKey });
    scripted focus match :focus-visible right after a Y/N/S/U keypress, painting a
    full-card purple ring after every decision (GH #578, most visible in Electron
    on Windows). The ring is always spurious here — the real focus indicators live
-   on the buttons/thumbnails — so suppress it on the container. */
+   on the buttons/thumbnails — so suppress it on the container. Both properties:
+   the app-wide `:focus-visible` rule in style.css paints the ring with
+   `box-shadow`, so staying silent about it would put the #578 ring straight
+   back, in amber instead of purple. */
 .rs-card:focus,
 .rs-card:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 /* Distinct entry transition while the key-slip hold is active, so a card-type
    change is visually announced. */
@@ -932,7 +931,6 @@ defineExpose({ handleKey });
   gap: 7px;
   height: 34px;
   padding: 0 14px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -977,11 +975,9 @@ defineExpose({ handleKey });
   flex-shrink: 0;
   height: 26px;
   padding: 0 var(--space-3);
-  cursor: pointer;
   border-radius: var(--radius-sm);
   border: 1px solid
     color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 55%, transparent);
-  background: transparent;
   color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -1011,7 +1007,6 @@ defineExpose({ handleKey });
   gap: 6px;
   height: 30px;
   padding: 0 11px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

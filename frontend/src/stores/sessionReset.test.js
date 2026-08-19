@@ -51,12 +51,67 @@ import { useSnapshotsStore } from "./useSnapshotsStore";
 import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
+import { useLibrariesStore } from "./useLibrariesStore";
+import { useModelShelfStore } from "./useModelShelfStore";
+import { useModelFoldersStore } from "./useModelFoldersStore";
+import { useModelMovesStore } from "./useModelMovesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // The model rows are hub-side facts about this machine, but each one
+    // carries the characters and sets in the ACTIVE LIBRARY that use it, so
+    // the page is stale the moment the credential changes. The `Show`
+    // selection is deliberately kept: it is the user's own preference and
+    // holds no ids.
+    name: "useModelShelfStore",
+    use: useModelShelfStore,
+    seed: (s) => {
+      s.rows = [
+        {
+          id: 1,
+          file_kind: "adapter",
+          attachments: [{ entity_type: "character", entity_id: 9 }],
+        },
+      ];
+    },
+    isEmpty: (s) => s.rows.length === 0,
+  },
+  {
+    // Absolute paths on the host machine, readable only by the owner. A share
+    // or read-only session could never have asked for them, so none of it may
+    // survive the transition, and any scan being waited on is abandoned with
+    // it, because this session no longer has standing to poll for it.
+    name: "useModelFoldersStore",
+    use: useModelFoldersStore,
+    seed: (s) => {
+      s.folders = [
+        { id: 1, path: "/home/g/loras", kind: "user", file_count: 91 },
+      ];
+      s.loaded = true;
+    },
+    isEmpty: (s) => s.folders.length === 0 && !s.loaded,
+  },
+  {
+    // A move names registered folders by id and shifts files between absolute
+    // host paths, so it is owner-only for the same reason the registry is. The
+    // job itself carries on server-side — this session simply stops watching
+    // it, because it no longer has standing to ask.
+    name: "useModelMovesStore",
+    use: useModelMovesStore,
+    seed: (s) => {
+      s.job = {
+        status: "running",
+        total: 4,
+        done: 1,
+        results: [],
+      };
+    },
+    isEmpty: (s) => s.job === null && s.status === "idle",
+  },
   {
     name: "useLockedSetsStore",
     use: useLockedSetsStore,
@@ -174,6 +229,21 @@ const STORES = [
       s.canUndo = true;
     },
     isEmpty: (s) => s.operations.length === 0 && s.canUndo === false,
+  },
+  {
+    name: "useLibrariesStore",
+    use: useLibrariesStore,
+    seed: (s) => {
+      s.libraries = [{ uuid: "a", name: "Main", is_active: true }];
+      s.canManage = true;
+      s.cliHint = "pixlstash --library /srv/main";
+      s.hasLoadedSuccessfully = true;
+    },
+    isEmpty: (s) =>
+      s.libraries.length === 0 &&
+      s.canManage === false &&
+      s.cliHint === "" &&
+      s.hasLoadedSuccessfully === false,
   },
 ];
 

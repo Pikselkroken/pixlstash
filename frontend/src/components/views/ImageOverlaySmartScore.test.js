@@ -43,6 +43,7 @@ const getMock = vi.fn(async (url) => {
 });
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
@@ -50,11 +51,6 @@ vi.mock("../../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 // (1) Verbatim copy of fetchOverlayMetadata's smart-score merge. `data` is the
 // authoritative /pictures/{id}/metadata?smart_score=true response; `image` is

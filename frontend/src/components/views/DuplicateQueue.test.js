@@ -484,7 +484,10 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
       verdict: "stacked",
       decided_at: "2026-08-02T12:00:00",
     };
-    const { wrapper } = await decidedQueue({ groups: [decidedGroup], total: 1 });
+    const { wrapper } = await decidedQueue({
+      groups: [decidedGroup],
+      total: 1,
+    });
 
     const row = wrapper.findComponent({ name: "DedupGroupRow" });
     expect(row.props("collapseStacks")).toBe(false);
@@ -495,9 +498,9 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
     await wrapper.find(".dq").trigger("keydown", { key: "e" });
     await flushPromises();
     expect(listStackMembers).not.toHaveBeenCalled();
-    expect(
-      wrapper.find('[data-testid="dedup-announcement"]').text(),
-    ).toContain("already shown");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "already shown",
+    );
 
     const compare = wrapper.findComponent({ name: "DedupCompareDialog" });
     expect(compare.props("collapseStacks")).toBe(false);
@@ -853,6 +856,37 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     wrapper.unmount();
   });
 
+  // The ⋯ panel takes the same deal as the tier popover: the keys pressed
+  // inside it are the menu's, not the queue's. Without it, S on an open menu
+  // would stack the group behind it.
+  it("keys pressed inside the ⋯ panel never fire verdicts", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    await wrapper.find(".dq-overflow .tbo-trigger").trigger("click");
+    const row = wrapper.find('[data-testid="mixed-row"]').element;
+    row.focus();
+    stackGroup.mockResolvedValue({});
+    key("s", row);
+    await flushPromises();
+    expect(stackGroup).not.toHaveBeenCalled();
+    expect(keepGroupSeparate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // ...and only while it is OPEN. A closed ⋯ is an ordinary toolbar button,
+  // and the keys go on working on it exactly as they do on the tier trigger
+  // beside it — the alternative is two adjacent triggers with opposite
+  // keyboard behaviour.
+  it("keys pressed on the closed ⋯ trigger still reach the queue", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    const trigger = wrapper.find(".dq-overflow .tbo-trigger").element;
+    trigger.focus();
+    stackGroup.mockResolvedValue({});
+    key("s", trigger);
+    await flushPromises();
+    expect(stackGroup).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("Escape on the threshold slider still dismisses the popover to its trigger", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     store.nearEnabled = true;
@@ -928,10 +962,12 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // The decision record's canonical tail, identical in every view:
-  // [separator] [UndoControl] [TbGlobalActions]. No ⋯ anywhere in this bar
-  // (amendment #2): every foldable here compresses or hides in its own group.
-  it("orders the tail separator → UndoControl → TbGlobalActions, no burger", async () => {
+  // The decision record's canonical tail, identical in every view that writes
+  // the operation log (the model shelf does not, and mounts no undo):
+  // [separator] [UndoControl] [TbGlobalActions]. The ⋯ is NOT part of the
+  // tail — it belongs to the left group, whose controls it collapses, and the
+  // app-wide cluster never folds into it (amendment #4).
+  it("orders the tail separator → UndoControl → TbGlobalActions, ⋯ elsewhere", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
     // TbGlobalActions is multi-root; its Settings button is a stable anchor.
@@ -943,26 +979,134 @@ describe("DuplicateQueue — the shell chrome", () => {
       true,
     );
     expect(follows(undo, globalActions)).toBe(true);
-    expect(wrapper.find(".tbo-wrap").exists()).toBe(false);
+    expect(wrapper.find(".dq-tb-left .dq-overflow").exists()).toBe(true);
+    expect(wrapper.find(".dq-tb-right .dq-overflow").exists()).toBe(false);
     wrapper.unmount();
   });
 
-  // The separator amendments: with the Decided toggle COMPRESSING instead of
-  // folding (amendment #2), D-S1's left flank is always populated — so both
-  // rules render at all widths and neither carries a fold class.
+  // The ⋯ stands where the controls it collapses stood: at the end of the
+  // toggle run, before D-S1.
+  it("puts the ⋯ after the page toggles and before the separator", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    const burger = wrapper.find(".dq-tb-left .dq-overflow").element;
+    expect(burger.previousElementSibling.classList.contains("qdecided")).toBe(
+      true,
+    );
+    expect(burger.nextElementSibling.classList.contains("dq-tb-sep")).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  // Fold = CSS both ways: every control the ⋯ collapses exists as a bar
+  // button AND as a row, and the container query at ≤882 flips which of the
+  // pair is visible. Nothing else may be in there — the tier gate, the scope
+  // pill, the count and the app-wide tail all stay on the bar at every width.
+  it("carries a row for each folded page toggle and nothing else", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    await wrapper.find(".dq-overflow .tbo-trigger").trigger("click");
+    const rows = wrapper.findAll(".dq-overflow .tbm-action");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("Decided");
+    expect(rows[1].text()).toContain("Mixed stacks");
+    // A folded control keeps the name its bar button carried. Name-from-content
+    // would otherwise cut Mixed stacks down to its label and count, losing the
+    // sentence that says what a mixed stack is.
+    expect(rows[0].attributes("aria-label")).toBe(
+      wrapper.find(".dq-toolbar .qdecided").attributes("aria-label"),
+    );
+    expect(rows[1].attributes("aria-label")).toBe(
+      wrapper.find('[data-testid="mixed-toggle"]').attributes("aria-label"),
+    );
+    // Each row's bar twin carries the fold class that hides it at the same
+    // width, so exactly one of the pair is ever on screen.
+    for (const toggle of wrapper.findAll(".dq-toolbar .qdecided")) {
+      expect(toggle.classes()).toContain("dq-fold-906");
+    }
+    wrapper.unmount();
+  });
+
+  // A fold class is a name shared between the template and one @container
+  // rung, and nothing else connects them: rename it in one place and that rung
+  // silently stops firing, which no mounted test can see (jsdom evaluates no
+  // container query) and no reviewer reads off a diff. Both re-placements of
+  // this ladder renamed these classes, so the halves are checked against each
+  // other rather than against a literal.
+  it("every fold class the template sets is hidden by a rung", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/views/DuplicateQueue.vue`,
+      "utf8",
+    );
+    const template = source.slice(0, source.indexOf("<script setup>"));
+    const style = source.slice(source.indexOf("<style scoped>"));
+    const set = (text, pattern) =>
+      [...new Set([...text.matchAll(pattern)].map((m) => m[1]))].sort();
+    const used = set(template, /['"\s](dq-fold-\d+)['":\s]/g);
+    const hidden = set(style, /\.(dq-fold-\d+)\s*\{/g);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used).toEqual(hidden);
+  });
+
+  // A row does the same thing its button does.
+  it("navigates from the folded row, and closes the panel behind it", async () => {
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await wrapper.find(".dq-overflow .tbo-trigger").trigger("click");
+    listGroups.mockResolvedValue({
+      groups: [],
+      total: 0,
+      offset: 0,
+      limit: 20,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+    await wrapper.find('[data-testid="mixed-row"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(store.showingMixed).toBe(true);
+    expect(wrapper.find(".dq-overflow .tbm-action").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  // The way OUT of a sub-page is not a foldable: on the Decided and Mixed
+  // pages the surviving toggle reads "Back to review" and is the visible exit,
+  // so it keeps its place on the bar and the ⋯ (which would then hold nothing)
+  // does not mount at all.
+  it("never folds a Back to review toggle, and drops the ⋯ with it", async () => {
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    listGroups.mockResolvedValue({
+      groups: [],
+      total: 0,
+      offset: 0,
+      limit: 20,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+    await store.toggleDecided();
+    await wrapper.vm.$nextTick();
+
+    const back = wrapper.find(".dq-toolbar .qdecided");
+    expect(back.attributes("aria-label")).toBe("Back to review");
+    expect(back.classes()).not.toContain("dq-fold-906");
+    expect(wrapper.find(".dq-overflow").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  // The separator amendments: D-S1's left flank is populated at every width —
+  // by the toggles above 906 and by the ⋯ that replaces them below it — so
+  // both rules render at all widths and neither carries a fold class.
   it("both separators render at all widths, neither carrying a fold class", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const separators = wrapper.findAll(".dq-toolbar .dq-tb-sep");
     expect(separators).toHaveLength(2);
     for (const separator of separators) {
-      expect(separator.classes()).not.toContain("dq-fold-720");
+      expect(separator.classes().some((c) => c.startsWith("dq-fold-"))).toBe(
+        false,
+      );
     }
     wrapper.unmount();
   });
 
-  // The Decided toggle compresses (icon-only at ≤720, the Auto-stack
-  // pattern), so it must carry its own accessible name and keep its pressed
-  // state at every width.
+  // The Decided toggle folds at ≤882 and compresses to an arrow while it is
+  // the way back, so it must carry its own accessible name and keep its
+  // pressed state at every width.
   it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     const toggle = wrapper.find(".dq-toolbar .qdecided");
@@ -988,7 +1132,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // The tier trigger's label ellipsizes under pressure and hides entirely at
-  // ≤720, so the button must carry its own accessible name at every width
+  // ≤1087, so the button must carry its own accessible name at every width
   // (WCAG 4.1.2 — a hidden span would leave it empty).
   it("the tier button exposes its label as title and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -1103,15 +1247,18 @@ describe("DuplicateQueue — undo puts the queue back", () => {
     await wrapper.vm.$nextTick();
 
     expect(listGroups).toHaveBeenCalledTimes(1);
-    expect(listGroups.mock.calls[0][0]).toMatchObject({ offset: 150, limit: 200 });
+    expect(listGroups.mock.calls[0][0]).toMatchObject({
+      offset: 150,
+      limit: 200,
+    });
     expect(store.windowStart).toBe(150);
     expect(store.focusedGroup.signature).toBe("g175");
     expect(store.isSelected("g174")).toBe(true);
     expect(store.isSelected("g175")).toBe(true);
     expect(list.element.scrollTop).toBe(170 * PITCH + 7);
-    expect(wrapper.find('[data-testid="dedup-group-g99-restored"]').exists()).toBe(
-      true,
-    );
+    expect(
+      wrapper.find('[data-testid="dedup-group-g99-restored"]').exists(),
+    ).toBe(true);
     wrapper.unmount();
   });
 
@@ -2094,9 +2241,9 @@ describe("DuplicateQueue — multi-select", () => {
       "g3",
     ]);
     expect(wrapper.findAll(".grow")).toHaveLength(3);
-    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).not.toContain(
-      "Stacked",
-    );
+    expect(
+      wrapper.find('[data-testid="dedup-announcement"]').text(),
+    ).not.toContain("Stacked");
 
     resolveBatch({ batch_id: "cli-visible", results: [{}, {}] });
     await flushPromises();
@@ -3436,7 +3583,10 @@ describe("DuplicateQueue: the two-way shortcut", () => {
 // score just to decide whether to show a shortcut.
 describe("DuplicateQueue: the route to the stacks", () => {
   /** Mount straight onto the queue-clear screen. */
-  async function mountCleared({ liveStackCount = 209, loadStackFacts = true } = {}) {
+  async function mountCleared({
+    liveStackCount = 209,
+    loadStackFacts = true,
+  } = {}) {
     listMixedStacks.mockResolvedValue(
       mixedPage([], { live_stack_count: liveStackCount }),
     );

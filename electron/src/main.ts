@@ -10,20 +10,26 @@ import {
   dialog,
   Tray,
 } from 'electron';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
-import { ServerProcess } from './backend/ServerProcess';
+import { isAllowedNavigation, redactUrl } from './urlPolicy';
+import { ServerProcess, devInterpreter } from './backend/ServerProcess';
+import {
+  isPermissionRepairRequired,
+  mkdirPrivateIfMissing,
+  permissionRepairDialogDetail,
+  PermissionRepairRequiredError,
+} from './backend/StartupPermissions';
 import {
   Accel,
   ACCEL_LABELS,
@@ -41,6 +47,16 @@ import {
   serverLogPath,
   setBackendsRoot,
 } from './config';
+import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
+import {
+  cliCommandHint,
+  launcherPath,
+  parseCliArgs,
+  shimBlocked,
+  shimInstalled,
+  shimPath,
+  syncShim,
+} from './cliShim';
 
 const execFileP = promisify(execFile);
 
@@ -94,10 +110,19 @@ let teardownComplete = false;
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
+// Desktop-shell preference: when true, `~/.local/bin/pixlstash` is kept pointing
+// at this install so the CLI is reachable from a plain shell. Opt-in: it writes
+// to a directory outside the app's own storage.
+let shellCommand = false;
 const pendingMediaSaves = new Map<
   string,
   { filePath: string; webContentsId: number; timeout: NodeJS.Timeout }
 >();
+
+// Server-owned source detected by setup:probe. The renderer receives the path
+// only to name the consent choice; setup:commit sends a boolean and can never
+// substitute a different vault for the privileged preparer invocation.
+let detectedLegacyIdentitySource: string | null = null;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -121,57 +146,9 @@ function sendPhase(payload: Record<string, unknown>): void {
   mainWindow?.webContents.send('app:phase', payload);
 }
 
-/**
- * Decide whether the window may navigate (top-level) to `target`. The privileged
- * `pixlstashDesktop` preload bridge stays injected across same-window navigation,
- * so any off-origin page that loaded here could call high-impact IPC
- * (setServerSettings, commitSetup, installAccelerator, …). We therefore allow
- * ONLY the content we load ourselves and block everything else (deny-by-default):
- *
- *  - `file://` — ONLY files inside our own packaged renderer directory
- *    (renderer/index.html splash, renderer/setup.html, their assets). A blanket
- *    `file:` allow would let a navigated page load any local HTML under the
- *    privileged preload, so we resolve the target path and require it to live
- *    under RENDERER_DIR.
- *  - the live loopback backend origin — http://127.0.0.1:<ephemeral port>. The
- *    port is chosen fresh per backend launch, so the allowed origin is derived
- *    from the URL we actually loaded (`currentUrl`), never hardcoded. Before the
- *    backend is up `currentUrl` is null; we then permit only the loopback host
- *    (127.0.0.1 / localhost over http) so an in-flight load isn't broken, while
- *    still excluding every non-loopback origin.
- */
-function isAllowedNavigation(target: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(target);
-  } catch (e) {
-    console.warn(`[nav] blocking navigation to unparseable URL ${target}:`, e);
-    return false;
-  }
-  // Local bundled pages (splash / setup wizard): allow ONLY our own renderer
-  // files, never an arbitrary file:// path (which would still carry the preload).
-  if (url.protocol === 'file:') {
-    try {
-      const path = resolve(fileURLToPath(url));
-      return path === RENDERER_DIR.slice(0, -1) || path.startsWith(RENDERER_DIR);
-    } catch (e) {
-      console.warn(`[nav] blocking unresolvable file:// URL ${target}:`, e);
-      return false;
-    }
-  }
-  // The running backend, pinned to the exact loopback origin we loaded.
-  if (currentUrl) {
-    try {
-      if (url.origin === new URL(currentUrl).origin) return true;
-    } catch (e) {
-      console.warn(`[nav] could not parse current backend URL ${currentUrl}:`, e);
-    }
-  }
-  // Fallback before the backend URL is known: only the loopback host over http.
-  if (url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')) {
-    return true;
-  }
-  return false;
+/** Bind the shared origin policy (see `./urlPolicy`) to this process's state. */
+function isAllowedTarget(target: string): boolean {
+  return isAllowedNavigation(target, currentUrl, RENDERER_DIR);
 }
 
 /**
@@ -183,7 +160,7 @@ function isAllowedNavigation(target: string): boolean {
  * we allow `https:` and `mailto:` and block (and log) everything else —
  * deny-by-default. Plain `http:` is intentionally excluded for outbound opens:
  * the only legitimate http target here is the loopback backend, which is handled
- * in-app (setWindowOpenHandler 'allow' / isAllowedNavigation), never opened
+ * in-app (setWindowOpenHandler 'allow' / isAllowedTarget), never opened
  * externally. Used by BOTH setWindowOpenHandler and the navigation guard so the
  * scheme policy lives in one place.
  */
@@ -192,14 +169,16 @@ function openExternalSafely(url: string): void {
   try {
     ({ protocol } = new URL(url));
   } catch (e) {
-    console.warn(`[external] refusing to open unparseable URL ${url}:`, e);
+    console.warn(`[external] refusing to open unparseable URL ${redactUrl(url)}:`, e);
     return;
   }
   if (protocol === 'https:' || protocol === 'mailto:') {
     void shell.openExternal(url);
     return;
   }
-  console.warn(`[external] blocked openExternal for disallowed scheme '${protocol}': ${url}`);
+  console.warn(
+    `[external] blocked openExternal for disallowed scheme '${protocol}': ${redactUrl(url)}`,
+  );
 }
 
 /** The accelerator the bundled (installer-shipped) runtime provides. */
@@ -247,14 +226,16 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-  // Open external links in the user's browser, not inside the app window.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
-      return { action: 'allow' };
-    }
+  // Open external links in the user's browser, not inside the app window. A
+  // child window is only allowed for content we load ourselves, decided by the
+  // same parsed-origin policy as in-window navigation — a string prefix test
+  // would classify http://127.0.0.1.example.com/ as loopback (#1020).
+  const openHandler = ({ url }: { url: string }): { action: 'allow' | 'deny' } => {
+    if (isAllowedTarget(url)) return { action: 'allow' };
     openExternalSafely(url);
     return { action: 'deny' };
-  });
+  };
+  mainWindow.webContents.setWindowOpenHandler(openHandler);
   // Lock down TOP-LEVEL navigation so the privileged preload bridge can never
   // end up under an untrusted origin. setWindowOpenHandler above only covers
   // window.open / new windows; in-window navigation (link clicks, meta-refresh,
@@ -262,15 +243,23 @@ function createMainWindow(): void {
   // own local content or the live loopback backend is cancelled and, if it's a
   // real external link, handed to the OS browser instead.
   const guardNavigation = (event: Electron.Event, url: string): void => {
-    if (isAllowedNavigation(url)) return;
+    if (isAllowedTarget(url)) return;
     event.preventDefault();
-    console.warn(`[nav] blocked in-window navigation to off-origin URL: ${url}`);
+    console.warn(`[nav] blocked in-window navigation to off-origin URL: ${redactUrl(url)}`);
     // Hand a real external link to the OS browser, but only through the scheme
     // allowlist (https/mailto) — never a raw file:/smb:/custom-handler URL.
     openExternalSafely(url);
   };
   mainWindow.webContents.on('will-navigate', guardNavigation);
   mainWindow.webContents.on('will-redirect', guardNavigation);
+  // A child window inherits the parent's webPreferences (preload included), so
+  // its navigation must be governed too: validating only the URL it opened with
+  // would let it navigate off-origin one hop later, bridge and all.
+  mainWindow.webContents.on('did-create-window', (child) => {
+    child.webContents.setWindowOpenHandler(openHandler);
+    child.webContents.on('will-navigate', guardNavigation);
+    child.webContents.on('will-redirect', guardNavigation);
+  });
 }
 
 /** Bring the main window to the front, recreating it if it was destroyed. */
@@ -386,16 +375,78 @@ function loadDesktopPrefs(): void {
   if (prefs && typeof prefs.hideToTrayOnClose === 'boolean') {
     hideToTrayOnClose = prefs.hideToTrayOnClose;
   }
+  if (prefs && typeof prefs.shellCommand === 'boolean') {
+    shellCommand = prefs.shellCommand;
+  }
 }
 
 /** Persist the current shell preferences to disk. */
 function saveDesktopPrefs(): void {
   try {
     mkdirSync(dirname(desktopPrefsPath()), { recursive: true });
-    writeFileSync(desktopPrefsPath(), JSON.stringify({ hideToTrayOnClose }, null, 2));
+    writeFileSync(
+      desktopPrefsPath(),
+      JSON.stringify({ hideToTrayOnClose, shellCommand }, null, 2),
+    );
   } catch (e) {
     console.warn('[desktop-prefs] could not persist preferences:', e);
   }
+}
+
+/**
+ * Whether a shell shim is worth offering here: Windows has no per-user bin
+ * directory on PATH, and an unpackaged dev run has no durable launcher to point
+ * a shim at.
+ */
+function shimSupported(): boolean {
+  return process.platform !== 'win32' && app.isPackaged;
+}
+
+/**
+ * The command that reaches this CLI, or undefined when we cannot name one.
+ *
+ * Only a packaged install has a launcher a shell can run: unpackaged,
+ * `process.execPath` is the bare Electron binary, and `'<electron>' cli …` does
+ * not start the app (a dev run needs `electron . cli …`). Declaring that would
+ * put a command that cannot work in front of the user, so dev runs say nothing
+ * and let the backend fall back to its own inference, which already knows what
+ * a source checkout should type.
+ */
+function declaredCliCommand(): string | undefined {
+  if (!app.isPackaged) return undefined;
+  // Windows declares nothing on purpose (issue #1058). Naming our own launcher
+  // there prints a command no shell waits for: PixlStash.exe is linked for the
+  // GUI subsystem, so the prompt comes back before the CLI has written a byte
+  // and its output then lands on top of it. The backend runs on the bundled
+  // python.exe — a console-subsystem binary at a durable path — and can compose
+  // that command from itself, so leaving the variable unset gets a *better*
+  // answer than we can give. See `desktop_windows_command` in
+  // pixlstash/hub/cli_hint.py.
+  if (process.platform === 'win32') return undefined;
+  return cliCommandHint(shimSupported() && shimInstalled(), launcherPath());
+}
+
+/**
+ * Rewrite (or remove) the shell shim and tell the backend which command works.
+ *
+ * Run at every startup and on every toggle, because the shim's target moves
+ * whenever the user moves the AppImage. Where no shim is installed the plain
+ * `<launcher> cli` form is still a working command, so the hint is never a lie.
+ * The backend reads PIXLSTASH_CLI_COMMAND from its inherited environment, so a
+ * toggle only reaches the Settings hint after the backend next restarts.
+ */
+function applyShellCommand(): void {
+  if (shimSupported()) syncShim(shellCommand, launcherPath());
+  const declared = declaredCliCommand();
+  // Deleted rather than left stale, so a dev run can never inherit a hint from
+  // whatever set the variable before us.
+  if (declared) process.env.PIXLSTASH_CLI_COMMAND = declared;
+  else delete process.env.PIXLSTASH_CLI_COMMAND;
+}
+
+/** The desktop's hub database, which sits beside its own server config. */
+function hubPath(): string {
+  return join(dirname(serverConfigPath()), 'hub.db');
 }
 
 /** Bring the window forward and ask the renderer to open the Settings dialog. */
@@ -626,7 +677,7 @@ function deviceFor(accel: Accel | null): string | undefined {
 }
 
 /** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null): Promise<void> {
+async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -639,7 +690,11 @@ async function startAndLoad(accel: Accel | null): Promise<void> {
       );
     }
   });
-  const running = await serverProcess.start(overlayFor(accel), deviceFor(accel));
+  const running = await serverProcess.start(
+    overlayFor(accel),
+    deviceFor(accel),
+    repairPermissions,
+  );
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -676,12 +731,79 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  * phantom-active GPU with no backend running (the accel:use zombie, 2026-07-20).
  * With `accel === null` a failure rethrows unchanged (nothing to fall back from).
  */
-async function startWithOverlayFallback(accel: Accel | null): Promise<void> {
+async function startWithOverlayFallback(
+  accel: Accel | null,
+  repairPermissions = false,
+): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: startAndLoad,
+    start: (candidate) => startAndLoad(candidate, repairPermissions),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
+    // Permission failures are unrelated to an accelerator. Preserve the active
+    // overlay and let boot() offer the dedicated recovery dialog.
+    shouldFallback: (error) => !isPermissionRepairRequired(error),
   });
+}
+
+/**
+ * The repair report the permissions screen is currently showing. Held in main
+ * (rather than passed through a query string) so the renderer can only ever see
+ * a report the backend actually produced this launch.
+ */
+let pendingPermissionRepair: PermissionRepairRequiredError['request'] | null = null;
+
+/**
+ * Ask the user to authorise the backend's bounded permission repair.
+ *
+ * This is a full window rather than a native message box because the decision
+ * is the app's whole first impression when it happens: it has to explain a risk
+ * the user did not know they had, name every folder it will touch, and still
+ * read as PixlStash. A native dialog can only render one blob of detail text,
+ * which is how a list of paths and modes turns into a wall the user dismisses.
+ *
+ * Falls back to the native box when there is no window to host the page (the
+ * repair can be discovered before `createWindow`, e.g. a headless relaunch), so
+ * the offer is never silently lost.
+ */
+async function offerPermissionRepair(error: PermissionRepairRequiredError): Promise<boolean> {
+  if (!mainWindow) {
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'PixlStash',
+      message: 'PixlStash needs safer file permissions',
+      detail: permissionRepairDialogDetail(error.request),
+      buttons: ['Fix it', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    return result.response === 0;
+  }
+
+  const window = mainWindow;
+  pendingPermissionRepair = error.request;
+  try {
+    await window.loadFile(join(__dirname, 'renderer', 'permissions.html'));
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (accepted: boolean) => {
+        if (settled) return;
+        settled = true;
+        ipcMain.removeHandler('permissions:resolve');
+        window.off('closed', onClosed);
+        resolve(accepted);
+      };
+      // Closing the window is a refusal, not a hang: without this the boot
+      // promise would never settle and the app would sit dead with no UI.
+      const onClosed = () => settle(false);
+      window.on('closed', onClosed);
+      ipcMain.handle('permissions:resolve', (_e, accepted: unknown) => {
+        settle(accepted === true);
+      });
+    });
+  } finally {
+    pendingPermissionRepair = null;
+  }
 }
 
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
@@ -713,8 +835,31 @@ async function boot(): Promise<void> {
     // the user, and retry once on the bundled CPU/Metal env. If that also fails,
     // the error falls through to the fatal phase below as before.
     await startWithOverlayFallback(await activeOverlayAccel());
-  } catch (e) {
-    sendPhase({ phase: 'error', message: (e as Error).message });
+  } catch (caught) {
+    let error: unknown = caught;
+    if (isPermissionRepairRequired(error)) {
+      if (!(await offerPermissionRepair(error))) {
+        app.quit();
+        return;
+      }
+      try {
+        // Exactly one user-authorised retry. Python rechecks ownership, type,
+        // and inode before changing any recorded path.
+        if (isDevBackend()) {
+          await startAndLoad(null, true);
+        } else {
+          await startWithOverlayFallback(await activeOverlayAccel(), true);
+        }
+        return;
+      } catch (retryError) {
+        error = retryError;
+        // The permissions screen is still loaded and has no handler for the
+        // fatal phase, so put the splash back before reporting; otherwise a
+        // failed repair leaves the offer on screen with nothing happening.
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+      }
+    }
+    sendPhase({ phase: 'error', message: (error as Error).message });
   }
 }
 
@@ -830,6 +975,12 @@ function registerIpc(): void {
     activeAccel: await manager.getActiveAccel(),
   }));
 
+  // ---- Startup permission recovery ----
+
+  // Read-only: the screen renders the report; `permissions:resolve` is
+  // registered only while that screen is actually waiting for an answer.
+  ipcMain.handle('permissions:request', () => pendingPermissionRepair);
+
   // ---- First-run setup wizard ----
 
   ipcMain.handle('setup:probe', async () => {
@@ -837,9 +988,15 @@ function registerIpc(): void {
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
       typeof imported?.image_root === 'string' ? (imported.image_root as string) : null;
+    const resolvedImportedRoot = importedImageRoot ? resolve(importedImageRoot) : null;
+    detectedLegacyIdentitySource =
+      resolvedImportedRoot && existsSync(join(resolvedImportedRoot, 'vault.db'))
+        ? resolvedImportedRoot
+        : null;
     const gpu = gpuUpgrade();
     return {
       importedFrom: imported ? stdPath : null,
+      legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
         imageRoot: importedImageRoot || defaultLibraryDir(),
         useGpu: Boolean(gpu),
@@ -864,7 +1021,15 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'setup:commit',
-    async (_e, choices: { imageRoot: string; useGpu: boolean; installLocation?: string }) => {
+    async (
+      _e,
+      choices: {
+        imageRoot: string;
+        useGpu: boolean;
+        installLocation?: string;
+        importLegacyIdentity?: boolean;
+      },
+    ) => {
       if (!runtime) throw new Error('No bundled runtime available');
       const imageRoot = (choices?.imageRoot || '').trim();
       if (!imageRoot) throw new Error('Please choose a library folder.');
@@ -877,14 +1042,43 @@ function registerIpc(): void {
         setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
       }
 
-      // Write the desktop's own config. Loopback HTTP; the active runtime drives
-      // the device (default_device left as auto). The backend fills the rest of
-      // the defaults on first read.
-      mkdirSync(dirname(serverConfigPath()), { recursive: true });
+      const configDir = dirname(serverConfigPath());
+      // New credential directories are private even under umask 0002. Existing
+      // ones are left to the explicit recovery dialog, never silently changed.
+      mkdirPrivateIfMissing(configDir);
+
+      if (choices?.importLegacyIdentity) {
+        if (!detectedLegacyIdentitySource) {
+          throw new Error('No existing standalone PixlStash library was detected.');
+        }
+        if (resolve(imageRoot) !== detectedLegacyIdentitySource) {
+          throw new Error(
+            'To import its login and share links, keep the detected existing library selected.',
+          );
+        }
+        // Fail closed before a live desktop config exists. A nonzero CLI exit
+        // leaves the vault untouched and this exception keeps the setup screen
+        // open instead of booting a server that looks migrated but is not.
+        await prepareLegacyIdentity(
+          bundledInterpreter(),
+          hubPath(),
+          detectedLegacyIdentitySource,
+        );
+      }
+
+      // Write the desktop's own config only after any requested preparation
+      // succeeds. Declining consent writes no provenance marker and therefore
+      // imports zero legacy identity. Loopback HTTP; the active runtime drives
+      // the device (default_device left as auto).
       writeFileSync(
         serverConfigPath(),
         JSON.stringify(
-          { host: '127.0.0.1', require_ssl: false, image_root: imageRoot, default_device: 'auto' },
+          {
+            host: '127.0.0.1',
+            require_ssl: false,
+            image_root: imageRoot,
+            default_device: 'auto',
+          },
           null,
           2,
         ),
@@ -970,14 +1164,43 @@ function registerIpc(): void {
   });
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
-  ipcMain.handle('desktop:getPrefs', () => ({ hideToTrayOnClose }));
-  ipcMain.handle('desktop:setPrefs', (_e, prefs: { hideToTrayOnClose?: boolean }) => {
-    if (typeof prefs?.hideToTrayOnClose === 'boolean') {
-      hideToTrayOnClose = prefs.hideToTrayOnClose;
-      saveDesktopPrefs();
-    }
-    return { hideToTrayOnClose };
-  });
+  //
+  // shellCommand reports whether the command is *actually there*, not what the
+  // preference says, and is null where there is nothing to install (Windows has
+  // no per-user bin dir on PATH; an unpackaged dev run has no durable launcher
+  // to point at) so Settings leaves the row out entirely. Enabling can be
+  // refused — by a `pixlstash` the user wrote themselves, or an unwritable home
+  // — and a switch stuck on over a command that does not exist would be worse
+  // than one that snaps back with a reason.
+  const shellCommandState = () => (shimSupported() ? shimInstalled() : null);
+
+  ipcMain.handle('desktop:getPrefs', () => ({
+    hideToTrayOnClose,
+    shellCommand: shellCommandState(),
+  }));
+  ipcMain.handle(
+    'desktop:setPrefs',
+    (_e, prefs: { hideToTrayOnClose?: boolean; shellCommand?: boolean }) => {
+      if (typeof prefs?.hideToTrayOnClose === 'boolean') {
+        hideToTrayOnClose = prefs.hideToTrayOnClose;
+        saveDesktopPrefs();
+      }
+      if (typeof prefs?.shellCommand === 'boolean') {
+        shellCommand = prefs.shellCommand;
+        saveDesktopPrefs();
+        applyShellCommand();
+        if (shellCommand && !shimInstalled()) {
+          throw new Error(
+            shimBlocked()
+              ? `${shimPath()} already exists and was not created by PixlStash. ` +
+                'Rename or remove it, then try again.'
+              : `Could not write ${shimPath()}.`,
+          );
+        }
+      }
+      return { hideToTrayOnClose, shellCommand: shellCommandState() };
+    },
+  );
 
   // External server (remote access) settings. The loopback the window uses is
   // never affected by these — only the optional second listener.
@@ -1052,8 +1275,51 @@ function registerIpc(): void {
   });
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+/**
+ * Run the bundled `pixlstash.cli` and exit with its status.
+ *
+ * Deliberately ahead of the single-instance lock and `whenReady`: taking the
+ * lock would hand a running window our arguments and quit, and a CLI run must
+ * work whether or not the app is already open. Nothing here creates a window,
+ * so this stays a fast process spawn rather than a full Chromium start.
+ *
+ * `stdio: 'inherit'` because the CLI writes to the terminal and asks for a y/n
+ * on destructive verbs; piping would hang that prompt with nothing shown.
+ */
+function runCli(args: string[]): void {
+  // No window is coming, so keep Chromium's GPU process out of it entirely. It
+  // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
+  // to open dri...") to the terminal *after* the CLI's own output.
+  app.disableHardwareAcceleration();
+  const declared = declaredCliCommand();
+  // Same interpreter choice the backend makes, so a dev run drives the repo's
+  // .venv and the CLI branch is exercisable without building the bundled env.
+  const child = spawn(
+    isDevBackend() ? devInterpreter() : bundledInterpreter(),
+    ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
+    {
+      stdio: 'inherit',
+      // So the CLI's own usage lines, errors and "add one with:" hints name the
+      // command the user actually typed instead of the `pixlstash-cli` console
+      // script, which no desktop install puts on PATH. Undefined in a dev run,
+      // where we have no runnable command to name (see declaredCliCommand).
+      env: declared ? { ...process.env, PIXLSTASH_CLI_COMMAND: declared } : process.env,
+    },
+  );
+  // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
+  // is the same class of failure from the caller's side.
+  child.on('error', (e) => {
+    console.error(`Could not run the PixlStash CLI: ${e.message}`);
+    app.exit(3);
+  });
+  child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
+}
+
+const cliArgs = parseCliArgs(process.argv);
+const gotLock = cliArgs === null && app.requestSingleInstanceLock();
+if (cliArgs !== null) {
+  runCli(cliArgs);
+} else if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -1064,6 +1330,9 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     loadDesktopPrefs();
+    // Before boot(), so the backend inherits PIXLSTASH_CLI_COMMAND and the
+    // Settings hint names a command that actually runs on this install.
+    applyShellCommand();
     buildMenu();
     registerDownloadHandling();
     registerIpc();

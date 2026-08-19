@@ -9,12 +9,13 @@ from pixlstash.db_models import (
     Picture,
     Quality,
 )
-from pixlstash.picture_scoring import (
+from pixlstash.scoring.smart_score import (
     _load_builtin_anchors,
     _BUILTIN_MIN_GOOD,
     _BUILTIN_MIN_BAD,
     attach_anomaly_inputs,
     prepare_smart_score_inputs,
+    resolve_penalised_tag_weights,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
@@ -33,7 +34,7 @@ class SmartScoreTask(BaseTask):
     scorer's inputs are owned outside the DB session: the tagger's per-label acceptance
     thresholds, which live in the model's ``meta.json`` plus the user's threshold offset.
     The owner's penalised-tag weights are resolved from the DB inside the read session by
-    :func:`~pixlstash.picture_scoring.attach_anomaly_inputs`, so this background path and
+    :func:`~pixlstash.scoring.smart_score.attach_anomaly_inputs`, so this background path and
     the request path score identically.
 
     Args:
@@ -67,9 +68,17 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
+        # The owner's table comes from the hub's user row, never from ``self._db`` —
+        # that is the vault, and identity does not live there.
+        owner_penalised_tags = resolve_penalised_tag_weights(
+            getattr(self._vault, "auth_service", None)
+        )
         good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
-                self._fetch_score_data, picture_ids, apply_thresholds
+                self._fetch_score_data,
+                picture_ids,
+                apply_thresholds,
+                owner_penalised_tags,
             )
         )
 
@@ -110,14 +119,17 @@ class SmartScoreTask(BaseTask):
 
     @staticmethod
     def _fetch_score_data(
-        session: Session, candidate_ids: list, apply_thresholds: dict | None = None
+        session: Session,
+        candidate_ids: list,
+        apply_thresholds: dict | None = None,
+        owner_penalised_tags: dict | None = None,
     ):
         """Fetch anchors, candidates, and the scorer config for smart score computation.
 
         Returns ``(good_anchors, bad_anchors, candidates, scorer_config,
         anomaly_signature)``. Mirrors
-        :func:`pixlstash.picture_scoring.fetch_smart_score_data` and shares
-        :func:`pixlstash.picture_scoring.attach_anomaly_inputs`, so the background task
+        :func:`pixlstash.scoring.smart_score.fetch_smart_score_data` and shares
+        :func:`pixlstash.scoring.smart_score.attach_anomaly_inputs`, so the background task
         and the on-demand sort score identically.
 
         The ``anomaly_signature`` (``{picture_id: signature}`` from
@@ -131,7 +143,9 @@ class SmartScoreTask(BaseTask):
             session: Active DB session.
             candidate_ids: Pictures to score.
             apply_thresholds: Per-tag confidence gate; see
-                :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`.
+                :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`.
+            owner_penalised_tags: The owner's ``{tag: weight}`` table, resolved from the
+                hub by the caller — ``session`` is a vault one and holds no identity.
         """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)
@@ -193,7 +207,10 @@ class SmartScoreTask(BaseTask):
             )
 
         scorer_config = attach_anomaly_inputs(
-            session, candidates, apply_thresholds=apply_thresholds
+            session,
+            candidates,
+            apply_thresholds=apply_thresholds,
+            penalised_tag_weights=owner_penalised_tags,
         )
 
         builtin_good, builtin_bad = _load_builtin_anchors()

@@ -7,7 +7,7 @@ PixlStash is a local picture library server for organizing, filtering, and revie
 
 It provides:
 
-- A browser-based interface
+- A desktop application or a headless server with a browser-based interface
 - Automatic tagging and image descriptions with selectable AI engines (including JoyCaption)
 - Re-tag or regenerate descriptions for any selection directly from the context menu
 - Instant grid loading — thumbnails appear immediately, metadata fills in asynchronously
@@ -24,6 +24,9 @@ It provides:
 - Undo and Redo with keyboard shortcuts and history
 - Deduplication helper
 - Tag review helper
+- A model overview for keeping track of your generative AI models
+- Swappable image library
+- Scriptable backup 
 
 PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 
@@ -78,12 +81,155 @@ the app's own user-data directory.
 > | **Windows** | `%LOCALAPPDATA%\pixlstash\downloaded_models\` |
 >
 > An internet connection is required the first time the server starts. Subsequent starts use the cached models.
+>
+> **Moving them somewhere else:** open **Model folders** on the model shelf and use **Move** on PixlStash's own folder. Every file in it is copied, verified and removed from the old location, and the new location is remembered — so nothing is downloaded again. Set `PIXLSTASH_BUILTIN_MODEL_DIR` instead if you want the folder somewhere else without moving what is already in it (a mounted model volume, typically).
 
 If you need to use a custom config path:
 
 ```bash
 python -m pixlstash.app --server-config "C:\path\to\server-config.json"
 ```
+
+## Multiple libraries
+
+PixlStash can register several independent image libraries and keep one open at
+a time. Pictures, tags, scores, snapshots, guest sessions, and guest scores stay
+with their library; your owner account and preferences stay with the
+installation. Switch from **Settings → Libraries**. API tokens and share links
+are pinned to the library where they were created: they become inactive while a
+different library is open and work again when you switch back.
+
+### The library command line
+
+Adding and removing libraries is a command-line operation in this release,
+because it points PixlStash at folders on your machine. **Settings → Libraries**
+shows the exact command for your installation, with a copy button.
+
+Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
+**with the same environment active that the server runs in** (activate the venv,
+or use the same interpreter). That is the one assumption the short form makes;
+if the commands are not found, see [Which form to type](#which-form-to-type)
+below.
+
+```bash
+pixlstash-cli libraries list
+pixlstash-cli libraries create /path/to/new-library --name "New library"
+pixlstash-cli libraries attach /path/to/existing-library --name "Existing library"
+pixlstash-cli libraries rename "Existing library" "Better name"
+pixlstash-cli libraries relocate "Existing library" /new/path
+pixlstash-cli libraries detach "Existing library"
+pixlstash-cli libraries backup "Existing library" /path/to/backups/
+pixlstash-cli libraries backup "Existing library" /path/to/backups/monday.tar.zst
+pixlstash-cli libraries restore /path/to/backups/monday.tar.zst /path/to/new-library
+```
+
+| Command | What it does |
+| --- | --- |
+| `list` | Shows every registered library and marks the active one. |
+| `create` | Creates the folder, starts an empty library in it, and registers it. |
+| `attach` | Registers a library folder that already exists on disk. |
+| `rename` | Changes the display name. Nothing on disk moves. |
+| `relocate` | Points an existing registration at a new path, keeping its identity and share links. |
+| `detach` | Forgets a library. **No files are removed and nothing inside the folder changes.** |
+| `backup` | Writes the library and the hub to a single archive. |
+| `restore` | Unpacks an archive into a **new** folder and makes it the library that opens. |
+
+Notes worth knowing before you need them:
+
+- `detach` refuses the **active** library. Switch to another one first.
+- Reattaching the same folder revives its original registration, including its
+  share links, because a library carries a fingerprint of its own identity.
+- A backup is a **zstd-compressed tar**, named `.tar.zst` — not `.tar.gz`.
+  `--no-compress` writes a plain `.tar` instead. Given a folder, `backup`
+  invents a dated name with the right ending; given a filename, it adds the
+  right ending if you left it off. `restore` recognises an archive by its
+  contents, so a renamed file still works.
+- A backup contains `hub.db`, and therefore your login and token secrets.
+  PixlStash writes it owner-readable and refuses to overwrite an existing file.
+- A backup covers the library folder. Pictures kept in **reference folders** live
+  outside it and are *not* included, so back those up separately.
+- Backing up finishes any outstanding one-time snapshot cleanup first, so the
+  archive never carries credentials from before your upgrade.
+- `restore` needs PixlStash stopped, and names a folder that is empty or does
+  not exist yet — it never writes over a library. Because the archive holds the hub,
+  restoring also brings back the password and API tokens that library was
+  using, so your current ones are replaced.
+- **`restore` does not delete your current setup.** It *moves*
+  `server-config.json` and `hub.db` into a dated `pre-restore-*` folder beside
+  themselves and prints the launch command for each, so
+  `pixlstash-server --server-config <pre-restore-*>/server-config.json` reopens
+  what you had. Your old library folder is never touched.
+
+#### Which form to type
+
+The commands above assume `pixlstash-cli` is on your `PATH`, which is true once
+the environment PixlStash is installed into is active.
+
+- **Source checkout**, or an environment you have not activated:
+  `python -m pixlstash.cli libraries list`
+- **Docker Compose**, for a running service (paths are inside the container):
+  `docker compose exec pixlstash pixlstash-cli libraries list`
+- **Desktop app** (AppImage, deb, .dmg, installer): the app is its own CLI, so
+  `/path/to/PixlStash.AppImage cli libraries list` works whether or not the app
+  is running. Turn on Settings › Backend › Desktop › **Shell command** to get a
+  `pixlstash` command in `~/.local/bin` and type `pixlstash libraries list`
+  instead. Either form targets the desktop app's own hub; there is no need to
+  pass `--hub`. Settings › Libraries always shows the exact command for your
+  install.
+- **A different hub** than the default: put global options *before* `libraries`,
+  e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the
+  CLI uses the standard config location, which is what you want almost always.
+
+### Required one-shot preparation when upgrading
+
+If an older installation already has its owner and tokens inside `vault.db`,
+normal startup deliberately will not guess from the config file or from
+finding an existing vault; it needs that exact legacy vault authorized once.
+
+- **Desktop app:** setup performs this step only after you explicitly approve
+  importing the detected legacy owner and tokens.
+- **`pixlstash-server` / `python -m pixlstash.app`, in an interactive
+  terminal:** startup detects the unprepared legacy vault itself and asks,
+  with a plain explanation and a `[y/N]` prompt — defaulting to **no**, since
+  this is irreversible — before doing anything. Saying yes does the same thing
+  the CLI command below does, in the same startup, so no separate step or
+  restart is needed. After this runs, the vault is no longer readable as an
+  owner/token store by versions of PixlStash older than the hub — the prompt
+  says so before you answer.
+- **Non-interactive launches** (a service, a container, redirected stdin) log
+  that the legacy vault needs preparing instead of asking, and the CLI command
+  below remains the
+  way to authorize the migration ahead of time.
+
+Pip installation:
+
+```bash
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries prepare-legacy-identity /path/to/library
+```
+
+Source checkout:
+
+```bash
+python -m pixlstash.cli --hub /path/to/config-dir/hub.db libraries prepare-legacy-identity /path/to/library
+```
+
+Docker Compose, before bringing the upgraded service up (adjust the two
+container paths if you configured custom mounts):
+
+```bash
+docker compose run --rm --entrypoint pixlstash-cli pixlstash \
+  --hub /home/pixlstash/.config/pixlstash/hub.db \
+  libraries prepare-legacy-identity \
+  /home/pixlstash/.config/pixlstash/images
+```
+
+After the command succeeds, start PixlStash normally. Startup verifies the
+approved path and identity digest, copies the owner/tokens into the hub, stamps
+the library, and only then removes portable owner, token, and guest-session data
+from the live vault and its historical snapshots. New snapshots and every
+restore scratch database receive the same sanitation, so identity remains
+hub-only. If verification fails, the hub does not mark the migration complete;
+correct the reported problem and retry.
 
 ## Server configuration
 
@@ -123,7 +269,7 @@ Edit the file and restart the server to apply changes.
 | `require_local_for_write` | `true` | When `true`, full login (username/password and ALL-scope tokens) is only permitted from local network addresses (RFC 1918 / loopback). READ-only share tokens are always accepted from any IP. Set to `false` to allow full login from any IP. |
 | `trusted_proxies` | `[]` | List of proxy IP addresses whose `X-Forwarded-For` header should be trusted for real-client-IP detection. See [Sharing and remote access](#sharing-and-remote-access) below. |
 
-At startup the server detects its own LAN IP and automatically allows it on any port. This means the Vite dev server works over LAN (`http://192.168.1.5:5173` → `http://192.168.1.5:9537`) without any extra configuration, as long as network access is enabled via `host`.
+At startup the server detects its own LAN IP and automatically allows it on any port. This means the Vite dev server works over LAN (`http://<lan-ip>:5173` → `http://<lan-ip>:9537`) without any extra configuration, as long as network access is enabled via `host`.
 
 Use `cors_origins` only if you need to allow origins on a different machine entirely.
 
@@ -338,15 +484,80 @@ Detailed installation instructions on <a href="http://pixlstash.dev/upgrade.html
 
 PixlStash supports built-in plugins and user-created plugins.
 
+### With the CLI (recommended)
+
+```bash
+pixlstash-cli plugins available                     # what is published
+pixlstash-cli plugins available caption             # ...matching a word
+pixlstash-cli plugins install hello_world_stamp     # from the plugins repository
+pixlstash-cli plugins install ./my_captioner.zip    # a zip of a plugin folder
+pixlstash-cli plugins install ./my_captioner/       # an extracted folder
+pixlstash-cli plugins install ./my_filter.py        # a single module
+pixlstash-cli plugins test ./my_captioner.py       # does it load and render?
+pixlstash-cli plugins list
+pixlstash-cli plugins remove my_captioner
+```
+
+`plugins available` lists what
+[PixlStash-plugins](https://github.com/Pikselkroken/PixlStash-plugins) publishes,
+with each plugin's name, title, one-line summary and (where declared) author and
+licence; `*` marks one you already have. Add a word to search, and it matches
+any of those fields, so anything you can see in the listing you can search for.
+It downloads the same archive `install` does and reads it without importing
+anything, so it needs no token and runs no published code.
+
+The destination differs by kind (captioning plugin or image filter) and by
+shape, so `install` works it out from the source instead of asking you to type
+it: it reads the source without importing it, decides which base class it
+derives from, and names the installed file after the plugin's own `name`. It
+refuses a source that is not a plugin, one whose name collides with a built-in,
+and a zip whose entries would be unpacked outside the folder it is unpacked
+into.
+
+`--dry-run` prints the plan and stops, `--yes` skips the confirmation, `--force`
+replaces an existing plugin of the same name, and `--strict` turns the warnings
+into refusals. `--ref` picks a branch, tag or commit in the plugins repository
+and is ignored for local sources; it cannot point the download at a different
+repository. A plugin's `requirements.txt` is never installed unless you pass
+`--with-deps`. **Plugin code runs unsandboxed, in the server process, with your
+permissions** — install what you would run yourself.
+
+Captioning plugins load at server start, so restart PixlStash after installing
+one; image filters are re-scanned every time the Filters menu is listed.
+
+`plugins test` is for the person *writing* a captioning plugin, and it is the
+one verb that imports the plugin instead of reading it: it loads the file the
+way the server does, registers what it defines, and checks that the parameter
+schema is one the settings screen can render — so a typo costs a command rather
+than a restart. `--image PATH` runs it over one picture as well, and stops
+instead of running when the plugin reports its model is not present — though a
+plugin that downloads inside `init()` still will, since by then it is the
+plugin's code deciding.
+
+**It is a development aid, not a security scanner.** It does not tell you
+whether a plugin is safe to install — it *runs* the plugin, unsandboxed, with
+your permissions, which is exactly what the server would do. Only test a plugin
+you would have installed anyway.
+
 ### User plugin directory
 
-Place your `.py` plugin files in the platform-specific user data directory. PixlStash logs the exact path on startup.
+If you prefer to copy files by hand, they go in the platform-specific user data
+directory. PixlStash logs the exact path on startup, and
+`pixlstash-cli plugins list` prints it.
 
-| OS | Path |
-|----|------|
-| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` |
-| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` |
-| **Windows** | `%LOCALAPPDATA%\pixlstash\image-plugins\user\` |
+| OS | Image filters | Captioning plugins |
+|----|---------------|--------------------|
+| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` | `~/.local/share/pixlstash/tagger-plugins/user/` |
+| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` | `~/Library/Application Support/pixlstash/tagger-plugins/user/` |
+| **Windows** | `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\` | `%LOCALAPPDATA%\pixlstash\pixlstash\tagger-plugins\user\` |
+
+The doubled `pixlstash\pixlstash` on Windows is not a typo: `platformdirs` puts
+the app under a vendor folder, and PixlStash passes no separate vendor name.
+This table used to show it singly, which is why copying a plugin there by hand
+appeared to do nothing.
+
+An image filter is always a single `.py` file. A captioning plugin may be a
+single `.py` file or a folder containing `__init__.py`.
 
 ### Writing a plugin
 
@@ -490,4 +701,3 @@ docker run -d \
 ```
 
 Replace `/home/you/Photos` with your actual host path and adjust the container path index if you have multiple folders.
-

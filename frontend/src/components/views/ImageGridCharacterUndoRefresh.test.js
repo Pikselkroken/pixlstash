@@ -43,34 +43,12 @@ vi.mock("../../utils/apiClient", () => {
   };
 });
 
-vi.mock("vuetify/components", () => {
-  const stubs = new Map();
-  return new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (prop === "__esModule") return true;
-        if (typeof prop !== "string") return undefined;
-        if (!stubs.has(prop)) {
-          stubs.set(prop, { name: prop, template: "<div><slot /></div>" });
-        }
-        return stubs.get(prop);
-      },
-      has: () => true,
-    },
-  );
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
 });
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
-globalThis.IntersectionObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+
 
 vi.mock("vue-router", () => ({
   useRoute: () => ({ query: {}, params: {}, path: "/", name: "grid" }),

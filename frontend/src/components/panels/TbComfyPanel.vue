@@ -110,9 +110,10 @@
 <script setup>
 import { ref, computed, watch } from "vue";
 import { listWorkflows } from "../../api/comfyui";
-
+import { errorDetail } from "../../utils/apiError";
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   open: { type: Boolean, default: false },
 });
 
@@ -176,7 +177,7 @@ async function tbFetchComfyWorkflows() {
     tbComfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     tbComfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     tbComfyuiWorkflows.value = [];
   } finally {
     tbComfyuiWorkflowLoading.value = false;

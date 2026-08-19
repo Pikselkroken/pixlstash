@@ -9,6 +9,7 @@ const { sessionResetHandlers } = vi.hoisted(() => ({
 // backend only through `api/operations`. Both are mocked so no HTTP happens and
 // every branch (read-only, 409, batch coalescing) can be driven directly.
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: (handler) => {
     sessionResetHandlers.add(handler);
     return () => sessionResetHandlers.delete(handler);

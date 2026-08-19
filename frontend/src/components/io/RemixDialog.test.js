@@ -503,7 +503,7 @@ describe("RemixDialog prompt prefill", () => {
     const w = await settle(
       mountDialog({ image: { id: 42, file_name: "cat.png" } }),
     );
-    expect(getPictureMetadata).toHaveBeenCalledWith(42, expect.anything());
+    expect(getPictureMetadata).toHaveBeenCalledWith(42);
     expect(w.find("textarea").element.value).toBe("a cat on a mat");
     expect(w.find(".remix-provenance").text()).toContain("from image description");
   });
@@ -582,7 +582,6 @@ describe("RemixDialog seeds", () => {
     await settle(w);
     expect(runRecipe).toHaveBeenCalledWith(
       expect.objectContaining({ seed_mode: "fixed", seed: 6 }),
-      expect.anything(),
     );
   });
 
@@ -600,7 +599,6 @@ describe("RemixDialog seeds", () => {
     await settle(w);
     expect(runRecipe).toHaveBeenCalledWith(
       expect.objectContaining({ seed_mode: "fixed", seed: 97 }),
-      expect.anything(),
     );
   });
 
@@ -637,7 +635,6 @@ describe("RemixDialog submit", () => {
     await settle(w);
     expect(runRecipe).toHaveBeenCalledWith(
       expect.objectContaining({ picture_id: 42, seed_mode: "random" }),
-      expect.anything(),
     );
     expect(w.emitted("run")[0][0]).toMatchObject({
       pictureId: 42,
@@ -661,7 +658,6 @@ describe("RemixDialog submit", () => {
         workflow_name: "Edit.json",
         caption: "make it snowing",
       }),
-      expect.anything(),
     );
   });
 

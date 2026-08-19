@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS install (
   -- upgrade wave, which would otherwise make week-1 retention read absurdly
   -- high.
   is_new_install INTEGER NOT NULL DEFAULT 0,
-  -- One of four coarse buckets. Docker installs ping daily and desktop/pip only
-  -- when run, so the curve is uninterpretable without it.
+  -- One of the coarse buckets in validate.js INSTALL_TYPES. Docker installs ping
+  -- daily and desktop/pip only when run, so the curve is uninterpretable without
+  -- it. Not a CHECK constraint on purpose: the allowlist is enforced in the
+  -- parser, and pinning it here too would need a table rebuild to add a bucket.
   install_type   TEXT    NOT NULL
 );
 

@@ -8,6 +8,7 @@
 import csv
 import os
 import platform
+import threading
 
 import numpy as np
 import onnxruntime as ort
@@ -63,6 +64,13 @@ class WD14Service:
         self._onnx_batch_capacity: int = 1
         self._rating_tags: list | None = None
         self._general_tags: list | None = None
+        # Serialises session construction against destruction. ``unload`` drops
+        # the last reference to an ONNX Runtime session, which owns native
+        # threads and device memory; doing that while ``_init_onnx_session`` is
+        # still building one is the crash reproduced in
+        # test_model_unload_race.py. ``aggressive_unload`` runs from the idle
+        # sweep and from shutdown and cannot see an in-flight load.
+        self._load_lock = threading.RLock()
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -103,30 +111,37 @@ class WD14Service:
 
     def init(self) -> None:
         """Load the ONNX session and tag list (idempotent)."""
-        if self.is_loaded():
-            return
-        if self._device == "cuda":
-            providers = ort.get_available_providers()
-            if "CUDAExecutionProvider" not in providers:
-                logger.warning(
-                    "CUDAExecutionProvider unavailable for onnxruntime "
-                    "(WD14 tagger will use CPU; all PyTorch models still use CUDA). "
-                    "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
-                )
-        self._init_onnx_session()
-        if self._rating_tags is None or self._general_tags is None:
-            self._load_tags()
+        with self._load_lock:
+            if self.is_loaded():
+                return
+            if self._device == "cuda":
+                providers = ort.get_available_providers()
+                if "CUDAExecutionProvider" not in providers:
+                    logger.warning(
+                        "CUDAExecutionProvider unavailable for onnxruntime "
+                        "(WD14 tagger will use CPU; all PyTorch models still use CUDA). "
+                        "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
+                    )
+            self._init_onnx_session()
+            if self._rating_tags is None or self._general_tags is None:
+                self._load_tags()
 
     def unload(self) -> None:
-        """Release the ONNX session and tag list."""
-        if self._ort_sess is not None:
-            del self._ort_sess
-            self._ort_sess = None
-            logger.debug("WD14Service: ONNX session unloaded.")
-        self._input_name = None
-        self._onnx_batch_capacity = 1
-        self._rating_tags = None
-        self._general_tags = None
+        """Release the ONNX session and tag list.
+
+        Waits for an in-flight :meth:`init`: dropping the last reference to an
+        ONNX Runtime session tears down its native threads, and doing that while
+        one is still being constructed crashes the process.
+        """
+        with self._load_lock:
+            if self._ort_sess is not None:
+                del self._ort_sess
+                self._ort_sess = None
+                logger.debug("WD14Service: ONNX session unloaded.")
+            self._input_name = None
+            self._onnx_batch_capacity = 1
+            self._rating_tags = None
+            self._general_tags = None
 
     def batch_capacity(self) -> int:
         """Return the ONNX model's batch dimension (1 when not yet loaded)."""
@@ -487,6 +502,7 @@ class WD14Plugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: WD14 produces tags.
         supports_descriptions: WD14 does not produce captions.
         requires_download: Model must be downloaded on first use.
@@ -495,6 +511,15 @@ class WD14Plugin(TaggerPlugin):
     name: str = "wd14"
     display_name: str = "WD14 Tagger"
     description: str = "WD14 ONNX tagger (SmilingWolf/wd-convnext-tagger-v3) — broad anime/illustration tag coverage."
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    # Dual: this file adapts Kohya_ss (see the Apache-2.0 attribution at the
+    # top of the module) into the GPL-3.0 backend, and Apache-2.0 §4
+    # attribution survives that. A header claiming GPL alone would drop
+    # Kohya_ss out of any attribution report built from it.
+    license: str = "GPL-3.0-only AND Apache-2.0"
+    models: list[dict[str, str]] = [
+        {"name": "SmilingWolf/wd-convnext-tagger-v3", "license": "Apache-2.0"},
+    ]
     supports_tags: bool = True
     supports_descriptions: bool = False
     requires_download: bool = True
@@ -573,20 +598,6 @@ class WD14Plugin(TaggerPlugin):
     def default_params(self) -> dict:
         """Return ``{name: default}`` from ``parameter_schema``."""
         return {f["name"]: f["default"] for f in self.parameter_schema()}
-
-    def plugin_schema(self) -> dict:
-        """Return JSON-serialisable metadata for this plugin."""
-        return {
-            "name": self.name,
-            "display_name": self.display_name,
-            "description": self.description,
-            "supports_tags": self.supports_tags,
-            "supports_descriptions": self.supports_descriptions,
-            "requires_download": self.requires_download,
-            "parameters": self.parameter_schema(),
-            "downloaded_artifacts": self.list_downloaded_artifacts(),
-            "is_loaded": self.is_loaded(),
-        }
 
     def needs_download(self, parameters=None) -> bool:
         """Return ``True`` if model files are absent."""

@@ -31,7 +31,7 @@ test.describe('sidebar tabs are stateless (route is the single source of truth)'
   }) => {
     await grid.waitForThumbnailLoaded()
     const urlBefore = page.url()
-    const firstBefore = await grid.firstThumbnailSrc()
+    const firstBefore = await grid.firstThumbnailKey()
     expect(idFromThumbSrc(firstBefore)).not.toBeNull()
 
     // Global → Projects: sidebar reveals the project tree; grid untouched.
@@ -39,7 +39,7 @@ test.describe('sidebar tabs are stateless (route is the single source of truth)'
     await expect(sidebar.projectRows.first()).toBeVisible()
     expect(page.url(), 'Projects tab must not push a route').toBe(urlBefore)
     expect(
-      await grid.firstThumbnailSrc(),
+      await grid.firstThumbnailKey(),
       'Projects tab must not move the grid',
     ).toBe(firstBefore)
 
@@ -48,7 +48,7 @@ test.describe('sidebar tabs are stateless (route is the single source of truth)'
     await expect(sidebar.foldersTab).toHaveClass(/active/)
     expect(page.url(), 'Folders tab must not push a route').toBe(urlBefore)
     expect(
-      await grid.firstThumbnailSrc(),
+      await grid.firstThumbnailKey(),
       'Folders tab must not move the grid',
     ).toBe(firstBefore)
 
@@ -56,7 +56,7 @@ test.describe('sidebar tabs are stateless (route is the single source of truth)'
     await sidebar.globalTab.click()
     await expect(sidebar.globalTab).toHaveClass(/active/)
     expect(page.url(), 'Global tab must not push a route').toBe(urlBefore)
-    expect(await grid.firstThumbnailSrc()).toBe(firstBefore)
+    expect(await grid.firstThumbnailKey()).toBe(firstBefore)
   })
 
   test('a tab switch does not disturb an active entity view', async ({
@@ -71,17 +71,17 @@ test.describe('sidebar tabs are stateless (route is the single source of truth)'
     await expect.poll(() => page.url()).toContain('/set/')
     await grid.waitForThumbnailLoaded()
     const setUrl = page.url()
-    const setFirst = await grid.firstThumbnailSrc()
+    const setFirst = await grid.firstThumbnailKey()
 
     // Switch to Projects then Folders: the set view underneath is preserved.
     await sidebar.projectsTab.click()
     await expect(sidebar.projectRows.first()).toBeVisible()
     expect(page.url(), 'switching tabs must not leave the set route').toBe(setUrl)
-    expect(await grid.firstThumbnailSrc()).toBe(setFirst)
+    expect(await grid.firstThumbnailKey()).toBe(setFirst)
 
     await sidebar.foldersTab.click()
     await expect(sidebar.foldersTab).toHaveClass(/active/)
     expect(page.url()).toBe(setUrl)
-    expect(await grid.firstThumbnailSrc()).toBe(setFirst)
+    expect(await grid.firstThumbnailKey()).toBe(setFirst)
   })
 })

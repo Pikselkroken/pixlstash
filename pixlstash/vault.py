@@ -8,6 +8,7 @@ import time
 import threading
 import numpy as np
 
+from pathlib import Path
 from typing import Optional
 from concurrent.futures import Future
 
@@ -22,11 +23,13 @@ from .db_models import (
     Face,
     Picture,
     PictureSet,
+    Snapshot,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
 )
 from .pixl_logging import get_logger
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.inference.engine import InferenceEngine
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
@@ -48,7 +51,8 @@ from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
-from pixlstash.services.restore_service import RestoreService
+from pixlstash.services.restore import RestoreService
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 
 
 logger = get_logger(__name__)
@@ -96,17 +100,50 @@ class Vault:
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
         """
-        self.image_root = image_root
+        registered_hub = getattr(image_root, "hub", None)
+        registered_library = getattr(image_root, "library", None)
+        self.image_root = str(image_root)
         logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
-        os.makedirs(self.image_root, exist_ok=True)
+        # Creation only: existing directories keep their modes, whatever they
+        # are — the user may deliberately share their image folder with a media
+        # server or sync agent. Not makedirs(mode=0o700): since Python 3.7 that
+        # mode reaches only the LEAF, so intermediates of a deep new image_root
+        # came out 0775 under Ubuntu's umask 002 and the guarded open then
+        # refused the namespace the app itself had just created (W21).
+        mkdir_private(Path(self.image_root))
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
         )
 
         self._db_path = os.path.join(self.image_root, "vault.db")
-        self.db = VaultDatabase(self._db_path)
+        if registered_hub is not None and registered_library is not None:
+            from pixlstash.hub.bootstrap import (
+                finalize_library_connection,
+                prevalidate_opened_library,
+            )
+
+            # The engine's connect hook legitimately creates WAL/SHM before
+            # verification. That is handled inside the guard now, for every
+            # caller, rather than by this one site opting out of a directory
+            # check the other three still paid for.
+            location_guard = TrustedSQLiteLocation.open(
+                self._db_path,
+                create=not os.path.exists(self._db_path),
+            )
+            self.db = VaultDatabase(
+                self._db_path,
+                location_guard=location_guard,
+                pre_migration_hook=lambda connection: prevalidate_opened_library(
+                    connection, registered_library
+                ),
+                post_migration_hook=lambda connection: finalize_library_connection(
+                    registered_hub, registered_library, connection
+                ),
+            )
+        else:
+            self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
 
         self.snapshot_service = SnapshotService(self)
@@ -180,13 +217,21 @@ class Vault:
             return
 
         self._task_runner = TaskRunner(
-            name="vault-task-runner", num_workers=worker_config.NUM_WORKERS
+            name="vault-task-runner",
+            num_workers=worker_config.NUM_WORKERS,
+            # So a GPU out-of-memory retry can raise a toast instead of only a
+            # log line. Bound method, like the finders' notifier below.
+            notifier=self.notify,
         )
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
             engine_getter=lambda: self._engine,
             image_root=self.image_root,
             path_mapper=path_mapper,
+            # So a regenerated thumbnail can announce itself. Passed as the bound
+            # method rather than the vault, to keep the finders' surface to what
+            # they actually use.
+            notifier=self.notify,
         )
         from pixlstash.tasks import (
             TaskType,
@@ -219,6 +264,34 @@ class Vault:
         self._planner_work_finders[TaskType.SMART_SCORE] = MissingSmartScoreFinder(
             vault=self
         )
+        # Repairs the one window the hub/vault split opened: a penalised-tag
+        # weight change commits its setting to the hub and its score
+        # invalidation to the vault, and those cannot share a transaction. The
+        # settings handler records the invalidation durably first and applies it
+        # inline; this finder is what completes it if the process died in
+        # between. Registered here, like the finders above, because it needs the
+        # Vault rather than just the database.
+        from pixlstash.tasks.pending_score_invalidation_finder import (
+            PendingScoreInvalidationFinder,
+        )
+
+        self._planner_work_finders[TaskType.PENDING_SCORE_INVALIDATION] = (
+            PendingScoreInvalidationFinder(vault=self)
+        )
+        # The one finder here that works on the HUB rather than on this vault:
+        # a model folder is a fact about the machine, so the checkpoints it
+        # registers are shared by every library. Registered only when the vault
+        # was opened through a hub registration (a Vault built without one — the
+        # CLI tools, most tests — has no hub to reach), and harmless in the
+        # multi-library case because only one vault is live at a time.
+        if registered_hub is not None:
+            from pixlstash.tasks.missing_checkpoint_hash_finder import (
+                MissingCheckpointHashFinder,
+            )
+
+            self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
+                MissingCheckpointHashFinder(hub=registered_hub)
+            )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
@@ -318,7 +391,15 @@ class Vault:
         Example:
             vault.notify(Vault.VaultEventType.NEW_PICTURE)
         """
-        if self._work_planner and self._work_planner.is_running():
+        # Waking the planner means "there may be work to pick up". A VRAM_OOM is
+        # the opposite statement — the GPU is full — and waking on it would send
+        # the planner looking for more GPU work three times per failing task, at
+        # the one moment there is no room for any.
+        if (
+            event_type is not EventType.VRAM_OOM
+            and self._work_planner
+            and self._work_planner.is_running()
+        ):
             self._work_planner.wake()
         with self._event_listeners_lock:
             listeners = list(self._event_listeners)
@@ -380,6 +461,49 @@ class Vault:
                     rf.folder,
                     exc,
                 )
+
+    def reference_folder_roots(self) -> tuple[str, ...]:
+        """Return the roots pictures may legitimately live under besides image_root.
+
+        Each configured reference folder contributes its stored (host-side)
+        path and, when a path mapper is configured, its mapped
+        (container-side) form: stored ``Picture.file_path`` values are written
+        under the mapped form in Docker deployments, while the
+        ``reference_folder`` row keeps the host form.
+
+        Returns:
+            The root directories, empty when the folder list cannot be read
+            (logged) so a caller containing a destructive operation refuses
+            rather than guesses.
+        """
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+
+        def fetch(session: Session) -> list[str]:
+            return [
+                row.folder
+                for row in session.exec(select(ReferenceFolder)).all()
+                if row.folder
+            ]
+
+        try:
+            folders = self.db.run_immediate_read_task(fetch)
+        except Exception as exc:
+            logger.warning(
+                "Could not read the reference folders of %s; treating the set "
+                "as empty, so paths outside the image root will be refused: %s",
+                self.image_root,
+                exc,
+            )
+            return ()
+
+        roots: list[str] = []
+        for folder in folders:
+            roots.append(folder)
+            if self._path_mapper is not None:
+                mapped = self._path_mapper.resolve(folder)
+                if mapped != folder:
+                    roots.append(mapped)
+        return tuple(roots)
 
     def watch_reference_folder(self, folder_id: int, folder_path: str) -> None:
         """Start watching *folder_path* for reference folder *folder_id*.
@@ -457,6 +581,10 @@ class Vault:
             str: String representation.
         """
         return f"Vault(db_path='{self._db_path}')"
+
+    @property
+    def is_open(self) -> bool:
+        return not self._closed and self.db is not None and self.db.is_open
 
     def close(self):
         """
@@ -789,19 +917,6 @@ class Vault:
             session.commit()
 
         self.db.submit_task(op, priority=DBPriority.IMMEDIATE)
-
-    def get_description(self) -> Optional[str]:
-        return self.db.submit_task(
-            lambda session: (
-                session.exec(
-                    select(MetaData).where(
-                        MetaData.schema_version == MetaData.CURRENT_SCHEMA_VERSION
-                    )
-                )
-                .first()
-                .description
-            )
-        ).result()
 
     def submit_task(self, task):
         """Submit an in-memory task to the shared task runner."""
@@ -1155,8 +1270,36 @@ class Vault:
         return future
 
     def is_worker_running(self, worker_type: TaskType) -> bool:
-        """Check if a specific worker is running."""
-        return bool(self._work_planner and self._work_planner.is_running())
+        """Whether *worker_type* will actually be scheduled right now.
+
+        Both conditions matter and used to be conflated: the planner thread has
+        to be alive, and a finder for this task type has to still be registered
+        with it. Ignoring the argument meant a dead planner and a detached
+        finder produced the same answer, and callers reported whichever symptom
+        they happened to name.
+        """
+        if not self._work_planner or not self._work_planner.is_running():
+            return False
+        return self._work_planner.has_finder(worker_type)
+
+    def worker_unavailable_reason(self, worker_type: TaskType) -> str | None:
+        """Why *worker_type* is not schedulable, or None when it is.
+
+        Callers that refuse a request need to say which of the two conditions
+        failed; "the worker is not running" reads as a configuration choice and
+        has sent every investigation of a dead planner thread down the wrong
+        path.
+        """
+        if not self._work_planner:
+            return "the background work planner was never started"
+        if not self._work_planner.is_running():
+            return (
+                "the background work planner thread is not alive (it was "
+                "stopped, or it died); restart the server"
+            )
+        if not self._work_planner.has_finder(worker_type):
+            return f"no {worker_type} finder is registered with the work planner"
+        return None
 
     def _is_worker_active(self, worker_type: TaskType) -> bool:
         if not self._work_planner or not self._work_planner.is_running():
@@ -1287,6 +1430,31 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.MODEL_FOLDER_SCAN:
+                # User-triggered (no finder): live counters straight off the
+                # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
+                # in model files, not pictures — the shelf lives in the hub and
+                # the generic library total would be meaningless here.
+                label = "model_folder_scan"
+                active_scan_tasks = (
+                    self._task_runner.get_active_tasks_of_type("ModelFolderScanTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_scan_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0)) for t in active_scan_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_scan_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(
@@ -1299,6 +1467,21 @@ class Vault:
                 total = 0
                 missing = 0
                 label = "missing_file_purge"
+            elif worker_type == TaskType.SNAPSHOT_IDENTITY_SCRUB:
+                # Counted in snapshot archives, not pictures. This is a one-time
+                # migration with a real finish line, so the generic picture total
+                # would claim "N / N, nothing remaining" while the scrub still
+                # has archives to rewrite: the same misleading shape the dedup
+                # scan avoids below, but worse here because the user is waiting
+                # for it to end.
+                total = int(
+                    self.db.run_immediate_read_task(self._count_total_snapshots) or 0
+                )
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_unscrubbed_snapshots)
+                    or 0
+                )
+                label = "snapshot_identity_scrub"
             elif worker_type == TaskType.TEXT_SCORE:
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_text_score) or 0
@@ -1354,6 +1537,17 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.CHECKPOINT_HASH:
+                # The one worker here whose denominator is the model shelf and
+                # not the picture library. Left in the `planner_managed` default
+                # below it inherited the library's picture count as its own
+                # total and a hardcoded `missing = 0`, so reading tens of
+                # gigabytes off disk for minutes rendered as "N / N, nothing
+                # remaining, 0/s" on a row that still said running — which is
+                # what made a healthy long task look like a stuck one.
+                finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "checkpoints_hashed"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
                 # the v1.8.0 upgrade this counts the entire library, which is what
@@ -1385,6 +1579,31 @@ class Vault:
     @staticmethod
     def _count_total_pictures(session: Session) -> int:
         result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_total_snapshots(session: Session) -> int:
+        """Every registered snapshot, scrubbed or not."""
+        result = session.exec(select(func.count()).select_from(Snapshot)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_unscrubbed_snapshots(session: Session) -> int:
+        """Legacy archives the identity scrub still owes work to.
+
+        Mirrors ``MissingSnapshotIdentityScrubFinder._fetch_next``: keyed on
+        ``identity_scrubbed_at IS NULL``, which means a pre-hub archive and
+        nothing else, because snapshots created since are stamped at creation.
+        """
+        result = session.exec(
+            select(func.count())
+            .select_from(Snapshot)
+            .where(Snapshot.identity_scrubbed_at.is_(None))
+        ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0

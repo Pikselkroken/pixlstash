@@ -11,11 +11,13 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
+import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   project: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const emit = defineEmits(["close", "saved", "deleted"]);
@@ -60,7 +62,6 @@ async function save() {
           name: name.value.trim(),
           description: description.value.trim() || null,
         },
-        { baseUrl: props.backendUrl },
       );
       emit("saved", null);
     } else {
@@ -69,12 +70,11 @@ async function save() {
           name: name.value.trim(),
           description: description.value.trim() || null,
         },
-        { baseUrl: props.backendUrl },
       );
       emit("saved", created?.id ?? null);
     }
   } catch (e) {
-    error.value = e?.response?.data?.detail || e.message || "Save failed.";
+    error.value = errorDetail(e) || e.message || "Save failed.";
   } finally {
     saving.value = false;
   }
@@ -92,12 +92,10 @@ async function deleteProject() {
   deleting.value = true;
   error.value = null;
   try {
-    await deleteProjectRequest(props.project.id, {
-      baseUrl: props.backendUrl,
-    });
+    await deleteProjectRequest(props.project.id);
     emit("deleted", props.project.id);
   } catch (e) {
-    error.value = e?.response?.data?.detail || e.message || "Delete failed.";
+    error.value = errorDetail(e) || e.message || "Delete failed.";
     noticeStore.error(error.value);
   } finally {
     deleting.value = false;

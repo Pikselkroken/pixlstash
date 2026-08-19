@@ -18,6 +18,7 @@
 
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
+import { errorDetail } from "../utils/apiError";
 import {
   getScrapheapRetention,
   setScrapheapRetentionDays,
@@ -108,7 +109,7 @@ export const useScrapheapRetentionStore = defineStore(
             err,
           );
           error.value =
-            err?.response?.data?.detail ||
+            errorDetail(err) ||
             err?.message ||
             "Failed to load the scrapheap retention setting.";
         } finally {
@@ -152,7 +153,7 @@ export const useScrapheapRetentionStore = defineStore(
           err,
         );
         error.value =
-          err?.response?.data?.detail ||
+          errorDetail(err) ||
           err?.message ||
           "Failed to update the scrapheap retention setting.";
         throw err;

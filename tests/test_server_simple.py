@@ -13,6 +13,7 @@ Worker-heavy tests still live in :mod:`tests.test_server`.
 import logging
 import os
 import shutil
+import stat
 import tempfile
 import time
 
@@ -26,8 +27,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
-from sqlalchemy import text
+from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Character,
@@ -56,6 +56,7 @@ from pixlstash.db_models import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from tests.utils import wipe_tables
 
 logger = get_logger(__name__)
 
@@ -123,16 +124,9 @@ def reset_vault(server):
     - Reset auth in-memory caches.
     """
 
-    def _wipe(session: Session):
-        # Disable FK enforcement so wipe order doesn't matter; the test
-        # leaves the DB empty so referential integrity is preserved overall.
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        for model in _RESET_TABLES:
-            session.exec(delete(model))
-        session.commit()
-        session.exec(text("PRAGMA foreign_keys = ON"))
-
-    server.vault.db.run_task(_wipe)
+    # FK enforcement is off for the wipe so table order doesn't matter; the
+    # DB is left empty, so referential integrity is preserved overall.
+    server.vault.db.run_task(wipe_tables, _RESET_TABLES)
 
     image_root = server.vault.image_root
     db_basenames = {"vault.db", "vault.db-wal", "vault.db-shm", "vault.db-journal"}
@@ -911,9 +905,17 @@ def test_pictures_export(server):
     download_url = status_payload.get("download_url")
     assert download_url, "Missing download_url in export status"
 
+    export_task = server.export_tasks[task_id]
+    export_path = export_task["file_path"]
+    private_dir = export_task["private_dir"]
+    assert stat.S_IMODE(os.stat(export_path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(private_dir).st_mode) == 0o700
+
     download_resp = client.get(download_url)
     assert download_resp.status_code == 200, f"Error: {download_resp.text}"
     assert download_resp.content[:2] == b"PK"  # ZIP file signature
+    assert task_id not in server.export_tasks
+    assert not os.path.exists(private_dir)
     logger.info(
         "Exported pictures zip size: {} bytes".format(len(download_resp.content))
     )
@@ -964,10 +966,13 @@ def test_read_version(server):
     assert data["message"] == "PixlStash REST API"
     assert data["version"] == expected_version
     assert "install_type" in data
-    # The install_type contract is exactly this set of values; the frontend
+    # The install_type contract is exactly Server.INSTALL_TYPES; the frontend
     # guards anything else to "other", but the backend must never emit a value
-    # outside the set in the first place.
-    assert data["install_type"] in {"docker", "pip", "electron", "other"}
+    # outside the set in the first place. Asserted against the constant rather
+    # than a copy of it: a literal here passed on CI (which sets no install-type
+    # env var) and failed only on a developer's machine, which is the one that
+    # exports PIXLSTASH_INSTALL_TYPE=dev.
+    assert data["install_type"] in set(Server.INSTALL_TYPES)
 
 
 def test_read_version_install_type_docker(server, monkeypatch):

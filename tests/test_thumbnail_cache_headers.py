@@ -17,12 +17,14 @@ request is actually answered with a 304 rather than the whole PNG again.
 """
 
 import gc
+import io
 import json
 import os
 import tempfile
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from pixlstash.db_models import Face
 from pixlstash.server import Server
@@ -148,6 +150,32 @@ def _import_one_picture(client):
     return import_resp["results"][0]["picture_id"]
 
 
+def _age_the_cached_thumbnail(server, subdir, stem, old_version):
+    """Rewind a just-written cache entry to a pre-256 PixlStash.
+
+    A fresh vault starts with an empty thumbnail cache, so the branch every
+    *existing* install takes -- read the cache, decide it is stale, regenerate
+    -- is unreachable without one on disk. This edits the metadata the route
+    itself just wrote and changes **only** the version, so a regeneration can
+    only be attributed to ``thumbnail_cache_version`` and not to a picture id
+    or hidden-tag key that happened not to match.
+    """
+    cache_dir = os.path.join(server.vault.image_root, "tmp", subdir)
+    meta_path = os.path.join(cache_dir, f"{stem}.json")
+    with open(meta_path, "r", encoding="utf-8") as handle:
+        meta = json.load(handle)
+    assert meta["version"] > old_version, (
+        f"{subdir} cache version was not bumped past {old_version}, so every "
+        "already-cached 64x64 thumbnail would go on being served forever"
+    )
+    meta["version"] = old_version
+    with open(meta_path, "w", encoding="utf-8") as handle:
+        json.dump(meta, handle)
+    Image.new("RGBA", (64, 64), (1, 2, 3, 255)).save(
+        os.path.join(cache_dir, f"{stem}.png"), format="PNG"
+    )
+
+
 def _link_face(server, pic_id, char_id):
     def _add(session):
         session.add(
@@ -177,6 +205,9 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         first = client.get(f"/characters/{char_id}/thumbnail")
         assert first.status_code == 200, first.text
         assert first.headers["cache-control"] == REVALIDATE_CACHE_CONTROL
+        # Served at 256, not the 64 this route used to hardcode: the in-app
+        # consumer is a 24 px mark, but external pickers render it far larger.
+        assert Image.open(io.BytesIO(first.content)).size == (256, 256)
         etag = first.headers.get("etag")
         assert etag
 
@@ -192,8 +223,14 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         )
         assert conditional.status_code == 304
         assert conditional.content == b""
+
+        # An install that already cached a 64x64 crop must not keep serving it.
+        _age_the_cached_thumbnail(server, "face_thumbnails", f"character_{char_id}", 6)
+        regenerated = client.get(f"/characters/{char_id}/thumbnail")
+        assert regenerated.status_code == 200
+        assert Image.open(io.BytesIO(regenerated.content)).size == (256, 256)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -213,6 +250,10 @@ def test_picture_set_thumbnail_revalidates_instead_of_going_stale():
         assert first.status_code == 200, first.text
         assert first.headers["cache-control"] == REVALIDATE_CACHE_CONTROL
         assert first.headers.get("etag")
+        # Same size bump as the character route. This pins the served size
+        # only -- whether the fan was *rendered* at that size or upscaled from
+        # a smaller canvas is not something a PNG's dimensions can tell you.
+        assert Image.open(io.BytesIO(first.content)).size == (256, 256)
 
         conditional = client.get(
             f"/picture_sets/{set_id}/thumbnail",
@@ -220,7 +261,13 @@ def test_picture_set_thumbnail_revalidates_instead_of_going_stale():
         )
         assert conditional.status_code == 304
         assert conditional.content == b""
+
+        # Same stale-cache branch as the character route.
+        _age_the_cached_thumbnail(server, "set_thumbnails", f"picture_set_{set_id}", 16)
+        regenerated = client.get(f"/picture_sets/{set_id}/thumbnail")
+        assert regenerated.status_code == 200
+        assert Image.open(io.BytesIO(regenerated.content)).size == (256, 256)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

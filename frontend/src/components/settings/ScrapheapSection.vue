@@ -309,22 +309,14 @@ function cancelReduction() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.6);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
 }
 
 .sr-info:hover {
   color: rgb(var(--v-theme-on-surface));
   background: var(--hover-wash);
-}
-
-.sr-info:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sr-tip {

@@ -1,4 +1,5 @@
 import os
+import shutil
 import uuid
 
 from fastapi import (
@@ -8,6 +9,7 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
@@ -15,6 +17,17 @@ from pixlstash.pixl_logging import get_logger
 
 
 logger = get_logger(__name__)
+
+
+class _PinnedVaultServer:
+    """Delegate machine-global state while fixing export work to one vault."""
+
+    def __init__(self, server, vault):
+        self._server = server
+        self.vault = vault
+
+    def __getattr__(self, name):
+        return getattr(self._server, name)
 
 
 class ExportStartResponse(BaseModel):
@@ -34,6 +47,24 @@ class ExportStatusResponse(BaseModel):
 
 
 def register_routes(router, server):
+    def discard_export(task_id: str, task: dict) -> None:
+        current = server.export_tasks.get(task_id)
+        if current is task:
+            server.export_tasks.pop(task_id, None)
+        private_dir = task.get("private_dir")
+        if not private_dir:
+            return
+        if not os.path.basename(private_dir).startswith("pixlstash_export_"):
+            logger.warning("Refusing to remove unexpected export path %s", private_dir)
+            return
+        try:
+            if os.path.islink(private_dir):
+                os.unlink(private_dir)
+            elif os.path.isdir(private_dir):
+                shutil.rmtree(private_dir)
+        except OSError as exc:
+            logger.warning("Could not remove completed export %s: %s", private_dir, exc)
+
     @router.get(
         "/pictures/export",
         summary="Start picture export job",
@@ -55,12 +86,15 @@ def register_routes(router, server):
         bbox_mode: str = Query("none"),
     ):
         task_id = str(uuid.uuid4())
+        lease = request.state.library_lease
         server.export_tasks[task_id] = {
             "status": "in_progress",
             "file_path": None,
             "total": 0,
             "processed": 0,
             "filename": None,
+            "library_uuid": lease.library_uuid,
+            "generation": lease.generation,
         }
 
         from pixlstash.utils.service.export_utils import (
@@ -82,7 +116,7 @@ def register_routes(router, server):
         }
         background_tasks.add_task(
             PictureServiceUtils.generate_zip,
-            server,
+            _PinnedVaultServer(server, lease.vault),
             request,
             task_id,
             server.export_tasks,
@@ -96,9 +130,14 @@ def register_routes(router, server):
         description="Returns current progress for an export task id, including completion state and download URL when ready.",
         response_model=ExportStatusResponse,
     )
-    def export_status(task_id: str):
+    def export_status(request: Request, task_id: str):
         task = server.export_tasks.get(task_id)
-        if not task:
+        lease = request.state.library_lease
+        if (
+            not task
+            or task.get("library_uuid") != lease.library_uuid
+            or task.get("generation") != lease.generation
+        ):
             raise HTTPException(status_code=404, detail="Task not found")
 
         total = task.get("total") or 0
@@ -128,10 +167,20 @@ def register_routes(router, server):
         response_class=FileResponse,
         responses={200: {"content": {"application/zip": {}}}},
     )
-    def download_export(task_id: str):
+    def download_export(request: Request, task_id: str):
         task = server.export_tasks.get(task_id)
-        if not task or task["status"] != "completed":
+        lease = request.state.library_lease
+        if (
+            not task
+            or task["status"] != "completed"
+            or task.get("library_uuid") != lease.library_uuid
+            or task.get("generation") != lease.generation
+        ):
             raise HTTPException(status_code=404, detail="File not ready")
 
         filename = task.get("filename") or os.path.basename(task["file_path"])
-        return FileResponse(task["file_path"], filename=filename)
+        return FileResponse(
+            task["file_path"],
+            filename=filename,
+            background=BackgroundTask(discard_export, task_id, task),
+        )

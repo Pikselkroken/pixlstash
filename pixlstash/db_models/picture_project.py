@@ -1,5 +1,3 @@
-from typing import Optional
-
 from sqlmodel import Column, Field, ForeignKey, Integer, SQLModel
 
 
@@ -24,10 +22,3 @@ class PictureProjectMember(SQLModel, table=True):
             index=True,
         ),
     )
-
-
-class PictureProjectMemberRead(SQLModel):
-    """Lightweight schema used in APIs that expose picture-project links."""
-
-    picture_id: Optional[int] = None
-    project_id: Optional[int] = None

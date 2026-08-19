@@ -59,7 +59,7 @@ from pixlstash.utils.field_allowlist import (
 from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     select_reference_faces_for_character,
 )
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
@@ -1243,7 +1243,7 @@ def create_router(server) -> APIRouter:
         require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
 
         if field == "thumbnail":
-            thumbnail_cache_version = 6
+            thumbnail_cache_version = 7
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = resolve_path_within(cache_dir, f"character_{id}.png")
@@ -1424,7 +1424,11 @@ def create_router(server) -> APIRouter:
                     int(round(new_y2)),
                 )
             )
-            crop = crop.resize((64, 64), Image.LANCZOS)
+            # 256, not 64: the in-app consumer is a 24 px ModelMark, but this
+            # is the only character image the API serves, and a picker that
+            # renders it in a ~150 px HiDPI grid cell had nothing else to ask
+            # for. Bump ``thumbnail_cache_version`` above when this changes.
+            crop = crop.resize((256, 256), Image.LANCZOS)
             try:
                 crop.save(cache_path, format="PNG")
                 try:

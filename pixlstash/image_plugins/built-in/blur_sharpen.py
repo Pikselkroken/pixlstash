@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
 from typing import Any
 
 import cv2
@@ -18,6 +15,9 @@ class BlurSharpenPlugin(ImagePlugin):
     name = "blur_sharpen"
     display_name = "Blur / Sharpen"
     description = "Apply blur or sharpen effect to images or videos."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = True
 
@@ -108,130 +108,13 @@ class BlurSharpenPlugin(ImagePlugin):
         strength = self._coerce_positive_number(params.get("strength"), 1.0)
         angle = self._coerce_number(params.get("angle"), 0.0)
 
-        cap = cv2.VideoCapture(source_path)
-        if not cap.isOpened():
-            raise ValueError(f"Failed to open video file: {source_path}")
-
-        frame_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        if fps <= 0:
-            fps = 24.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        if width <= 0 or height <= 0:
-            cap.release()
-            raise ValueError(f"Invalid video dimensions for {source_path}")
-
-        temp_path = ""
-        writer = None
-        output_ext = ".mp4"
-        processed = 0
-        try:
-            source_ext = os.path.splitext(source_path)[1].lower()
-            writer_candidates = [
-                (".mp4", "avc1"),
-                (".mp4", "H264"),
-                (".webm", "VP80"),
-                (".webm", "VP90"),
-                (".mp4", "mp4v"),
-            ]
-            if source_ext == ".webm":
-                writer_candidates = [
-                    (".webm", "VP80"),
-                    (".webm", "VP90"),
-                    (".mp4", "avc1"),
-                    (".mp4", "H264"),
-                    (".mp4", "mp4v"),
-                ]
-
-            for candidate_ext, codec in writer_candidates:
-                with tempfile.NamedTemporaryFile(
-                    suffix=candidate_ext,
-                    delete=False,
-                ) as temp_file:
-                    temp_path = temp_file.name
-                candidate_writer = cv2.VideoWriter(
-                    temp_path,
-                    cv2.VideoWriter_fourcc(*codec),
-                    fps,
-                    (width, height),
-                )
-                if candidate_writer.isOpened():
-                    writer = candidate_writer
-                    output_ext = candidate_ext
-                    break
-                candidate_writer.release()
-                with contextlib.suppress(OSError):
-                    os.remove(temp_path)
-                temp_path = ""
-
-            if writer is None:
-                raise ValueError("Failed to open output video writer")
-
-            while True:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    break
-
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                filtered = self._apply_mode(
-                    Image.fromarray(rgb_frame), mode, strength, angle
-                )
-                filtered_bgr = cv2.cvtColor(
-                    np.array(filtered.convert("RGB")),
-                    cv2.COLOR_RGB2BGR,
-                )
-                writer.write(filtered_bgr)
-
-                processed += 1
-                self.report_progress(
-                    progress_callback,
-                    current=processed,
-                    total=frame_total if frame_total > 0 else processed,
-                    message=f"Processed video frame {processed}",
-                )
-
-            if processed == 0:
-                raise ValueError("No frames processed from video")
-
-            writer.release()
-            writer = None
-            cap.release()
-
-            with open(temp_path, "rb") as handle:
-                return handle.read(), output_ext
-        except Exception as exc:
-            self.report_error(
-                error_callback,
-                index=0,
-                message="Failed to apply blur/sharpen to video",
-                details={"error": str(exc), "source_path": source_path},
-            )
-            raise
-        finally:
-            if writer is not None:
-                writer.release()
-            cap.release()
-            if temp_path and os.path.exists(temp_path):
-                with contextlib.suppress(OSError):
-                    os.remove(temp_path)
-
-    @staticmethod
-    def _coerce_positive_number(value: Any, default: float) -> float:
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return default
-        if parsed <= 0:
-            return default
-        return parsed
-
-    @staticmethod
-    def _coerce_number(value: Any, default: float) -> float:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
+        return self.transform_video(
+            source_path,
+            lambda image: self._apply_mode(image, mode, strength, angle),
+            progress_callback=progress_callback,
+            error_callback=error_callback,
+            error_message="Failed to apply blur/sharpen to video",
+        )
 
     @staticmethod
     def _motion_blur_kernel(length: int, angle_deg: float) -> np.ndarray:

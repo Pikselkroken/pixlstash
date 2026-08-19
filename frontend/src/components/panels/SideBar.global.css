@@ -1,3 +1,216 @@
+/* ---------------------------------------------------------------------------
+   THE ROW SYSTEM — see docs/design/visual-language.md §5.1
+
+   Every list row in the sidebar starts at ONE left edge and moves only by whole
+   indent steps. Before this rule there were six left edges (2, 5, 8, 11, 19px)
+   and three depth steps (7, 8, 16px), so scrolling from Folders to People
+   shifted the column under the eye.
+
+   THIS BLOCK IS DELIBERATELY UNSCOPED. FolderTreeNode.vue renders rows of the
+   same family, and a scoped rule in SideBar.css cannot cross a component
+   boundary. It used to keep its own copy, which had drifted to a different
+   padding and a missing base rail; that is the drift this placement prevents.
+   Every selector here is `sidebar-` or `ps-row`-prefixed, so global scope is
+   contained. `.ps-row` is the neutral alias: the model shelf renders rows of
+   this family outside the rail, and a private copy there is exactly the drift
+   this placement prevents. It is an ALIAS, never a second declaration.
+
+   Two invariants do the work:
+
+   1. The horizontal box is owned HERE and nowhere else. Row types still set
+      their own vertical padding (they are different heights on purpose), but a
+      per-type `padding-left` is now a bug. Depth is the only thing that moves
+      the edge, and it moves it by `--indent-step`, never by a hand-summed
+      composite of padding + margin + border.
+
+   2. The selection rail is ALWAYS present and ALWAYS transparent on the base;
+      only its colour changes on `.active`. Adding the border on select and
+      "compensating" with padding shifts the label 3px on click. That shipped
+      twice here, once under a comment asserting it did not happen.
+   --------------------------------------------------------------------------- */
+.sidebar-list-item,
+.sidebar-project-tree-row,
+.sidebar-project-tree-subheader,
+.sidebar-folder-row,
+.sidebar-folder-section-header,
+.sidebar-section-header,
+.ps-row {
+  box-sizing: border-box;
+  padding-left: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
+  /* Fallback on the scale, not off it. --space-3 is 8px, so this is the same
+     edge it always was, expressed in the spacing ramp. */
+  padding-right: var(--sidebar-right-edge, var(--space-3));
+  border-left: 3px solid transparent;
+}
+
+/* A leading glyph slot: a disclosure chevron, a folder icon, anything optional
+   in front of the label. It keeps its width whether or not it holds a glyph, so
+   a folder with no children shares an edge with one that has them. Hide the
+   glyph with `visibility`, never `display: none` and never `v-if`, because both
+   remove the box and the row jumps. This replaces an inline `:style` ternary in
+   SideBar.vue and an `[style*="display: none"]` attribute-selector hack, which
+   were two different local patches for this one missing rule. */
+.sidebar-row-glyph,
+.ps-row-glyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  /* Plain separation between the glyph and what follows it. This does NOT have
+     to equal --indent-step: tuning the two to each other is what produced a
+     24px step and names starting at 91px. See visual-language.md §5.1. */
+  margin-right: var(--space-2);
+}
+
+.sidebar-row-glyph--empty,
+.ps-row-glyph--empty {
+  visibility: hidden;
+}
+
+/* The folder-row family. Nested rows come from FolderTreeNode, so ONE copy of
+   these lives here rather than one per component. */
+.sidebar-folder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  cursor: pointer;
+  color: rgb(var(--v-theme-sidebar-text));
+  user-select: none;
+  min-height: 28px;
+  /* The tokens, not the 0.12s this carried over from the scoped rule it
+     replaced. This is now the canonical folder-row rule and will be imitated,
+     and `--dur-1` + `--ease-standard` is what visual-language.md §motion rules
+     for hover feedback and what App.css already uses on the same kind of row.
+     Hover tint lands 30 ms later than before, in step with every other row. */
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+
+.sidebar-folder-row:hover {
+  background: rgba(var(--v-theme-accent), 0.08);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-folder-row.active {
+  background: rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-on-primary));
+  border-left-color: rgb(var(--v-theme-primary));
+}
+
+.sidebar-folder-row.active:hover {
+  background:
+    linear-gradient(
+      rgba(var(--v-theme-accent), 0.08),
+      rgba(var(--v-theme-accent), 0.08)
+    ),
+    rgba(var(--v-theme-primary), 0.18);
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-folder-row.droppable {
+  filter: brightness(1.2);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* No inset here. The old rule summed padding 4 + margin 2 + a 1px border into a
+   7px step that was both off-grid and invisible to anything measuring depth.
+   Each row carries its own `--depth` instead, so the wrapper is layout-only. */
+.sidebar-folder-children {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-folder-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sidebar-folder-chevron,
+.sidebar-folder-icon {
+  opacity: 0.7;
+}
+
+/* Folder glyphs stay at the glyph box regardless of thumbnail size. Width and
+   height come from `.sidebar-row-glyph`; only font-size needs forcing, because
+   Vuetify sets it inline from the `size` prop. */
+.sidebar-folder-icon,
+.sidebar-folder-chevron {
+  font-size: var(--text-md) !important;
+}
+
+.sidebar-folder-status-badge {
+  flex-shrink: 0;
+  margin-left: var(--space-1);
+  opacity: 0.75;
+}
+
+.sidebar-folder-count-badge {
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+  min-width: 22px;
+  text-align: right;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-folder-row.active .sidebar-folder-count-badge {
+  color: rgba(var(--v-theme-on-primary), 0.65);
+}
+
+/* The refused-drop state (#757). Unscoped for the same reason as the rest of
+   this block: FolderTreeNode renders folder rows, and a scoped rule cannot
+   reach it. It previously existed twice, once in SideBar.css and once copied
+   into that component under a comment explaining the copy was necessary. It is
+   not, once the family lives here.
+
+   A glyph plus a texture, not colour alone: the row must read as refused in
+   forced-colors and to a colour-blind user. */
+.sidebar-list-item.not-droppable,
+.sidebar-project-tree-row.not-droppable,
+.sidebar-folder-row.not-droppable {
+  position: relative;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 var(--space-2),
+    rgba(var(--v-theme-border), 0.45) var(--space-2) var(--space-3)
+  );
+  outline: 1px dashed rgba(var(--v-theme-border), 0.7);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+  cursor: no-drop;
+}
+
+.sidebar-list-item.not-droppable > *,
+.sidebar-project-tree-row.not-droppable > *,
+.sidebar-folder-row.not-droppable > * {
+  opacity: var(--opacity-disabled);
+}
+
+.sidebar-list-item.not-droppable::after,
+.sidebar-project-tree-row.not-droppable::after,
+.sidebar-folder-row.not-droppable::after {
+  content: "\F073A"; /* mdi-cancel */
+  font-family: "Material Design Icons";
+  font-size: var(--text-sm);
+  line-height: 1;
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  transform: translateY(-50%);
+  color: rgb(var(--v-theme-sidebar-text));
+  pointer-events: none;
+}
+
 /* Non-scoped: webkit scrollbar pseudo-elements are suppressed by scoped data-v selectors */
 /* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
 .sidebar-scroll::-webkit-scrollbar {
@@ -20,10 +233,12 @@
   background: transparent !important;
 }
 
-/* Override ProjectFiles header inside the project tree to match subheader style */
+/* Override ProjectFiles header inside the project tree to match subheader style.
+   It sits alongside the People/Sets subheaders, so it takes their depth too. */
 .sidebar-project-tree-files .pf-header {
   min-height: 24px !important;
-  padding: var(--space-1) 0 var(--space-1) var(--space-3) !important;
+  padding: var(--space-1) 0 var(--space-1)
+    calc(var(--space-3) + 1 * var(--indent-step)) !important;
   padding-right: var(--sidebar-header-action-right-edge) !important;
   font-size: var(--text-2xs) !important;
   font-weight: var(--weight-semibold) !important;

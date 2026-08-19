@@ -39,11 +39,28 @@ def _setup_server_with_owner_session():
         json.dump({"disable_background_workers": True}, fh)
     server = Server(config_path)
     server.__enter__()
-    client = TestClient(server.api, raise_server_exceptions=True)
-    r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
-    )
-    assert r.status_code == 200, r.text
+    # The caller's try/finally cannot start until this returns, so anything
+    # that raises past __enter__ would strand a fully started Server — and its
+    # daemon database worker — for the rest of the session.
+    try:
+        client = TestClient(server.api, raise_server_exceptions=True)
+        r = client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert r.status_code == 200, r.text
+    except BaseException:
+        # `BaseException`, not `Exception`, on purpose: a KeyboardInterrupt here
+        # would otherwise strand exactly the Server this function exists to stop
+        # stranding. It re-raises, so nothing is swallowed.
+        #
+        # `finally`, so the temp directory goes even when `__exit__` raises —
+        # otherwise a failing teardown leaks the directory as well as whatever
+        # `__exit__` failed to close.
+        try:
+            server.__exit__(None, None, None)
+        finally:
+            tmp.cleanup()
+        raise
     return tmp, server, client
 
 
@@ -87,6 +104,9 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
         session.add(
             UserToken(
                 user_id=owner.id,
+                # Identity and tokens live in the hub now, and every token is
+                # stamped with the library it belongs to.
+                library_uuid=server._active_library_uuid(),
                 token_hash=bcrypt.hash(token_value),
                 token_prefix=token_value[:8],
                 created_at=datetime.utcnow(),
@@ -98,7 +118,7 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
         )
         session.commit()
 
-    server.vault.db.run_task(_add)
+    server.hub_engine.run_task(_add)
     return token_value
 
 

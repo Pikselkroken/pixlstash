@@ -7,11 +7,18 @@ rectangle within it. Generation is MODE-AGNOSTIC — the per-user
 read here.
 
 This task is data-driven off ``Picture.thumbnail_width IS NULL``. New imports
-populate the columns at import time, so in normal operation the only rows this
-task processes are those an upgrade reset to NULL (a one-time regeneration of the
-whole-frame bitmap). Each processed picture is regenerated from its source: the
+populate the columns at import time, so the rows this task processes are the ones
+something reset to NULL: an upgrade (a one-time regeneration of the whole-frame
+bitmap) or an in-place rotate and its undo, which change the source file under an
+existing thumbnail. Each processed picture is regenerated from its source: the
 bitmap file is (re)written and every ``thumbnail_*`` / ``square_crop_*`` column is
 set. Faces (when already present) weight the square-crop rectangle.
+
+**Completion is announced.** While a picture sits at NULL it has no stored aspect
+ratio, so its card lays out wrong, and its cache token is ``"0"``. Both are fixed
+here — but a client cannot know that without being told, and this task used to
+tell no one, so the repair reached the disk and the database while the open grid
+kept showing the wrong picture until a full reload. See :meth:`_announce`.
 """
 
 import ast
@@ -34,7 +41,7 @@ class ThumbnailGenerationTask(BaseTask):
 
     BATCH_SIZE = 64
 
-    def __init__(self, database, pictures: list):
+    def __init__(self, database, pictures: list, notifier=None):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="ThumbnailGenerationTask",
@@ -45,6 +52,7 @@ class ThumbnailGenerationTask(BaseTask):
         )
         self._db = database
         self._pictures = pictures or []
+        self._notifier = notifier
 
     # ── helpers ───────────────────────────────────────────────────────────────
     @staticmethod
@@ -155,4 +163,44 @@ class ThumbnailGenerationTask(BaseTask):
 
         changed = self._db.run_task(_persist, updates, priority=DBPriority.LOW)
         logger.debug("ThumbnailGenerationTask updated %s pictures.", changed)
+        self._announce(list(updates.keys()))
         return {"changed_count": changed or 0}
+
+    def _announce(self, picture_ids: list[int]) -> None:
+        """Tell open clients their tiles have a new bitmap to fetch.
+
+        Regeneration is the *completion* of a change something else started: an
+        upgrade that reset these columns to NULL, a reference-folder source swap,
+        or an in-place rotate and its undo. Until this ran, those pictures had no
+        stored dimensions at all — so a card had no aspect ratio to lay out with
+        and rendered stretched, and the cache token was ``"0"``. Both are only
+        repaired by re-reading the thumbnail endpoint, which nothing prompted:
+        the whole task was silent, so the fix landed on disk and in the database
+        and the open grid went on showing the wrong picture until a full reload.
+
+        ``pixels`` is the field name because the picture's own bytes are what the
+        client must re-read — the same marker an in-place rotate raises, handled
+        by the same branch. Best-effort: a broken notifier must never fail a
+        thumbnail batch that has already been persisted.
+        """
+        if not self._notifier or not picture_ids:
+            return
+        try:
+            from pixlstash.event_types import EventType
+
+            self._notifier(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": picture_ids,
+                    "change_kind": "updated",
+                    "fields": ["pixels"],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "ThumbnailGenerationTask could not announce %d regenerated "
+                "thumbnails (%s); their cards will look stale until the view is "
+                "reloaded",
+                len(picture_ids),
+                exc,
+            )

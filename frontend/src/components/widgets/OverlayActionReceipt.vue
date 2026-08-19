@@ -290,25 +290,18 @@ defineExpose({
   gap: var(--space-2);
   flex-shrink: 0;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-dark-surface));
   font-family: inherit;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 /* `--hover-wash` is `rgba(accent, 0.14)` in BOTH themes, so it composites to a
    visible warm lift on this dark fill without a variant. */
 .r-btn:hover:not([aria-disabled="true"]) {
   background: var(--hover-wash);
-}
-.r-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 /* `aria-disabled`, never the attribute: disabling a control the keyboard is on
    moves focus to <body>, and this button flips to Redo when the trip lands. */

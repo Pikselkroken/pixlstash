@@ -10,6 +10,9 @@ EXPECTED_SCHEMA_KEYS = {
     "name",
     "display_name",
     "description",
+    "author",
+    "license",
+    "models",
     "supports_tags",
     "supports_descriptions",
     "requires_download",
@@ -42,6 +45,9 @@ def test_plugin_schema_fields_are_correct_types(manager):
     for schema in manager.list_plugins():
         assert isinstance(schema["name"], str) and schema["name"]
         assert isinstance(schema["display_name"], str)
+        assert isinstance(schema["author"], str) and schema["author"]
+        assert isinstance(schema["license"], str) and schema["license"]
+        assert isinstance(schema["models"], list)
         assert isinstance(schema["supports_tags"], bool)
         assert isinstance(schema["supports_descriptions"], bool)
         assert isinstance(schema["requires_download"], bool)

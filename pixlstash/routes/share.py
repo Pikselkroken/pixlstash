@@ -51,6 +51,20 @@ def create_router(server) -> APIRouter:
         if matched_token is None:
             return _not_found
 
+        # The library pin, applied here by hand because the gate cannot see this
+        # route's token (see share_token_is_for_active_library). 404, like every
+        # other refusal here: a link to a non-active library must be
+        # indistinguishable from one that never existed.
+        if not share_service.share_token_is_for_active_library(
+            server.auth, matched_token
+        ):
+            logger.info(
+                "Refusing a share link minted for library %s while %s is active",
+                getattr(matched_token, "library_uuid", None),
+                server.auth.active_library_uuid(),
+            )
+            return _not_found
+
         pic_id = matched_token.resource_id
         pic = share_service.get_shared_picture(server.vault, pic_id)
         if not pic:
@@ -76,7 +90,7 @@ def create_router(server) -> APIRouter:
                 with Image.open(file_path) as pil_img:
                     if apply_wm:
                         wm_bytes = share_service.get_user_watermark_bytes(
-                            server.vault, matched_token.user_id
+                            server.hub_engine, matched_token.user_id
                         )
                         if wm_bytes:
                             pil_img = apply_watermark(pil_img, wm_bytes)

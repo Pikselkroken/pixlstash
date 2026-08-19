@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
@@ -27,16 +28,6 @@ describe("api/comfyui", () => {
     const result = await listWorkflows();
     expect(apiClient.get).toHaveBeenCalledWith("/comfyui/workflows");
     expect(result).toEqual({ workflows: [] });
-  });
-
-  // Several call sites hold an explicit backend base; the module must place it
-  // in front rather than silently dropping it.
-  it("listWorkflows prefixes an explicit backend base", async () => {
-    apiClient.get.mockResolvedValue({ data: {} });
-    await listWorkflows({ baseUrl: "http://host:9000" });
-    expect(apiClient.get).toHaveBeenCalledWith(
-      "http://host:9000/comfyui/workflows",
-    );
   });
 
   it("deleteWorkflow URL-encodes the workflow name", async () => {
@@ -70,8 +61,8 @@ describe("api/comfyui", () => {
   it("runImageToImage POSTs the payload under the given base", async () => {
     apiClient.post.mockResolvedValue({ data: { prompts: ["p1"] } });
     const payload = { picture_ids: [1], workflow_name: "flow" };
-    const result = await runImageToImage(payload, { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/comfyui/run_i2i", payload);
+    const result = await runImageToImage(payload);
+    expect(apiClient.post).toHaveBeenCalledWith("/comfyui/run_i2i", payload);
     expect(result).toEqual({ prompts: ["p1"] });
   });
 
@@ -89,11 +80,11 @@ describe("api/comfyui getPictureRecipe", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/comfyui/pictures/7/recipe");
   });
 
-  it("prefixes an explicit backend base", async () => {
+  it("requests the picture recipe route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
-    await getPictureRecipe(7, { baseUrl: "http://host:9000" });
+    await getPictureRecipe(7);
     expect(apiClient.get).toHaveBeenCalledWith(
-      "http://host:9000/comfyui/pictures/7/recipe",
+      "/comfyui/pictures/7/recipe",
     );
   });
 
@@ -115,11 +106,11 @@ describe("api/comfyui runRecipe", () => {
     expect(apiClient.post).toHaveBeenCalledWith("/comfyui/run_recipe", payload);
   });
 
-  it("prefixes an explicit backend base", async () => {
+  it("posts to the recipe run route", async () => {
     apiClient.post.mockResolvedValue({ data: {} });
-    await runRecipe({ picture_id: 7 }, { baseUrl: "http://host:9000" });
+    await runRecipe({ picture_id: 7 });
     expect(apiClient.post).toHaveBeenCalledWith(
-      "http://host:9000/comfyui/run_recipe",
+      "/comfyui/run_recipe",
       { picture_id: 7 },
     );
   });

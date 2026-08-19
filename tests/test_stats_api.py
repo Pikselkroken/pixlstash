@@ -76,7 +76,7 @@ def test_stats_basic_counts():
         assert data["smart_score_distribution"] == []
         assert data["resolution_distribution"] == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -102,7 +102,7 @@ def test_stats_tag_filter_reduces_total():
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -133,7 +133,7 @@ def test_stats_score_filter():
         assert resp.status_code == 200
         assert resp.json()["total"] == 2
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -163,7 +163,61 @@ def test_stats_include_picture():
         assert isinstance(data["resolution_distribution"], list)
         assert len(data["resolution_distribution"]) > 0
     finally:
-        server.vault.close()
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_unscored_histogram_bucket_matches_what_the_unscored_filter_returns():
+    """The Unscored bar and ``unscored=1`` must agree, score 0 included.
+
+    Clicking the current star again writes a literal 0 via ``POST
+    /pictures/apply-scores``, and nothing normalises it back to NULL. The
+    histogram used to read only the NULL group, so a score-0 picture fell into no
+    bucket at all: the bars did not sum to the library and the sidebar count
+    disagreed with the grid on the very first click.
+    """
+    temp_dir, client, server = _setup()
+    clear_stats_cache()
+    try:
+        cleared = _upload_picture(client, "Bad1.png")
+        never = _upload_picture(client, "Bad2.png")
+        rated = _upload_picture(client, "Changed1.png")
+
+        resp = client.post(
+            "/pictures/apply-scores",
+            json={"scores": {str(cleared): 0, str(rated): 4}, "only_unscored": False},
+        )
+        assert resp.status_code == 200
+
+        clear_stats_cache()
+        data = client.get("/pictures/stats?include=picture").json()
+        score_dist = {e["label"]: e["count"] for e in data["score_distribution"]}
+        assert score_dist["Unscored"] == 2, "score 0 belongs in Unscored with NULL"
+        assert score_dist["4"] == 1
+        assert sum(score_dist.values()) == data["total"], (
+            "every picture lands in exactly one bar"
+        )
+
+        resp = client.get("/pictures?unscored=1&limit=100")
+        assert resp.status_code == 200
+        returned = {p["id"] for p in resp.json()}
+        assert returned == {cleared, never}, "both NULL and 0, and nothing rated"
+        assert len(returned) == score_dist["Unscored"]
+
+        # The over-blocking direction: the rated picture is still reachable, and
+        # an unfiltered listing is unaffected.
+        resp = client.get("/pictures?min_score=1&limit=100")
+        assert {p["id"] for p in resp.json()} == {rated}
+        resp = client.get("/pictures?limit=100")
+        assert {p["id"] for p in resp.json()} == {cleared, never, rated}
+
+        # The param reaches the stats population too, so the sidebar totals track
+        # the grid rather than the whole library.
+        clear_stats_cache()
+        assert client.get("/pictures/stats?unscored=1").json()["total"] == 2
+    finally:
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -189,7 +243,7 @@ def test_stats_include_cooc():
         assert set(pair["tags"]) == {"cooc_a", "cooc_b"}
         assert pair["count"] == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -211,7 +265,7 @@ def test_stats_include_conf():
         assert isinstance(data["regular_tags"], list)
         assert "conf_tag" in data["regular_tags"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -242,6 +296,6 @@ def test_stats_cache_expires_after_ttl(monkeypatch):
             "Stats should be recomputed after TTL expires"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

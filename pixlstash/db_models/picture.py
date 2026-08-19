@@ -175,8 +175,19 @@ class Picture(SQLModel, table=True):
     file_path: Optional[str] = None
     description: Optional[str] = None
     format: Optional[str] = None
+    # RAW, un-rotated pixel dimensions as stored in the file. They do NOT swap
+    # when the EXIF orientation changes — an in-place rotate rewrites one tag and
+    # copies every pixel byte through, so the stored bitmap keeps its shape.
     width: Optional[int] = None
     height: Optional[int] = None
+    # The EXIF orientation (1-8) the file on disk currently carries, mirrored
+    # here so it can be read without opening the file. It is a *mirror*, not the
+    # source of truth: the file is. The column exists because
+    # ``capture_state_in_session`` runs for every recorded operation, and reading
+    # the tag off disk there would make a 2,700-row tag edit do 5,400 file opens
+    # on the single DB writer thread. NULL means "not yet read" —
+    # ``MissingOrientationFinder`` backfills it.
+    orientation: Optional[int] = Field(default=None)
     size_bytes: Optional[int] = None
     size_bin_index: Optional[int] = Field(default=None, index=True)
     created_at: Optional[datetime] = Field(
@@ -434,14 +445,17 @@ class Picture(SQLModel, table=True):
     # non-deleted row to prove there is no work; scoped to the matching rows the
     # probe is O(rows that actually need work), i.e. free when idle.
     #
-    # Column order is load-bearing, not cosmetic. The obvious ``(id)``-only form
-    # does NOT get chosen: this database never runs ``ANALYZE``, so there is no
-    # ``sqlite_stat1``, and without statistics SQLite scores a partial index by the
-    # table's default row estimate. It only wins when it can claim MORE equality
-    # terms than the index it competes with. Leading with the nullable column makes
-    # ``<col> IS NULL`` a usable equality term (SQLite treats ``IS NULL`` as one),
-    # and ``deleted`` a second, which beats single-term ``ix_picture_deleted``
-    # outright rather than tying with it and losing on a creation-order tie-break.
+    # Column order is load-bearing, not cosmetic. A partial index only wins when
+    # it can claim MORE equality terms than the index it competes with. Leading
+    # with the nullable column makes ``<col> IS NULL`` a usable equality term
+    # (SQLite treats ``IS NULL`` as one), and ``deleted`` a second, which beats
+    # single-term ``ix_picture_deleted`` outright. The obvious ``(id)``-only form
+    # claims no extra term, so it ties and loses on a creation-order tie-break:
+    # measured without statistics it is not chosen at all and the probe falls
+    # back to ``ix_picture_deleted`` at 80 ms, against 0.003 ms here. This does
+    # not rest on PixlStash never running ``ANALYZE`` (it does not, but a user
+    # can run it from any SQLite client): the order above is the one that wins
+    # both with and without ``sqlite_stat1``.
     # Trailing ``id`` keeps ``ORDER BY picture.id`` free (no temp B-tree).
     # Measured on 200k rows with 3 matching: 17.9 ms -> under 0.01 ms per probe.
     __table_args__ = (
@@ -460,6 +474,15 @@ class Picture(SQLModel, table=True):
             "deleted",
             "id",
             sqlite_where=text("smart_score IS NULL"),
+        ),
+        # MissingOrientationFinder: orientation IS NULL AND deleted IS 0. Same
+        # idle-probe shape and the same column order for the same reason.
+        Index(
+            "ix_picture_orientation_missing",
+            "orientation",
+            "deleted",
+            "id",
+            sqlite_where=text("orientation IS NULL"),
         ),
     )
 
@@ -534,6 +557,7 @@ class Picture(SQLModel, table=True):
         candidate_ids: Optional[List[int]] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
+        unscored: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         comfyui_models_filter: Optional[List[str]] = None,
@@ -682,6 +706,7 @@ class Picture(SQLModel, table=True):
             format=format,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             comfyui_models_filter=comfyui_models_filter,
@@ -790,11 +815,12 @@ class Picture(SQLModel, table=True):
         impossible_sources: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
+        unscored: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
         guest_session_id: Optional[str] = None,
-        guest_token_id: Optional[int] = None,
+        guest_token_public_id: Optional[str] = None,
         count_only: bool = False,
         **search,
     ) -> Union[List["Picture"], int]:
@@ -877,6 +903,7 @@ class Picture(SQLModel, table=True):
             format=format,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,
@@ -1108,8 +1135,10 @@ class Picture(SQLModel, table=True):
                 join_cond = (gs_alias.picture_id == cls.id) & (
                     gs_alias.session_id == guest_session_id
                 )
-                if guest_token_id is not None:
-                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                if guest_token_public_id is not None:
+                    join_cond = join_cond & (
+                        gs_alias.token_public_id == guest_token_public_id
+                    )
                 query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, cls.score)
                 if sort_mech.descending:
@@ -1164,6 +1193,13 @@ class Picture(SQLModel, table=True):
             "text_score",
             "reference_folder_id",
             "file_path",
+            # The full-size media URL's `?v=` token (`mediaVersion` in
+            # frontend/src/utils/media.js). An in-place rotate rewrites only the
+            # EXIF orientation tag, so nothing else in this projection moves when
+            # a picture is turned — without it the lightbox, the grid's
+            # full-image prefetch and the neighbour preloads all build the same
+            # unchanged URL and the browser repaints the pre-rotate bytes.
+            "orientation",
         }
 
     @classmethod
@@ -1232,6 +1268,7 @@ class Picture(SQLModel, table=True):
         stack_leaders_only: bool = False,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
+        unscored: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         project_id: Optional[int] = None,
@@ -1246,7 +1283,7 @@ class Picture(SQLModel, table=True):
         impossible_sources: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
-        guest_token_id: Optional[int] = None,
+        guest_token_public_id: Optional[str] = None,
         count_only: bool = False,
     ):
         # Imported lazily to avoid a circular import (predicate_filter imports Picture).
@@ -1288,6 +1325,7 @@ class Picture(SQLModel, table=True):
             format=format,
             min_score=min_score,
             max_score=max_score,
+            unscored=unscored,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,
@@ -1398,8 +1436,10 @@ class Picture(SQLModel, table=True):
                 join_cond = (gs_alias.picture_id == Picture.id) & (
                     gs_alias.session_id == guest_session_id
                 )
-                if guest_token_id is not None:
-                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                if guest_token_public_id is not None:
+                    join_cond = join_cond & (
+                        gs_alias.token_public_id == guest_token_public_id
+                    )
                 query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, Picture.score)
                 query = query.order_by(

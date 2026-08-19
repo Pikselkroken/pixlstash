@@ -20,7 +20,7 @@ import {
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
 } from "../utils/media.js";
-import { debounce } from "lodash-es";
+import { debounce } from "../utils/utils";
 import { useFilterStore } from "../stores/useFilterStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
@@ -381,6 +381,9 @@ export function useGridFetch(
     if (filterStore.maxScoreFilter != null) {
       params.append("max_score", filterStore.maxScoreFilter);
     }
+    if (filterStore.unscoredOnlyFilter) {
+      params.append("unscored", "1");
+    }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
     }
@@ -456,6 +459,9 @@ export function useGridFetch(
     }
     if (filterStore.maxScoreFilter != null) {
       params.append("max_score", filterStore.maxScoreFilter);
+    }
+    if (filterStore.unscoredOnlyFilter) {
+      params.append("unscored", "1");
     }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
@@ -603,9 +609,7 @@ export function useGridFetch(
         fetchMode = "likeness-groups";
         const threshold = getStackThreshold(sortStore.stackThreshold);
         const likenessGroupParams = buildLikenessGroupQueryParams();
-        const data = await getLikenessGroups(threshold, likenessGroupParams, {
-          baseUrl: props.backendUrl,
-        });
+        const data = await getLikenessGroups(threshold, likenessGroupParams);
         if (fetchAllGridImages.lastRequestId !== requestId) {
           if (isSortedFetch && options?.showProgress === true)
             completeSmartScoreProgress(loadId, 0, false);
@@ -647,9 +651,7 @@ export function useGridFetch(
         if (!ranked) {
           let raw;
           try {
-            raw = await characterFaceSearch(character.id, {
-              baseUrl: props.backendUrl,
-            });
+            raw = await characterFaceSearch(character.id);
           } catch (error) {
             error.gridFetchPhase = "character-face-search-request";
             throw error;
@@ -664,7 +666,7 @@ export function useGridFetch(
           if (ranked.length) {
             const rows = await listPicturesByIds(
               ranked.map((r) => r.picture_id),
-              { fields: "grid", baseUrl: props.backendUrl },
+              { fields: "grid" },
             );
             if (fetchAllGridImages.lastRequestId !== requestId) {
               if (isSortedFetch && options?.showProgress === true)
@@ -695,9 +697,7 @@ export function useGridFetch(
         fetchMode = "face-likeness-search";
         // Face likeness search: POST to face-search with source_face_id.
         const queryFaceId = faceLikenessSearchFaceId.value;
-        const faceResultsRaw = await faceSearch(queryFaceId, {
-          baseUrl: props.backendUrl,
-        });
+        const faceResultsRaw = await faceSearch(queryFaceId);
         const faceResults = Array.isArray(faceResultsRaw) ? faceResultsRaw : [];
         if (!faceResults.length) {
           images = [];
@@ -705,7 +705,6 @@ export function useGridFetch(
           const idOrder = faceResults.map((r) => r.picture_id);
           const rows = await listPicturesByIds(idOrder, {
             fields: "grid",
-            baseUrl: props.backendUrl,
           });
           const picturesById = {};
           for (const pic of Array.isArray(rows) ? rows : []) {
@@ -718,9 +717,7 @@ export function useGridFetch(
         // Reverse image search: POST to likeness-search with stored CLIP embeddings.
         // Multiple IDs are combined with min similarity (must match all sources).
         const queryPicIds = reverseImageSearchPictureIds.value;
-        const likenessRaw = await likenessSearch(queryPicIds, {
-          baseUrl: props.backendUrl,
-        });
+        const likenessRaw = await likenessSearch(queryPicIds);
         const likenessResults = Array.isArray(likenessRaw) ? likenessRaw : [];
         if (!likenessResults.length) {
           images = [];
@@ -728,7 +725,6 @@ export function useGridFetch(
           const idOrder = likenessResults.map((r) => r.picture_id);
           const rows = await listPicturesByIds(idOrder, {
             fields: "grid",
-            baseUrl: props.backendUrl,
           });
           const picturesById = {};
           for (const pic of Array.isArray(rows) ? rows : []) {
@@ -742,7 +738,6 @@ export function useGridFetch(
         const params = buildPictureIdsQueryParams();
         images = await searchPictures(searchStore.searchQuery.trim(), {
           query: params,
-          baseUrl: props.backendUrl,
         });
       } else {
         fetchMode = "stream";
@@ -948,6 +943,7 @@ export function useGridFetch(
           _filterP.set("min_score", String(filterStore.minScoreFilter));
         if (filterStore.maxScoreFilter != null)
           _filterP.set("max_score", String(filterStore.maxScoreFilter));
+        if (filterStore.unscoredOnlyFilter) _filterP.set("unscored", "1");
         // Filter params: smart score bucket
         if (filterStore.smartScoreBucketFilter != null)
           _filterP.set(
@@ -1048,7 +1044,6 @@ export function useGridFetch(
         const countStartedAt = getNowMs();
         const countBody = await getPictureCount(
           `stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`,
-          { baseUrl: props.backendUrl },
         );
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         fetchPhaseTimings.countMs = Math.max(0, getNowMs() - countStartedAt);
@@ -1141,7 +1136,6 @@ export function useGridFetch(
           streamPictures(streamQuery, {
             offset: 0,
             batchLimit: FIRST_BATCH,
-            baseUrl: props.backendUrl,
           }),
         );
         // Tail batch: for collections where the gap exceeds TAIL_THRESHOLD.
@@ -1153,7 +1147,6 @@ export function useGridFetch(
                 streamPictures(streamQuery, {
                   offset: potentialLastBatchStart,
                   batchLimit: LAST_BATCH,
-                  baseUrl: props.backendUrl,
                 }),
               )
             : Promise.resolve(null)
@@ -1224,7 +1217,6 @@ export function useGridFetch(
             streamPictures(streamQuery, {
               offset: bgOff,
               batchLimit: limit,
-              baseUrl: props.backendUrl,
             }),
           );
           if (fetchAllGridImages.lastRequestId !== requestId) return;
@@ -1466,7 +1458,6 @@ export function useGridFetch(
       const data = await getCharacterSummary(
         ALL_PICTURES_ID,
         userPrefsStore.applyTagFilter ? { apply_tag_filter: true } : undefined,
-        { baseUrl: props.backendUrl },
       );
       totalAllPicturesCount.value = Number(data.image_count) || 0;
     } catch (e) {
@@ -1495,9 +1486,7 @@ export function useGridFetch(
         // same request the sidebar makes on the same triggers, and the count
         // shown here must be the fresh one, so it forces a revalidation rather
         // than reading whatever happens to be cached.
-        const setList = await useEntityListsStore().refresh("sets", {
-          baseUrl: props.backendUrl,
-        });
+        const setList = await useEntityListsStore().refresh("sets");
         const selectedSetNumericId = Number(selectedSetId);
         const selectedSet = Array.isArray(setList)
           ? setList.find((item) => {
@@ -1544,12 +1533,10 @@ export function useGridFetch(
           ? await getProjectSummary(
               summaryId,
               hasParams ? summaryParams : undefined,
-              { baseUrl: props.backendUrl },
             )
           : await getCharacterSummary(
               summaryId,
               hasParams ? summaryParams : undefined,
-              { baseUrl: props.backendUrl },
             );
       totalCurrentCategoryCount.value = Number(scopedData.image_count) || 0;
     } catch (e) {

@@ -219,10 +219,6 @@ def populate_env(py: Path, wheel: Path, accel: str, cache_dir: Path) -> None:
     # 3. The PixlStash wheel + remaining deps from PyPI.
     pip_install(py, [str(wheel)], cache_dir)
 
-    # 4. The spaCy English model used by the description pipeline.
-    log("downloading spaCy en_core_web_sm")
-    subprocess.run([str(py), "-m", "spacy", "download", "en_core_web_sm"], check=True)
-
 
 def installed_version(py: Path, dist: str) -> str:
     out = subprocess.run(

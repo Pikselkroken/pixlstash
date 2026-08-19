@@ -492,7 +492,6 @@ function previewUrl(pictureId, record, version = "") {
   }
   return pictureThumbnailUrl(pictureId, {
     version: record?.thumbnail_version ?? version,
-    baseUrl: API_BASE_URL,
   });
 }
 
@@ -1134,6 +1133,15 @@ let panState = null;
 
 /** The current scale, 1 = actual pixels; null until the image has measured
  * (the un-measured state renders the classic fit look via CSS). */
+// One key press moves the zoom about 27%, which is `exp(120 * ZOOM_INTENSITY)`.
+// Expressed as a wheel delta rather than a scale factor so the keyboard and the
+// wheel share one curve instead of two that drift.
+const ZOOM_KEY_STEP_DELTA = 120;
+// A pan step is a fifth of the viewport: far enough to make progress across a
+// 1024px crop, small enough to keep the eye's place.
+const ZOOM_PAN_FRACTION = 0.2;
+const ZOOM_PAN_MIN_STEP = 48;
+
 const zoomScale = ref(null);
 /** The floor of the continuum: the scale at which this image exactly fits. */
 const zoomFitScale = ref(1);
@@ -1419,6 +1427,56 @@ function applyZoomScale(next, cursor) {
 }
 
 /**
+ * Step the zoom from the keyboard, anchored on the VIEWPORT CENTRE.
+ *
+ * Routed through `zoomStepScale`, the same function the wheel uses, so the two
+ * inputs cannot drift into different zoom curves. The wheel anchors on the
+ * cursor because there is one; a key press has no pointer, so the centre of
+ * what the user is looking at is the honest anchor.
+ *
+ * @param {number} direction - +1 to zoom in, -1 to zoom out.
+ */
+function stepZoomByKey(direction) {
+  if (!zoomOpen.value || zoomScale.value === null) return;
+  const el = zoomScrollEl.value;
+  // Negative deltaY is "zoom in" in the wheel's own convention.
+  const next = zoomStepScale(
+    zoomScale.value,
+    -direction * ZOOM_KEY_STEP_DELTA,
+    zoomFitScale.value,
+  );
+  if (next === zoomScale.value) return;
+  applyZoomScale(
+    next,
+    el ? { x: el.clientWidth / 2, y: el.clientHeight / 2 } : { x: 0, y: 0 },
+  );
+}
+
+/**
+ * Pan the zoomed image from the keyboard.
+ *
+ * Only meaningful while the image overflows its viewport, which is exactly when
+ * a mouse user would drag. At Fit there is nothing to pan and the key should
+ * fall through rather than silently doing nothing.
+ *
+ * @param {number} dx - columns to move, in step units.
+ * @param {number} dy - rows to move, in step units.
+ * @returns {boolean} whether the pan was applied.
+ */
+function panZoomByKey(dx, dy) {
+  const el = zoomScrollEl.value;
+  if (!zoomOpen.value || !el || !zoomOverflowing.value) return false;
+  const stepX = Math.max(ZOOM_PAN_MIN_STEP, el.clientWidth * ZOOM_PAN_FRACTION);
+  const stepY = Math.max(
+    ZOOM_PAN_MIN_STEP,
+    el.clientHeight * ZOOM_PAN_FRACTION,
+  );
+  el.scrollLeft += dx * stepX;
+  el.scrollTop += dy * stepY;
+  return true;
+}
+
+/**
  * Escape peels ONE layer: with the zoom up, a close request (AppDialog's own
  * Escape handling on its subtree, Vuetify's ESC/scrim, the header X) closes
  * the ZOOM and keeps the dialog; the next one closes the dialog. The queue's
@@ -1520,6 +1578,9 @@ defineExpose({
   flipZoom,
   zoomTo,
   toggleZoomPixels,
+  stepZoom: stepZoomByKey,
+  panZoom: panZoomByKey,
+  canPanZoom: () => zoomOpen.value && zoomOverflowing.value,
   zoomLevel: () => zoomScale.value,
 });
 
@@ -2287,11 +2348,8 @@ function onZoomContextMenu() {
   width: 100%;
   text-align: left;
   padding: 0;
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -2301,11 +2359,6 @@ function onZoomContextMenu() {
 
 .dc-pick[aria-pressed="true"] {
   background: var(--active-wash);
-}
-
-.dc-pick:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* The image takes every pixel the metadata does not strictly need. */
@@ -2384,20 +2437,13 @@ function onZoomContextMenu() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-sm);
   background: var(--scrim-photo);
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
 }
 
 .dc-zoom:hover {
   color: rgb(var(--v-theme-accent));
-}
-
-.dc-zoom:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* ── The compact meta grid: two columns, label over value ─────────────────── */
@@ -2493,11 +2539,8 @@ function onZoomContextMenu() {
   align-items: center;
   justify-content: center;
   padding: var(--space-1);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);
@@ -2508,11 +2551,6 @@ function onZoomContextMenu() {
   color: rgb(var(--v-theme-on-surface));
 }
 
-.dc-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* The expansion trigger reads as the value it replaces, not as a button in a
    column of values: the chevron carries the affordance and the state. */
 .dc-expand {
@@ -2521,13 +2559,10 @@ function onZoomContextMenu() {
   gap: var(--space-1);
   max-width: 100%;
   padding: 0;
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
   font-variant-numeric: tabular-nums;
   text-align: left;
-  cursor: pointer;
 }
 
 .dc-expand:hover {
@@ -2726,11 +2761,8 @@ function onZoomContextMenu() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(255, 255, 255, 0.72);
-  cursor: pointer;
 }
 
 .dc-zv-close:hover {

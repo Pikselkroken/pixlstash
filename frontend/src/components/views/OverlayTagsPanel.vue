@@ -45,7 +45,6 @@
                 v-for="plugin in tagPlugins"
                 :key="plugin.name"
                 :title="plugin.display_name || plugin.name"
-                :disabled="!!plugin.load_error"
                 @click="refreshPictureTags(plugin.name)"
               />
               <v-list-item
@@ -259,7 +258,7 @@
  *   refetchPredictions(id) - Re-fetch predictions after parent metadata refresh.
  */
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
-import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   removeTagEverywhere,
@@ -281,7 +280,7 @@ import {
 
 const props = defineProps({
   image: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   // True when the picture is frozen by a locked set: render tags read-only.
@@ -451,9 +450,7 @@ function normalizeTagKey(tag) {
 async function fetchTagPredictions(imageId) {
   if (!imageId || !props.backendUrl) return;
   try {
-    const payload = await listTagPredictions(imageId, {
-      baseUrl: props.backendUrl,
-    });
+    const payload = await listTagPredictions(imageId);
     if (!props.image || props.image.id !== imageId) return;
     const predictions = Array.isArray(payload)
       ? payload
@@ -856,7 +853,6 @@ async function removeAllTag(tag, { batchId = newOperationBatchId() } = {}) {
   if (capturedImageId && props.backendUrl) {
     try {
       await removeTagEverywhere(capturedImageId, label, {
-        baseUrl: props.backendUrl,
         batchId,
       });
     } catch (err) {
@@ -903,7 +899,7 @@ async function confirmPrediction(tag) {
   }
 
   try {
-    await confirmTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
+    await confirmTagPrediction(imageId, tag);
     void fetchTagPredictions(imageId);
   } catch (e) {
     emit("update-tags", prevTags);
@@ -926,7 +922,6 @@ async function rejectPrediction(tag, { batchId } = {}) {
   const key = String(tag).trim().toLowerCase();
   try {
     await rejectTagPrediction(imageId, tag, {
-      baseUrl: props.backendUrl,
       batchId,
     });
     tagPredictions.value = tagPredictions.value.map((p) =>
@@ -975,9 +970,7 @@ async function refreshPictureTags(model = null) {
   isTagsRefreshing.value = true;
   try {
     const body = model ? { model } : {};
-    await resetPictureTags(capturedImageId, body, {
-      baseUrl: props.backendUrl,
-    });
+    await resetPictureTags(capturedImageId, body);
     tagPredictions.value = [];
     emit("update-tags", []);
     emit("overlay-change", {
@@ -1068,14 +1061,11 @@ defineExpose({
 }
 
 .section-meta-btn {
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
 }
 
 .section-meta-btn:disabled {
@@ -1226,9 +1216,6 @@ defineExpose({
 .tag-pred-btn {
   margin: 0 1px;
   padding: 1px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   font-size: 0.75em;
   line-height: 1;
   vertical-align: middle;
@@ -1286,10 +1273,7 @@ defineExpose({
 .tag-delete-btn {
   margin: 0;
   padding: var(--space-1);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-primary));
-  cursor: pointer;
   font-size: 0.8em; /* relative em scale, not absolute px; no token */
   line-height: 1;
   vertical-align: middle;
@@ -1327,10 +1311,7 @@ defineExpose({
   text-align: left;
   padding: 5px 10px; /* no clean token: 5px is between --space-2(4px) and --space-3(8px); 10px between --space-3(8px) and --space-4(12px) */
   font-size: var(--text-2xs);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

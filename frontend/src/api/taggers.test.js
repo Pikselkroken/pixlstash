@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn() },
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { listTaggers, getLabelThresholds } from "./taggers";
+import {
+  listTaggers,
+  listTaggerPluginDiagnostics,
+  getLabelThresholds,
+} from "./taggers";
 
 beforeEach(() => {
   apiClient.get.mockReset();
@@ -21,10 +26,35 @@ describe("api/taggers", () => {
     expect(result.plugins).toEqual([{ name: "a" }]);
   });
 
-  it("listTaggers prefixes an explicit backend base", async () => {
+  it("listTaggers requests the taggers route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
-    await listTaggers({ baseUrl: "http://host:9000" });
-    expect(apiClient.get).toHaveBeenCalledWith("http://host:9000/taggers");
+    await listTaggers();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers");
+  });
+
+  // Its own route because both halves name host paths, and the folder is
+  // stricter than the plugin list: local owner, not merely owner.
+  it("listTaggerPluginDiagnostics GETs the separate diagnostics route", async () => {
+    apiClient.get.mockResolvedValue({
+      data: {
+        plugin_dirs: { user: "/somewhere/tagger-plugins/user" },
+        load_errors: [{ name: "broken", message: "boom" }],
+        cli_hint: "pixlstash plugins install <name-or-path>",
+        cli_available_hint: "pixlstash plugins available",
+        cli_search_hint: "pixlstash plugins available <search-term>",
+        cli_list_hint: "pixlstash plugins list",
+      },
+    });
+    const result = await listTaggerPluginDiagnostics();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-diagnostics");
+    expect(result.plugin_dirs.user).toBe("/somewhere/tagger-plugins/user");
+    expect(result.load_errors[0].name).toBe("broken");
+    expect(result.cli_hint).toBe("pixlstash plugins install <name-or-path>");
+    expect(result.cli_available_hint).toBe("pixlstash plugins available");
+    expect(result.cli_search_hint).toBe(
+      "pixlstash plugins available <search-term>",
+    );
+    expect(result.cli_list_hint).toBe("pixlstash plugins list");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {

@@ -16,7 +16,7 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,

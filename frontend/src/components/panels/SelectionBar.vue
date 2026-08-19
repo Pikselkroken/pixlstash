@@ -213,7 +213,6 @@
             :open="selectionMenuOpen"
             :selected-count="selectedCount"
             :selected-image-ids="selectedImageIds"
-            :backend-url="backendUrl"
             :is-read-only="isReadOnly"
             :is-scrapheap-view="isScrapheapView"
             :grouping-lock-reason="props.groupingLockReason"
@@ -226,6 +225,7 @@
             :selected-multiple-stack-ids="props.selectedMultipleStackIds"
             :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
             :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
+            :rotate-block-reason="props.rotateBlockReason"
             :show-remove-from-stack="props.showRemoveFromStack"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
@@ -243,6 +243,8 @@
             @open-comfyui-panel="openComfyuiPanel()"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
+            @rotate-left="$emit('rotate-left')"
+            @rotate-right="$emit('rotate-right')"
             @remove-from-group="$emit('remove-from-group')"
             @keep-cover-only="$emit('keep-cover-only')"
             @delete-selected="$emit('delete-selected')"
@@ -266,7 +268,6 @@
               ></div>
             </template>
             <TbTagPanel
-              :backend-url="props.backendUrl"
               :selected-count="selectedCount"
               :selected-image-ids="props.selectedImageIds"
               :all-grid-images="props.allGridImages"
@@ -326,12 +327,14 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listWorkflows, runImageToImage } from "../../api/comfyui";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
+import { isEditableElement } from "../../utils/dom.js";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   selectedCount: Number,
@@ -346,7 +349,7 @@ const props = defineProps({
    */
   ownsEscape: { type: Boolean, default: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedImageIds: { type: Array, default: () => [] },
   selectedMediaSupport: {
     type: Object,
@@ -360,13 +363,15 @@ const props = defineProps({
   // only, never as a top-level pill button.
   keepCoverOnlyStackCount: { type: Number, default: 0 },
   keepCoverOnlyLockReason: { type: String, default: null },
+  // Forwarded straight to SelectionMenu, like the two above: the rotate pair
+  // lives in the overflow only, never as a top-level pill button.
+  rotateBlockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
   captionerPlugins: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
   selectedCharacter: String,
-  selectedSet: String,
   impossibleSources: { type: Array, default: () => [] },
   clearingImpossible: { type: Boolean, default: false },
 });
@@ -391,6 +396,8 @@ const emit = defineEmits([
   "generate-description",
   "reverse-image-search",
   "segment",
+  "rotate-left",
+  "rotate-right",
   "selection-menu-open",
   "clear-impossible-tags",
 ]);
@@ -458,15 +465,6 @@ const selectedPluginName = ref("");
 const pluginMenuOpen = ref(false);
 const selectionMenuOpen = ref(false);
 const selectionMenuRef = ref(null);
-
-function isEditableElement(el) {
-  if (!(el instanceof HTMLElement)) return false;
-  if (el.isContentEditable) return true;
-  const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (el.getAttribute("role") === "textbox") return true;
-  return false;
-}
 
 function handleSelectionMenuHotkey(event) {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -646,7 +644,7 @@ async function fetchComfyWorkflows() {
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     comfyuiWorkflows.value = [];
   } finally {
     comfyuiWorkflowLoading.value = false;
@@ -673,9 +671,7 @@ async function runSelectedComfyWorkflow() {
       client_id: props.comfyuiClientId || undefined,
       stack: stackI2IOutputs.value,
     };
-    const body = await runImageToImage(payload, {
-      baseUrl: props.backendUrl,
-    });
+    const body = await runImageToImage(payload);
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("comfyui-run", {
       prompts,
@@ -692,8 +688,7 @@ async function runSelectedComfyWorkflow() {
       comfyuiMenuOpen.value = false;
     }, 1200);
   } catch (err) {
-    comfyuiRunError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     comfyuiRunLoading.value = false;
   }
@@ -795,14 +790,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   justify-content: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -810,7 +802,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .clear-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -841,14 +832,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps
      the destructive control off its neighbour's elbow. */
   margin-left: var(--space-3);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -856,7 +844,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .delete-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -866,12 +853,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;
