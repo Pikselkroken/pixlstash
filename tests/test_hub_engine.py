@@ -20,7 +20,11 @@ from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.db import HubPermissionError, check_file_mode
+from pixlstash.hub.db import (
+    HubPermissionError,
+    canonical_hub_path,
+    check_file_mode,
+)
 from pixlstash.hub.engine import HubEngine
 from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import (
@@ -1311,3 +1315,136 @@ def test_transaction_survives_an_already_open_transaction(hub_path):
     finally:
         survivor.close()
     assert "/written/inside" in paths, "the block's own write must still commit"
+
+
+class TestHubUnderASymlinkedAncestor:
+    """A symlinked config directory must not stop the server starting.
+
+    v1.10.0 introduced both the hub and ``trusted_sqlite``'s guard. The guard
+    refuses a *caller-supplied* path that crosses a symlink, and the hub's path
+    — unlike a library's, which ``registry.resolve_path`` has always canonicalised
+    at attach — was handed over exactly as derived from the config directory.
+    A stow/chezmoi-managed ``~/.config``, a ``$HOME`` symlinked onto another
+    disk, or a macOS path crossing ``/var`` -> ``/private/var`` therefore
+    bricked startup with no route back, since ``startup_permissions`` mirrors
+    the guard over ``realpath`` and cannot see a redirect that exists only
+    before resolution.
+
+    Both directions, because the ancestor relaxation must not cost the leaf
+    refusal: an ancestor link is followed, a link standing at ``hub.db``
+    itself is still refused.
+    """
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_a_hub_under_a_symlinked_ancestor_opens(self, tmp_path):
+        real = tmp_path / "real-config"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "config"
+        link.symlink_to(real, target_is_directory=True)
+
+        HubDatabase(str(link / "hub.db")).close()
+
+        # The bytes must land at the canonical location, opened once, rather
+        # than at a second file reached through the link.
+        assert (real / "hub.db").is_file()
+        assert not (real / "hub.db").is_symlink()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_the_opened_path_is_canonical(self, tmp_path):
+        real = tmp_path / "real-config"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "config"
+        link.symlink_to(real, target_is_directory=True)
+
+        # The pool, the sidecars and `os.replace` all reopen by this string
+        # over the process lifetime; if it still held the link they would
+        # re-resolve it on every use.
+        with HubDatabase(str(link / "hub.db")) as hub:
+            assert hub.path == str(real / "hub.db")
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_a_symlinked_leaf_under_a_symlinked_ancestor_is_still_refused(
+        self, tmp_path
+    ):
+        real = tmp_path / "real-config"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "config"
+        link.symlink_to(real, target_is_directory=True)
+        target = real / "elsewhere.db"
+        target.write_bytes(b"do not open")
+        (real / "hub.db").symlink_to(target)
+
+        with pytest.raises(HubPermissionError, match="symlink"):
+            HubDatabase(str(link / "hub.db"))
+
+        assert target.read_bytes() == b"do not open"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_a_symlink_to_an_exposed_directory_is_still_refused(self, tmp_path):
+        """Resolving the ancestor must not smuggle past the namespace walk.
+
+        This is what carries the security load now that the redirect itself is
+        followed: the link is resolved, and then the directory it lands on is
+        judged on its own ownership and mode.
+        """
+        exposed = tmp_path / "exposed"
+        exposed.mkdir()
+        # chmod, not mkdir(mode=...): the process umask is commonly 0o022, which
+        # would silently make this 0o755 and leave nothing for the guard to
+        # refuse — the assertion would then pass for the wrong reason.
+        os.chmod(exposed, 0o777)
+        link = tmp_path / "config"
+        link.symlink_to(exposed, target_is_directory=True)
+
+        with pytest.raises(HubPermissionError, match="writable"):
+            HubDatabase(str(link / "hub.db"))
+
+
+class TestCanonicalHubPath:
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_ancestors_are_resolved_and_the_leaf_is_not(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "via-link"
+        link.symlink_to(real, target_is_directory=True)
+        leaf = real / "hub.db"
+        leaf.symlink_to(real / "target.db")
+
+        resolved = canonical_hub_path(str(link / "hub.db"))
+
+        assert resolved == str(real / "hub.db")
+        # Preserved as a link so `_reject_symlinked_path` still gets to refuse
+        # it; `os.path.realpath` over the whole path would have followed it.
+        assert os.path.islink(resolved)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_a_path_without_links_is_unchanged(self, tmp_path):
+        plain = str(tmp_path / "hub.db")
+
+        assert canonical_hub_path(plain) == os.path.realpath(plain)
+
+    @pytest.mark.skipif(os.name == "nt", reason="creates a symlink to simulate nt")
+    def test_on_windows_a_symlinked_ancestor_is_not_resolved(
+        self, tmp_path, monkeypatch
+    ):
+        """The Windows carve-out that keeps ``_reject_symlinked_path`` intact.
+
+        On ``nt`` resolving the ancestors would defeat the redirect refusal, one
+        of the only controls left there (W19, ``docs/backend_architecture.md``
+        section 13). A real symlink is made on this POSIX gate, ``os.name`` is
+        forced to ``nt``, and the ancestor must come back *unresolved* — the
+        symlink still present — so the leaf-and-ancestor walk in
+        ``_reject_symlinked_path`` still gets to see and refuse it. Without the
+        guard this resolves the link and the assertion fails.
+        """
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "via-link"
+        link.symlink_to(real, target_is_directory=True)
+
+        monkeypatch.setattr("pixlstash.hub.db.os.name", "nt")
+
+        resolved = canonical_hub_path(str(link / "hub.db"))
+
+        assert resolved == str(link / "hub.db")
+        assert os.path.islink(os.path.dirname(resolved))

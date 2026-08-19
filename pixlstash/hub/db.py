@@ -125,6 +125,59 @@ def default_hub_path() -> str:
     return os.path.join(user_config_dir(APP_NAME), "hub.db")
 
 
+def canonical_hub_path(path: str) -> str:
+    """Return *path* with every symlinked ancestor resolved.
+
+    ``TrustedSQLiteLocation`` opens by the canonical path but refuses a
+    *caller-supplied* path that reaches its target through a symlink, and the
+    hub's path is derived from the config directory rather than registered the
+    way a library's is.  A user whose ``~/.config`` is managed by stow or
+    chezmoi, whose ``$HOME`` is symlinked onto another disk, or whose path
+    crosses macOS's ``/var`` -> ``/private/var`` therefore had a server that
+    would not start at all -- and no route back, because ``startup_permissions``
+    mirrors the guard's walk over ``realpath`` and so cannot see a redirect that
+    only exists before resolution, and the Electron shell exposes no way to
+    override the config path.
+
+    Resolving here is what the library registry has always done for vault paths
+    (``registry.resolve_path``), so the two lanes now agree.  It is deliberately
+    weaker than the refusal it replaces: a redirect is followed once per boot
+    rather than refused, which admits an attacker who can write a directory on
+    the pre-resolution path redirecting us to a *different* database this user
+    already owns.  Every other guard still holds -- the namespace walk refuses a
+    target whose parent another principal can write, and the file checks refuse
+    one this user does not own at mode 600 -- so the residue is confusion
+    between our own hubs, not substitution.  Reaching even that needs write
+    access inside the owner's own config directory, which also holds
+    ``autostart/`` and ``systemd/user/``: code execution as the owner by a
+    shorter route.  Accepted risk, recorded beside W17 in
+    ``docs/backend_architecture.md`` section 13.
+
+    Only the *ancestors* are resolved.  The final component is left exactly as
+    given so that a symlink standing at ``hub.db`` itself still reaches
+    ``_reject_symlinked_path`` and is refused: nobody legitimately makes the
+    database file a link, and that is the classic pre-positioned-symlink
+    attack.  ``os.path.realpath`` over the whole path would follow it silently.
+
+    On Windows the path is returned absolute but otherwise *unchanged*, ancestors
+    included.  ``os.path.realpath`` there resolves junctions and symlinks, so
+    pre-resolving the ancestors would hand ``TrustedSQLiteLocation.open`` a
+    redirect-free path and defeat ``_reject_symlinked_path`` on an ancestor
+    junction -- the redirect an unprivileged account can create with only
+    directory write access (``mklink /J``).  The two POSIX controls that make
+    following a redirect tolerable both return early on ``nt``:
+    ``_require_owned_directory``'s namespace walk (which would refuse an exposed
+    parent) and ``check_file_mode``'s mode-600 check.  Windows therefore keeps
+    refusing ancestor redirects rather than following them; see the W19 record in
+    ``docs/backend_architecture.md`` section 13.
+    """
+    absolute = os.path.abspath(os.path.expanduser(path))
+    if os.name == "nt":
+        return absolute
+    directory, name = os.path.split(absolute)
+    return os.path.join(os.path.realpath(directory), name)
+
+
 def check_file_mode(path: str, *, repair: bool) -> None:
     """Verify that *path* is not group- or world-accessible.
 
@@ -195,7 +248,7 @@ class HubDatabase:
             repair_permissions: Passed to :func:`check_file_mode`. The CLI sets
                 it; the server does not.
         """
-        self._path = path or default_hub_path()
+        self._path = canonical_hub_path(path or default_hub_path())
         self._closed = False
 
         parent = Path(self._path).parent

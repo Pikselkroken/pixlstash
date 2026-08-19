@@ -2660,6 +2660,49 @@ route back to tightening this. Recorded here rather than in a review document
 because `docs/reviews/` is gitignored: an accepted risk nobody else can read is
 not a record.
 
+**Accepted risk W19 — the hub path is resolved, not refused.** The guard refuses
+a *caller-supplied* path that reaches its target through a symlink. A library's
+path never presents one, because `registry.resolve_path` has always
+canonicalised it at attach and stored the resolved string; the hub's did,
+because it is derived from the config directory on every boot and handed over as
+derived. The refusal therefore fell entirely on the hub, and it fell hard: a
+stow- or chezmoi-managed `~/.config`, a `$HOME` symlinked onto another disk, or
+a macOS path crossing `/var` -> `/private/var` produced a server that would not
+start, with no route back — `startup_permissions` mirrors the guard's walk over
+`realpath`, so it cannot see a redirect that exists only before resolution and
+reported "no issues" for the startup that then failed, and the Electron shell
+exposes no way to override the config path. Nothing like this existed in v1.9.0,
+which had neither the hub nor the guard.
+
+`hub/db.py`'s `canonical_hub_path` resolves the *ancestors* of the hub path in
+`HubDatabase.__init__`, so both the server and CLI lanes now agree with what the
+registry does for libraries. The final component is deliberately left
+unresolved, so a symlink standing at `hub.db` itself still reaches
+`_reject_symlinked_path` and is refused: that is the classic pre-positioned
+attack and nobody legitimately makes the database file a link.
+
+What this gives up: a redirect is followed once per boot rather than refused, so
+an attacker who can write a directory on the pre-resolution path can point us at
+a *different* database this user already owns. It is confusion, not
+substitution — the namespace walk still refuses a target whose parent another
+principal can write, and the file checks still refuse one this user does not own
+at mode 600, so the attacker cannot author the content. A concrete target does
+exist: `default_hub_path()` fixes the CLI's hub under `user_config_dir`, while
+Electron drives one under its own `userData`, so a machine that has run both
+holds two 0600 hubs at fixed paths. It is accepted because the precondition
+dominates the payoff — write access inside the owner's own config directory,
+which also holds `autostart/` and `systemd/user/`, is code execution as the
+owner by a shorter route than swapping a hub.
+
+Windows keeps `_reject_symlinked_path` intact, including junctions: there
+`_require_owned_directory` returns early, so the redirect refusal is one of only
+three controls that actually run and removing it would be a straight downgrade.
+
+Owner: lindkvis. Revisit with W17. The wider change this was carved out of —
+retiring the POSIX ancestor refusal outright, canonicalising the vault
+connection pool, and repairing `startup_permissions`'s blindness — is not in
+this record and needs its own independent adversarial sign-off.
+
 ### Vector storage
 
 - Embeddings (`image_embedding`, `text_embedding`, `Face.features`) are stored as `BLOB` columns.

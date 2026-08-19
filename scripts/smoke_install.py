@@ -310,10 +310,11 @@ def run_smoke(venv_dir: Path, port: int, expected_version: str | None) -> None:
     base_url = f"http://127.0.0.1:{port}"
 
     with tempfile.TemporaryDirectory(prefix="pixlstash-smoke-") as tmp:
-        # Resolve through any OS-level symlinks (e.g. /var → /private/var on
-        # macOS) so trusted_sqlite's symlink rejection never fires on a path
-        # the caller did not construct.
-        tmp_path = Path(tmp).resolve()
+        # Deliberately NOT resolved. On macOS this path runs through
+        # /var -> /private/var, so the unresolved spelling is exactly the
+        # symlinked-ancestor case that used to stop the server starting; the
+        # smoke test is where that stays proven on a real macOS runner.
+        tmp_path = Path(tmp)
         image_root = tmp_path / "images"
         image_root.mkdir()
         config_path = tmp_path / "server-config.json"
