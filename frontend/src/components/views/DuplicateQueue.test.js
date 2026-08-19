@@ -484,7 +484,10 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
       verdict: "stacked",
       decided_at: "2026-08-02T12:00:00",
     };
-    const { wrapper } = await decidedQueue({ groups: [decidedGroup], total: 1 });
+    const { wrapper } = await decidedQueue({
+      groups: [decidedGroup],
+      total: 1,
+    });
 
     const row = wrapper.findComponent({ name: "DedupGroupRow" });
     expect(row.props("collapseStacks")).toBe(false);
@@ -495,9 +498,9 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
     await wrapper.find(".dq").trigger("keydown", { key: "e" });
     await flushPromises();
     expect(listStackMembers).not.toHaveBeenCalled();
-    expect(
-      wrapper.find('[data-testid="dedup-announcement"]').text(),
-    ).toContain("already shown");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "already shown",
+    );
 
     const compare = wrapper.findComponent({ name: "DedupCompareDialog" });
     expect(compare.props("collapseStacks")).toBe(false);
@@ -996,7 +999,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // Fold = CSS both ways: every control the ⋯ collapses exists as a bar
-  // button AND as a row, and the container query at ≤1180 flips which of the
+  // button AND as a row, and the container query at ≤882 flips which of the
   // pair is visible. Nothing else may be in there — the tier gate, the scope
   // pill, the count and the app-wide tail all stay on the bar at every width.
   it("carries a row for each folded page toggle and nothing else", async () => {
@@ -1018,9 +1021,31 @@ describe("DuplicateQueue — the shell chrome", () => {
     // Each row's bar twin carries the fold class that hides it at the same
     // width, so exactly one of the pair is ever on screen.
     for (const toggle of wrapper.findAll(".dq-toolbar .qdecided")) {
-      expect(toggle.classes()).toContain("dq-fold-1180");
+      expect(toggle.classes()).toContain("dq-fold-906");
     }
     wrapper.unmount();
+  });
+
+  // A fold class is a name shared between the template and one @container
+  // rung, and nothing else connects them: rename it in one place and that rung
+  // silently stops firing, which no mounted test can see (jsdom evaluates no
+  // container query) and no reviewer reads off a diff. Both re-placements of
+  // this ladder renamed these classes, so the halves are checked against each
+  // other rather than against a literal.
+  it("every fold class the template sets is hidden by a rung", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/views/DuplicateQueue.vue`,
+      "utf8",
+    );
+    const template = source.slice(0, source.indexOf("<script setup>"));
+    const style = source.slice(source.indexOf("<style scoped>"));
+    const set = (text, pattern) =>
+      [...new Set([...text.matchAll(pattern)].map((m) => m[1]))].sort();
+    const used = set(template, /['"\s](dq-fold-\d+)['":\s]/g);
+    const hidden = set(style, /\.(dq-fold-\d+)\s*\{/g);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used).toEqual(hidden);
   });
 
   // A row does the same thing its button does.
@@ -1059,26 +1084,27 @@ describe("DuplicateQueue — the shell chrome", () => {
 
     const back = wrapper.find(".dq-toolbar .qdecided");
     expect(back.attributes("aria-label")).toBe("Back to review");
-    expect(back.classes()).not.toContain("dq-fold-1180");
+    expect(back.classes()).not.toContain("dq-fold-906");
     expect(wrapper.find(".dq-overflow").exists()).toBe(false);
     wrapper.unmount();
   });
 
   // The separator amendments: D-S1's left flank is populated at every width —
-  // by the toggles above 1180 and by the ⋯ that replaces them below it — so
+  // by the toggles above 906 and by the ⋯ that replaces them below it — so
   // both rules render at all widths and neither carries a fold class.
   it("both separators render at all widths, neither carrying a fold class", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const separators = wrapper.findAll(".dq-toolbar .dq-tb-sep");
     expect(separators).toHaveLength(2);
     for (const separator of separators) {
-      expect(separator.classes()).not.toContain("dq-fold-1180");
-      expect(separator.classes()).not.toContain("dq-fold-1040");
+      expect(separator.classes().some((c) => c.startsWith("dq-fold-"))).toBe(
+        false,
+      );
     }
     wrapper.unmount();
   });
 
-  // The Decided toggle folds at ≤1180 and compresses to an arrow while it is
+  // The Decided toggle folds at ≤882 and compresses to an arrow while it is
   // the way back, so it must carry its own accessible name and keep its
   // pressed state at every width.
   it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
@@ -1106,7 +1132,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // The tier trigger's label ellipsizes under pressure and hides entirely at
-  // ≤1180, so the button must carry its own accessible name at every width
+  // ≤1087, so the button must carry its own accessible name at every width
   // (WCAG 4.1.2 — a hidden span would leave it empty).
   it("the tier button exposes its label as title and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -1221,15 +1247,18 @@ describe("DuplicateQueue — undo puts the queue back", () => {
     await wrapper.vm.$nextTick();
 
     expect(listGroups).toHaveBeenCalledTimes(1);
-    expect(listGroups.mock.calls[0][0]).toMatchObject({ offset: 150, limit: 200 });
+    expect(listGroups.mock.calls[0][0]).toMatchObject({
+      offset: 150,
+      limit: 200,
+    });
     expect(store.windowStart).toBe(150);
     expect(store.focusedGroup.signature).toBe("g175");
     expect(store.isSelected("g174")).toBe(true);
     expect(store.isSelected("g175")).toBe(true);
     expect(list.element.scrollTop).toBe(170 * PITCH + 7);
-    expect(wrapper.find('[data-testid="dedup-group-g99-restored"]').exists()).toBe(
-      true,
-    );
+    expect(
+      wrapper.find('[data-testid="dedup-group-g99-restored"]').exists(),
+    ).toBe(true);
     wrapper.unmount();
   });
 
@@ -2212,9 +2241,9 @@ describe("DuplicateQueue — multi-select", () => {
       "g3",
     ]);
     expect(wrapper.findAll(".grow")).toHaveLength(3);
-    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).not.toContain(
-      "Stacked",
-    );
+    expect(
+      wrapper.find('[data-testid="dedup-announcement"]').text(),
+    ).not.toContain("Stacked");
 
     resolveBatch({ batch_id: "cli-visible", results: [{}, {}] });
     await flushPromises();
@@ -3554,7 +3583,10 @@ describe("DuplicateQueue: the two-way shortcut", () => {
 // score just to decide whether to show a shortcut.
 describe("DuplicateQueue: the route to the stacks", () => {
   /** Mount straight onto the queue-clear screen. */
-  async function mountCleared({ liveStackCount = 209, loadStackFacts = true } = {}) {
+  async function mountCleared({
+    liveStackCount = 209,
+    loadStackFacts = true,
+  } = {}) {
     listMixedStacks.mockResolvedValue(
       mixedPage([], { live_stack_count: liveStackCount }),
     );
