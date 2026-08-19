@@ -591,20 +591,105 @@ class TestCliHintIsShort:
 
         assert mod.cli_hint() == "pixlstash libraries list"
 
-    def test_a_declared_windows_command_is_printed_exactly_as_given(self, monkeypatch):
-        """The launcher's own quoting must survive untouched (issue #1058).
+    def test_a_declared_command_is_printed_exactly_as_given(self, monkeypatch):
+        """A launcher's own quoting must survive untouched.
 
-        The desktop app declares a PowerShell command on Windows — a ``&`` call
-        operator in front of a single-quoted path, because neither of the two
-        Windows shells runs the ``sh`` form this module would otherwise emit.
-        Re-quoting or stripping any of it here would break the one instruction
-        the Libraries panel gives (multi-library plan §3.6 acceptance 8).
+        Re-quoting or stripping any of it would break the one instruction the
+        Libraries panel gives (multi-library plan §3.6 acceptance 8).
         """
         mod = self._module()
         declared = "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli"
         monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", declared)
 
         assert mod.cli_hint() == f"{declared} libraries list"
+
+    def _windows_desktop(self, monkeypatch, tmp_path, mod):
+        """Pose as the bundled Windows desktop runtime.
+
+        The layout is the packaged one: ``<resources>/python/python.exe`` with
+        ``runtime.json`` beside the ``python`` directory, which is the marker
+        only that build writes.
+        """
+        resources = tmp_path / "resources"
+        (resources / "python").mkdir(parents=True)
+        interpreter = resources / "python" / "python.exe"
+        interpreter.write_text("")
+        (resources / "runtime.json").write_text("{}")
+        monkeypatch.setattr(mod.os, "name", "nt")
+        monkeypatch.setattr(mod.sys, "executable", str(interpreter))
+        monkeypatch.delenv("PIXLSTASH_CLI_COMMAND", raising=False)
+        return str(interpreter)
+
+    def test_the_windows_desktop_names_its_console_interpreter_not_the_launcher(
+        self, monkeypatch, tmp_path
+    ):
+        """Issue #1058, the half that made the output overlap the prompt.
+
+        ``PixlStash.exe`` is linked for the Windows GUI subsystem, so no shell
+        waits for it: the prompt returns and the CLI's output then lands on top
+        of it. The bundled ``python.exe`` is console-subsystem and at a durable
+        path, so naming it is what makes the shell wait.
+        """
+        mod = self._module()
+        interpreter = self._windows_desktop(monkeypatch, tmp_path, mod)
+        hub = "C:\\Users\\me\\AppData\\Roaming\\PixlStash\\hub.db"
+
+        hint = mod.cli_hint(hub_path=hub)
+
+        assert hint == (
+            f"& '{interpreter}' {mod.MODULE_INVOCATION} --hub '{hub}' libraries list"
+        )
+        assert "PixlStash.exe" not in hint, "the GUI launcher is what broke this"
+        assert hint.startswith("& "), "PowerShell needs the call operator"
+
+    def test_the_windows_hub_is_named_because_it_is_not_the_platform_default(
+        self, monkeypatch, tmp_path
+    ):
+        """Omitting --hub would edit the wrong registry, silently."""
+        mod = self._module()
+        self._windows_desktop(monkeypatch, tmp_path, mod)
+
+        assert "--hub" in mod.cli_hint(hub_path="C:\\hub.db")
+
+    def test_a_windows_path_with_a_quote_is_doubled_not_backslash_escaped(
+        self, monkeypatch, tmp_path
+    ):
+        """PowerShell's single-quoted string is literal; ``''`` is its escape."""
+        mod = self._module()
+        self._windows_desktop(monkeypatch, tmp_path, mod)
+
+        hint = mod.cli_hint(hub_path="C:\\Users\\o'brien\\hub.db")
+
+        assert "o''brien" in hint
+        assert "o\\'brien" not in hint
+
+    def test_a_system_python_on_windows_is_not_mistaken_for_the_desktop(
+        self, monkeypatch, tmp_path
+    ):
+        """Without the bundle's runtime.json this is somebody's own Python."""
+        mod = self._module()
+        self._windows_desktop(monkeypatch, tmp_path, mod)
+        (tmp_path / "resources" / "runtime.json").unlink()
+
+        assert mod.desktop_windows_command("C:\\hub.db") is None
+
+    def test_the_desktop_branch_never_fires_off_windows(self, monkeypatch, tmp_path):
+        """POSIX keeps the console script; the AppImage keeps its launcher."""
+        mod = self._module()
+        self._windows_desktop(monkeypatch, tmp_path, mod)
+        monkeypatch.setattr(mod.os, "name", "posix")
+
+        assert mod.desktop_windows_command("/home/me/hub.db") is None
+
+    def test_a_declaration_still_outranks_the_derived_windows_command(
+        self, monkeypatch, tmp_path
+    ):
+        """A launcher that speaks for itself is still the more specific answer."""
+        mod = self._module()
+        self._windows_desktop(monkeypatch, tmp_path, mod)
+        monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "pixlstash")
+
+        assert mod.cli_hint(hub_path="C:\\hub.db") == "pixlstash libraries list"
 
     def test_an_empty_declaration_falls_through_to_the_normal_rules(
         self, monkeypatch, tmp_path

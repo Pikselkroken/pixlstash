@@ -64,6 +64,59 @@ def _quote(path: str) -> str:
     return shlex.quote(path)
 
 
+def _ps_quote(path: str) -> str:
+    """Single-quote *path* for PowerShell, doubling any quote.
+
+    PowerShell's single-quoted string is literal, so ``''`` is the only escape
+    it has; :func:`_quote`'s ``'\\''`` would close the string and strand a
+    backslash. Mirrors ``psQuote`` in ``electron/src/cliShim.ts``.
+    """
+    return "'" + path.replace("'", "''") + "'"
+
+
+def desktop_windows_command(hub_path: str | None) -> str | None:
+    """Return the bundled-runtime invocation, or None if this is not one.
+
+    **This is what makes the desktop CLI usable on Windows at all** (issue
+    #1058). The obvious command to print is the app's own launcher, and it is
+    what this module used to be handed in ``PIXLSTASH_CLI_COMMAND`` — but
+    ``PixlStash.exe`` is linked for the Windows GUI subsystem, so no shell waits
+    for it: the prompt returns immediately and the CLI's output then lands on
+    top of it, leaving the cursor mid-line. The bundled ``python.exe`` is a
+    console-subsystem binary at a stable path inside the install directory, so
+    naming *it* makes the shell wait and the output arrive in order. It is also
+    exactly what the app itself spawns (``runCli`` in ``electron/src/main.ts``),
+    so this is the invocation that is already known to work.
+
+    The AppImage reasoning that put the launcher here does not apply on Windows:
+    there is no squashfs remounting at a fresh path every launch, so the
+    interpreter path is durable.
+
+    Detection is the ``runtime.json`` the desktop build writes beside its
+    ``python/`` directory — a file only that build produces, so a system Python
+    can never match.
+
+    Args:
+        hub_path: The hub this deployment uses. Required in the command because
+            the desktop's hub deliberately is not the platform default one, so
+            omitting it would edit the wrong registry.
+
+    Returns:
+        The command, without a verb, or None when this is not a bundled Windows
+        desktop runtime.
+    """
+    if os.name != "nt" or not hub_path:
+        return None
+    runtime_marker = os.path.join(os.path.dirname(sys.executable), "..", "runtime.json")
+    if not os.path.isfile(runtime_marker):
+        return None
+    # PowerShell, not cmd: no single string runs in both, and the Settings panel
+    # names the shell. See `cliCommandHint` in electron/src/cliShim.ts.
+    return (
+        f"& {_ps_quote(sys.executable)} {MODULE_INVOCATION} --hub {_ps_quote(hub_path)}"
+    )
+
+
 def _shorten(path: str) -> str:
     """Abbreviate the user's home directory to ``~`` in *path*.
 
@@ -89,12 +142,15 @@ def _shorten(path: str) -> str:
     return path
 
 
-def cli_hint(verb: str = "libraries list") -> str:
+def cli_hint(verb: str = "libraries list", hub_path: str | None = None) -> str:
     """Return a copy-pasteable command that runs the library CLI here.
 
     Args:
         verb: The command to show, group included. ``libraries list`` is the
             safe one to put in front of a user who has not read the docs yet.
+        hub_path: This deployment's hub, when the caller knows it. Only the
+            bundled Windows desktop runtime needs it — see
+            :func:`desktop_windows_command`.
 
     Returns:
         A single shell command line. Paths are quoted, so a Windows install
@@ -109,6 +165,13 @@ def cli_hint(verb: str = "libraries list") -> str:
     declared = os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip()
     if declared:
         return f"{declared} {verb}"
+
+    # Ahead of the remaining rules because it is the more specific answer: this
+    # process IS the desktop's bundled interpreter, so the command is derived
+    # rather than guessed. The Windows desktop therefore declares nothing.
+    bundled = desktop_windows_command(hub_path)
+    if bundled:
+        return f"{bundled} {verb}"
 
     if running_in_docker():
         container = os.environ.get("HOSTNAME") or socket.gethostname()

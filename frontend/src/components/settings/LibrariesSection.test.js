@@ -359,7 +359,10 @@ describe("teaching the CLI", () => {
 
     listLibraries.mockResolvedValue({
       ...LOCAL_RESPONSE,
-      cli_hint: "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli libraries list",
+      cli_hint:
+        "& 'C:\\Program Files\\PixlStash\\resources\\python\\python.exe' " +
+        "-m pixlstash.cli --hub 'C:\\Users\\me\\AppData\\Roaming\\PixlStash\\hub.db' " +
+        "libraries list",
     });
     const windows = await settle(mountPane());
     expect(windows.text()).toContain("PowerShell");

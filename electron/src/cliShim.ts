@@ -35,17 +35,6 @@ function shQuote(value: string): string {
 }
 
 /**
- * Single-quote *value* for PowerShell, doubling any quote.
- *
- * PowerShell's single-quoted string is literal, so a doubled `''` is the only
- * escape it has — `'\''` (what {@link shQuote} emits) would end the string and
- * leave a stray backslash behind.
- */
-function psQuote(value: string): string {
-  return `'${value.replace(/'/g, `''`)}'`;
-}
-
-/**
  * The shim's contents: exec the app's own launcher with the `cli` marker.
  *
  * `exec` rather than a plain call so the shell is replaced and the exit status
@@ -75,29 +64,9 @@ export function launcherPath(env: NodeJS.ProcessEnv = process.env, execPath = pr
  * can print something that actually runs. Without the shim the full launcher
  * path is still a working command — unlike the bare console-script name, which
  * is on no PATH — so the Settings hint is correct either way.
- *
- * **Windows gets a PowerShell command, and only PowerShell** (issue #1058).
- * There is no single string both Windows shells run: cmd.exe has no
- * single-quote semantics at all and needs `"…"`, while PowerShell reads a
- * quoted leading token as a *string expression* rather than a command and needs
- * the `&` call operator in front of it. Shipping `sh` quoting here was wrong for
- * both, so one had to be picked, and PowerShell is the default profile of
- * Windows Terminal and the Start-menu default on Windows 11. The Settings panel
- * names the shell for that reason.
- *
- * Windows has no per-user bin directory on PATH, so no shim can be installed
- * there and the launcher path is the only form available — see
- * {@link syncShim} and issue #1060, which retires this fork by putting a
- * `pixlstash.cmd` on PATH and reducing the hint to a bare word again.
  */
-export function cliCommandHint(
-  shimInstalled: boolean,
-  launcher: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (shimInstalled) return 'pixlstash';
-  if (platform === 'win32') return `& ${psQuote(launcher)} cli`;
-  return `${shQuote(launcher)} cli`;
+export function cliCommandHint(shimInstalled: boolean, launcher: string): string {
+  return shimInstalled ? 'pixlstash' : `${shQuote(launcher)} cli`;
 }
 
 /**

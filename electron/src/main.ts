@@ -414,6 +414,15 @@ function shimSupported(): boolean {
  */
 function declaredCliCommand(): string | undefined {
   if (!app.isPackaged) return undefined;
+  // Windows declares nothing on purpose (issue #1058). Naming our own launcher
+  // there prints a command no shell waits for: PixlStash.exe is linked for the
+  // GUI subsystem, so the prompt comes back before the CLI has written a byte
+  // and its output then lands on top of it. The backend runs on the bundled
+  // python.exe — a console-subsystem binary at a durable path — and can compose
+  // that command from itself, so leaving the variable unset gets a *better*
+  // answer than we can give. See `desktop_windows_command` in
+  // pixlstash/hub/cli_hint.py.
+  if (process.platform === 'win32') return undefined;
   return cliCommandHint(shimSupported() && shimInstalled(), launcherPath());
 }
 
