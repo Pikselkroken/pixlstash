@@ -27,6 +27,7 @@ import os
 import sys
 from typing import Sequence
 
+from pixlstash.hub.cli_hint import desktop_windows_command
 from pixlstash.hub.db import HubDatabase, HubPermissionError, default_hub_path
 from pixlstash.hub.registry import (
     Library,
@@ -54,6 +55,22 @@ LIBRARY_ARG_HELP = (
 )
 
 
+def _hub_from_argv(argv: Sequence[str] | None = None) -> str | None:
+    """Return the ``--hub`` value on the command line, if there is one.
+
+    Read straight from ``sys.argv`` rather than from parsed arguments because
+    :func:`invoked_as` fills argparse's own ``prog``, which is needed to build
+    the parser that would do the parsing.
+    """
+    args = list(sys.argv if argv is None else argv)
+    for index, arg in enumerate(args):
+        if arg == "--hub" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--hub="):
+            return arg[len("--hub=") :]
+    return None
+
+
 def invoked_as() -> str:
     """Return the command the user typed to get here.
 
@@ -63,8 +80,17 @@ def invoked_as() -> str:
     declares the working form in ``PIXLSTASH_CLI_COMMAND`` (see
     :mod:`pixlstash.hub.cli_hint`, which reads the same variable to fill the
     Settings panel). Everywhere else the console script is exactly right.
+
+    The Windows desktop declares nothing, because the command that works there
+    is *this very interpreter* and so can be derived rather than announced
+    (issue #1058). Deriving it through the same helper the Settings panel uses
+    keeps the two from drifting: what the panel prints is what the CLI then
+    calls itself.
     """
-    return os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip() or "pixlstash-cli"
+    declared = os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip()
+    if declared:
+        return declared
+    return desktop_windows_command(_hub_from_argv()) or "pixlstash-cli"
 
 
 def epilog() -> str:

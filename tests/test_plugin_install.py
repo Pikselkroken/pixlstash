@@ -1491,3 +1491,48 @@ def test_without_a_declaration_the_console_script_is_still_the_name(monkeypatch)
     # An empty declaration must not produce a prog of "" or a leading space.
     monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "  ")
     assert cli.invoked_as() == "pixlstash-cli"
+
+
+def test_the_windows_desktop_derives_its_name_since_nothing_declares_one(
+    monkeypatch, tmp_path
+):
+    """Issue #1058: on Windows the app declares nothing, on purpose.
+
+    The command that works there is this very interpreter, so it is derived
+    rather than announced — and through the same helper that fills the Settings
+    panel, so the panel and the CLI's own output cannot drift apart.
+    """
+    resources = tmp_path / "resources"
+    (resources / "python").mkdir(parents=True)
+    interpreter = resources / "python" / "python.exe"
+    interpreter.write_text("")
+    (resources / "runtime.json").write_text("{}")
+    hub = "C:\\Users\\me\\AppData\\Roaming\\PixlStash\\hub.db"
+
+    monkeypatch.delenv("PIXLSTASH_CLI_COMMAND", raising=False)
+    monkeypatch.setattr(cli.os, "name", "nt")
+    monkeypatch.setattr(cli.sys, "executable", str(interpreter))
+    monkeypatch.setattr(cli.sys, "argv", ["pixlstash.cli", "--hub", hub, "libraries"])
+
+    name = cli.invoked_as()
+    assert name == f"& '{interpreter}' -m pixlstash.cli --hub '{hub}'"
+    assert "pixlstash-cli" not in name, "that console script is on no PATH there"
+
+    # argparse's prog is built before any parsing, which is why the hub is read
+    # off sys.argv rather than from parsed arguments.
+    assert cli.build_parser().prog == name
+
+
+def test_the_hub_is_read_off_the_command_line_in_both_spellings(monkeypatch):
+    """``--hub X`` and ``--hub=X`` are the same flag to argparse."""
+    monkeypatch.setattr(cli.sys, "argv", ["x", "--hub", "/a/hub.db", "libraries"])
+    assert cli._hub_from_argv() == "/a/hub.db"
+
+    monkeypatch.setattr(cli.sys, "argv", ["x", "--hub=/b/hub.db", "libraries"])
+    assert cli._hub_from_argv() == "/b/hub.db"
+
+    # A trailing --hub with no value is argparse's error to report, not ours.
+    monkeypatch.setattr(cli.sys, "argv", ["x", "libraries", "list"])
+    assert cli._hub_from_argv() is None
+    monkeypatch.setattr(cli.sys, "argv", ["x", "--hub"])
+    assert cli._hub_from_argv() is None

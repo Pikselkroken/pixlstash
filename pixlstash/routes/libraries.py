@@ -189,7 +189,9 @@ def create_router(server) -> APIRouter:
             libraries=[_to_response(library, local) for library in libraries],
             can_manage=local,
             in_docker=running_in_docker(),
-            cli_hint=cli_hint() if local else None,
+            # The hub path only ever reaches a local caller, along with the
+            # library paths beside it: it is host layout, same as those.
+            cli_hint=cli_hint(hub_path=server.hub.path) if local else None,
         )
 
     @router.post(
