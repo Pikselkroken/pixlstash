@@ -74,7 +74,7 @@
           class="qdecided"
           :class="{
             'qdecided--on': store.showingDecided,
-            'dq-fold-1180': pageTogglesFold,
+            'dq-fold-906': pageTogglesFold,
           }"
           :title="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
@@ -102,7 +102,7 @@
           class="qdecided"
           :class="{
             'qdecided--on': store.showingMixed,
-            'dq-fold-1180': pageTogglesFold,
+            'dq-fold-906': pageTogglesFold,
           }"
           :title="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
@@ -255,10 +255,7 @@
              the user is looking straight at the answer. -->
         <!-- Not on the Mixed stacks page: its rows draw one fixed 64px cover,
              so a size control there would be a control with nothing to buy. -->
-        <div
-          v-if="store.hasGroups && !store.showingMixed"
-          class="dq-size dq-fold-1040"
-        >
+        <div v-if="store.hasGroups && !store.showingMixed" class="dq-size">
           <v-icon size="16" aria-hidden="true"
             >mdi-image-size-select-large</v-icon
           >
@@ -3482,13 +3479,52 @@ defineExpose({ windowedGroups, tierLabel });
   white-space: nowrap;
 }
 
-/* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md,
-   amendment #4, which measured what amendment #2 assumed). The ⋯ takes the
-   two page toggles at ≤1180; everything else compresses or hides in its own
-   group. Floor: count (ellipsizing), ⋯, separator, tier gate (icon +
-   chevron), scope pill (compressed, if scoped), Auto-stack (icon + count, if
-   present), separator, Undo, Settings, Stats — measured clean down to 320px
-   of bar width with every one of those present. ───────────────────────── */
+/* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md:
+   amendment #4 measured it, #7 re-placed the rungs, #8 re-ordered them by
+   what each one COSTS). ─────────────────────────────────────────────────
+
+   Measured against the full bar (1408px, typical content), one item at a
+   time — this is the table the order is derived from, not an argument:
+
+     48 done this session            122px   a readout
+     the size value (Very Large)      84px   a readout the slider already shows
+     Auto-stack's sentence            91px   words; the tooltip keeps them
+     the tier label                  137px   words; the tooltip keeps them
+     both page toggles → the ⋯       232px   one extra click
+     the SIZE CONTROL                212px   a control, outright
+
+   **Cheapest loss first, and the size control is never spent.** It was being
+   dropped fourth, which is what #8 fixes: it is the one thing on this bar
+   with no fold destination and no tooltip standing in for it, and the queue's
+   whole business is looking at pictures — a control that changes the thing
+   you are looking at is not what you sell to buy 128px. Spending Auto-stack's
+   sentence instead (91px, and the button still shows its count) reaches a
+   NARROWER floor than the old ladder did while dropping the slider, because
+   the old order spent the expensive things first.
+
+   Every rung fires at the width the configuration above it needs:
+
+     full                1408px
+     after rung 1        1202px
+     after rung 2        1111px
+     after rung 3         974px
+     after rung 4         906px
+     after rung 5         706px   ← the floor, with the size control still on
+
+   Below 706px the shrink chain (amendment #4: `.dq-tb-left { min-width: 0;
+   flex: 0 1 auto }`) ellipsizes the count headline, which carries the bar to
+   ~530px with nothing leaving it — narrower than the 586px floor the ladder
+   reached by dropping the slider.
+
+   Tuned to typical content on purpose: the same chain answers a pathological
+   scope name or a seven-digit count. A ladder placed at the worst case would
+   collapse the bar for everyone to protect a case the chain already holds.
+
+   The queries are 24px under the widths the rungs are named for:
+   `container-type: inline-size` queries the CONTENT box and this bar's inset
+   is `0 var(--space-3) 0 var(--space-5)`. Re-measure by stepping the
+   container, never by reasoning about it — both times this ladder was wrong,
+   a number had been argued rather than read. ───────────────────────────── */
 .dq-auto-short,
 .dq-auto-count {
   display: none;
@@ -3509,9 +3545,8 @@ defineExpose({ windowedGroups, tierLabel });
 
 /* Rung 1. The two readouts that report rather than control: the session tally
    (the durable record is the Decided page) and the slider's word for a
-   position the slider already shows. Measured: the full bar wants 1570px, so
-   this is where the first thing has to give. */
-@container dqbar (max-width: 1400px) {
+   position the slider already shows. Buys 206px. */
+@container dqbar (max-width: 1384px) {
   .qsub {
     display: none;
   }
@@ -3520,40 +3555,12 @@ defineExpose({ windowedGroups, tierLabel });
   }
 }
 
-/* Rung 2. What has somewhere to go, goes first: the page toggles fold into
-   the ⋯, which appears in their place, and that buys more bar (~346px) than
-   anything else on it. A toggle showing "Back to review" never carries the
-   fold class, so the way out of a sub-page stays on the bar and compresses to
-   its arrow. The tier trigger compresses to [filter icon][chevron] in the same
-   step, the grid Filter trigger's grammar; its title/aria-label carry the
-   name. */
-@container dqbar (max-width: 1180px) {
-  .dq-fold-1180 {
-    display: none;
-  }
-  .dq-overflow {
-    display: flex;
-  }
-  .dq-tier-label {
-    display: none;
-  }
-  /* All that can be left on the bar now is a "Back to review" arrow, which
-     says what it does without its label. */
-  .qdecided-label {
-    display: none;
-  }
-}
-
-/* Rung 3, and the size control is here rather than a rung earlier for a
-   reason: it has no fold destination, so hiding it costs the user the control
-   outright, while the toggles above only move. It goes when the folding has
-   run out — no replacement row, the value persists in the store and comes back
-   with the width — and Auto-stack drops its sentence for "Auto-stack N" in the
-   same step, the full one surviving as its tooltip and accessible name. */
-@container dqbar (max-width: 1040px) {
-  .dq-fold-1040 {
-    display: none;
-  }
+/* Rung 2. Auto-stack drops its sentence for "Auto-stack N" — the cheapest
+   word on the bar, because the count it keeps IS the sentence's subject and
+   the full form survives as the tooltip and the accessible name. Buys 91px,
+   and spending it here is what keeps the tier label and both toggle labels
+   alive for another 200-400px. */
+@container dqbar (max-width: 1178px) {
   .dq-auto-full {
     display: none;
   }
@@ -3562,15 +3569,41 @@ defineExpose({ windowedGroups, tierLabel });
   }
 }
 
-/* Rung 4. Auto-stack keeps its flash and its count and drops the verb; the
-   scope pill compresses to [kind icon][dismiss] in the same step (its own
-   `@container toolbar` rule, in DedupScopePill.vue). */
-@container dqbar (max-width: 820px) {
+/* Rung 3. The tier trigger compresses to [filter icon][chevron], the grid
+   Filter trigger's shipped grammar, with its title and aria-label carrying
+   the name. Buys 137px. */
+@container dqbar (max-width: 1087px) {
+  .dq-tier-label {
+    display: none;
+  }
+}
+
+/* Rung 4. Auto-stack keeps its flash and its count and drops the verb. Buys
+   68px. */
+@container dqbar (max-width: 950px) {
   .dq-auto-short {
     display: none;
   }
   .dq-auto-count {
     display: inline;
+  }
+}
+
+/* Rung 5, and the last: the page toggles fold into the ⋯, which appears in
+   their place. The biggest single bite on the bar, taken when the bar has
+   actually run out rather than 400px before. A toggle showing "Back to
+   review" never carries the fold class, so the way out of a sub-page stays on
+   the bar and compresses to its arrow, which says what it does without a
+   label. Buys 200px net of the ⋯ itself. */
+@container dqbar (max-width: 882px) {
+  .dq-fold-906 {
+    display: none;
+  }
+  .dq-overflow {
+    display: flex;
+  }
+  .qdecided-label {
+    display: none;
   }
 }
 
