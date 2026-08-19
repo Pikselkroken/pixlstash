@@ -1,33 +1,12 @@
 // Collapsing loose adapters into stacks — /model-stacks.
 //
-// The split between the first two calls is the contract: **detection proposes,
-// it never applies.** `listStackProposals` reads the shelf and writes nothing,
-// so the whole dry run is drawn before the owner decides; `createStack` is the
-// only half that writes and is reached only after they have seen it.
-//
-// The rest edit a stack that exists: `unstackStack` breaks one up, and
+// `createStack` is the only call that builds one, from a selection the owner
+// made. The rest edit a stack that exists: `unstackStack` breaks one up, and
 // `setStackCover` / `removeStackMember` act on one file inside it — the two
 // gestures the expanded strip is for.
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
-
-/**
- * Groups of loose adapters that look like one subject.
- *
- * `tier` is `step_group` (one version, files differing only by a training step)
- * or `version_group` (`Foxglove` beside `Foxglove_v2` — several training runs
- * of one subject). Prefix grouping (`JimmyVehicle` beside `JimmyVehicle2`) needs
- * counter-evidence and is not offered.
- *
- * @returns {Promise<Array<Object>>} the `proposals` array, each carrying
- *   `tier`, `key`, `name`, `folder_id`, `total_size` and cover-first `members`,
- *   whose entries carry `step` and `version`.
- */
-export async function listStackProposals() {
-  const body = await unwrap(apiClient.get("/model-stacks/proposals"));
-  return Array.isArray(body?.proposals) ? body.proposals : [];
-}
 
 /**
  * Collapse models into one stack.

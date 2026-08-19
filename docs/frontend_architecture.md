@@ -1610,7 +1610,7 @@ a burst of requests it could never satisfy (issue #1014). Three parts fix it:
   because its toolbar is small and its body is a list of the library's own
   pictures; the shelf's body IS the host machine's filesystem, so a read-only
   render would be an empty state under a live toolbar of owner-only verbs — Add,
-  the stack sweep, Model folders, the scan. The row above is where the
+  Model folders, the scan. The row above is where the
   destination explains itself, which is where a visitor meets it.
 
 `SideBar` keeps its own ungated `isModelsView` for `aria-current` and
@@ -1649,9 +1649,9 @@ consumer of that class and wants its own issue.
 `Model folders`, the separator and `TbGlobalActions` are on both tabs — they
 open something, write nothing on the press and have no selection to hang on, so
 they are view-independent, and keeping them fixed is also what stops the left
-group reflowing on every switch. Group, Sort, Show **and the stack sweep** are
-gated to the shelf tab: all four act on the `model_file` rows, which are not on
-screen on the runs tab. Hidden rather than disabled — a disabled control owes an
+group reflowing on every switch. Group, Sort and Show are gated to the shelf
+tab: all three act on the `model_file` rows, which are not on screen on the runs
+tab. Hidden rather than disabled — a disabled control owes an
 explanation, and these are not about a selection the reader just made.
 
 **Switching keeps the shelf's selection and takes away its keys.** `selectedIds`
@@ -1687,9 +1687,20 @@ revert a library action with nothing on screen to say it happened — the same
 *out loud*: one `info` notice under the coalescing key `SHELF_NO_UNDO_KEY`, so
 a held or repeated chord updates a single card instead of stacking (notice spec
 §9.1). A silent no-op would leave the reader pressing it again. `.shelf-toolbar`
-still declares `container-name: shelfbar toolbar` — the convention both other
-hosts follow, so a shared control mounted here degrades by the same scoped
-rules — though after this change nothing queries either name on this bar.
+declares `container-name: shelfbar toolbar` — the convention both other hosts
+follow, so a shared control mounted here degrades by the same scoped rules.
+Nothing queries `toolbar` on this bar (dropping `UndoControl` took the one
+control that did); `shelfbar` carries the bar's own three-rung ladder, measured
+and recorded as **Amendment #6** in
+`docs/design/toolbar-responsive-decisions.md`: the full bar wants 1071px, so at
+**≤1070px** the title and the count go (both report, neither controls), at
+**≤840px** `Group` and `Sort` drop their value and keep glyph + chevron (the
+value stays in `title` and in the accessible name), and at **≤680px** `Add ▾`
+and `Model folders` fold into a `TbOverflowMenu` whose rows are the same
+`.shelf-mi` items the Add menu draws. `Group`, `Sort` and `Show` compress and
+never fold — they are menus, and a menu inside the ⋯ is a submenu, which is the
+same line the Duplicates bar draws between its folding toggles and its
+compressing tier menu. Floor: 565px.
 
 **And the band itself is the grid bar's, not its own** (Amendment #5). What the
 three bars hold was unified before what they *are* was: the shelf strip shipped
@@ -2565,24 +2576,23 @@ never in the toolbar** (#896). The toolbar is where the view is switched, so a
 mutating control beside `Sort` and `Show` would be one stray click from a
 different question. The audit is over a **named set, not a judgement**, and the
 set is counted in **focusable controls**, because a tab stop is a stray-press
-target whatever it is grouped with visually. The shelf puts **seven** in its own
-bar: `+ Add ▾`, `Stack training runs`, `Model folders`, `Group`, the `Sort`
-direction toggle, the `Sort` menu, and `Show`. All seven hold. `Group`, both
-halves of `Sort`, and `Show` write only view state. The other three each open
-something and write nothing on the press:
+target whatever it is grouped with visually. The shelf puts **six** in its own
+bar: `+ Add ▾`, `Model folders`, `Group`, the `Sort` direction toggle, the
+`Sort` menu, and `Show`. All six hold. `Group`, both halves of `Sort`, and
+`Show` write only view state. The other two each open something and write
+nothing on the press:
 `+ Add ▾` opens a menu, and its `Import from ai-toolkit` item is confirmed
-against a listing of the runs it found; `Stack training runs` opens the dry run,
-with the applying half behind the dialog's own confirmation; `Model folders`
-opens the registry dialog. Those three stay in the toolbar because none has a
-selection to act on — their subject is a source folder full of files the shelf
-does not list yet, or the list of such folders itself, so there is no row and no
-selection to hang them off.
+against a listing of the runs it found; `Model folders` opens the registry
+dialog. Those two stay in the toolbar because neither has a selection to act
+on — their subject is a source folder full of files the shelf does not list
+yet, or the list of such folders itself, so there is no row and no selection to
+hang them off.
 
 The **app-wide tail is outside this set and outside the rule**: `UndoControl`
 writes on the press by design, and it, `Settings` and the stats toggle are not
 the shelf's controls at all — they are the canonical tail every view carries,
 ruled off by a separator (see the toolbar section above). Adding a control to
-the shelf's own bar means adding it to the seven and re-running this audit;
+the shelf's own bar means adding it to the six and re-running this audit;
 adding one to the tail is a different document.
 
 **The bar states the count AND what the selection weighs**, `40 models selected
@@ -3388,9 +3398,8 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 #### Registering the folders the shelf reads
 
 `ModelFoldersDialog.vue` (`components/panels/`) is the registry surface,
-opened from three doors: the toolbar's `bar-btn--boxed` `Model folders` button
-beside the stack sweep, the `+ Add ▾` menu's `Add folder…` item, and the empty
-state's own button. The empty state is the moment the folder list matters, so
+opened from three doors: the toolbar's `bar-btn--boxed` `Model folders` button,
+the `+ Add ▾` menu's `Add folder…` item, and the empty state's own button. The empty state is the moment the folder list matters, so
 the fix must not be two navigations away in Settings — and the toolbar button is
 what keeps it reachable once the empty state has unmounted, which is exactly
 when rescan, relocate and forget start to matter. Because more than one control
@@ -3405,14 +3414,13 @@ with the two ordinary ones, against a real `document.activeElement`; drop the
 `isConnected` check and the suite goes red. The earlier `event.currentTarget`
 version of all this was dead code: no call site ever passed an event.
 
-Neither this button nor the stack sweep takes **`bar-btn--open`**. `App.css`
-declares that class for "the toolbar button while its MENU is open", and both
-open an `AppDialog`, which sets `:scrim="true"` — so the highlight is painted
-under the scrim for exactly as long as it applies, and neither button has the
-chevron the rule rotates. `Group`, `Sort` and `Show` keep it because they really
-are menus. Both carry `aria-haspopup="dialog"` and neither carries
-`aria-expanded`: focus moves into the dialog rather than into anything the
-button owns.
+This button does not take **`bar-btn--open`**. `App.css` declares that class
+for "the toolbar button while its MENU is open", and this one opens an
+`AppDialog`, which sets `:scrim="true"` — so the highlight is painted under the
+scrim for exactly as long as it applies, and the button has none of the chevron
+the rule rotates. `Group`, `Sort` and `Show` keep it because they really are
+menus. It carries `aria-haspopup="dialog"` and no `aria-expanded`: focus moves
+into the dialog rather than into anything the button owns.
 
 `FolderBrowser.vue` is reused whole as the host-path picker, and
 `registeredPaths` is what stops the API's duplicate 409 rather than reporting

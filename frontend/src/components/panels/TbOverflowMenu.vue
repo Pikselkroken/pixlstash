@@ -95,6 +95,18 @@ onBeforeUnmount(() => {
 });
 
 /**
+ * The trigger element, for a host whose folded row opens a DIALOG rather than
+ * toggling something: the dialog has to be told where to put focus back, and
+ * below the fold the bar button that normally answers for that is
+ * `display: none`, which cannot take focus.
+ *
+ * @returns {HTMLElement|null}
+ */
+function trigger() {
+  return triggerEl.value ?? null;
+}
+
+/**
  * Whether the panel is showing. A host whose surface owns the keyboard needs
  * this to tell "a key pressed inside my open menu" from "a key pressed with
  * the closed trigger focused" — the second one still belongs to the host.
@@ -105,7 +117,7 @@ function isOpen() {
   return open.value;
 }
 
-defineExpose({ close, isOpen });
+defineExpose({ close, isOpen, trigger });
 </script>
 
 <style scoped>
@@ -166,5 +178,4 @@ defineExpose({ close, isOpen });
 .tbo-panel--start {
   left: 0;
 }
-
 </style>
