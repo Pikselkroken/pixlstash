@@ -780,6 +780,51 @@ class LibraryRegistry:
         )
         return self.get(existing.id)
 
+    def adopt_vault_fingerprint(self, library: Library) -> Library:
+        """Record the fingerprint of a registered vault this hub never opened.
+
+        A registration made while its vault carried no fingerprint records
+        ``vault_uuid = NULL``; the value is written on the first successful
+        open. If something else stamps that vault first — another PixlStash
+        installation on this machine pointed at the same folder — every later
+        startup dies on the conflict check with nothing in the UI to undo it.
+
+        A NULL fingerprint means this hub has never served the library, so
+        adopting what the folder carries claims nothing: the library keeps its
+        own uuid, which is what tokens are stamped with. A row that somehow
+        already has tokens is refused, so a share link can never come back
+        pointing at content it was not issued for.
+        """
+        if library.vault_uuid is not None:
+            return library
+        fingerprint = read_vault_uuid(library.path)
+        if fingerprint is None or fingerprint == library.uuid:
+            return library
+        tokens = self._token_count(library.uuid)
+        if tokens:
+            logger.warning(
+                "%s carries fingerprint %s but library %s was registered "
+                "without one and already has %d token(s); not adopting it.",
+                library.path,
+                fingerprint,
+                library.uuid,
+                tokens,
+            )
+            return library
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET vault_uuid = ? WHERE id = ? AND vault_uuid IS NULL",
+                (fingerprint, library.id),
+            )
+        logger.info(
+            "Adopted the existing fingerprint %s for library %s at %s; it was "
+            "registered before anything stamped the vault.",
+            fingerprint,
+            library.uuid,
+            library.path,
+        )
+        return self.by_uuid(library.uuid) or library
+
     def _token_count(self, library_uuid: str) -> int:
         """Return how many tokens are stamped with this library."""
         row = self._hub.fetchone(
