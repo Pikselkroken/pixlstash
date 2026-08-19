@@ -164,6 +164,10 @@ def bootstrap_hub(
     library = registry.active_library()
     if library is None:
         library = _register_first_library(registry, configured_image_root)
+    # Before anything reads the vault: a registration made while the folder
+    # carried no fingerprint would otherwise conflict forever with whatever
+    # stamped it first.
+    library = registry.adopt_vault_fingerprint(library)
 
     if (
         legacy_identity_prompt is not None

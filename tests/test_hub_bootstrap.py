@@ -824,6 +824,62 @@ class TestCrashSafeOrdering:
         owner.close()
         preparer.close()
 
+    def test_a_never_opened_registration_adopts_the_fingerprint_it_finds(self, paths):
+        """Two installations sharing one folder must not wedge each other.
+
+        The desktop build keeps its hub in a different config directory from
+        the terminal build. Whichever registers the folder while it is still
+        unstamped records no fingerprint, and if the other one stamps it first
+        the loser used to fail every later startup with no way back.
+        """
+        hub_path, library_folder = paths
+        foreign_uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        conn = sqlite3.connect(os.path.join(library_folder, "vault.db"))
+        conn.execute("UPDATE library_settings SET library_uuid = ?", (foreign_uuid,))
+        conn.commit()
+        conn.close()
+
+        result = bootstrap_hub(library_folder, hub_path)
+        assert result.library.vault_uuid == foreign_uuid
+        # The library keeps its own identity; only the fingerprint is adopted.
+        assert result.library.uuid != foreign_uuid
+
+        finalize_opened_library(result)
+
+        assert read_vault_uuid(library_folder) == foreign_uuid
+        result.engine.close()
+        result.hub.close()
+
+    def test_a_library_holding_tokens_never_adopts_a_foreign_fingerprint(self, paths):
+        """A share link must not come back pointing at content it never saw."""
+        hub_path, library_folder = paths
+        result = bootstrap_upgrade(library_folder, hub_path)
+        library_uuid = result.library.uuid
+        assert result.hub.fetchone(
+            "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ?", (library_uuid,)
+        )[0]
+        result.engine.close()
+        result.hub.close()
+
+        # Forget the fingerprint the way a registration that never opened the
+        # vault would have left it, then let something else stamp the folder.
+        hub = HubDatabase(hub_path)
+        with hub.transaction() as conn:
+            conn.execute("UPDATE library SET vault_uuid = NULL")
+        hub.close()
+        foreign_uuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        conn = sqlite3.connect(os.path.join(library_folder, "vault.db"))
+        conn.execute("UPDATE library_settings SET library_uuid = ?", (foreign_uuid,))
+        conn.commit()
+        conn.close()
+
+        result = bootstrap_hub(library_folder, hub_path)
+        assert result.library.vault_uuid is None
+        with pytest.raises(HubBootstrapError, match="fingerprint conflict"):
+            finalize_opened_library(result)
+        result.engine.close()
+        result.hub.close()
+
     def test_fingerprint_conflict_stops_before_blanking(self, paths):
         hub_path, library_folder = paths
         result = bootstrap_upgrade(library_folder, hub_path, finalize=False)
