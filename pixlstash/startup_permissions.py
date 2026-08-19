@@ -222,9 +222,15 @@ def find_startup_permission_issues(
         return []
 
     config_dir = os.path.abspath(os.path.dirname(server_config_path))
-    hub_path = os.path.join(config_dir, "hub.db")
     issues: list[PermissionIssue] = []
     canonical_config_dir = os.path.realpath(config_dir)
+    # Build the hub path from the *resolved* directory, matching what
+    # `canonical_hub_path` hands the guard. A symlinked config directory
+    # otherwise leaves this scan inspecting one spelling while the guard opens
+    # another, which is how the offer came to report "no issues" for a startup
+    # that then failed. The leaf is joined rather than resolved, so a symlink
+    # standing at hub.db is still the guard's to refuse.
+    hub_path = os.path.join(canonical_config_dir, "hub.db")
     private_config_dir = canonical_config_dir in _app_owned_config_directories()
 
     config_issue = _repairable_issue(
