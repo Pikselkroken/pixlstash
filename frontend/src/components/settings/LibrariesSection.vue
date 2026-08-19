@@ -299,8 +299,8 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         Run it on the machine hosting PixlStash, signed in as the user that owns
         it.
         <template v-if="needsPowerShell">
-          Use PowerShell or Windows Terminal; these commands do not run in the
-          older Command Prompt.
+          Use PowerShell (for example, in Windows Terminal); these commands do not run in
+          the older Command Prompt.
         </template>
         <template v-if="inDocker">
           Paths shown here are paths inside the container.
