@@ -137,7 +137,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openAddFile"
+            @click="openAddFile(addBtnRef)"
           >
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
@@ -155,7 +155,7 @@
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openAddSource"
+              @click="openAddSource(addBtnRef)"
             >
               <AiToolkitIcon :size="16" />
               <span>Set ai-toolkit output folder…</span>
@@ -223,7 +223,7 @@
             role="menuitem"
             @click="
               close();
-              openAddFile();
+              openAddFile(overflowRef?.trigger?.());
             "
           >
             <v-icon size="16">mdi-file-plus-outline</v-icon>
@@ -236,7 +236,7 @@
               role="menuitem"
               @click="
                 close();
-                openAddSource();
+                openAddSource(overflowRef?.trigger?.());
               "
             >
               <AiToolkitIcon :size="16" />
@@ -1499,8 +1499,23 @@ const addBtnRef = ref(null);
 const foldersBtnRef = ref(null);
 // The empty state's own door. Unlike the two above it is NOT always mounted —
 // the first scan that finds a model replaces the empty state with the list —
-// which is the case `closeFolders`' `isConnected` check exists for.
+// which is the case `closeFolders`' fallback exists for.
 const emptyFoldersBtnRef = ref(null);
+/**
+ * Hand focus to the first candidate that will actually take it, in order.
+ * `addBtnRef` and `foldersBtnRef` both carry `shelf-fold-680`: below that
+ * width the ladder hides them and shows `overflowRef`'s trigger in their
+ * place. `isConnected` alone doesn't see that — a folded button is still in
+ * the document, just `display:none`, and can't take focus — so this confirms
+ * each attempt actually landed rather than assuming it from DOM presence.
+ */
+function restoreFocus(...candidates) {
+  for (const el of candidates) {
+    if (!el?.isConnected) continue;
+    el.focus();
+    if (document.activeElement === el) return;
+  }
+}
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -2484,21 +2499,28 @@ function onTabKeydown(event) {
 // output root exists there is nothing left here to add.
 
 const addSourceOpen = ref(false);
+// Held raw like `folderInvoker`: a DOM node, not reactive state.
+const addSourceInvoker = shallowRef(null);
 
 /** Whether the ai-toolkit output root has been set. */
 const hasSourceFolder = computed(() => Boolean(foldersStore.sourceFolder));
 
-function openAddSource() {
+function openAddSource(invoker) {
+  addSourceInvoker.value = invoker ?? null;
   addSourceOpen.value = true;
 }
 
 async function closeAddSource() {
+  const returnTo = addSourceInvoker.value;
   addSourceOpen.value = false;
+  addSourceInvoker.value = null;
   await nextTick();
-  // The button can unmount under us: this item is the last thing in the menu
-  // when the shelf has no folders at all. Falling back to the shelf root beats
-  // dropping focus to <body>.
-  (addBtnRef.value?.isConnected ? addBtnRef.value : rootEl.value)?.focus();
+  restoreFocus(
+    returnTo,
+    addBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 /**
@@ -2529,16 +2551,26 @@ async function onSourcePicked(path) {
 
 const addFileOpen = ref(false);
 const adding = ref(false);
+// Held raw like `folderInvoker`: a DOM node, not reactive state.
+const addFileInvoker = shallowRef(null);
 
-function openAddFile() {
+function openAddFile(invoker) {
   if (adding.value) return;
+  addFileInvoker.value = invoker ?? null;
   addFileOpen.value = true;
 }
 
 async function closeAddFile() {
+  const returnTo = addFileInvoker.value;
   addFileOpen.value = false;
+  addFileInvoker.value = null;
   await nextTick();
-  addBtnRef.value?.focus();
+  restoreFocus(
+    returnTo,
+    addBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 /**
@@ -2597,10 +2629,16 @@ async function closeFolders() {
   foldersOpen.value = false;
   folderInvoker.value = null;
   await nextTick();
-  // The empty-state button unmounts the moment the first folder is scanned in,
-  // so fall back to the toolbar's folder button — the one door that is always
-  // mounted — rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
+  // The empty-state button unmounts the moment the first folder is scanned
+  // in, and `foldersBtnRef` itself folds away under `overflowRef` below
+  // 656px — `restoreFocus` tries both, then the ⋯ trigger, before giving up
+  // on the shelf root, rather than dropping focus to <body>.
+  restoreFocus(
+    returnTo,
+    foldersBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);

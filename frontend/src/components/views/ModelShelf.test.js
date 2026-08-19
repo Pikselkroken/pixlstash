@@ -3746,6 +3746,45 @@ describe("Add file", () => {
     expect(notices.notices[0].level).toBe("error");
     expect(notices.notices[0].text).toContain("already inside");
   });
+
+  it("returns focus to the Add button when opened from its own menu", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    const item = wrapper
+      .findAll(".shelf-mi")
+      .find((entry) => entry.text().includes("Add file"));
+    await item.trigger("click");
+    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(
+      wrapper.find('.shelf-toolbar button[title="Add models to the shelf"]')
+        .element,
+    );
+    wrapper.unmount();
+  });
+
+  it("returns focus to the ⋯ trigger when opened from the overflow menu, not the folded Add button", async () => {
+    // The bug this guards: the ⋯ row used to call `openAddFile()` with no
+    // invoker, so `closeAddFile` always named `addBtnRef` — which is exactly
+    // the button `shelf-fold-680` hides at the width the ⋯ exists to serve.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    await wrapper.find(".tbo-trigger").trigger("click");
+    const item = wrapper
+      .findAll(".tbo-panel .shelf-mi")
+      .find((entry) => entry.text().includes("Add file"));
+    await item.trigger("click");
+    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(wrapper.find(".tbo-trigger").element);
+    wrapper.unmount();
+  });
 });
 
 describe("the two kinds of absence", () => {
