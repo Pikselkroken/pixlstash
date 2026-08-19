@@ -310,7 +310,10 @@ def run_smoke(venv_dir: Path, port: int, expected_version: str | None) -> None:
     base_url = f"http://127.0.0.1:{port}"
 
     with tempfile.TemporaryDirectory(prefix="pixlstash-smoke-") as tmp:
-        tmp_path = Path(tmp)
+        # Resolve through any OS-level symlinks (e.g. /var → /private/var on
+        # macOS) so trusted_sqlite's symlink rejection never fires on a path
+        # the caller did not construct.
+        tmp_path = Path(tmp).resolve()
         image_root = tmp_path / "images"
         image_root.mkdir()
         config_path = tmp_path / "server-config.json"
