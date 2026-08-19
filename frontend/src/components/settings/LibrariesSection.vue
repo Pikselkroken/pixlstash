@@ -95,6 +95,15 @@ const detachCommand = computed(() =>
     : "",
 );
 
+// Which shell these commands are written for, when it is not "any of them".
+// The Windows desktop declares a PowerShell command — a leading `&` call
+// operator — because no single string runs in both cmd.exe and PowerShell
+// (issue #1058), and a command pasted into the wrong one fails with an error
+// that names neither. Read off the command we are about to show rather than
+// from a new API field: the hint IS the deployment's own answer, so the two
+// can never disagree.
+const needsPowerShell = computed(() => cliHint.value?.startsWith("& ") ?? false);
+
 watch(
   () => props.open,
   (isOpen) => {
@@ -289,6 +298,10 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       <p class="libraries-note">
         Run it on the machine hosting PixlStash, signed in as the user that owns
         it.
+        <template v-if="needsPowerShell">
+          Use PowerShell or Windows Terminal; these commands do not run in the
+          older Command Prompt.
+        </template>
         <template v-if="inDocker">
           Paths shown here are paths inside the container.
         </template>

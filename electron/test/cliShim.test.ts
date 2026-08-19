@@ -79,8 +79,55 @@ describe('cliCommandHint — what Settings tells the user to type', () => {
   it('without the shim it still names a command that runs, not a bare script name', () => {
     // The console script inside the app image is on no PATH, so naming it would
     // print a command that fails. The launcher always works.
-    const hint = cliCommandHint(false, '/home/me/Apps/PixlStash.AppImage');
+    const hint = cliCommandHint(false, '/home/me/Apps/PixlStash.AppImage', 'linux');
     assert.equal(hint, "'/home/me/Apps/PixlStash.AppImage' cli");
+  });
+
+  it('the POSIX form is unchanged on every non-Windows platform', () => {
+    // The Windows fork below must not disturb the form that already ships.
+    for (const platform of ['linux', 'darwin', 'freebsd'] as NodeJS.Platform[]) {
+      assert.equal(
+        cliCommandHint(false, '/opt/PixlStash/pixlstash', platform),
+        "'/opt/PixlStash/pixlstash' cli",
+        `${platform} must keep the sh form`,
+      );
+    }
+  });
+
+  it('Windows gets a PowerShell command, because sh quoting runs in neither Windows shell', () => {
+    // Issue #1058: `'C:\…' cli` is a literal path in cmd.exe (no single-quote
+    // semantics) and a bare string expression in PowerShell (no call operator).
+    const hint = cliCommandHint(
+      false,
+      'C:\\Users\\me\\AppData\\Local\\Programs\\PixlStash\\PixlStash.exe',
+      'win32',
+    );
+    assert.equal(
+      hint,
+      "& 'C:\\Users\\me\\AppData\\Local\\Programs\\PixlStash\\PixlStash.exe' cli",
+    );
+    assert.ok(hint.startsWith('& '), 'PowerShell needs the call operator to run a quoted path');
+  });
+
+  it('a Windows install directory with spaces survives the copy', () => {
+    // allowToChangeInstallationDirectory is on, so C:\Program Files is reachable.
+    assert.equal(
+      cliCommandHint(false, 'C:\\Program Files\\PixlStash\\PixlStash.exe', 'win32'),
+      "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli",
+    );
+  });
+
+  it("a quote in the path is doubled, not backslash-escaped as sh would", () => {
+    // PowerShell's single-quoted string is literal: `''` is its only escape,
+    // and shQuote's `'\''` would close the string and strand a backslash.
+    assert.equal(
+      cliCommandHint(false, "C:\\Users\\o'brien\\PixlStash.exe", 'win32'),
+      "& 'C:\\Users\\o''brien\\PixlStash.exe' cli",
+    );
+  });
+
+  it('the shim short form wins on Windows too, if one is ever installed there', () => {
+    assert.equal(cliCommandHint(true, 'C:\\PixlStash\\PixlStash.exe', 'win32'), 'pixlstash');
   });
 });
 

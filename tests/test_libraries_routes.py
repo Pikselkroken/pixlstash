@@ -591,6 +591,21 @@ class TestCliHintIsShort:
 
         assert mod.cli_hint() == "pixlstash libraries list"
 
+    def test_a_declared_windows_command_is_printed_exactly_as_given(self, monkeypatch):
+        """The launcher's own quoting must survive untouched (issue #1058).
+
+        The desktop app declares a PowerShell command on Windows — a ``&`` call
+        operator in front of a single-quoted path, because neither of the two
+        Windows shells runs the ``sh`` form this module would otherwise emit.
+        Re-quoting or stripping any of it here would break the one instruction
+        the Libraries panel gives (multi-library plan §3.6 acceptance 8).
+        """
+        mod = self._module()
+        declared = "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli"
+        monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", declared)
+
+        assert mod.cli_hint() == f"{declared} libraries list"
+
     def test_an_empty_declaration_falls_through_to_the_normal_rules(
         self, monkeypatch, tmp_path
     ):

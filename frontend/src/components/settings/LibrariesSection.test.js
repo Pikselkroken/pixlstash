@@ -349,6 +349,22 @@ describe("teaching the CLI", () => {
     expect(wrapper.text()).toContain("pixlstash-cli libraries list");
   });
 
+  it("names PowerShell only when the deployment's command needs it", async () => {
+    // Issue #1058: the Windows desktop declares a PowerShell command (leading
+    // `&`), which fails in Command Prompt with an error naming neither shell.
+    // Every other deployment's command runs in any shell, so the note would be
+    // noise there.
+    const anyShell = await settle(mountPane());
+    expect(anyShell.text()).not.toContain("PowerShell");
+
+    listLibraries.mockResolvedValue({
+      ...LOCAL_RESPONSE,
+      cli_hint: "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli libraries list",
+    });
+    const windows = await settle(mountPane());
+    expect(windows.text()).toContain("PowerShell");
+  });
+
   it("lists the verbs and promises detach keeps files", async () => {
     const wrapper = await settle(mountPane());
 
