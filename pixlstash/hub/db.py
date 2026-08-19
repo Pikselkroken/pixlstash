@@ -158,8 +158,23 @@ def canonical_hub_path(path: str) -> str:
     ``_reject_symlinked_path`` and is refused: nobody legitimately makes the
     database file a link, and that is the classic pre-positioned-symlink
     attack.  ``os.path.realpath`` over the whole path would follow it silently.
+
+    On Windows the path is returned absolute but otherwise *unchanged*, ancestors
+    included.  ``os.path.realpath`` there resolves junctions and symlinks, so
+    pre-resolving the ancestors would hand ``TrustedSQLiteLocation.open`` a
+    redirect-free path and defeat ``_reject_symlinked_path`` on an ancestor
+    junction -- the redirect an unprivileged account can create with only
+    directory write access (``mklink /J``).  The two POSIX controls that make
+    following a redirect tolerable both return early on ``nt``:
+    ``_require_owned_directory``'s namespace walk (which would refuse an exposed
+    parent) and ``check_file_mode``'s mode-600 check.  Windows therefore keeps
+    refusing ancestor redirects rather than following them; see the W19 record in
+    ``docs/backend_architecture.md`` section 13.
     """
-    directory, name = os.path.split(os.path.abspath(os.path.expanduser(path)))
+    absolute = os.path.abspath(os.path.expanduser(path))
+    if os.name == "nt":
+        return absolute
+    directory, name = os.path.split(absolute)
     return os.path.join(os.path.realpath(directory), name)
 
 
