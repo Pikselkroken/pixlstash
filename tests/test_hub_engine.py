@@ -1335,6 +1335,7 @@ class TestHubUnderASymlinkedAncestor:
     itself is still refused.
     """
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_a_hub_under_a_symlinked_ancestor_opens(self, tmp_path):
         real = tmp_path / "real-config"
         real.mkdir(mode=0o700)
@@ -1348,21 +1349,20 @@ class TestHubUnderASymlinkedAncestor:
         assert (real / "hub.db").is_file()
         assert not (real / "hub.db").is_symlink()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_the_opened_path_is_canonical(self, tmp_path):
         real = tmp_path / "real-config"
         real.mkdir(mode=0o700)
         link = tmp_path / "config"
         link.symlink_to(real, target_is_directory=True)
 
-        hub = HubDatabase(str(link / "hub.db"))
-        try:
-            # The pool, the sidecars and `os.replace` all reopen by this string
-            # over the process lifetime; if it still held the link they would
-            # re-resolve it on every use.
+        # The pool, the sidecars and `os.replace` all reopen by this string
+        # over the process lifetime; if it still held the link they would
+        # re-resolve it on every use.
+        with HubDatabase(str(link / "hub.db")) as hub:
             assert hub.path == str(real / "hub.db")
-        finally:
-            hub.close()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_a_symlinked_leaf_under_a_symlinked_ancestor_is_still_refused(
         self, tmp_path
     ):
@@ -1379,6 +1379,7 @@ class TestHubUnderASymlinkedAncestor:
 
         assert target.read_bytes() == b"do not open"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_a_symlink_to_an_exposed_directory_is_still_refused(self, tmp_path):
         """Resolving the ancestor must not smuggle past the namespace walk.
 
@@ -1400,6 +1401,7 @@ class TestHubUnderASymlinkedAncestor:
 
 
 class TestCanonicalHubPath:
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_ancestors_are_resolved_and_the_leaf_is_not(self, tmp_path):
         real = tmp_path / "real"
         real.mkdir(mode=0o700)
@@ -1415,7 +1417,34 @@ class TestCanonicalHubPath:
         # it; `os.path.realpath` over the whole path would have followed it.
         assert os.path.islink(resolved)
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     def test_a_path_without_links_is_unchanged(self, tmp_path):
         plain = str(tmp_path / "hub.db")
 
         assert canonical_hub_path(plain) == os.path.realpath(plain)
+
+    @pytest.mark.skipif(os.name == "nt", reason="creates a symlink to simulate nt")
+    def test_on_windows_a_symlinked_ancestor_is_not_resolved(
+        self, tmp_path, monkeypatch
+    ):
+        """The Windows carve-out that keeps ``_reject_symlinked_path`` intact.
+
+        On ``nt`` resolving the ancestors would defeat the redirect refusal, one
+        of the only controls left there (W19, ``docs/backend_architecture.md``
+        section 13). A real symlink is made on this POSIX gate, ``os.name`` is
+        forced to ``nt``, and the ancestor must come back *unresolved* — the
+        symlink still present — so the leaf-and-ancestor walk in
+        ``_reject_symlinked_path`` still gets to see and refuse it. Without the
+        guard this resolves the link and the assertion fails.
+        """
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "via-link"
+        link.symlink_to(real, target_is_directory=True)
+
+        monkeypatch.setattr("pixlstash.hub.db.os.name", "nt")
+
+        resolved = canonical_hub_path(str(link / "hub.db"))
+
+        assert resolved == str(link / "hub.db")
+        assert os.path.islink(os.path.dirname(resolved))
