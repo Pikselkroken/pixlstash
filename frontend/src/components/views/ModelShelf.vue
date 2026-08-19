@@ -32,16 +32,16 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
-    <!-- The toolbar changes the VIEW. The three things on it that are not view
+    <!-- The toolbar changes the VIEW. The two things on it that are not view
          controls are the ones with no selection to hang on — Add, which makes a
-         row that does not exist yet; the stack sweep, which proposes over the
-         whole shelf; and Model folders, which edits the registry the shelf
-         reads — so they sit together on the left, apart from the view controls.
+         row that does not exist yet, and Model folders, which edits the
+         registry the shelf reads — so they sit together on the left, apart
+         from the view controls.
          The test the left group applies: it opens something, it writes nothing
          on the press, and it has no selection to hang on. Every other verb
          lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
-      <span class="shelf-title">Models</span>
+      <span class="shelf-title shelf-fold-1070">Models</span>
 
       <!-- Two views of one destination, not two destinations. The runs are
            models too — still in ai-toolkit's output folder rather than on the
@@ -106,7 +106,7 @@
           <button
             ref="addBtnRef"
             v-bind="menuProps"
-            class="bar-btn bar-btn--accent"
+            class="bar-btn bar-btn--accent shelf-fold-680"
             type="button"
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
@@ -137,7 +137,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openAddFile"
+            @click="openAddFile(addBtnRef)"
           >
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
@@ -155,7 +155,7 @@
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openAddSource"
+              @click="openAddSource(addBtnRef)"
             >
               <AiToolkitIcon :size="16" />
               <span>Set ai-toolkit output folder…</span>
@@ -163,26 +163,6 @@
           </template>
         </div>
       </v-menu>
-
-      <!-- The sweep, and the shelf's one verb with no selection to act on: it
-           proposes over every row. Icon-only beside Add rather than among the
-           view controls, because it is a verb and they are not — and it opens a
-           dry run, so nothing is written by the press itself. -->
-      <!-- The sweep proposes stacks over the shelf's `model_file` ROWS, so on
-           the training-runs tab it acts on a list the reader is not looking at.
-           Hidden there for the same reason Group, Sort and Show are. -->
-      <button
-        v-if="isShelfTab"
-        ref="stacksBtnRef"
-        class="bar-btn bar-btn--boxed"
-        type="button"
-        title="Stack training runs — review proposed stacks"
-        aria-label="Stack training runs"
-        aria-haspopup="dialog"
-        @click="stacksOpen = true"
-      >
-        <v-icon size="19">mdi-layers-plus</v-icon>
-      </button>
 
       <!-- The registry the shelf reads, and the only door to it once the empty
            state is gone: Add ▾ spells this "Add folder…", which is the wrong
@@ -193,18 +173,18 @@
            store always exists), so a permanent number beside Show's identical
            pill would mean something else entirely.
 
-           No `bar-btn--open`, and the sweep above lost its copy in the same
-           change: `App.css` declares that class for "the toolbar button while
-           its MENU is open", and both of these open an `AppDialog`, which sets
-           `:scrim="true"`. The highlight is painted under the scrim for exactly
-           as long as it applies, and neither button has the chevron the rule
+           No `bar-btn--open`: `App.css` declares that class for "the toolbar
+           button while its MENU is open", and this one opens an `AppDialog`,
+           which sets `:scrim="true"`. The highlight is painted under the scrim
+           for exactly as long as it applies, and the button has none of the
+           chevron the rule
            rotates. Group/Sort/Show keep it because they really are menus.
            `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
            focus moves into the dialog rather than into anything the button
            owns. -->
       <button
         ref="foldersBtnRef"
-        class="bar-btn bar-btn--boxed"
+        class="bar-btn bar-btn--boxed shelf-fold-680"
         type="button"
         title="Model folders — add, rescan, move or forget a folder"
         aria-label="Model folders"
@@ -214,13 +194,78 @@
         <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
 
+      <!-- Where those two land when the bar runs out of width. Only the
+           "opens something, writes nothing on the press" pair folds: the ⋯ is
+           for verbs, and Group, Sort and Show are menus that compress instead
+           (the Duplicates bar's rule — a menu inside a menu is a submenu, and
+           this bar would need three of them).
+
+           `align="start"` because the trigger sits near the LEFT edge, and the
+           rows are the same `.shelf-mi` items the Add menu already draws — one
+           recipe, so the folded form is the unfolded one moved. -->
+      <TbOverflowMenu ref="overflowRef" class="shelf-overflow" align="start">
+        <template #default="{ close }">
+          <button
+            class="shelf-mi"
+            type="button"
+            role="menuitem"
+            @click="
+              close();
+              openFolders(overflowRef?.trigger?.());
+            "
+          >
+            <v-icon size="16">mdi-folder-plus-outline</v-icon>
+            <span>Add folder…</span>
+          </button>
+          <button
+            class="shelf-mi"
+            type="button"
+            role="menuitem"
+            @click="
+              close();
+              openAddFile(overflowRef?.trigger?.());
+            "
+          >
+            <v-icon size="16">mdi-file-plus-outline</v-icon>
+            <span>Add file…</span>
+          </button>
+          <template v-if="!hasSourceFolder">
+            <button
+              class="shelf-mi"
+              type="button"
+              role="menuitem"
+              @click="
+                close();
+                openAddSource(overflowRef?.trigger?.());
+              "
+            >
+              <AiToolkitIcon :size="16" />
+              <span>Set ai-toolkit output folder…</span>
+            </button>
+          </template>
+          <span class="shelf-mi-sep"></span>
+          <button
+            class="shelf-mi"
+            type="button"
+            role="menuitem"
+            @click="
+              close();
+              openFolders(overflowRef?.trigger?.());
+            "
+          >
+            <v-icon size="16">mdi-folder-multiple-outline</v-icon>
+            <span>Model folders…</span>
+          </button>
+        </template>
+      </TbOverflowMenu>
+
       <!-- Reports the list actually on screen, not always the shelf's — and it
            sits AFTER the verbs, in the gap the spacer opens, for one reason:
            the two labels are different widths ("1,842 models · 12 copies" vs
-           "8 runs"), so anywhere to their left it shoves Add, the sweep and
-           Model folders sideways every time the tab changes. Here the spacer
+           "8 runs"), so anywhere to their left it shoves Add and Model
+           folders sideways every time the tab changes. Here the spacer
            absorbs the difference and nothing moves. -->
-      <span class="shelf-sub shelf-sub--ingap">{{
+      <span class="shelf-sub shelf-sub--ingap shelf-fold-1070">{{
         isShelfTab ? countLabel : runsCountLabel
       }}</span>
 
@@ -1288,7 +1333,6 @@
       :destination-folder-id="movePreselected"
       @close="closeMove"
     />
-    <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
     <!-- Setting the output root from the registry dialog lands on the runs for
          the same reason doing it from the Add menu does: the owner set it
          because they have runs to import, so showing them beats leaving a new
@@ -1360,8 +1404,8 @@ import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
-import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
@@ -1455,8 +1499,23 @@ const addBtnRef = ref(null);
 const foldersBtnRef = ref(null);
 // The empty state's own door. Unlike the two above it is NOT always mounted —
 // the first scan that finds a model replaces the empty state with the list —
-// which is the case `closeFolders`' `isConnected` check exists for.
+// which is the case `closeFolders`' fallback exists for.
 const emptyFoldersBtnRef = ref(null);
+/**
+ * Hand focus to the first candidate that will actually take it, in order.
+ * `addBtnRef` and `foldersBtnRef` both carry `shelf-fold-680`: below that
+ * width the ladder hides them and shows `overflowRef`'s trigger in their
+ * place. `isConnected` alone doesn't see that — a folded button is still in
+ * the document, just `display:none`, and can't take focus — so this confirms
+ * each attempt actually landed rather than assuming it from DOM presence.
+ */
+function restoreFocus(...candidates) {
+  for (const el of candidates) {
+    if (!el?.isConnected) continue;
+    el.focus();
+    if (document.activeElement === el) return;
+  }
+}
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -1997,7 +2056,6 @@ function shelfOwnsTheKey(event) {
   if (
     moveOpen.value ||
     addSourceOpen.value ||
-    stacksOpen.value ||
     foldersOpen.value ||
     addFileOpen.value ||
     editVerb.value
@@ -2139,15 +2197,13 @@ async function confirmClearIcons() {
 // not shared, because an expansion is a glance rather than a preference.
 
 const openStacks = ref(new Set());
-const stacksOpen = ref(false);
-const stacksBtnRef = ref(null);
 
 /**
- * Group the selection into one stack, the bar's manual counterpart to the sweep.
+ * Group the selection into one stack.
  *
- * A confirmation and not a dry run, unlike the toolbar's proposals dialog: the
- * reader assembled this group themselves and is looking at it, so there is
- * nothing to show them they have not already chosen. It is still a prompt,
+ * A confirmation rather than a dry run: the reader assembled this group
+ * themselves and is looking at it, so there is nothing to show them they have
+ * not already chosen. It is still a prompt,
  * because every verb afterwards acts on the whole stack rather than the file
  * that was clicked — but it is no longer a warning about a one-way door, since
  * Ungroup takes it back.
@@ -2208,8 +2264,8 @@ async function confirmStack() {
  * with the vocabulary reserved for the verbs that destroy bytes would teach the
  * reader to ignore that vocabulary.
  *
- * One call per stack, matching the proposals dialog: each is one row's worth of
- * work, and one that fails must not discard the others.
+ * One call per stack: each is one row's worth of work, and one that fails must
+ * not discard the others.
  */
 async function confirmUnstack() {
   const stackIds = [
@@ -2324,12 +2380,6 @@ async function confirmRemoveFromStack() {
     level: failed.length === results.length ? "error" : "success",
     text: releaseReceipt(released, dissolved, failed.length),
   });
-}
-
-async function closeStacks() {
-  stacksOpen.value = false;
-  await nextTick();
-  stacksBtnRef.value?.focus();
 }
 
 function isStackOpen(stackId) {
@@ -2449,21 +2499,28 @@ function onTabKeydown(event) {
 // output root exists there is nothing left here to add.
 
 const addSourceOpen = ref(false);
+// Held raw like `folderInvoker`: a DOM node, not reactive state.
+const addSourceInvoker = shallowRef(null);
 
 /** Whether the ai-toolkit output root has been set. */
 const hasSourceFolder = computed(() => Boolean(foldersStore.sourceFolder));
 
-function openAddSource() {
+function openAddSource(invoker) {
+  addSourceInvoker.value = invoker ?? null;
   addSourceOpen.value = true;
 }
 
 async function closeAddSource() {
+  const returnTo = addSourceInvoker.value;
   addSourceOpen.value = false;
+  addSourceInvoker.value = null;
   await nextTick();
-  // The button can unmount under us: this item is the last thing in the menu
-  // when the shelf has no folders at all. Falling back to the shelf root beats
-  // dropping focus to <body>.
-  (addBtnRef.value?.isConnected ? addBtnRef.value : rootEl.value)?.focus();
+  restoreFocus(
+    returnTo,
+    addBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 /**
@@ -2494,16 +2551,26 @@ async function onSourcePicked(path) {
 
 const addFileOpen = ref(false);
 const adding = ref(false);
+// Held raw like `folderInvoker`: a DOM node, not reactive state.
+const addFileInvoker = shallowRef(null);
 
-function openAddFile() {
+function openAddFile(invoker) {
   if (adding.value) return;
+  addFileInvoker.value = invoker ?? null;
   addFileOpen.value = true;
 }
 
 async function closeAddFile() {
+  const returnTo = addFileInvoker.value;
   addFileOpen.value = false;
+  addFileInvoker.value = null;
   await nextTick();
-  addBtnRef.value?.focus();
+  restoreFocus(
+    returnTo,
+    addBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 /**
@@ -2541,6 +2608,9 @@ async function onFilePicked(path) {
 // about the press rather than about the dialog. Held raw: it is a DOM node, and
 // making it reactive would deep-track an element tree for nothing.
 const folderInvoker = shallowRef(null);
+// The ⋯ the left group folds into below 690px; its rows open dialogs, so they
+// need its trigger to hand focus back to.
+const overflowRef = ref(null);
 
 /**
  * @param {HTMLElement} invoker Control to hand focus back to on close. Every
@@ -2559,10 +2629,16 @@ async function closeFolders() {
   foldersOpen.value = false;
   folderInvoker.value = null;
   await nextTick();
-  // The empty-state button unmounts the moment the first folder is scanned in,
-  // so fall back to the toolbar's folder button — the one door that is always
-  // mounted — rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
+  // The empty-state button unmounts the moment the first folder is scanned
+  // in, and `foldersBtnRef` itself folds away under `overflowRef` below
+  // 656px — `restoreFocus` tries both, then the ⋯ trigger, before giving up
+  // on the shelf root, rather than dropping focus to <body>.
+  restoreFocus(
+    returnTo,
+    foldersBtnRef.value,
+    overflowRef.value?.trigger?.(),
+    rootEl.value,
+  );
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);
@@ -3815,12 +3891,12 @@ watch(
      app-wide chrome writes its scoped @container rules against — the same
      pair the grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`)
      declare, so a shared control mounted here degrades exactly as it does
-     there. Nothing queries either name on this bar today: the shelf has no
-     ladder of its own yet, and dropping UndoControl took the one control that
-     wrote `@container toolbar` rules with it. The declaration stays because
-     the convention is what makes the next shared control work without a
-     second look — and `container-type: inline-size` is also what keeps the
-     bar's width independent of its contents. */
+     there. `shelfbar` carries this bar's own ladder (the rungs at the bottom
+     of this block); `toolbar` is what a shared control mounted here would
+     write its own rules against, and nothing on the bar does today —
+     dropping UndoControl took the one control that did. `container-type:
+     inline-size` is also what keeps the bar's width independent of its
+     contents. */
   container-type: inline-size;
   container-name: shelfbar toolbar;
   /* The shell's top band, copied from the GRID toolbar
@@ -3885,6 +3961,78 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+/* ── The ladder ──────────────────────────────────────────────────────────────
+
+   MEASURED, not guessed. Rendering this bar's markup and this block in
+   Chromium at `width: max-content`, with the widest content each control can
+   hold (a 12ch Group value, a 12ch Sort value, the shelf tab's long count):
+
+     full                1071px
+     after rung 1         840px
+     after rung 2         679px
+     after rung 3         565px   ← the floor
+
+   So the bar has never fitted a 1280px window minus the sidebar, which is
+   what this ladder is for. **Each rung fires at the width the configuration
+   above it needs**, which is why the numbers are what they are and not round
+   ones — change a control and the rungs move with the measurement.
+
+   **The queries are 24px under the widths the classes are named for**, and
+   deliberately: `container-type: inline-size` queries the CONTENT box, while
+   the figures above are the bar's border box, and this bar's inset is
+   `0 var(--space-3) 0 var(--space-5)` = 24px. Named for the bar width because
+   that is the number a person measures with a window edge; written as the
+   content width because that is the number the query sees.
+
+   Rung 3 folds only the two verbs. `Group`, `Sort` and `Show` compress and
+   never fold: they are menus, and a menu inside the ⋯ is a submenu — the same
+   line the Duplicates bar draws, where the toggles fold and the tier menu
+   compresses.
+
+   Remeasure by loading `.shelf-toolbar` at `width: max-content`; the numbers
+   move whenever a control is added, and the rung widths are the sum, not a
+   guess about it. */
+
+.shelf-overflow {
+  display: none;
+}
+
+/* Rung 1. The two things on the bar that REPORT rather than control: the
+   view's own name, which the sidebar and the tab pair beside it both already
+   say, and the count, whose two widths ("1,842 models · 12 copies" vs "8
+   runs") are why the spacer sits where it does. Buys 231px. */
+@container shelfbar (max-width: 1046px) {
+  .shelf-fold-1070 {
+    display: none;
+  }
+}
+
+/* Rung 2. `Group` and `Sort` drop their VALUE and keep their glyph and
+   chevron — the grid Filter trigger's compressed grammar. The value is the
+   reason the list looks the way it does, so it goes after the two labels that
+   mean nothing, and never silently: both buttons carry it in `title` and in
+   their accessible name at every width. Buys 161px. */
+@container shelfbar (max-width: 816px) {
+  .bar-btn-value {
+    display: none;
+  }
+}
+
+/* Rung 3. `Add ▾` and `Model folders` fold into the ⋯ that appears in their
+   place. They are the bar's only two verbs, they open something and write
+   nothing on the press, and their rows are the same `.shelf-mi` items the Add
+   menu already draws. Buys 114px net of the ⋯ itself, and what is left — the
+   tab pair, the ⋯, and the three compressed view menus — is the 565px floor:
+   below that the bar overflows and there is nothing left to give. */
+@container shelfbar (max-width: 656px) {
+  .shelf-fold-680 {
+    display: none;
+  }
+  .shelf-overflow {
+    display: flex;
+  }
 }
 
 /* The one filled button in the bar. It is the only control here with a result

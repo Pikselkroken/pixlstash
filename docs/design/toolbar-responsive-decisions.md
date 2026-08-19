@@ -6,7 +6,8 @@
 > width, and replaced every rung. Any width given for that bar before amendment
 > #4 — 860 / 720 / 600, and the fold classes named after them — is history, not
 > the shipped CSS. The grid bar's ladder is unchanged, and amendment #2 remains
-> the record for it.
+> the record for it. Amendment #6 (2026-08-19) is the current record for the
+> **model shelf** bar, which had no ladder at all until then.
 
 ## Current state (verified, not assumed)
 
@@ -31,20 +32,22 @@ container queries today**):
 Amendment #5, container `shelfbar toolbar`) — added 2026-08-15, after this
 record was written:
 
-- Left: title → count → Add (accent) → stack sweep → Model folders
+- Left: title → view switch (Shelf / Training runs) → Add (accent) →
+  Model folders → count
 - Right: Group → Sort split-button → Show → separator → TbGlobalActions
   (no UndoControl — see Amendment #4)
+
+The stack sweep was removed on 2026-08-19; the bar's ladder is Amendment #6.
 
 It was shipped without the tail at all, so both app-wide controls simply
 vanished on `/models`; it then followed Decision 1 as written rather than
 inventing a third arrangement.
 
 `Model folders` rejoined the left group on 2026-08-16, having been dropped by
-the #904 consolidation. **The shelf bar still has no ladder**: it declares
-`container-name: shelfbar toolbar` and writes no `@container` rule, and there is
-no `TbOverflowMenu` on it, so Decision 2 is unimplemented here and the bar now
-carries seven focusable controls plus the tail with nothing to fold. Writing
-that ladder is open work, not something this record already decided.
+the #904 consolidation. The bar had **no ladder** until 2026-08-19: it declared
+`container-name: shelfbar toolbar`, wrote no `@container` rule, and carried no
+`TbOverflowMenu`, so Decision 2 was simply unimplemented here. Amendment #6
+measures it and writes one.
 
 So undo/redo sits mid-left in the grid and right-adjacent-to-TbGlobalActions in
 Duplicates. A user who learns one position loses it in the other view. That is
@@ -605,3 +608,67 @@ the open state reads on the grid and queue bars already, and the shelf has now
 converged onto it rather than away. Fixing `.bar-btn--open` app-wide (an accent
 border, the treatment `.bar-btn--icon.bar-btn--open` already uses) is a
 lead-designer item across all three bars.
+
+## Amendment #6 (2026-08-19): the model shelf gets a ladder
+
+**The finding.** The shelf bar shipped with `container-name: shelfbar toolbar`
+and nothing querying it — the block said so in as many words ("the shelf has no
+ladder of its own yet"). It therefore did exactly what amendment #4 found the
+Duplicates bar doing: nothing folds, nothing compresses, and the surplus leaves
+through the right edge taking Settings and Stats with it.
+
+**Measured first, the way #4 was.** Rendering the shipped markup and the
+shipped `<style>` at `width: max-content` in Chromium, each control holding the
+widest content it can (a 12ch Group value, a 12ch Sort value, the shelf tab's
+`1,842 models · 12 copies`):
+
+| configuration | bar wants |
+|---|---|
+| full | 1071px |
+| after rung 1 | 840px |
+| after rung 2 | 679px |
+| after rung 3 | 565px (floor) |
+
+1071px is wider than a 1280px window minus the sidebar, so the shipped bar has
+never fitted at a common laptop width.
+
+**The ladder.** Each rung fires at the width the configuration above it needs,
+so the breakpoints are the measurements and not round numbers.
+
+1. **≤1070px** — the title and the count go. They REPORT; neither controls
+   anything. The view's name is already in the sidebar and on the tab pair
+   beside it. Buys 231px.
+2. **≤840px** — `Group` and `Sort` drop their VALUE, keeping glyph and
+   chevron: the grid Filter trigger's compressed grammar. Both carry the value
+   in `title` and in their accessible name at every width, so nothing is lost
+   silently. Buys 161px. **This is the rung the shelf was most visibly
+   missing** — the two widest controls on the bar are the two that state their
+   own state.
+3. **≤680px** — `Add ▾` and `Model folders` fold into a `TbOverflowMenu`
+   (`align="start"`, the queue's left-anchored form) that appears in their
+   place. Buys 114px net of the ⋯ itself. Below the resulting **565px
+   floor** the bar overflows; there is nothing left on it to give.
+
+**What does NOT fold, and why.** `Group`, `Sort` and `Show` compress and stay
+on the bar. They are menus, and a menu inside the ⋯ is a submenu — the shelf
+would need three of them. This is amendment #4's line held rather than a new
+one: there, the page *toggles* folded and the tier *menu* compressed. The ⋯
+takes verbs; menus take a haircut.
+
+The ⋯'s rows are the same `.shelf-mi` items the Add menu already draws, plus
+`Model folders…`, so the folded form is the unfolded one moved rather than a
+second design of the same doors.
+
+**`TbOverflowMenu` gained `trigger()`.** The queue's folded rows are toggles
+that need nothing back; the shelf's open DIALOGS, which have to be told where
+to return focus — and below rung 3 the bar button that normally answers for
+that is `display: none`, which cannot take focus. One accessor, no behaviour
+change for the queue.
+
+**Not covered, and known:** `closeFolders` still falls back to the toolbar's
+folder button when its invoker has unmounted. Below 680px that button is folded
+away, so the one path that reaches the fallback — the empty-state button
+unmounting under its own dialog when the first scan lands — drops focus to
+`<body>` on a narrow bar. It is a pre-existing fallback, now with one more way
+to be reached; fixing it means asking which door is visible, which is a
+container-query fact JS cannot read cheaply.

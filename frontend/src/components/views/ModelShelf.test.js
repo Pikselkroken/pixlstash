@@ -92,7 +92,6 @@ vi.mock("../../api/modelStacks", () => ({
   unstackStack: (...args) => unstackStack(...args),
   setStackCover: (...args) => setStackCover(...args),
   removeStackMember: (...args) => removeStackMember(...args),
-  listStackProposals: vi.fn(),
 }));
 
 // The shelf reads `route.name` to decide which of its two views is showing, so
@@ -172,7 +171,6 @@ const globalOpts = {
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
       FolderBrowser: true,
-      ShelfStackProposalsDialog: true,
       ProgressOverlay: true,
       // The picker inside the selection bar, which the bar's own suite covers.
       // Left real it would read the shared entity lists on every mount here.
@@ -3748,6 +3746,45 @@ describe("Add file", () => {
     expect(notices.notices[0].level).toBe("error");
     expect(notices.notices[0].text).toContain("already inside");
   });
+
+  it("returns focus to the Add button when opened from its own menu", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    const item = wrapper
+      .findAll(".shelf-mi")
+      .find((entry) => entry.text().includes("Add file"));
+    await item.trigger("click");
+    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(
+      wrapper.find('.shelf-toolbar button[title="Add models to the shelf"]')
+        .element,
+    );
+    wrapper.unmount();
+  });
+
+  it("returns focus to the ⋯ trigger when opened from the overflow menu, not the folded Add button", async () => {
+    // The bug this guards: the ⋯ row used to call `openAddFile()` with no
+    // invoker, so `closeAddFile` always named `addBtnRef` — which is exactly
+    // the button `shelf-fold-680` hides at the width the ⋯ exists to serve.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    await wrapper.find(".tbo-trigger").trigger("click");
+    const item = wrapper
+      .findAll(".tbo-panel .shelf-mi")
+      .find((entry) => entry.text().includes("Add file"));
+    await item.trigger("click");
+    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(wrapper.find(".tbo-trigger").element);
+    wrapper.unmount();
+  });
 });
 
 describe("the two kinds of absence", () => {
@@ -4268,7 +4305,7 @@ describe("the two views of the shelf", () => {
   });
 
   it("hides the row-list controls on the runs tab", async () => {
-    // Group, Sort, Show and the stack sweep all act on the shelf's rows. On the
+    // Group, Sort and Show all act on the shelf's rows. On the
     // runs tab that list is not on screen, so they are gone rather than
     // disabled — a disabled control owes an explanation, and these are not
     // about a selection the reader just made.
@@ -4281,13 +4318,11 @@ describe("the two views of the shelf", () => {
             .filter(Boolean)
             .join(" "),
         );
-    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(true);
     expect(labels().some((l) => l.includes("Group"))).toBe(true);
 
     nav.route.name = "models-runs";
     await wrapper.vm.$nextTick();
 
-    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(false);
     expect(labels().some((l) => l.includes("Group"))).toBe(false);
     wrapper.unmount();
   });
@@ -4314,6 +4349,42 @@ describe("the two views of the shelf", () => {
 
     expect(has("Add models to the shelf")).toBe(true);
     expect(has("Model folders")).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("hands the two verbs to the ⋯ when the bar folds", async () => {
+    // The ladder itself is CSS (@container shelfbar, which jsdom does not
+    // evaluate), so what is asserted here is the pair the ladder depends on:
+    // the fold hooks are on the elements the rungs name, and the folded form
+    // offers the SAME doors as the buttons it replaces. Lose either and the
+    // bar silently stops collapsing.
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find(".shelf-title").classes()).toContain("shelf-fold-1070");
+    expect(wrapper.find(".shelf-sub--ingap").classes()).toContain(
+      "shelf-fold-1070",
+    );
+    const folded = wrapper
+      .findAll(".shelf-toolbar button")
+      .filter((b) => b.classes().includes("shelf-fold-680"))
+      .map((b) => b.attributes("title"));
+    expect(folded).toEqual([
+      "Add models to the shelf",
+      "Model folders — add, rescan, move or forget a folder",
+    ]);
+
+    await wrapper.find(".tbo-trigger").trigger("click");
+    const rows = wrapper.findAll(".tbo-panel .shelf-mi").map((b) => b.text());
+    expect(rows).toEqual([
+      "Add folder…",
+      "Add file…",
+      "Set ai-toolkit output folder…",
+      "Model folders…",
+    ]);
+
+    await wrapper.findAll(".tbo-panel .shelf-mi").at(-1).trigger("click");
+    expect(
+      wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
+    ).toBe(true);
     wrapper.unmount();
   });
 
