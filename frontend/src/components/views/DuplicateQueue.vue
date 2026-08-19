@@ -3513,7 +3513,7 @@ defineExpose({ windowedGroups, tierLabel });
 
    Below 706px the shrink chain (amendment #4: `.dq-tb-left { min-width: 0;
    flex: 0 1 auto }`) ellipsizes the count headline, which carries the bar to
-   ~530px with nothing leaving it — narrower than the 586px floor the ladder
+   ~380px with nothing leaving it — narrower than the 586px floor the ladder
    reached by dropping the slider.
 
    Tuned to typical content on purpose: the same chain answers a pathological
