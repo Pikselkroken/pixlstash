@@ -87,7 +87,7 @@ export function launcherPath(env: NodeJS.ProcessEnv = process.env, execPath = pr
  *
  * Windows has no per-user bin directory on PATH, so no shim can be installed
  * there and the launcher path is the only form available — see
- * {@link syncShim} and issue #1059, which retires this fork by putting a
+ * {@link syncShim} and issue #1060, which retires this fork by putting a
  * `pixlstash.cmd` on PATH and reducing the hint to a bare word again.
  */
 export function cliCommandHint(
