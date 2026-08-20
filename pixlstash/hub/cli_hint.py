@@ -69,7 +69,7 @@ def _ps_quote(path: str) -> str:
 
     PowerShell's single-quoted string is literal, so ``''`` is the only escape
     it has; :func:`_quote`'s ``'\\''`` would close the string and strand a
-    backslash. Mirrors ``psQuote`` in ``electron/src/cliShim.ts``.
+    backslash.
     """
     return "'" + path.replace("'", "''") + "'"
 
@@ -111,7 +111,9 @@ def desktop_windows_command(hub_path: str | None) -> str | None:
     if not os.path.isfile(runtime_marker):
         return None
     # PowerShell, not cmd: no single string runs in both, and the Settings panel
-    # names the shell. See `cliCommandHint` in electron/src/cliShim.ts.
+    # names the shell. This is the fallback form; once the desktop's optional
+    # shell command is switched on the app declares the bare word `pixlstash`
+    # instead (issue #1060), which runs in either shell and never reaches here.
     return (
         f"& {_ps_quote(sys.executable)} {MODULE_INVOCATION} --hub {_ps_quote(hub_path)}"
     )
@@ -160,15 +162,17 @@ def cli_hint(verb: str = "libraries list", hub_path: str | None = None) -> str:
     # A launcher that knows better than we can. The desktop app sets this: its
     # console script is sealed inside the app image at a path that changes every
     # launch, and its hub is not the platform default one, so the command that
-    # works there is the app's own launcher (or the shell shim pointing at it)
-    # and nothing this module could infer from ``sys.executable``.
+    # works there is the app's own launcher, or the shell shim -- which points at
+    # that launcher on Linux and macOS and at the bundled interpreter on Windows
+    # -- and nothing this module could infer from ``sys.executable``.
     declared = os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip()
     if declared:
         return f"{declared} {verb}"
 
     # Ahead of the remaining rules because it is the more specific answer: this
     # process IS the desktop's bundled interpreter, so the command is derived
-    # rather than guessed. The Windows desktop therefore declares nothing.
+    # rather than guessed. The Windows desktop therefore declares nothing until
+    # its shell command is installed, at which point the branch above wins.
     bundled = desktop_windows_command(hub_path)
     if bundled:
         return f"{bundled} {verb}"
