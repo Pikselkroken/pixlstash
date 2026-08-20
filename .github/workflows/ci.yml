@@ -549,6 +549,7 @@ jobs:
           tests/test_projects_api.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
+          tests/test_recipe_provenance_schema.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
           tests/test_reviews_api.py

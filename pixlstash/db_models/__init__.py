@@ -38,6 +38,27 @@ from .picture_likeness import PictureLikeness, PictureLikenessQueue  # noqa: F40
 from .project import Project, ProjectAttachment  # noqa: F401
 from .quality import Quality  # noqa: F401
 from .metadata import MetaData  # noqa: F401
+from .recipe import (  # noqa: F401
+    ASSET_CHECKPOINT,
+    ASSET_CLIP,
+    ASSET_CONTROLNET,
+    ASSET_EMBEDDING,
+    ASSET_IMAGE,
+    ASSET_LORA,
+    ASSET_SNAPSHOT,
+    ASSET_UNKNOWN_MODEL,
+    ASSET_UPSCALE_MODEL,
+    ASSET_VAE,
+    ENGINE_AI_TOOLKIT,
+    ENGINE_COMFYUI,
+    HASH_VERSION_V1,
+    HASH_VERSION_V1_RAW,
+    Generation,
+    GenerationInput,
+    Recipe,
+    RecipeAsset,
+    RecipeInstance,
+)
 from .tag import (  # noqa: F401
     Tag,
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,

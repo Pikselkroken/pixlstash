@@ -821,6 +821,84 @@ Operation: id, batch_id, created_at, actor, op_type, target_type,
             restores after_state — see §21)
 ```
 
+### Recipes, instances and generations (v1.11, AI-toolkit Phase 2)
+
+```text
+Recipe: id, engine, engine_version, document, document_ui,
+        structural_hash, hash_version, created_at
+        (UNIQUE structural_hash+hash_version)
+
+RecipeAsset: id, recipe_id, asset_type, asset_sha256, asset_filename,
+             resolved_adapter_sha256, resolved_checkpoint_sha256,
+             role, strength
+
+RecipeInstance: id, recipe_id, instance_hash (unique),
+                prompt_positive, prompt_negative, params (JSON),
+                hash_version, created_at
+
+Generation: id, image_id, instance_id, seed, overrides (JSON),
+            remote_job_id, created_at
+
+GenerationInput: generation_id, node_ref, position,
+                 image_sha256, image_id
+                 (PK generation_id+node_ref+position)
+```
+
+"How did I make this?" has three answers and collapsing them loses the useful
+one, so provenance is three levels, defined in
+[`db_models/recipe.py`](../pixlstash/db_models/recipe.py):
+
+- **Recipe = topology.** The graph plus the assets it loads, every parameter
+  nulled before hashing. Two images share a recipe when they came from the same
+  workflow wired the same way, whatever the prompt or the seed. This is the
+  level "everything I made with this LoRA" reads. **One topology, one row:** the
+  unique index on `(structural_hash, hash_version)` is what makes ingest
+  idempotent and grouping meaningful. `v1` and `v1-raw` are different
+  canonicalizations of the same graph and neither supersedes the other, which is
+  why the version is part of the key rather than a flag.
+- **RecipeInstance = intent.** Prompt and scalar parameters on top of a recipe.
+  Editing a prompt or a LoRA strength makes a new instance, never a new recipe.
+  `params` keys are namespaced `{canonical_node_id}.{widget}` so stacked loaders
+  and multiple text encoders cannot collide.
+- **Generation = event.** One image, one seed. A re-roll is a new row here and
+  changes nothing above it.
+
+Which bucket every ComfyUI node input falls into (topology / topology-asset /
+param / query / volatile) is specified per node in
+`pixlstash-hash-field-classification.md` in the business repo, and that
+document's fixture list is the acceptance suite for the canonicalizer.
+
+`RecipeAsset` exists to keep uncertainty **honest**. A workflow names its models
+by filename, and a filename is not an identity, so the row records what the
+document said, what identity was available, and separately what PixlStash has
+since resolved it to. Rows with a NULL `resolved_*` are the work queue for the
+retro-resolve pass: registering a model on the shelf gives every image that ever
+named it full lineage, retroactively. A generation whose checkpoint matched on
+filename alone is reported as unverified rather than silently trusted. The
+resolved columns hold a **sha256, never an integer model id**, for the same
+reason as `AdapterAttachment`: the shelf is hub-side, no foreign key can span
+the two databases, and SQLite reissues a deleted row's id.
+
+`GenerationInput` is the **resolution lock**. The PixlStash browse and search
+nodes pick images from vault state at run time, so the workflow records the
+query (the intent) and this table records what came back (the fact). Replay then
+has two honest modes: re-run the query for fresh results, or replay the lock for
+the exact images. An image saved outside Picture Saver simply has no lock rows,
+which degrades to "query known, results unknown" instead of a false claim of
+exact reproducibility.
+
+**Deletion is deliberately asymmetric**, and the two behaviours are opposite on
+purpose:
+
+| Column | On picture delete | Why |
+|---|---|---|
+| `generation.image_id` | `CASCADE` | The row exists to say how *that* picture was made. Without the picture it says nothing. |
+| `generation_input.image_id` | `SET NULL` | The lock records what a run consumed. Deleting one of those images does not unmake the run, and `image_sha256` is the identity there and never dangles. It is also what makes "which generations used this image" answerable *before* a deletion. |
+
+`tests/test_recipe_provenance_schema.py` pins both, plus the uniqueness
+invariants and the agreement between the migrated schema and what
+`SQLModel.metadata.create_all` builds on a fresh vault.
+
 ### Filesystem-linked
 
 ```text
@@ -1488,7 +1566,9 @@ Selected milestones:
 
 | 0101 | `library_settings.settings_fingerprint`, the keyed fingerprint that lets a dormant library detect it has fallen behind owner settings and catch up on activation |
 
-Current head: `0101_add_settings_fingerprint`.
+| 0105 | `recipe` / `recipe_asset` / `recipe_instance` / `generation` / `generation_input`: the v1.11 provenance tables (§6, "Recipes, instances and generations"). Purely additive, five empty tables, no behaviour change |
+
+Current head: `0105_add_recipe_provenance_tables`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 
