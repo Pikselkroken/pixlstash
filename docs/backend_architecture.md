@@ -823,30 +823,62 @@ Operation: id, batch_id, created_at, actor, op_type, target_type,
 
 ### Recipes, instances and generations (v1.11, AI-toolkit Phase 2)
 
+**This feature spans both databases.** The workflow itself is a **hub** table;
+only the picture-linked half is in the vault.
+
 ```text
-Recipe: id, engine, engine_version, document, document_ui,
+--- HUB (pixlstash/hub/schema.py, _V2_RECIPE_TABLES) ---
+
+recipe: id, engine, engine_version, document, document_ui,
         structural_hash, topology_hash, family_hash,
         hash_version, created_at
         (UNIQUE structural_hash+hash_version)
 
-RecipeAsset: id, recipe_id, asset_type, asset_sha256, asset_filename,
-             resolved_adapter_sha256, resolved_checkpoint_sha256,
-             role, strength
+recipe_asset: id, recipe_id, asset_type, asset_sha256, asset_filename,
+              resolved_adapter_sha256, resolved_checkpoint_sha256,
+              role, strength
 
-RecipeInstance: id, recipe_id, instance_hash (unique),
-                prompt_positive, prompt_negative, params (JSON),
-                hash_version, created_at
+recipe_instance: id, recipe_id, instance_hash (unique),
+                 prompt_positive, prompt_negative, params (JSON),
+                 hash_version, created_at
 
-Generation: id, image_id (nullable), image_sha256, instance_id,
-            seed, overrides (JSON), remote_job_id, created_at
+--- VAULT (db_models/recipe.py, revision 0105) ---
+
+Generation: id, image_id (nullable), image_sha256,
+            instance_hash, seed, overrides (JSON),
+            remote_job_id, created_at
 
 GenerationInput: generation_id, node_ref, position,
                  image_sha256, image_id
                  (PK generation_id+node_ref+position)
 ```
 
+**Why the workflow is hub-side.** The placement test (multi-library plan §5) is
+*would two libraries sharing this value feel wrong? then vault*. A workflow
+graph is a machine-level artefact and two libraries sharing one is the observed
+norm, not a conflict: the extraction measurement records 70% of recipes
+appearing in more than one library, and a two-library comparison found complete
+containment (189 of 189 recipes in the smaller library were also in the larger).
+Hub placement is also what lets a workflow outlive every picture that used it,
+which is the point of the feature — deleting a library must not take the graph
+with it. `Generation` names a `picture.id` and therefore cannot be anywhere but
+the vault.
+
+**The join across the two files is `Generation.instance_hash`, a TEXT column and
+never an integer id.** No foreign key can span the hub and a vault, and SQLite
+hands a deleted row's id to the next insert, so an integer link would silently
+re-point at a different instance while still looking valid. Same rule, same
+reason, as `AdapterAttachment.adapter_sha256` (§6, revision 0103).
+
+Hub tables are stdlib `sqlite3` with explicit DDL and are deliberately **not**
+SQLModel: `SQLModel.metadata` is process-global and the vault's baseline calls
+`metadata.create_all()`, so declaring them as models would create the workflow
+tables inside every vault. `tests/test_recipe_provenance_schema.py` asserts they
+never appear in a migrated vault.
+
 "How did I make this?" has three answers and collapsing them loses the useful
-one, so provenance is three levels, defined in
+one, so provenance is three levels, split across
+[`hub/schema.py`](../pixlstash/hub/schema.py) and
 [`db_models/recipe.py`](../pixlstash/db_models/recipe.py):
 
 - **Recipe = topology.** The graph plus the assets it loads, every parameter
@@ -871,7 +903,8 @@ document's fixture list is the acceptance suite for the canonicalizer.
 
 #### Three hashes, one walk, three questions
 
-`Recipe` carries three hashes, nested loosest-last. All three are **exact**:
+The hub's `recipe` carries three hashes, nested loosest-last. All three are
+**exact**:
 there is no similarity threshold anywhere in this design, which is a deliberate
 choice and not an omission (see below).
 
@@ -972,8 +1005,9 @@ keeping a workflow never keeps anything about the person in the picture.
 
 `tests/test_recipe_provenance_schema.py` pins the ghost surviving, the
 forget-keeps-the-workflow split, the uniqueness invariants, the non-uniqueness
-of the two grouping columns, and the agreement between the migrated schema and
-what `SQLModel.metadata.create_all` builds on a fresh vault.
+of the two grouping columns, the hub/vault split and its hash join, and the
+agreement between the migrated schema and what `SQLModel.metadata.create_all`
+builds on a fresh vault.
 
 ### Filesystem-linked
 
@@ -1642,7 +1676,7 @@ Selected milestones:
 
 | 0101 | `library_settings.settings_fingerprint`, the keyed fingerprint that lets a dormant library detect it has fallen behind owner settings and catch up on activation |
 
-| 0105 | `recipe` / `recipe_asset` / `recipe_instance` / `generation` / `generation_input`: the v1.11 provenance tables (§6, "Recipes, instances and generations"). Purely additive, five empty tables, no behaviour change |
+| 0105 | `generation` / `generation_input`: the vault half of the v1.11 provenance tables (§6, "Recipes, instances and generations"). Purely additive, two empty tables, no behaviour change. The workflow half is hub-side, in `_V2_RECIPE_TABLES` |
 
 Current head: `0105_add_recipe_provenance_tables`.
 

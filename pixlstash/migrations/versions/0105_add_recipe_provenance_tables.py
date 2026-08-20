@@ -1,19 +1,25 @@
-"""Recipe, instance and generation provenance tables (v1.11 AI-toolkit Phase 2).
+"""Generation provenance: the vault half of the recipe tables (v1.11 Phase 2).
 
-Five new vault tables and nothing else: no column is added to an existing table,
+Two new vault tables and nothing else: no column is added to an existing table,
 no data is rewritten, and no ingest behaviour changes in this revision. They sit
 empty until the canonicalizer and the ingest hook land on top of them.
 
-They are vault tables because they reference pictures, and a picture belongs to
-one library. The model shelf they resolve against is hub-side, which is why
-``recipe_asset.resolved_adapter_sha256`` and ``resolved_checkpoint_sha256`` hold
-a hash rather than an integer model id: no foreign key can span the hub and a
-vault, and SQLite reissues a deleted row's id to the next insert, so an integer
-would silently re-point at a different model. Same rule as revision 0103.
+**The other half is hub-side.** ``recipe``, ``recipe_asset`` and
+``recipe_instance`` are created by ``pixlstash/hub/schema.py`` (``_V2_RECIPE_TABLES``),
+because a workflow is a fact about the machine rather than about one library:
+measured on real libraries, 70% of recipes appear in more than one, and a
+two-library comparison found complete containment. Two libraries sharing a
+workflow is the norm, which is the multi-library placement test answered
+directly, and it is what lets a workflow outlive every picture that used it.
 
-**Nothing here dies with a picture.** Both tables that point at ``picture`` null
-the pointer rather than cascade, and both keep a sha256 as the identity that
-survives it:
+What lands here is the half that names a ``picture.id`` and therefore cannot be
+anything else. The two halves are joined by ``generation.instance_hash``, a TEXT
+column and deliberately not an integer id: no foreign key spans the hub and a
+vault, and SQLite reissues a deleted row's id to the next insert, so an integer
+would silently come to name a different instance. Same rule as revision 0103.
+
+**Nothing here dies with a picture.** Both tables null the pointer rather than
+cascade, and both keep a sha256 as the identity that survives it:
 
 * ``generation.image_id`` holds the seed, which is a third of what recreating a
   deleted image takes (recipe + instance + seed). Cascading it would mean
@@ -23,13 +29,6 @@ survives it:
   and is not personal data, while a prompt and a thumbnail can be.
 * ``generation_input.image_id`` is the resolution lock, the record of which
   images a run consumed. Deleting one of those images does not unmake the run.
-
-``recipe`` carries three hashes rather than one, all exact, nested loosest-last:
-``structural_hash`` is the identity and is never merged, ``topology_hash`` drops
-asset filenames so one graph run against two checkpoints is one entry, and
-``family_hash`` groups by what each node *feeds into* rather than what it is
-called, which is what makes the Workflows view browsable and merges node-pack
-variants without a synonym table to maintain.
 
 Revision ID: 0105_add_recipe_provenance_tables
 Revises: 0104_add_picture_orientation
@@ -57,45 +56,11 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 # had to fix after the fact. The names are the ones SQLModel derives from the
 # model declarations, so both paths converge on exactly this set.
 _INDEXES = [
-    ("ix_recipe_engine", "recipe", ["engine"], False),
-    ("ix_recipe_structural_hash", "recipe", ["structural_hash"], False),
-    # The Workflows view pages on family_hash; topology_hash is the model-variant
-    # rollup inside a group. Both are non-unique by design: many recipes share
-    # one, which is the entire point of them.
-    ("ix_recipe_topology_hash", "recipe", ["topology_hash"], False),
-    ("ix_recipe_family_hash", "recipe", ["family_hash"], False),
-    (
-        "ix_recipe_structural_identity",
-        "recipe",
-        ["structural_hash", "hash_version"],
-        True,
-    ),
-    ("ix_recipe_asset_recipe_id", "recipe_asset", ["recipe_id"], False),
-    ("ix_recipe_asset_asset_type", "recipe_asset", ["asset_type"], False),
-    ("ix_recipe_asset_asset_sha256", "recipe_asset", ["asset_sha256"], False),
-    ("ix_recipe_asset_asset_filename", "recipe_asset", ["asset_filename"], False),
-    (
-        "ix_recipe_asset_resolved_adapter_sha256",
-        "recipe_asset",
-        ["resolved_adapter_sha256"],
-        False,
-    ),
-    (
-        "ix_recipe_asset_resolved_checkpoint_sha256",
-        "recipe_asset",
-        ["resolved_checkpoint_sha256"],
-        False,
-    ),
-    ("ix_recipe_instance_recipe_id", "recipe_instance", ["recipe_id"], False),
-    (
-        "ix_recipe_instance_instance_hash",
-        "recipe_instance",
-        ["instance_hash"],
-        True,
-    ),
     ("ix_generation_image_id", "generation", ["image_id"], False),
     ("ix_generation_image_sha256", "generation", ["image_sha256"], False),
-    ("ix_generation_instance_id", "generation", ["instance_id"], False),
+    # The join to the hub's recipe_instance, and the query behind "everything
+    # made with this workflow". Non-unique: one instance has many generations.
+    ("ix_generation_instance_hash", "generation", ["instance_hash"], False),
     (
         "ix_generation_input_image_sha256",
         "generation_input",
@@ -107,68 +72,13 @@ _INDEXES = [
 
 # Dropped in reverse dependency order so a downgrade never leaves a foreign key
 # pointing at a table that is already gone.
-_TABLES_IN_DROP_ORDER = [
-    "generation_input",
-    "generation",
-    "recipe_instance",
-    "recipe_asset",
-    "recipe",
-]
+_TABLES_IN_DROP_ORDER = ["generation_input", "generation"]
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_tables = set(inspector.get_table_names())
-
-    if "recipe" not in existing_tables:
-        op.create_table(
-            "recipe",
-            sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("engine", sa.String(), nullable=False),
-            sa.Column("engine_version", sa.String(), nullable=True),
-            sa.Column("document", sa.String(), nullable=False),
-            sa.Column("document_ui", sa.String(), nullable=True),
-            sa.Column("structural_hash", sa.String(), nullable=False),
-            # Nullable: they describe a node graph, and an ai-toolkit training
-            # config is a recipe with no graph to roll up.
-            sa.Column("topology_hash", sa.String(), nullable=True),
-            sa.Column("family_hash", sa.String(), nullable=True),
-            sa.Column("hash_version", sa.String(), nullable=False, server_default="v1"),
-            sa.Column("created_at", sa.DateTime(), nullable=False),
-            sa.PrimaryKeyConstraint("id"),
-        )
-
-    if "recipe_asset" not in existing_tables:
-        op.create_table(
-            "recipe_asset",
-            sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("recipe_id", sa.Integer(), nullable=False),
-            sa.Column("asset_type", sa.String(), nullable=False),
-            sa.Column("asset_sha256", sa.String(), nullable=True),
-            sa.Column("asset_filename", sa.String(), nullable=True),
-            sa.Column("resolved_adapter_sha256", sa.String(), nullable=True),
-            sa.Column("resolved_checkpoint_sha256", sa.String(), nullable=True),
-            sa.Column("role", sa.String(), nullable=True),
-            sa.Column("strength", sa.Float(), nullable=True),
-            sa.ForeignKeyConstraint(["recipe_id"], ["recipe.id"], ondelete="CASCADE"),
-            sa.PrimaryKeyConstraint("id"),
-        )
-
-    if "recipe_instance" not in existing_tables:
-        op.create_table(
-            "recipe_instance",
-            sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("recipe_id", sa.Integer(), nullable=False),
-            sa.Column("instance_hash", sa.String(), nullable=False),
-            sa.Column("prompt_positive", sa.String(), nullable=True),
-            sa.Column("prompt_negative", sa.String(), nullable=True),
-            sa.Column("params", sa.String(), nullable=True),
-            sa.Column("hash_version", sa.String(), nullable=False, server_default="v1"),
-            sa.Column("created_at", sa.DateTime(), nullable=False),
-            sa.ForeignKeyConstraint(["recipe_id"], ["recipe.id"], ondelete="CASCADE"),
-            sa.PrimaryKeyConstraint("id"),
-        )
 
     if "generation" not in existing_tables:
         op.create_table(
@@ -180,16 +90,15 @@ def upgrade() -> None:
             # keeps once the pointer is gone.
             sa.Column("image_id", sa.Integer(), nullable=True),
             sa.Column("image_sha256", sa.String(), nullable=True),
-            sa.Column("instance_id", sa.Integer(), nullable=False),
+            # The hub's recipe_instance.instance_hash. Not a foreign key: the
+            # referenced table is in another database file.
+            sa.Column("instance_hash", sa.String(), nullable=False),
             sa.Column("seed", sa.Integer(), nullable=True),
             sa.Column("overrides", sa.String(), nullable=True),
             # No foreign key: remote_job is Phase 5 and does not exist yet.
             sa.Column("remote_job_id", sa.Integer(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.ForeignKeyConstraint(["image_id"], ["picture.id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(
-                ["instance_id"], ["recipe_instance.id"], ondelete="CASCADE"
-            ),
             sa.PrimaryKeyConstraint("id"),
         )
 

@@ -480,6 +480,113 @@ _V2_MODEL_SHELF_TABLES = (
 _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 
 
+# Workflow provenance (v1.11 AI-toolkit Phase 2).
+#
+# **These are hub tables because a workflow is a fact about the machine, not
+# about one library.** Measured on the owner's real libraries: 70% of recipes
+# appear in more than one library, and a two-library comparison found complete
+# containment — 189 of 189 recipes in the smaller library were also in the
+# larger. Two libraries sharing a workflow is the norm, not a conflict, which is
+# the multi-library plan §5 test answered directly. It is also what lets a
+# workflow outlive every picture that used it, since deleting a library must not
+# take the graph with it.
+#
+# The picture-linked half (`generation`, `generation_input`) stays in the vault,
+# because a generation names a `picture.id`. The two halves are joined by
+# `generation.instance_hash`, a TEXT column and deliberately not an integer:
+# no foreign key spans the hub and a vault, and SQLite reissues a deleted row's
+# id to the next insert, so an integer would silently come to name a different
+# instance. Same rule as `adapter_attachment.adapter_sha256`.
+_V2_RECIPE = """
+CREATE TABLE IF NOT EXISTS recipe (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    engine           TEXT NOT NULL,
+    engine_version   TEXT,
+    document         TEXT NOT NULL,
+    document_ui      TEXT,
+    structural_hash  TEXT NOT NULL,
+    topology_hash    TEXT,
+    family_hash      TEXT,
+    hash_version     TEXT NOT NULL DEFAULT 'v1',
+    created_at       TEXT
+)
+"""
+
+# What a recipe loads, by hash where it is known and by filename where it is
+# not. The resolved columns hold a sha256 rather than a `model(id)`: the model
+# may not be registered yet, and a filename is not an identity, so the row has
+# to be able to say "a file called this" and "that exact file" separately.
+_V2_RECIPE_ASSET = """
+CREATE TABLE IF NOT EXISTS recipe_asset (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id                   INTEGER NOT NULL REFERENCES recipe(id),
+    asset_type                  TEXT NOT NULL,
+    asset_sha256                TEXT,
+    asset_filename              TEXT,
+    resolved_adapter_sha256     TEXT,
+    resolved_checkpoint_sha256  TEXT,
+    role                        TEXT,
+    strength                    REAL
+)
+"""
+
+# Prompt and parameters on top of a recipe. Hub-side with the recipe (owner
+# decision 2026-08-20): a prompt is already readable from the library the image
+# lives in, so hub placement exposes nothing a library switch did not already.
+_V2_RECIPE_INSTANCE = """
+CREATE TABLE IF NOT EXISTS recipe_instance (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id        INTEGER NOT NULL REFERENCES recipe(id),
+    instance_hash    TEXT NOT NULL,
+    prompt_positive  TEXT,
+    prompt_negative  TEXT,
+    params           TEXT,
+    hash_version     TEXT NOT NULL DEFAULT 'v1',
+    created_at       TEXT
+)
+"""
+
+_V2_RECIPE_INDEXES = (
+    # One topology, one row. The invariant the whole feature rests on, and what
+    # makes ingest idempotent. Paired with hash_version because a v1 and a
+    # v1-raw hash of one graph are different values and neither supersedes the
+    # other.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_recipe_structural_identity "
+    "ON recipe(structural_hash, hash_version)",
+    # The Workflows view pages on family_hash; topology_hash is the
+    # model-variant rollup inside a family. Non-unique by design: many recipes
+    # sharing one is the entire point.
+    "CREATE INDEX IF NOT EXISTS ix_recipe_family ON recipe(family_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_topology ON recipe(topology_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_asset_recipe ON recipe_asset(recipe_id)",
+    # The retro-resolve pass arrives from the other direction: a model has just
+    # been registered, and the question is which recipes named it. It can match
+    # on either the hash or the filename, so both are indexed. These are also
+    # what answers "which workflows use this model" for the shelf.
+    "CREATE INDEX IF NOT EXISTS ix_recipe_asset_sha ON recipe_asset(asset_sha256)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_asset_filename "
+    "ON recipe_asset(asset_filename)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_asset_adapter "
+    "ON recipe_asset(resolved_adapter_sha256)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_asset_checkpoint "
+    "ON recipe_asset(resolved_checkpoint_sha256)",
+    "CREATE INDEX IF NOT EXISTS ix_recipe_instance_recipe "
+    "ON recipe_instance(recipe_id)",
+    # The lookup ingest does on every image, and the join key the vault's
+    # `generation` rows resolve through.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_recipe_instance_hash "
+    "ON recipe_instance(instance_hash)",
+)
+
+_V2_RECIPE_TABLES = (
+    # recipe first: the other two reference recipe(id).
+    _V2_RECIPE,
+    _V2_RECIPE_ASSET,
+    _V2_RECIPE_INSTANCE,
+    *_V2_RECIPE_INDEXES,
+)
+
+
 # Ordered schema steps. Append only: a released version's statement list is
 # never edited, exactly as for an applied Alembic migration. ``library`` is
 # created before ``user_token`` because the latter references it.
@@ -674,6 +781,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         _rebuild_model_with_kind_check(conn)
 
     for statement in _V2_MODEL_SHELF_TABLES:
+        conn.execute(statement)
+
+    # Workflow provenance (v1.11), amended into v2 for the same reason the model
+    # shelf was: a build shipped before this change has CURRENT_SCHEMA_VERSION =
+    # 2 and would refuse a v3 hub with HubSchemaTooNewError. Every statement is
+    # IF NOT EXISTS, so re-running is a no-op and an existing developer hub
+    # picks these up on its next open.
+    for statement in _V2_RECIPE_TABLES:
         conn.execute(statement)
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
