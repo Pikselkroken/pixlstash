@@ -46,9 +46,6 @@ if (!existsSync(iconSrc)) {
   process.exit(0);
 }
 
-mkdirSync(dirname(iconPath), { recursive: true });
-copyFileSync(iconSrc, iconPath);
-
 const contents = `[Desktop Entry]
 Type=Application
 Name=PixlStash (dev)
@@ -60,8 +57,18 @@ Categories=Graphics;Photography;
 StartupWMClass=${WM_CLASS}
 `;
 
-mkdirSync(appsDir, { recursive: true });
-writeFileSync(desktopFile, contents);
+// Best effort, like the update-desktop-database nudge below: this is a cosmetic
+// nicety, and `npm run dev` chains straight into launching the app. A read-only
+// or locked-down home must cost you the icon, never the dev run.
+try {
+  mkdirSync(dirname(iconPath), { recursive: true });
+  copyFileSync(iconSrc, iconPath);
+  mkdirSync(appsDir, { recursive: true });
+  writeFileSync(desktopFile, contents);
+} catch (e) {
+  console.warn('dev-desktop: could not install the desktop entry; skipping:', e);
+  process.exit(0);
+}
 console.log(`dev-desktop: installed ${desktopFile}`);
 console.log(`             StartupWMClass=${WM_CLASS}  Icon=${iconPath}`);
 
