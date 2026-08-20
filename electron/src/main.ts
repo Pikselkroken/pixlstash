@@ -1283,6 +1283,10 @@ function registerIpc(): void {
  * work whether or not the app is already open. Nothing here creates a window,
  * so this stays a fast process spawn rather than a full Chromium start.
  *
+ * Windowless is not the same as invisible on macOS, though: AppKit reads the
+ * bundle's Info.plist and makes every launch a *regular* foreground app before
+ * any of this runs, so each CLI invocation left a dock tile behind (#1061).
+ *
  * `stdio: 'inherit'` because the CLI writes to the terminal and asks for a y/n
  * on destructive verbs; piping would hang that prompt with nothing shown.
  */
@@ -1291,6 +1295,11 @@ function runCli(args: string[]): void {
   // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
   // to open dri...") to the terminal *after* the CLI's own output.
   app.disableHardwareAcceleration();
+  // Same reason, macOS side: drop the regular-app activation policy so this run
+  // leaves no dock tile behind. Typed `Dock | undefined`, so the optional call
+  // is the platform check — unlike app.setActivationPolicy, which the typings
+  // declare unconditionally but which does not exist off macOS.
+  app.dock?.hide();
   const declared = declaredCliCommand();
   // Same interpreter choice the backend makes, so a dev run drives the repo's
   // .venv and the CLI branch is exercisable without building the bundled env.
