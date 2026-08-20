@@ -18,7 +18,7 @@ the four decisions that are expensive to change once rows exist:
    images does not unmake the run. What survives a deletion is a **ghost**, and
    permanently forgetting one deletes the generation and keeps the recipe.
 
-3. **Strict identity underneath, aggressive grouping on top.** ``role_hash`` and
+3. **Strict identity underneath, aggressive grouping on top.** ``family_hash`` and
    ``topology_hash`` group hard for the Workflows view and are deliberately not
    unique, while ``structural_hash`` never merges. A group can be split later; a
    merged identity cannot be recovered.
@@ -66,7 +66,7 @@ RECIPE_TABLES = (
 
 STRUCTURAL_HASH = "s" * 64
 TOPOLOGY_HASH = "t" * 64
-ROLE_HASH = "r" * 64
+FAMILY_HASH = "r" * 64
 INSTANCE_HASH = "i" * 64
 IMAGE_SHA = "f" * 64
 GENERATED_SHA = "e" * 64
@@ -97,14 +97,14 @@ def make_recipe(
     structural_hash=STRUCTURAL_HASH,
     hash_version=HASH_VERSION_V1,
     topology_hash=TOPOLOGY_HASH,
-    role_hash=ROLE_HASH,
+    family_hash=FAMILY_HASH,
 ):
     recipe = Recipe(
         engine=ENGINE_COMFYUI,
         document="{}",
         structural_hash=structural_hash,
         topology_hash=topology_hash,
-        role_hash=role_hash,
+        family_hash=family_hash,
         hash_version=hash_version,
     )
     session.add(recipe)
@@ -289,12 +289,14 @@ class TestThreeHashesGroupAtThreeStrengths:
     merges. A group can be split later; a merged identity cannot be recovered.
     """
 
-    def test_recipes_sharing_a_role_hash_stay_separate_rows(self, session):
+    def test_recipes_sharing_a_family_hash_stay_separate_rows(self, session):
         """Two variants of one workflow: one group, two replayable recipes."""
         make_recipe(session, structural_hash="a" * 64, topology_hash="p" * 64)
         make_recipe(session, structural_hash="b" * 64, topology_hash="q" * 64)
 
-        rows = session.exec(select(Recipe).where(Recipe.role_hash == ROLE_HASH)).all()
+        rows = session.exec(
+            select(Recipe).where(Recipe.family_hash == FAMILY_HASH)
+        ).all()
         assert len(rows) == 2
         # Grouping is a read, never a merge. Both keep their own identity, so
         # "which images used this LoRA" still resolves underneath the group.
@@ -303,7 +305,7 @@ class TestThreeHashesGroupAtThreeStrengths:
     def test_the_looser_hashes_are_not_unique_constraints(self, session):
         """A unique index here would make the whole grouping design impossible."""
         indexes = {idx.name: idx.unique for idx in Recipe.__table__.indexes}
-        assert indexes["ix_recipe_role_hash"] is False
+        assert indexes["ix_recipe_family_hash"] is False
         assert indexes["ix_recipe_topology_hash"] is False
         assert indexes["ix_recipe_structural_identity"] is True
 
@@ -312,9 +314,9 @@ class TestThreeHashesGroupAtThreeStrengths:
 
         NULL is the honest value there, not a hash of nothing.
         """
-        recipe = make_recipe(session, topology_hash=None, role_hash=None)
+        recipe = make_recipe(session, topology_hash=None, family_hash=None)
         assert recipe.topology_hash is None
-        assert recipe.role_hash is None
+        assert recipe.family_hash is None
 
 
 class TestAssetResolutionIsHonest:

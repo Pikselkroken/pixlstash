@@ -84,7 +84,7 @@ class Recipe(SQLModel, table=True):
     ==================  =========================================  ============
     ``structural_hash`` "can I replay this exactly?"               281 recipes
     ``topology_hash``   "same graph, different checkpoint?"        192 groups
-    ``role_hash``       "same *kind* of workflow?"                 93 groups
+    ``family_hash``       "same *kind* of workflow?"                 93 groups
     ==================  =========================================  ============
 
     (Counts are from a 13,463-image library; they are here to show the ratios
@@ -96,7 +96,7 @@ class Recipe(SQLModel, table=True):
     hash underneath. A group can always be split later; a merged identity cannot
     be recovered.
 
-    ``role_hash`` is the one that makes the Workflows view browsable, and the
+    ``family_hash`` is the one that makes the Workflows view browsable, and the
     trick in it is worth stating: **a node's identity comes from what it feeds
     into, not from what it is called.** The API-format JSON carries no type
     names, but the input name a node is wired to is ComfyUI's type discipline
@@ -123,7 +123,7 @@ class Recipe(SQLModel, table=True):
             The identity of the row.
         topology_hash: The same, with asset filenames dropped, so a graph run
             against two checkpoints is one entry with two variants.
-        role_hash: The sorted *set* of node roles. Deliberately a set and not a
+        family_hash: The sorted *set* of node roles. Deliberately a set and not a
             multiset: dropping multiplicity is what puts a one-LoRA and a
             four-LoRA version of a graph in one group, which is the aggressive
             behaviour the view wants. The group detail view is expected to show
@@ -155,8 +155,8 @@ class Recipe(SQLModel, table=True):
         default=None,
         sa_column=Column("topology_hash", String, nullable=True, index=True),
     )
-    role_hash: Optional[str] = Field(
-        default=None, sa_column=Column("role_hash", String, nullable=True, index=True)
+    family_hash: Optional[str] = Field(
+        default=None, sa_column=Column("family_hash", String, nullable=True, index=True)
     )
     hash_version: str = Field(
         default=HASH_VERSION_V1,

@@ -825,7 +825,7 @@ Operation: id, batch_id, created_at, actor, op_type, target_type,
 
 ```text
 Recipe: id, engine, engine_version, document, document_ui,
-        structural_hash, topology_hash, role_hash,
+        structural_hash, topology_hash, family_hash,
         hash_version, created_at
         (UNIQUE structural_hash+hash_version)
 
@@ -879,7 +879,7 @@ choice and not an omission (see below).
 |---|---|---|
 | `structural_hash` | "can I replay this exactly?" | 281 recipes |
 | `topology_hash` | "same graph, different checkpoint?" | 192 groups |
-| `role_hash` | "same *kind* of workflow?" | 93 groups |
+| `family_hash` | "same *kind* of workflow?" | 93 groups |
 
 `structural_hash` is the identity and is **never merged**. That is precisely
 what lets the other two be as aggressive as the Workflows view wants: grouping
@@ -888,7 +888,7 @@ and a group can be split later where a merged identity could not be recovered.
 Neither of the looser columns is unique-indexed; many recipes sharing one is the
 entire point.
 
-`role_hash` is what makes the Workflows view browsable, and its trick is that
+`family_hash` is what makes the Workflows view browsable, and its trick is that
 **a node's identity comes from what it feeds into, not from what it is called.**
 The API-format JSON carries no type names, but the input name a node is wired to
 is ComfyUI's type discipline showing through: anything wired to `model` is a
@@ -900,7 +900,7 @@ families caught 2 of ~120 classes, while the role rule merged `CLIPLoader` with
 `CLIPLoaderGGUF`, `UNETLoader` with `UNETLoaderDisTorch2MultiGPU`, and
 `EmptyLatentImage` with `EmptySD3LatentImage` unaided.
 
-`role_hash` is a **set**, not a multiset. Dropping multiplicity is what puts a
+`family_hash` is a **set**, not a multiset. Dropping multiplicity is what puts a
 one-LoRA and a four-LoRA version of a graph in one group. That is the intended
 aggressive behaviour; the group detail view is expected to show the variants
 rather than hide them.

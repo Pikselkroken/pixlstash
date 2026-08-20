@@ -27,7 +27,7 @@ survives it:
 ``recipe`` carries three hashes rather than one, all exact, nested loosest-last:
 ``structural_hash`` is the identity and is never merged, ``topology_hash`` drops
 asset filenames so one graph run against two checkpoints is one entry, and
-``role_hash`` groups by what each node *feeds into* rather than what it is
+``family_hash`` groups by what each node *feeds into* rather than what it is
 called, which is what makes the Workflows view browsable and merges node-pack
 variants without a synonym table to maintain.
 
@@ -59,11 +59,11 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 _INDEXES = [
     ("ix_recipe_engine", "recipe", ["engine"], False),
     ("ix_recipe_structural_hash", "recipe", ["structural_hash"], False),
-    # The Workflows view pages on role_hash; topology_hash is the model-variant
+    # The Workflows view pages on family_hash; topology_hash is the model-variant
     # rollup inside a group. Both are non-unique by design: many recipes share
     # one, which is the entire point of them.
     ("ix_recipe_topology_hash", "recipe", ["topology_hash"], False),
-    ("ix_recipe_role_hash", "recipe", ["role_hash"], False),
+    ("ix_recipe_family_hash", "recipe", ["family_hash"], False),
     (
         "ix_recipe_structural_identity",
         "recipe",
@@ -133,7 +133,7 @@ def upgrade() -> None:
             # Nullable: they describe a node graph, and an ai-toolkit training
             # config is a recipe with no graph to roll up.
             sa.Column("topology_hash", sa.String(), nullable=True),
-            sa.Column("role_hash", sa.String(), nullable=True),
+            sa.Column("family_hash", sa.String(), nullable=True),
             sa.Column("hash_version", sa.String(), nullable=False, server_default="v1"),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.PrimaryKeyConstraint("id"),
