@@ -171,11 +171,14 @@ the environment PixlStash is installed into is active.
   `docker compose exec pixlstash pixlstash-cli libraries list`
 - **Desktop app** (AppImage, deb, .dmg, installer): the app is its own CLI, so
   `/path/to/PixlStash.AppImage cli libraries list` works whether or not the app
-  is running. Turn on Settings › Backend › Desktop › **Shell command** to get a
-  `pixlstash` command in `~/.local/bin` and type `pixlstash libraries list`
-  instead. Either form targets the desktop app's own hub; there is no need to
-  pass `--hub`. Settings › Libraries always shows the exact command for your
-  install.
+  is running. On Windows that route is the bundled interpreter instead, because
+  the app's own launcher is a GUI binary no shell waits for. Turn on Settings ›
+  Backend › Desktop › **Shell command** to get a `pixlstash` command
+  (`~/.local/bin` on Linux and macOS, `%LOCALAPPDATA%\PixlStash\bin` — added to
+  your user `PATH` — on Windows) and type `pixlstash libraries list` instead;
+  open a new terminal afterwards. Either form targets the desktop app's own hub;
+  there is no need to pass `--hub`. Settings › Libraries always shows the exact
+  command for your install.
 - **A different hub** than the default: put global options *before* `libraries`,
   e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the
   CLI uses the standard config location, which is what you want almost always.

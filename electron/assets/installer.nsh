@@ -282,6 +282,118 @@
       Call PixlOpenIssue
     PixlNoReport:
   FunctionEnd
+
+  # -------------------------------------------------------------------------
+  # un.PixlRemoveFromUserPath: drop our bin directory from HKCU\Environment\Path
+  # (GitHub issue #1060). The Settings "Shell command" switch appends
+  # $LOCALAPPDATA\PixlStash\bin there so `pixlstash` is a bare word in both cmd
+  # and PowerShell; a user who uninstalls with the switch still on would
+  # otherwise be left with the element pointing at a shim whose interpreter no
+  # longer exists.
+  #
+  # Written by hand rather than with WordFunc because this is the USER's PATH:
+  # every element that is not exactly ours is copied through byte for byte,
+  # empty ones and a trailing ';' included. ReadRegStr returns the stored
+  # string unexpanded, and we write back with WriteRegExpandStr, so a Path full
+  # of %USERPROFILE% keeps expanding afterwards (REG_SZ -> REG_EXPAND_SZ is safe
+  # in the other direction: a string with no '%' expands to itself).
+  #
+  # No WM_SETTINGCHANGE broadcast: the app that would have sent it is being
+  # removed, and the next sign-in picks the change up. Uninstaller build only --
+  # NSIS function names must carry the `un.` prefix there and are invalid here.
+  # -------------------------------------------------------------------------
+  !ifdef BUILD_UNINSTALLER
+    Function un.PixlRemoveFromUserPath
+      Push $0   # the stored Path
+      Push $1   # our directory
+      Push $2   # the value being rebuilt
+      Push $3   # the unscanned remainder, ';'-terminated
+      Push $4   # the element under inspection
+      Push $5   # offset of the next ';'
+      Push $6   # "1" once something was actually removed
+      Push $7   # scratch
+
+      ReadRegStr $0 HKCU "Environment" "Path"
+      StrCmp $0 "" PixlPathDone
+
+      # NOT $LOCALAPPDATA: that follows the shell-var context, and an "anyone who
+      # uses this computer" uninstall still has it on `all` here, where it
+      # resolves to C:\ProgramData -- matching nothing and silently leaving the
+      # element behind. We are editing HKCU, so the directory has to be the same
+      # user's. Explorer's own record of it is context-free. Falling back to
+      # $LOCALAPPDATA keeps the per-user case working if that value is missing.
+      ReadRegStr $7 HKCU \
+        "Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" "Local AppData"
+      StrCmp $7 "" 0 +2
+        StrCpy $7 "$LOCALAPPDATA"
+      StrCpy $1 "$7\PixlStash\bin"
+
+      StrCpy $2 ""
+      StrCpy $3 "$0;"
+      StrCpy $6 "0"
+      # $0 has been consumed into $3; reuse it as "an element is already in $2".
+      # Testing $2 for emptiness instead would drop a leading ';'.
+      StrCpy $0 "0"
+
+      PixlPathNext:
+        StrCmp $3 "" PixlPathRewrite
+        StrCpy $5 0
+        PixlPathFindSemi:
+          StrCpy $4 $3 1 $5
+          StrCmp $4 ";" PixlPathGotSemi
+          # Unreachable while the sentinel above is in place; bail rather than
+          # spin if it ever is not.
+          StrCmp $4 "" PixlPathRewrite
+          IntOp $5 $5 + 1
+          Goto PixlPathFindSemi
+        PixlPathGotSemi:
+        # StrCpy's maxlen is "the whole string" when it is 0, so an empty element
+        # (a leading ';' or a ';;') would otherwise copy the entire remainder and
+        # duplicate it into the rebuilt value. Empty stays empty.
+        StrCmp $5 0 0 PixlPathTakeElement
+          StrCpy $4 ""
+          Goto PixlPathHaveElement
+        PixlPathTakeElement:
+        StrCpy $4 $3 $5
+        PixlPathHaveElement:
+        IntOp $7 $5 + 1
+        StrCpy $3 $3 "" $7
+        # StrCmp is case-insensitive, which is how Windows compares paths. NSIS
+        # has no backslash escape, so "$1\" is our directory plus a trailing
+        # separator -- the other spelling of the same element.
+        StrCmp $4 $1 PixlPathDrop
+        StrCmp $4 "$1\" PixlPathDrop
+        StrCmp $0 "1" PixlPathAppend
+          StrCpy $2 $4
+          StrCpy $0 "1"
+          Goto PixlPathNext
+        PixlPathAppend:
+        StrCpy $2 "$2;$4"
+        Goto PixlPathNext
+        PixlPathDrop:
+        StrCpy $6 "1"
+        Goto PixlPathNext
+
+      PixlPathRewrite:
+      StrCmp $6 "1" 0 PixlPathDone
+      StrCmp $2 "" 0 PixlPathWrite
+        # We were the only element: remove the value rather than store "".
+        DeleteRegValue HKCU "Environment" "Path"
+        Goto PixlPathDone
+      PixlPathWrite:
+      WriteRegExpandStr HKCU "Environment" "Path" $2
+
+      PixlPathDone:
+      Pop $7
+      Pop $6
+      Pop $5
+      Pop $4
+      Pop $3
+      Pop $2
+      Pop $1
+      Pop $0
+    FunctionEnd
+  !endif
 !macroend
 
 # ---------------------------------------------------------------------------
@@ -573,6 +685,25 @@
   # Persist the log for completed installs (the abort path is covered by
   # .onInstFailed, defined in customHeader).
   Call PixlWriteLogs
+!macroend
+
+# ---------------------------------------------------------------------------
+# customUnInstall: in uninstaller.nsi's un.install section. Takes back the one
+# thing this app writes outside its own storage — the PATH element the optional
+# shell command adds (GitHub issue #1060). The shim script itself is left where
+# it is, under %LOCALAPPDATA%\PixlStash\bin: it is one small file, it is
+# marker-identified as ours, and once the element above is gone nothing can
+# reach it. (The hub and vault are elsewhere again, under $APPDATA — the
+# app-data sweep further down uninstaller.nsh owns those.)
+# ---------------------------------------------------------------------------
+!macro customUnInstall
+  # Not on an over-the-top update: the old version's uninstaller runs there too,
+  # and stripping the element would leave the user without the command until the
+  # new build's first launch puts it back (applyShellCommand in main.ts runs at
+  # every startup). ${isUpdated} is electron-builder's own `--updated` flag.
+  ${ifNot} ${isUpdated}
+    Call un.PixlRemoveFromUserPath
+  ${endIf}
 !macroend
 
 # ---------------------------------------------------------------------------
