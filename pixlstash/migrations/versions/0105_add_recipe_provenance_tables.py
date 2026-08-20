@@ -11,13 +11,25 @@ a hash rather than an integer model id: no foreign key can span the hub and a
 vault, and SQLite reissues a deleted row's id to the next insert, so an integer
 would silently re-point at a different model. Same rule as revision 0103.
 
-Two deletion behaviours, deliberately opposite:
+**Nothing here dies with a picture.** Both tables that point at ``picture`` null
+the pointer rather than cascade, and both keep a sha256 as the identity that
+survives it:
 
-* ``generation.image_id`` cascades. The row says how *that* picture was made,
-  so without the picture it says nothing.
-* ``generation_input.image_id`` is set to NULL. That table is the resolution
-  lock, the record of which images a run actually consumed, and it has to
-  outlive them: ``image_sha256`` is the identity there and never dangles.
+* ``generation.image_id`` holds the seed, which is a third of what recreating a
+  deleted image takes (recipe + instance + seed). Cascading it would mean
+  deleting an image destroyed the recreation while leaving the workflow
+  standing and apparently intact. What remains is a **ghost**, and permanently
+  forgetting one is a delete of this row: the recipe is a graph of node types
+  and is not personal data, while a prompt and a thumbnail can be.
+* ``generation_input.image_id`` is the resolution lock, the record of which
+  images a run consumed. Deleting one of those images does not unmake the run.
+
+``recipe`` carries three hashes rather than one, all exact, nested loosest-last:
+``structural_hash`` is the identity and is never merged, ``topology_hash`` drops
+asset filenames so one graph run against two checkpoints is one entry, and
+``role_hash`` groups by what each node *feeds into* rather than what it is
+called, which is what makes the Workflows view browsable and merges node-pack
+variants without a synonym table to maintain.
 
 Revision ID: 0105_add_recipe_provenance_tables
 Revises: 0104_add_picture_orientation
@@ -47,6 +59,11 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 _INDEXES = [
     ("ix_recipe_engine", "recipe", ["engine"], False),
     ("ix_recipe_structural_hash", "recipe", ["structural_hash"], False),
+    # The Workflows view pages on role_hash; topology_hash is the model-variant
+    # rollup inside a group. Both are non-unique by design: many recipes share
+    # one, which is the entire point of them.
+    ("ix_recipe_topology_hash", "recipe", ["topology_hash"], False),
+    ("ix_recipe_role_hash", "recipe", ["role_hash"], False),
     (
         "ix_recipe_structural_identity",
         "recipe",
@@ -77,6 +94,7 @@ _INDEXES = [
         True,
     ),
     ("ix_generation_image_id", "generation", ["image_id"], False),
+    ("ix_generation_image_sha256", "generation", ["image_sha256"], False),
     ("ix_generation_instance_id", "generation", ["instance_id"], False),
     (
         "ix_generation_input_image_sha256",
@@ -112,6 +130,10 @@ def upgrade() -> None:
             sa.Column("document", sa.String(), nullable=False),
             sa.Column("document_ui", sa.String(), nullable=True),
             sa.Column("structural_hash", sa.String(), nullable=False),
+            # Nullable: they describe a node graph, and an ai-toolkit training
+            # config is a recipe with no graph to roll up.
+            sa.Column("topology_hash", sa.String(), nullable=True),
+            sa.Column("role_hash", sa.String(), nullable=True),
             sa.Column("hash_version", sa.String(), nullable=False, server_default="v1"),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.PrimaryKeyConstraint("id"),
@@ -152,14 +174,19 @@ def upgrade() -> None:
         op.create_table(
             "generation",
             sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("image_id", sa.Integer(), nullable=False),
+            # Nullable, and nulled rather than cascaded on delete: this row
+            # holds the seed, so it is a third of what recreating the image
+            # takes. It has to outlive the picture. image_sha256 is what it
+            # keeps once the pointer is gone.
+            sa.Column("image_id", sa.Integer(), nullable=True),
+            sa.Column("image_sha256", sa.String(), nullable=True),
             sa.Column("instance_id", sa.Integer(), nullable=False),
             sa.Column("seed", sa.Integer(), nullable=True),
             sa.Column("overrides", sa.String(), nullable=True),
             # No foreign key: remote_job is Phase 5 and does not exist yet.
             sa.Column("remote_job_id", sa.Integer(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=False),
-            sa.ForeignKeyConstraint(["image_id"], ["picture.id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(["image_id"], ["picture.id"], ondelete="SET NULL"),
             sa.ForeignKeyConstraint(
                 ["instance_id"], ["recipe_instance.id"], ondelete="CASCADE"
             ),

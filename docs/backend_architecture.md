@@ -825,7 +825,8 @@ Operation: id, batch_id, created_at, actor, op_type, target_type,
 
 ```text
 Recipe: id, engine, engine_version, document, document_ui,
-        structural_hash, hash_version, created_at
+        structural_hash, topology_hash, role_hash,
+        hash_version, created_at
         (UNIQUE structural_hash+hash_version)
 
 RecipeAsset: id, recipe_id, asset_type, asset_sha256, asset_filename,
@@ -836,8 +837,8 @@ RecipeInstance: id, recipe_id, instance_hash (unique),
                 prompt_positive, prompt_negative, params (JSON),
                 hash_version, created_at
 
-Generation: id, image_id, instance_id, seed, overrides (JSON),
-            remote_job_id, created_at
+Generation: id, image_id (nullable), image_sha256, instance_id,
+            seed, overrides (JSON), remote_job_id, created_at
 
 GenerationInput: generation_id, node_ref, position,
                  image_sha256, image_id
@@ -868,6 +869,57 @@ param / query / volatile) is specified per node in
 `pixlstash-hash-field-classification.md` in the business repo, and that
 document's fixture list is the acceptance suite for the canonicalizer.
 
+#### Three hashes, one walk, three questions
+
+`Recipe` carries three hashes, nested loosest-last. All three are **exact**:
+there is no similarity threshold anywhere in this design, which is a deliberate
+choice and not an omission (see below).
+
+| Column | Answers | On a 13,463-image library |
+|---|---|---|
+| `structural_hash` | "can I replay this exactly?" | 281 recipes |
+| `topology_hash` | "same graph, different checkpoint?" | 192 groups |
+| `role_hash` | "same *kind* of workflow?" | 93 groups |
+
+`structural_hash` is the identity and is **never merged**. That is precisely
+what lets the other two be as aggressive as the Workflows view wants: grouping
+is a read, so "which images used this LoRA" still resolves underneath a group,
+and a group can be split later where a merged identity could not be recovered.
+Neither of the looser columns is unique-indexed; many recipes sharing one is the
+entire point.
+
+`role_hash` is what makes the Workflows view browsable, and its trick is that
+**a node's identity comes from what it feeds into, not from what it is called.**
+The API-format JSON carries no type names, but the input name a node is wired to
+is ComfyUI's type discipline showing through: anything wired to `model` is a
+model source, anything wired to `clip` is a text encoder. Node versions and
+node-pack variants therefore merge with no synonym table to maintain, which
+matters because a hand-kept table over ~120 node classes goes stale every time a
+pack updates. Measured against the alternative on a real library: name-based
+families caught 2 of ~120 classes, while the role rule merged `CLIPLoader` with
+`CLIPLoaderGGUF`, `UNETLoader` with `UNETLoaderDisTorch2MultiGPU`, and
+`EmptyLatentImage` with `EmptySD3LatentImage` unaided.
+
+`role_hash` is a **set**, not a multiset. Dropping multiplicity is what puts a
+one-LoRA and a four-LoRA version of a graph in one group. That is the intended
+aggressive behaviour; the group detail view is expected to show the variants
+rather than hide them.
+
+**Why not similarity clustering.** Agglomerative clustering over a
+Weisfeiler-Leman graph kernel was measured on the same 281 recipes. At a 0.9
+threshold it produced 103 groups, near-identical to the exact role hash's 93,
+and it degrades violently below that: 0.8 gives one group holding 49 recipes,
+0.7 gives one holding 117 of 281. That is single-linkage chaining, and it makes
+the threshold a knob whose safe range can only be found by eyeballing output.
+The exact hash needs no threshold, no O(n²) pass and no background job, and
+gives the same answer. If a similarity pass is ever revisited, it must follow
+the house rule the dedup and stack-detection features already follow: detection
+proposes, it never applies.
+
+Both grouping columns are **nullable**, because they describe a node graph and
+an ai-toolkit training config is a recipe with no graph to roll up. NULL there
+is the honest value, not a hash of nothing.
+
 `RecipeAsset` exists to keep uncertainty **honest**. A workflow names its models
 by filename, and a filename is not an identity, so the row records what the
 document said, what identity was available, and separately what PixlStash has
@@ -887,17 +939,41 @@ the exact images. An image saved outside Picture Saver simply has no lock rows,
 which degrades to "query known, results unknown" instead of a false claim of
 exact reproducibility.
 
-**Deletion is deliberately asymmetric**, and the two behaviours are opposite on
-purpose:
+#### Nothing here dies with a picture
+
+Both tables that point at `picture` **null the pointer rather than cascade**,
+and both keep a sha256 as the identity that survives it. This is what makes
+"delete the pixels, keep the ability to recreate them" true.
 
 | Column | On picture delete | Why |
 |---|---|---|
-| `generation.image_id` | `CASCADE` | The row exists to say how *that* picture was made. Without the picture it says nothing. |
-| `generation_input.image_id` | `SET NULL` | The lock records what a run consumed. Deleting one of those images does not unmake the run, and `image_sha256` is the identity there and never dangles. It is also what makes "which generations used this image" answerable *before* a deletion. |
+| `generation.image_id` | `SET NULL` | The row holds the **seed**, which is a third of what recreating an image takes (recipe + instance + seed). `image_sha256` is what it keeps once the pointer is gone. |
+| `generation_input.image_id` | `SET NULL` | The lock records what a run *consumed*. Deleting one of those images does not unmake the run, and it is what makes "which generations used this image" answerable *before* a deletion. |
 
-`tests/test_recipe_provenance_schema.py` pins both, plus the uniqueness
-invariants and the agreement between the migrated schema and what
-`SQLModel.metadata.create_all` builds on a fresh vault.
+`generation.image_id` cascaded in the first draft of this schema, on the
+reasoning that the row describes one picture and says nothing without it. That
+was backwards. The recipe and the instance have no link to a picture and survive
+regardless, so cascading meant deleting an image destroyed the last third of the
+recreation while leaving the workflow standing and apparently intact. Losing a
+third of it silently is worse than losing all of it.
+
+What remains after the picture is deleted is a **ghost**: the recipe (the core
+workflow), the instance (the diff off it), the seed, and `image_sha256` naming
+what used to be there. That is a few dozen bytes per deleted image against
+megabytes of pixels. Measured on a real 13,463-image library, the complete
+provenance set is **~6 MB** (1.5 MB of recipe documents, 3.5 MB of instances,
+1.1 MB of generation rows), because the documents dedupe 48:1.
+
+**Permanent-forget deletes the generation row and leaves the recipe alone.** A
+recipe is a graph of node types and settings and is not personal data; a prompt
+and a thumbnail can be. That split is what lets the retention story be honest in
+both directions: forgetting an image never costs the user the workflow, and
+keeping a workflow never keeps anything about the person in the picture.
+
+`tests/test_recipe_provenance_schema.py` pins the ghost surviving, the
+forget-keeps-the-workflow split, the uniqueness invariants, the non-uniqueness
+of the two grouping columns, and the agreement between the migrated schema and
+what `SQLModel.metadata.create_all` builds on a fresh vault.
 
 ### Filesystem-linked
 

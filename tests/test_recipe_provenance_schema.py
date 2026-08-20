@@ -2,7 +2,7 @@
 
 These tables are empty until the canonicalizer and the ingest hook land on top
 of them, so what there is to test at this stage is the shape, and specifically
-the three decisions that are expensive to change once rows exist:
+the four decisions that are expensive to change once rows exist:
 
 1. **One topology, one recipe row.** Every fixture in the field-classification
    spec is written as "-> 1 recipe", and grouping is the whole product. A second
@@ -10,14 +10,20 @@ the three decisions that are expensive to change once rows exist:
    refuses it. A ``v1`` hash and a ``v1-raw`` hash of the same graph are
    different values and both are allowed to exist.
 
-2. **A generation dies with its picture; a resolution lock does not.** They are
-   deliberately opposite. ``generation`` says how *that* image was made and
-   means nothing without it. ``generation_input`` records which images a run
-   consumed, and deleting one of those images does not unmake the run that used
-   it, so the row survives with its ``image_sha256`` intact and only the
-   convenience pointer nulled.
+2. **Nothing dies with a picture.** Both tables pointing at ``picture`` null the
+   pointer and keep a sha256 instead. ``generation`` holds the seed, which is a
+   third of what recreating a deleted image takes, so cascading it would destroy
+   the recreation while leaving the workflow standing and apparently intact.
+   ``generation_input`` records what a run consumed, and deleting one of those
+   images does not unmake the run. What survives a deletion is a **ghost**, and
+   permanently forgetting one deletes the generation and keeps the recipe.
 
-3. **Both creation paths agree.** A fresh vault gets its tables from
+3. **Strict identity underneath, aggressive grouping on top.** ``role_hash`` and
+   ``topology_hash`` group hard for the Workflows view and are deliberately not
+   unique, while ``structural_hash`` never merges. A group can be split later; a
+   merged identity cannot be recovered.
+
+4. **Both creation paths agree.** A fresh vault gets its tables from
    ``SQLModel.metadata.create_all``; an existing one gets them from revision
    0105. Revision 0103 shipped with an index that only ever existed on the
    migrated path, because the ``CREATE INDEX`` sat inside a branch a fresh
@@ -59,8 +65,11 @@ RECIPE_TABLES = (
 )
 
 STRUCTURAL_HASH = "s" * 64
+TOPOLOGY_HASH = "t" * 64
+ROLE_HASH = "r" * 64
 INSTANCE_HASH = "i" * 64
 IMAGE_SHA = "f" * 64
+GENERATED_SHA = "e" * 64
 
 
 @pytest.fixture
@@ -83,11 +92,19 @@ def session():
         yield session
 
 
-def make_recipe(session, structural_hash=STRUCTURAL_HASH, hash_version=HASH_VERSION_V1):
+def make_recipe(
+    session,
+    structural_hash=STRUCTURAL_HASH,
+    hash_version=HASH_VERSION_V1,
+    topology_hash=TOPOLOGY_HASH,
+    role_hash=ROLE_HASH,
+):
     recipe = Recipe(
         engine=ENGINE_COMFYUI,
         document="{}",
         structural_hash=structural_hash,
+        topology_hash=topology_hash,
+        role_hash=role_hash,
         hash_version=hash_version,
     )
     session.add(recipe)
@@ -109,7 +126,10 @@ def make_generation(session):
     session.commit()
 
     generation = Generation(
-        image_id=picture.id, instance_id=instance.id, seed=1234567890
+        image_id=picture.id,
+        image_sha256=GENERATED_SHA,
+        instance_id=instance.id,
+        seed=1234567890,
     )
     session.add(generation)
     session.commit()
@@ -177,17 +197,56 @@ class TestOneTopologyOneRecipe:
             session.commit()
 
 
-class TestDeletionIsAsymmetric:
-    def test_deleting_the_generated_picture_takes_its_generation(self, session):
-        picture, _consumed, _generation = make_generation(session)
+class TestTheWorkflowOutlivesTheImage:
+    """Delete the pixels, keep the ability to recreate them.
+
+    Recreation needs three things: the recipe, the instance, and the seed. The
+    first two have no link to a picture and survive on their own; the seed lives
+    on the generation row, so this is where the property is actually won or
+    lost.
+    """
+
+    def test_deleting_the_picture_leaves_a_ghost_that_can_still_recreate_it(
+        self, session
+    ):
+        picture, _consumed, generation = make_generation(session)
+        recipe_id = session.exec(select(Recipe)).one().id
 
         session.delete(picture)
         session.commit()
+        session.expire_all()
 
-        # Nothing left to say: the row existed to describe how that picture was
-        # made. The lock rows go with it, being children of the generation.
+        ghost = session.exec(select(Generation)).one()
+        # The pointer is gone, the recreation is not.
+        assert ghost.image_id is None
+        assert ghost.seed == 1234567890
+        assert ghost.image_sha256 == GENERATED_SHA
+
+        instance = session.get(RecipeInstance, ghost.instance_id)
+        assert instance is not None
+        assert instance.recipe_id == recipe_id
+        assert session.get(Recipe, recipe_id) is not None
+
+    def test_forgetting_a_ghost_keeps_the_workflow(self, session):
+        """The privacy split: a prompt is personal, a graph of node types is not.
+
+        Permanent-forget has to be able to remove everything about one image
+        without costing the user the workflow they built.
+        """
+        picture, _consumed, generation = make_generation(session)
+        recipe_id = session.exec(select(Recipe)).one().id
+        session.delete(picture)
+        session.commit()
+
+        session.delete(session.exec(select(Generation)).one())
+        session.commit()
+
         assert session.exec(select(Generation)).all() == []
+        # The lock rows go too, being children of the generation.
         assert session.exec(select(GenerationInput)).all() == []
+        # The workflow stays.
+        assert session.get(Recipe, recipe_id) is not None
+        assert len(session.exec(select(RecipeInstance)).all()) == 1
 
     def test_deleting_a_consumed_picture_leaves_the_lock_standing(self, session):
         _picture, consumed, generation = make_generation(session)
@@ -220,6 +279,42 @@ class TestDeletionIsAsymmetric:
 
         assert session.exec(select(RecipeAsset)).all() == []
         assert session.exec(select(RecipeInstance)).all() == []
+
+
+class TestThreeHashesGroupAtThreeStrengths:
+    """Strict identity underneath, aggressive grouping on top.
+
+    The Workflows view merges hard (93 groups from 281 recipes on a real
+    library) and that is only safe because the strict hash below it never
+    merges. A group can be split later; a merged identity cannot be recovered.
+    """
+
+    def test_recipes_sharing_a_role_hash_stay_separate_rows(self, session):
+        """Two variants of one workflow: one group, two replayable recipes."""
+        make_recipe(session, structural_hash="a" * 64, topology_hash="p" * 64)
+        make_recipe(session, structural_hash="b" * 64, topology_hash="q" * 64)
+
+        rows = session.exec(select(Recipe).where(Recipe.role_hash == ROLE_HASH)).all()
+        assert len(rows) == 2
+        # Grouping is a read, never a merge. Both keep their own identity, so
+        # "which images used this LoRA" still resolves underneath the group.
+        assert {r.structural_hash for r in rows} == {"a" * 64, "b" * 64}
+
+    def test_the_looser_hashes_are_not_unique_constraints(self, session):
+        """A unique index here would make the whole grouping design impossible."""
+        indexes = {idx.name: idx.unique for idx in Recipe.__table__.indexes}
+        assert indexes["ix_recipe_role_hash"] is False
+        assert indexes["ix_recipe_topology_hash"] is False
+        assert indexes["ix_recipe_structural_identity"] is True
+
+    def test_a_graphless_recipe_may_have_no_grouping_hashes(self, session):
+        """An ai-toolkit training config is a recipe with no node graph.
+
+        NULL is the honest value there, not a hash of nothing.
+        """
+        recipe = make_recipe(session, topology_hash=None, role_hash=None)
+        assert recipe.topology_hash is None
+        assert recipe.role_hash is None
 
 
 class TestAssetResolutionIsHonest:

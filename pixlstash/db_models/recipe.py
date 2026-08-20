@@ -75,6 +75,40 @@ ASSET_UNKNOWN_MODEL = "unknown_model"
 class Recipe(SQLModel, table=True):
     """One workflow topology, identified by its structural hash.
 
+    **Three hashes, one walk of the graph, three different questions.** They are
+    nested, from strictest to loosest, and all three are exact: there is no
+    similarity threshold anywhere in this design.
+
+    ==================  =========================================  ============
+    Column              Answers                                    Measured
+    ==================  =========================================  ============
+    ``structural_hash`` "can I replay this exactly?"               281 recipes
+    ``topology_hash``   "same graph, different checkpoint?"        192 groups
+    ``role_hash``       "same *kind* of workflow?"                 93 groups
+    ==================  =========================================  ============
+
+    (Counts are from a 13,463-image library; they are here to show the ratios
+    between the levels, not as anything the code depends on.)
+
+    ``structural_hash`` stays the identity and is never merged, which is what
+    lets the looser two be as aggressive as they like: the Workflows view groups
+    93 ways, and "which images used this LoRA" still resolves against the strict
+    hash underneath. A group can always be split later; a merged identity cannot
+    be recovered.
+
+    ``role_hash`` is the one that makes the Workflows view browsable, and the
+    trick in it is worth stating: **a node's identity comes from what it feeds
+    into, not from what it is called.** The API-format JSON carries no type
+    names, but the input name a node is wired to is ComfyUI's type discipline
+    showing through, so anything wired to ``model`` is a model source and
+    anything wired to ``clip`` is a text encoder. Node versions and pack
+    variants therefore merge with no synonym table to maintain, which matters
+    because a hand-kept table over a hundred-odd node classes goes stale every
+    time a pack updates. Measured against the alternative: name-based families
+    caught 2 of ~120 classes, while the role rule merged ``CLIPLoader`` with
+    ``CLIPLoaderGGUF``, ``UNETLoader`` with ``UNETLoaderDisTorch2MultiGPU``, and
+    ``EmptyLatentImage`` with ``EmptySD3LatentImage`` on its own.
+
     Attributes:
         engine: :data:`ENGINE_COMFYUI` or :data:`ENGINE_AI_TOOLKIT`.
         engine_version: Whatever the producer declared, free text. Environment
@@ -85,9 +119,16 @@ class Recipe(SQLModel, table=True):
         document_ui: The UI-format JSON when the image carried one. Useful for
             showing the graph the way its author drew it; never hashed, because
             node positions and titles are cosmetic.
-        structural_hash: The canonical hash of topology plus asset identity,
-            with every parameter nulled. This is the identity of the row.
-        hash_version: Which canonicalization produced the hash. See
+        structural_hash: Topology plus asset identity, every parameter nulled.
+            The identity of the row.
+        topology_hash: The same, with asset filenames dropped, so a graph run
+            against two checkpoints is one entry with two variants.
+        role_hash: The sorted *set* of node roles. Deliberately a set and not a
+            multiset: dropping multiplicity is what puts a one-LoRA and a
+            four-LoRA version of a graph in one group, which is the aggressive
+            behaviour the view wants. The group detail view is expected to show
+            the variants rather than hide them.
+        hash_version: Which canonicalization produced the hashes. See
             :data:`HASH_VERSION_V1`.
     """
 
@@ -106,6 +147,16 @@ class Recipe(SQLModel, table=True):
     )
     structural_hash: str = Field(
         sa_column=Column("structural_hash", String, nullable=False, index=True)
+    )
+    # The two looser groupings. Nullable because they describe a *node graph*,
+    # and an ai-toolkit training config is a recipe with no graph at all: for
+    # those rows there is nothing to roll up and NULL is the honest value.
+    topology_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column("topology_hash", String, nullable=True, index=True),
+    )
+    role_hash: Optional[str] = Field(
+        default=None, sa_column=Column("role_hash", String, nullable=True, index=True)
     )
     hash_version: str = Field(
         default=HASH_VERSION_V1,
@@ -267,19 +318,47 @@ class RecipeInstance(SQLModel, table=True):
 
 
 class Generation(SQLModel, table=True):
-    """One image, produced by one instance, at one seed.
+    """One image, produced by one instance, at one seed. **It outlives the image.**
 
-    ``image_id`` cascades on delete: this row exists to say how *that* picture
-    was made, so without the picture it says nothing. That is the opposite of
-    :class:`GenerationInput`, which records what a run consumed and has to
-    outlive the images it names.
+    This is the row that makes "delete the pixels, keep the ability to recreate
+    them" true, so its delete behaviour is the load-bearing decision in this
+    module.
+
+    ``image_id`` is nulled rather than cascaded when the picture goes. An
+    earlier draft cascaded it, on the reasoning that the row describes one
+    picture and says nothing without it. That was exactly backwards: the recipe
+    and the instance have no link to a picture and survive anyway, but the
+    **seed lives here**, so cascading meant deleting an image destroyed the last
+    piece needed to reproduce it while leaving the workflow standing and
+    apparently intact. Recipe plus instance plus seed is the whole recreation,
+    and losing a third of it silently is worse than losing all of it.
+
+    What is left after the picture is deleted is a **ghost**: the recipe (the
+    core workflow), the instance (the diff off it), the seed, and
+    ``image_sha256`` naming what used to be there. That is a few dozen bytes per
+    deleted image against megabytes of pixels.
+
+    ``image_sha256`` is why the ghost is not just a hole. It is the identity the
+    row keeps once the pointer is gone, it is what a re-import matches against
+    to reattach the picture to its own history, and it is what "you already made
+    this" can be answered from.
+
+    **Permanent forget deletes this row, and leaves the recipe alone.** A recipe
+    is a graph of node types and settings and is not personal data; a prompt and
+    a thumbnail can be. That split is the whole reason the retention story can
+    be honest: forgetting an image never costs you the workflow, and keeping a
+    workflow never keeps anything about the person in the picture.
 
     There is deliberately no unique constraint on ``image_id``. Ingest looks the
     image up before inserting, and a constraint here would turn a re-ingest race
     into an exception raised inside a background task, which is the failure mode
-    the model-shelf work already learned to avoid.
+    the model-shelf work already learned to avoid. Nullability makes the point
+    moot in the other direction too: many ghosts share a NULL ``image_id``.
 
     Attributes:
+        image_id: The live picture, or NULL once it is gone. Never the identity.
+        image_sha256: What the image was. Survives the picture, and is how a
+            ghost is recognised if the same file comes back.
         seed: The one genuinely volatile value. A re-roll is a new row here and
             changes nothing above it.
         overrides: JSON for rare last-mile deviations that never made it into
@@ -291,14 +370,19 @@ class Generation(SQLModel, table=True):
     __tablename__ = "generation"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    image_id: int = Field(
+    image_id: Optional[int] = Field(
+        default=None,
         sa_column=Column(
             "image_id",
             Integer,
-            ForeignKey("picture.id", ondelete="CASCADE"),
-            nullable=False,
+            ForeignKey("picture.id", ondelete="SET NULL"),
+            nullable=True,
             index=True,
-        )
+        ),
+    )
+    image_sha256: Optional[str] = Field(
+        default=None,
+        sa_column=Column("image_sha256", String, nullable=True, index=True),
     )
     instance_id: int = Field(
         sa_column=Column(
