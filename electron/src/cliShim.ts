@@ -193,10 +193,12 @@ export function syncShim(
 
 /** The per-user environment block. Per-user, so no elevation is ever needed. */
 const USER_ENV_KEY = 'HKCU\\Environment';
+/** Registry value recording the PATH entry this installation appended. */
+const PATH_OWNERSHIP_VALUE = 'PixlStashCliPath';
 
 /** Whether two PATH elements name the same directory, as Windows compares them. */
 function samePathElement(a: string, b: string): boolean {
-  const normalise = (p: string) => p.trim().replace(/\\+$/, '').toLowerCase();
+  const normalise = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   return normalise(a) === normalise(b);
 }
 
@@ -212,11 +214,13 @@ export function pathWith(value: string, dir: string): string | null {
   return value.trim() === '' ? dir : `${value.replace(/;+$/, '')};${dir}`;
 }
 
-/** *value* with every occurrence of *dir* removed, or null when it holds none. */
+/** *value* with one occurrence of *dir* removed, or null when it holds none. */
 export function pathWithout(value: string, dir: string): string | null {
   const parts = value.split(';');
-  const kept = parts.filter((p) => !samePathElement(p, dir));
-  return kept.length === parts.length ? null : kept.join(';');
+  const at = parts.findIndex((p) => samePathElement(p, dir));
+  if (at === -1) return null;
+  parts.splice(at, 1);
+  return parts.join(';');
 }
 
 /**
@@ -242,19 +246,30 @@ export function pathWithout(value: string, dir: string): string | null {
  *   could safely round-trip is printable ASCII; anything else means the decode
  *   is not trustworthy and the right move is to touch nothing.
  */
-function readUserPath(): { name: string; kind: string; value: string } | null {
-  const reg = spawnSync('reg', ['query', USER_ENV_KEY], { encoding: 'utf8' });
+function readUserPath(): { name?: string; kind?: string; value?: string; ownedDir?: string } | null {
+  const reg = spawnSync('reg', ['query', USER_ENV_KEY], { encoding: 'utf8', windowsHide: true });
   if (reg.error) throw reg.error;
   if (reg.status !== 0) {
     throw new Error(`reg query ${USER_ENV_KEY} exited ${reg.status}: ${reg.stderr}`);
   }
   const m = reg.stdout.match(/^\s*(Path)\s+(REG_\w+)\s+(.*)$/im);
-  if (!m) return null;
+  const ownership = reg.stdout.match(new RegExp(`^\\s*${PATH_OWNERSHIP_VALUE}\\s+REG_\\w+\\s+(.*)$`, 'im'));
+  const ownedDir = ownership?.[1].trimEnd();
+  if (ownedDir && /[^\x20-\x7e]/.test(ownedDir)) {
+    throw new Error('the PixlStash PATH ownership record did not decode as ASCII; refusing to rewrite it');
+  }
+  if (!m) return ownedDir ? { ownedDir } : null;
   const value = m[3].trimEnd();
   if (/[^\x20-\x7e]/.test(value)) {
     throw new Error('the user PATH did not decode as ASCII; refusing to rewrite it');
   }
-  return { name: m[1], kind: m[2], value };
+  return { name: m[1], kind: m[2], value, ownedDir };
+}
+
+function runReg(args: string[]): void {
+  const reg = spawnSync('reg', args, { encoding: 'utf8', windowsHide: true });
+  if (reg.error) throw reg.error;
+  if (reg.status !== 0) throw new Error(`reg ${args[0]} exited ${reg.status}: ${reg.stderr}`);
 }
 
 /**
@@ -298,18 +313,23 @@ function broadcastEnvChange(): void {
 /**
  * Add or remove *dir* in the user's PATH. Windows only; a no-op elsewhere.
  *
- * Only the element we added is ever removed, and the rest of the value is
- * written back byte-for-byte, because this is the user's PATH and not the app's
- * storage. Returns whether *dir* is on the user PATH afterwards.
+ * A registry ownership marker is written only after this app appends the
+ * directory, so disabling cannot remove a PATH entry the user already had.
+ * Returns whether *dir* is on the user PATH afterwards.
  */
 export function syncUserPath(enabled: boolean, dir: string, platform: NodeJS.Platform = process.platform): boolean {
   if (platform !== 'win32') return false;
   try {
     const current = readUserPath();
-    const next = enabled
-      ? pathWith(current?.value ?? '', dir)
-      : pathWithout(current?.value ?? '', dir);
-    if (next === null) return enabled; // already in the state we want
+    const alreadyOnPath = current?.value !== undefined && pathWith(current.value, dir) === null;
+    if (!enabled && (!current?.ownedDir || !samePathElement(current.ownedDir, dir))) return alreadyOnPath;
+    const next = enabled ? pathWith(current?.value ?? '', dir) : pathWithout(current?.value ?? '', dir);
+    if (next === null) {
+      // The user removed our entry themselves. Forget the ownership marker so
+      // a later user-added matching entry can never be mistaken for ours.
+      if (!enabled) runReg(['delete', USER_ENV_KEY, '/v', PATH_OWNERSHIP_VALUE, '/f']);
+      return enabled;
+    }
     const name = current?.name ?? 'Path';
     // An empty value would be a `Path` set to the empty string; removing the
     // value is what "the user had nothing but us" actually means.
@@ -317,8 +337,12 @@ export function syncUserPath(enabled: boolean, dir: string, platform: NodeJS.Pla
       next === ''
         ? ['delete', USER_ENV_KEY, '/v', name, '/f']
         : ['add', USER_ENV_KEY, '/v', name, '/t', current?.kind ?? 'REG_EXPAND_SZ', '/d', next, '/f'];
-    const reg = spawnSync('reg', args, { encoding: 'utf8' });
-    if (reg.status !== 0) throw new Error(`reg ${args[0]} exited ${reg.status}: ${reg.stderr}`);
+    runReg(args);
+    if (enabled) {
+      runReg(['add', USER_ENV_KEY, '/v', PATH_OWNERSHIP_VALUE, '/t', 'REG_SZ', '/d', dir, '/f']);
+    } else {
+      runReg(['delete', USER_ENV_KEY, '/v', PATH_OWNERSHIP_VALUE, '/f']);
+    }
     broadcastEnvChange();
     return enabled;
   } catch (e) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import childProcess = require('node:child_process');
 import { describe, it } from 'node:test';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ import {
   shimPath,
   shimScript,
   syncShim,
+  syncUserPath,
 } from '../src/cliShim';
 
 describe('parseCliArgs — deciding between a window and a CLI run', () => {
@@ -288,11 +290,11 @@ describe('pathWith / pathWithout — editing the user PATH', () => {
     assert.equal(pathWithout(`C:\\A;;C:\\B;${dir}`, dir), 'C:\\A;;C:\\B');
   });
 
-  it('removes our element wherever it sits, not only at the end', () => {
+  it('removes one owned element wherever it sits, not only at the end', () => {
     assert.equal(pathWithout(`${dir};C:\\Windows`, dir), 'C:\\Windows');
     assert.equal(pathWithout(`C:\\A;${dir};C:\\B`, dir), 'C:\\A;C:\\B');
-    // Enabling twice can never produce this, but a hand-edited PATH can.
-    assert.equal(pathWithout(`${dir};C:\\A;${dir}`, dir), 'C:\\A');
+    // Preserve a duplicate a user may have added separately.
+    assert.equal(pathWithout(`${dir};C:\\A;${dir}`, dir), `C:\\A;${dir}`);
   });
 
   it('keeps %VARS% and every other element byte for byte', () => {
@@ -307,5 +309,41 @@ describe('pathWith / pathWithout — editing the user PATH', () => {
   it('leaves an empty value when we were the only element', () => {
     // The caller deletes the registry value rather than storing "".
     assert.equal(pathWithout(dir, dir), '');
+  });
+});
+
+describe('syncUserPath — ownership of the Windows PATH entry', () => {
+  const dir = 'C:\\Users\\me\\AppData\\Local\\PixlStash\\bin';
+  const spawnSync = childProcess.spawnSync;
+
+  function withRegOutput(output: string, run: (calls: string[][]) => void): void {
+    const calls: string[][] = [];
+    childProcess.spawnSync = ((command, args) => {
+      assert.equal(command, 'reg');
+      calls.push(args as string[]);
+      return { status: 0, stdout: calls.length === 1 ? output : '', stderr: '' } as ReturnType<typeof spawnSync>;
+    }) as typeof childProcess.spawnSync;
+    try {
+      run(calls);
+    } finally {
+      childProcess.spawnSync = spawnSync;
+    }
+  }
+
+  it('clears a stale ownership marker without removing a later user PATH entry', () => {
+    withRegOutput(`    PixlStashCliPath    REG_SZ    ${dir}\r\n`, (calls) => {
+      assert.equal(syncUserPath(false, dir, 'win32'), false);
+      assert.deepEqual(calls, [
+        ['query', 'HKCU\\Environment'],
+        ['delete', 'HKCU\\Environment', '/v', 'PixlStashCliPath', '/f'],
+      ]);
+    });
+  });
+
+  it('reports a pre-existing PATH entry as reachable without claiming or removing it', () => {
+    withRegOutput(`    Path    REG_SZ    C:\\Windows;${dir}\r\n`, (calls) => {
+      assert.equal(syncUserPath(false, dir, 'win32'), true);
+      assert.deepEqual(calls, [['query', 'HKCU\\Environment']]);
+    });
   });
 });

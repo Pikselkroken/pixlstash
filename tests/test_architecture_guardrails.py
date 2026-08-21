@@ -11,6 +11,7 @@ import gc
 import json
 import os
 import re
+import shlex
 import tempfile
 import warnings
 from pathlib import Path
@@ -2513,9 +2514,10 @@ def test_dockerfiles_install_every_runtime_dependency():
     the built image and only shows up as a ``ModuleNotFoundError`` at start-up.
     That is how ``send2trash`` reached the demo image and crashed it on import.
 
-    The check is a substring one on purpose: it is aliases like
-    ``opencv-python-headless`` and ``onnxruntime-gpu`` that legitimately satisfy
-    a plain name, and total absence is the failure worth catching.
+    The check is a substring one on purpose: aliases like
+    ``opencv-python-headless`` and ``onnxruntime-gpu`` legitimately satisfy a
+    plain name. Only package tokens in ``RUN pip install`` instructions count;
+    dependency names in comments must not satisfy the guardrail.
     """
     import tomllib
 
@@ -2527,12 +2529,44 @@ def test_dockerfiles_install_every_runtime_dependency():
         for spec in dependencies
     }
 
+    def installed_packages(text: str) -> list[str]:
+        packages = []
+        lines = text.splitlines()
+        for start, line in enumerate(lines):
+            if not re.match(r"\s*run\s+pip\s+install\b", line, re.IGNORECASE):
+                continue
+            command = line
+            index = start
+            while command.rstrip().endswith("\\") and index + 1 < len(lines):
+                index += 1
+                command = f"{command.rstrip()[:-1]} {lines[index].strip()}"
+            # Ignore comments inside a continued command too: a commented-out
+            # package name is not an installed package.
+            tokens = shlex.split(command, comments=True)
+            install_at = next(
+                (i for i in range(len(tokens) - 1) if tokens[i : i + 2] == ["pip", "install"]),
+                None,
+            )
+            if install_at is None:
+                continue
+            skip_next = False
+            for token in tokens[install_at + 2 :]:
+                if skip_next:
+                    skip_next = False
+                elif token in {"--index-url", "--extra-index-url", "-i"}:
+                    skip_next = True
+                elif not token.startswith("-"):
+                    packages.append(token.lower().replace("_", "-"))
+        return packages
+
     missing = []
     for filename in ("Dockerfile", "Dockerfile.gpu", "Dockerfile.demo"):
-        text = (
-            (REPO_ROOT / filename).read_text(encoding="utf-8").lower().replace("_", "-")
-        )
-        missing += [f"{filename}: {name}" for name in sorted(names) if name not in text]
+        packages = installed_packages((REPO_ROOT / filename).read_text(encoding="utf-8"))
+        missing += [
+            f"{filename}: {name}"
+            for name in sorted(names)
+            if not any(name in package for package in packages)
+        ]
 
     assert not missing, (
         "these runtime dependencies are never installed in the image, so the "

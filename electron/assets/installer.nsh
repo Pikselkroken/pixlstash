@@ -289,7 +289,8 @@
   # $LOCALAPPDATA\PixlStash\bin there so `pixlstash` is a bare word in both cmd
   # and PowerShell; a user who uninstalls with the switch still on would
   # otherwise be left with the element pointing at a shim whose interpreter no
-  # longer exists.
+  # longer exists. The app records a PixlStashCliPath ownership value when it
+  # appends the directory, so this never removes a pre-existing user entry.
   #
   # Written by hand rather than with WordFunc because this is the USER's PATH:
   # every element that is not exactly ours is copied through byte for byte,
@@ -313,9 +314,6 @@
       Push $6   # "1" once something was actually removed
       Push $7   # scratch
 
-      ReadRegStr $0 HKCU "Environment" "Path"
-      StrCmp $0 "" PixlPathDone
-
       # NOT $LOCALAPPDATA: that follows the shell-var context, and an "anyone who
       # uses this computer" uninstall still has it on `all` here, where it
       # resolves to C:\ProgramData -- matching nothing and silently leaving the
@@ -327,6 +325,11 @@
       StrCmp $7 "" 0 +2
         StrCpy $7 "$LOCALAPPDATA"
       StrCpy $1 "$7\PixlStash\bin"
+      ReadRegStr $7 HKCU "Environment" "PixlStashCliPath"
+      StrCmp $7 $1 0 PixlPathDone
+
+      ReadRegStr $0 HKCU "Environment" "Path"
+      StrCmp $0 "" PixlPathClearOwnership
 
       StrCpy $2 ""
       StrCpy $3 "$0;"
@@ -361,8 +364,8 @@
         # StrCmp is case-insensitive, which is how Windows compares paths. NSIS
         # has no backslash escape, so "$1\" is our directory plus a trailing
         # separator -- the other spelling of the same element.
-        StrCmp $4 $1 PixlPathDrop
-        StrCmp $4 "$1\" PixlPathDrop
+        StrCmp $4 $1 PixlPathMaybeDrop
+        StrCmp $4 "$1\" PixlPathMaybeDrop
         StrCmp $0 "1" PixlPathAppend
           StrCpy $2 $4
           StrCpy $0 "1"
@@ -370,7 +373,10 @@
         PixlPathAppend:
         StrCpy $2 "$2;$4"
         Goto PixlPathNext
-        PixlPathDrop:
+        PixlPathMaybeDrop:
+        # The ownership marker represents one element we appended. Preserve a
+        # duplicate entry a user may have added themselves.
+        StrCmp $6 "1" PixlPathAppend
         StrCpy $6 "1"
         Goto PixlPathNext
 
@@ -379,9 +385,12 @@
       StrCmp $2 "" 0 PixlPathWrite
         # We were the only element: remove the value rather than store "".
         DeleteRegValue HKCU "Environment" "Path"
-        Goto PixlPathDone
+        Goto PixlPathClearOwnership
       PixlPathWrite:
       WriteRegExpandStr HKCU "Environment" "Path" $2
+
+      PixlPathClearOwnership:
+      DeleteRegValue HKCU "Environment" "PixlStashCliPath"
 
       PixlPathDone:
       Pop $7
