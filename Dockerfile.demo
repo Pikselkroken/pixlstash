@@ -142,12 +142,22 @@ RUN python3 -c "import json; path='/home/pixlstash/.config/pixlstash/server-conf
 COPY --chown=pixlstash:pixlstash demo-data/hub.db \
     /home/pixlstash/.config/pixlstash/hub.db
 
-# Re-point the baked hub at the in-container paths, keeping library.uuid intact
-# because every token is stamped with it — rewrite the path, not the identity.
-# The model shelf is dropped: its rows name folders on the machine that built the
-# image, which do not exist here and must not be published on a public demo. The
-# server re-registers its own managed store on start.
-RUN python3 -c "import sqlite3; p='/home/pixlstash/.config/pixlstash/hub.db'; r='/home/pixlstash/images'; c=sqlite3.connect(p); [c.execute(q) for q in ('DELETE FROM model_file', 'DELETE FROM model_capability', 'DELETE FROM model', 'DELETE FROM adapter_stack', 'DELETE FROM model_folder')]; [c.execute(q, (r,)) for q in ('UPDATE library SET path = ?', 'UPDATE library_uuid_issued SET first_path = ?', 'UPDATE identity_migration_operation SET source_path = ?')]; c.commit(); assert c.execute('SELECT count(*) FROM usertoken').fetchone()[0], 'demo-data/hub.db holds no token - the public ?token= link would be refused'; assert c.execute('SELECT count(*) FROM library WHERE is_active = 1 AND path = ?', (r,)).fetchone()[0] == 1, 'demo-data/hub.db has no single active library'; c.close()"
+# Reduce the baked hub to the one library the demo serves, re-pointed at the
+# in-container path. library.uuid is kept intact because every token is stamped
+# with it — rewrite the path, not the identity.
+#
+# Only the active library survives. The hub is copied from a real machine, so it
+# carries whatever else was registered there: ux_library_path is UNIQUE, so
+# rewriting every row's path would fail the build outright the moment there is
+# more than one, and shipping those rows would publish the build machine's folder
+# names on a public demo. Their tokens go with them (usertoken.library_uuid has
+# no ON DELETE), and so does every non-READ token for the demo library itself —
+# a public image has no business carrying an ALL-scoped credential.
+#
+# The model shelf is dropped for the same reason: its rows name folders on the
+# machine that built the image, which do not exist here. The server re-registers
+# its own managed store on start.
+RUN python3 -c "import sqlite3; p='/home/pixlstash/.config/pixlstash/hub.db'; r='/home/pixlstash/images'; c=sqlite3.connect(p); row=c.execute('SELECT uuid FROM library WHERE is_active = 1').fetchone(); assert row, 'demo-data/hub.db has no active library'; u=row[0]; [c.execute(q) for q in ('DELETE FROM model_file', 'DELETE FROM model_capability', 'DELETE FROM model', 'DELETE FROM adapter_stack', 'DELETE FROM model_folder')]; c.execute('DELETE FROM usertoken WHERE library_uuid != ? OR scope != ?', (u, 'READ')); [c.execute(q, (u,)) for q in ('DELETE FROM identity_migration_operation WHERE library_uuid != ?', 'DELETE FROM library WHERE uuid != ?', 'UPDATE library_uuid_issued SET first_path = NULL WHERE uuid != ?')]; [c.execute(q, (r, u)) for q in ('UPDATE library SET path = ? WHERE uuid = ?', 'UPDATE library_uuid_issued SET first_path = ? WHERE uuid = ?', 'UPDATE identity_migration_operation SET source_path = ? WHERE library_uuid = ?')]; c.commit(); assert c.execute('SELECT count(*) FROM usertoken WHERE library_uuid = ?', (u,)).fetchone()[0], 'demo-data/hub.db holds no READ token for the active library - the public ?token= link would be refused'; assert c.execute('SELECT count(*) FROM library WHERE is_active = 1 AND path = ?', (r,)).fetchone()[0] == 1, 'demo-data/hub.db has no single active library'; c.close()"
 
 COPY --chown=pixlstash:pixlstash demo-data/images/ \
     /home/pixlstash/images/

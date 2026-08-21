@@ -486,6 +486,7 @@ jobs:
           tests/test_dedup_verdict_service.py
           tests/test_description_cancel_blanking.py
           tests/test_detections_scope.py
+          tests/test_docker_demo_hub_rewrite.py
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py

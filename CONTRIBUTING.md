@@ -299,10 +299,11 @@ hub.bootstrap: Registering an existing vault at /home/pixlstash/images without i
 
 The `Dockerfile.demo` build automatically rewrites `image_root` to the
 in-container path `/home/pixlstash/images`, so you do not need to edit
-`server-config.json` before building. It re-points the baked hub's library row at
-the same path — keeping `library.uuid`, which every token is stamped with — and
-drops the model-shelf rows, whose folders name the build machine and must not be
-published. The build fails if `demo-data/hub.db` holds no token.
+`server-config.json` before building. It reduces the baked hub to the **active**
+library and re-points that row at the same path, keeping `library.uuid` (which
+every token is stamped with). Everything that only describes the build machine
+goes: any other registered library and its tokens, every non-READ token, and the
+model-shelf rows. The build fails if no READ token is left for the active library.
 
 ```bash
 # Build the image locally
