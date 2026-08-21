@@ -17,7 +17,13 @@ export PIXLSTASH_IN_DOCKER=1
 # a valid string without touching /etc/passwd.
 export USER="${USER:-pixlstash}"
 
-mkdir -p "$(dirname "$CONFIG_PATH")"
+CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+mkdir -p "$CONFIG_DIR"
+
+# PixlStash refuses to start when its config directory is group/world-accessible
+# (the hub holds credentials).  mkdir under the default umask leaves 0755, and
+# the demo image bakes the directory in at 0755, so tighten it on every start.
+chmod 700 "$CONFIG_DIR" || echo "warning: could not chmod 700 $CONFIG_DIR - PixlStash will refuse to start" >&2
 
 # Write a default config on first run with Docker-appropriate settings
 # (host 0.0.0.0 so the server is reachable from outside the container).
