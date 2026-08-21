@@ -2498,3 +2498,43 @@ def test_tests_close_the_server_not_only_its_vault():
         "close the whole server, not only its vault — server.close() — at "
         + ", ".join(offenders)
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: every runtime dependency is installed in every Docker image
+# ---------------------------------------------------------------------------
+
+
+def test_dockerfiles_install_every_runtime_dependency():
+    """A dependency added to ``pyproject.toml`` must reach the images too.
+
+    All three Dockerfiles hand-maintain their ``pip install`` list and then run
+    ``pip install --no-deps -e .``, so a new dependency is silently absent from
+    the built image and only shows up as a ``ModuleNotFoundError`` at start-up.
+    That is how ``send2trash`` reached the demo image and crashed it on import.
+
+    The check is a substring one on purpose: it is aliases like
+    ``opencv-python-headless`` and ``onnxruntime-gpu`` that legitimately satisfy
+    a plain name, and total absence is the failure worth catching.
+    """
+    import tomllib
+
+    dependencies = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["dependencies"]
+    names = {
+        re.split(r"[<>=!~;\[]", spec)[0].strip().lower().replace("_", "-")
+        for spec in dependencies
+    }
+
+    missing = []
+    for filename in ("Dockerfile", "Dockerfile.gpu", "Dockerfile.demo"):
+        text = (
+            (REPO_ROOT / filename).read_text(encoding="utf-8").lower().replace("_", "-")
+        )
+        missing += [f"{filename}: {name}" for name in sorted(names) if name not in text]
+
+    assert not missing, (
+        "these runtime dependencies are never installed in the image, so the "
+        "container will fail on import: " + ", ".join(missing)
+    )
