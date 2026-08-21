@@ -81,7 +81,8 @@ RUN pip install --no-cache-dir \
     click \
     accelerate \
     bitsandbytes \
-    zstandard
+    zstandard \
+    send2trash
 
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*

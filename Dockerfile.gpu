@@ -84,7 +84,8 @@ RUN pip install --no-cache-dir \
     click \
     accelerate \
     bitsandbytes \
-    zstandard
+    zstandard \
+    send2trash
 
 
 
