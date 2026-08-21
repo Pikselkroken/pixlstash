@@ -105,6 +105,13 @@ COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 
 RUN pip install --no-cache-dir --no-deps -e .
 
+# Smoke test: import the server exactly as the entrypoint will. The pip list
+# above is hand-maintained and the install is --no-deps, so a dependency added
+# to pyproject.toml but not to that list produces a green build and an image
+# that dies on start-up (send2trash did, in v1.10.0). This fails the build
+# instead, before anything is tagged or pushed.
+RUN python -c "import pixlstash.server"
+
 COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
 
 # ── Bake in demo data ─────────────────────────────────────────────────────────
