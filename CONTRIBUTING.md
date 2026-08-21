@@ -251,7 +251,17 @@ into the image at build time.
 ```
 demo-data/
   server-config.json   # set image_root to the local absolute path of demo-data/images/
+  hub.db               # the owner and the READ token — copied from the config dir
   images/              # vault.db + all picture files
+```
+
+**`hub.db` is what makes the public link work.** Identity is portable: the owner
+and every token live in the hub, and `vault.db` carries none of it. Bake in only
+the vault and the container starts with an empty hub — no owner, no tokens, and
+`?token=` is refused. The container log names it:
+
+```
+hub.bootstrap: Registering an existing vault at /home/pixlstash/images without importing identity
 ```
 
 ### Building the demo database interactively
@@ -278,12 +288,22 @@ demo-data/
    Note the token value — it becomes the `?token=` in the public URL.
 5. Set `"disable_password_auth": true` in `demo-data/server-config.json` so nobody
    can log in via username/password once deployed.
+6. **Stop the server**, then copy the hub that holds that token next to the config:
+   ```bash
+   cp ~/.config/pixlstash/hub.db demo-data/hub.db
+   ```
+   Stop it first: the hub runs in WAL mode, so a copy taken while it is up can
+   miss the newest commits. There should be no `hub.db-wal` beside it.
 
 ### Building and deploying the image
 
 The `Dockerfile.demo` build automatically rewrites `image_root` to the
 in-container path `/home/pixlstash/images`, so you do not need to edit
-`server-config.json` before building.
+`server-config.json` before building. It reduces the baked hub to the **active**
+library and re-points that row at the same path, keeping `library.uuid` (which
+every token is stamped with). Everything that only describes the build machine
+goes: any other registered library and its tokens, every non-READ token, and the
+model-shelf rows. The build fails if no READ token is left for the active library.
 
 ```bash
 # Build the image locally

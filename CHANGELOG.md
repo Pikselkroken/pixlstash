@@ -1,3 +1,10 @@
+# [1.10.1]
+
+- Add missing dependency to docker images
+- Fix desktop icon in Electron app
+- Fix multiple icons showing up in macOS dock for CLI
+- Add pixlstash CLI to Windows PATH
+
 # [1.10.0]
 
 Pip, source, headless and Docker installations need one preparation command
