@@ -14,7 +14,7 @@ import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { networkInterfaces } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -56,6 +56,7 @@ import {
   shimInstalled,
   shimPath,
   syncShim,
+  syncUserPath,
 } from './cliShim';
 
 const execFileP = promisify(execFile);
@@ -110,10 +111,17 @@ let teardownComplete = false;
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
-// Desktop-shell preference: when true, `~/.local/bin/pixlstash` is kept pointing
-// at this install so the CLI is reachable from a plain shell. Opt-in: it writes
-// to a directory outside the app's own storage.
+// Desktop-shell preference: when true, a `pixlstash` shim is kept pointing at
+// this install so the CLI is reachable from a plain shell — `~/.local/bin` on
+// Linux and macOS, `%LOCALAPPDATA%\PixlStash\bin` plus a user PATH entry on
+// Windows. Opt-in: it writes outside the app's own storage.
 let shellCommand = false;
+// Whether the bare word `pixlstash` actually resolves right now. On Windows that
+// needs the PATH edit to have succeeded as well as the file to exist, and the
+// edit can fail on its own (a PATH we could not decode, an unavailable reg.exe).
+// Naming a command that does not run is the exact failure #1058 was about, so
+// nothing declares the bare word until this says so.
+let shimReachable = false;
 const pendingMediaSaves = new Map<
   string,
   { filePath: string; webContentsId: number; timeout: NodeJS.Timeout }
@@ -394,12 +402,25 @@ function saveDesktopPrefs(): void {
 }
 
 /**
- * Whether a shell shim is worth offering here: Windows has no per-user bin
- * directory on PATH, and an unpackaged dev run has no durable launcher to point
- * a shim at.
+ * Whether a shell shim is worth offering here: an unpackaged dev run has no
+ * durable launcher to point a shim at. Every packaged install does, Windows
+ * included since #1060 — it gets a `.cmd` and a PATH entry of its own rather
+ * than the per-user bin directory it does not have.
  */
 function shimSupported(): boolean {
-  return process.platform !== 'win32' && app.isPackaged;
+  return app.isPackaged;
+}
+
+/**
+ * What the shim forwards to. Windows cannot use the app's own launcher — it is
+ * a GUI-subsystem binary no shell waits for (#1058) — so its shim calls the
+ * bundled console-subsystem interpreter against this deployment's hub, exactly
+ * as {@link runCli} does.
+ */
+function shimForwardsTo(): { launcher: string; windowsHub?: string } {
+  return process.platform === 'win32'
+    ? { launcher: bundledInterpreter(), windowsHub: hubPath() }
+    : { launcher: launcherPath() };
 }
 
 /**
@@ -414,15 +435,16 @@ function shimSupported(): boolean {
  */
 function declaredCliCommand(): string | undefined {
   if (!app.isPackaged) return undefined;
-  // Windows declares nothing on purpose (issue #1058). Naming our own launcher
-  // there prints a command no shell waits for: PixlStash.exe is linked for the
-  // GUI subsystem, so the prompt comes back before the CLI has written a byte
-  // and its output then lands on top of it. The backend runs on the bundled
-  // python.exe — a console-subsystem binary at a durable path — and can compose
-  // that command from itself, so leaving the variable unset gets a *better*
-  // answer than we can give. See `desktop_windows_command` in
-  // pixlstash/hub/cli_hint.py.
-  if (process.platform === 'win32') return undefined;
+  // Windows without the shim declares nothing on purpose (issue #1058). Naming
+  // our own launcher there prints a command no shell waits for: PixlStash.exe is
+  // linked for the GUI subsystem, so the prompt comes back before the CLI has
+  // written a byte and its output then lands on top of it. The backend runs on
+  // the bundled python.exe — a console-subsystem binary at a durable path — and
+  // can compose that command from itself, so leaving the variable unset gets a
+  // *better* answer than we can give. See `desktop_windows_command` in
+  // pixlstash/hub/cli_hint.py. With the shim on PATH (#1060) there is finally
+  // something shorter and shell-agnostic to name, so we name it.
+  if (process.platform === 'win32') return shimReachable ? 'pixlstash' : undefined;
   return cliCommandHint(shimSupported() && shimInstalled(), launcherPath());
 }
 
@@ -436,7 +458,18 @@ function declaredCliCommand(): string | undefined {
  * toggle only reaches the Settings hint after the backend next restarts.
  */
 function applyShellCommand(): void {
-  if (shimSupported()) syncShim(shellCommand, launcherPath());
+  if (shimSupported()) {
+    const { launcher, windowsHub } = shimForwardsTo();
+    const installed = syncShim(shellCommand, launcher, shimPath(), windowsHub);
+    // Follows the shim rather than the preference, so a refused shim never
+    // leaves a directory on PATH that holds nothing.
+    const onPath = syncUserPath(installed, dirname(shimPath()));
+    // Elsewhere the directory is on PATH by convention, so the file is the whole
+    // answer; on Windows we put it there ourselves and have to have succeeded.
+    shimReachable = installed && (process.platform !== 'win32' || onPath);
+  } else {
+    shimReachable = false;
+  }
   const declared = declaredCliCommand();
   // Deleted rather than left stale, so a dev run can never inherit a hint from
   // whatever set the variable before us.
@@ -1166,17 +1199,29 @@ function registerIpc(): void {
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
   //
   // shellCommand reports whether the command is *actually there*, not what the
-  // preference says, and is null where there is nothing to install (Windows has
-  // no per-user bin dir on PATH; an unpackaged dev run has no durable launcher
-  // to point at) so Settings leaves the row out entirely. Enabling can be
-  // refused — by a `pixlstash` the user wrote themselves, or an unwritable home
-  // — and a switch stuck on over a command that does not exist would be worse
-  // than one that snaps back with a reason.
-  const shellCommandState = () => (shimSupported() ? shimInstalled() : null);
+  // preference says, and is null where there is nothing to install (an
+  // unpackaged dev run has no durable launcher to point at) so Settings leaves
+  // the row out entirely. Enabling can be refused — by a `pixlstash` the user
+  // wrote themselves, or an unwritable home — and a switch stuck on over a
+  // command that does not exist would be worse than one that snaps back with a
+  // reason — and on Windows the PATH edit can fail on its own, so the switch
+  // tracks whether the command is *reachable*, not merely written.
+  // shellCommandDir is sent so the row can name where the command goes; the home
+  // directory is abbreviated because the full path wraps the settings panel,
+  // which is the same reason cli_hint._shorten exists.
+  const shellCommandState = () => (shimSupported() ? shimReachable : null);
+  const shellCommandDir = () => {
+    const dir = dirname(shimPath());
+    const home = homedir();
+    return process.platform !== 'win32' && home && dir.startsWith(home + sep)
+      ? `~${dir.slice(home.length)}`
+      : dir;
+  };
 
   ipcMain.handle('desktop:getPrefs', () => ({
     hideToTrayOnClose,
     shellCommand: shellCommandState(),
+    shellCommandDir: shellCommandDir(),
   }));
   ipcMain.handle(
     'desktop:setPrefs',
@@ -1189,16 +1234,26 @@ function registerIpc(): void {
         shellCommand = prefs.shellCommand;
         saveDesktopPrefs();
         applyShellCommand();
-        if (shellCommand && !shimInstalled()) {
+        if (shellCommand && !shimReachable) {
           throw new Error(
             shimBlocked()
               ? `${shimPath()} already exists and was not created by PixlStash. ` +
                 'Rename or remove it, then try again.'
-              : `Could not write ${shimPath()}.`,
+              : shimInstalled()
+                ? // Windows only: the file is there but the PATH edit did not
+                  // take, so the bare word would not resolve. The log carries
+                  // the reason (see syncUserPath).
+                  `${shimPath()} was written, but ${dirname(shimPath())} could not be ` +
+                  'added to your PATH. See the log for why.'
+                : `Could not write ${shimPath()}.`,
           );
         }
       }
-      return { hideToTrayOnClose, shellCommand: shellCommandState() };
+      return {
+        hideToTrayOnClose,
+        shellCommand: shellCommandState(),
+        shellCommandDir: shellCommandDir(),
+      };
     },
   );
 
@@ -1283,6 +1338,10 @@ function registerIpc(): void {
  * work whether or not the app is already open. Nothing here creates a window,
  * so this stays a fast process spawn rather than a full Chromium start.
  *
+ * Windowless is not the same as invisible on macOS, though: AppKit reads the
+ * bundle's Info.plist and makes every launch a *regular* foreground app before
+ * any of this runs, so each CLI invocation left a dock tile behind (#1061).
+ *
  * `stdio: 'inherit'` because the CLI writes to the terminal and asks for a y/n
  * on destructive verbs; piping would hang that prompt with nothing shown.
  */
@@ -1291,6 +1350,11 @@ function runCli(args: string[]): void {
   // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
   // to open dri...") to the terminal *after* the CLI's own output.
   app.disableHardwareAcceleration();
+  // Same reason, macOS side: drop the regular-app activation policy so this run
+  // leaves no dock tile behind. Typed `Dock | undefined`, so the optional call
+  // is the platform check — unlike app.setActivationPolicy, which the typings
+  // declare unconditionally but which does not exist off macOS.
+  app.dock?.hide();
   const declared = declaredCliCommand();
   // Same interpreter choice the backend makes, so a dev run drives the repo's
   // .venv and the CLI branch is exercisable without building the bundled env.

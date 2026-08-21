@@ -177,9 +177,9 @@ describe("ComputeSection unified runtime list", () => {
 });
 
 // The desktop CLI shim toggle. Its whole job is to be absent where there is
-// nothing to install (Windows, or an unpackaged dev run) — the main process
-// signals that by reporting shellCommand as null rather than a boolean, and a
-// switch that silently does nothing is worse than no switch.
+// nothing to install (an unpackaged dev run) — the main process signals that by
+// reporting shellCommand as null rather than a boolean, and a switch that
+// silently does nothing is worse than no switch.
 describe("Desktop › Shell command", () => {
   async function mountBackend(prefs) {
     const desktop = installDesktop({ runtime: null, accelerators: [] });
@@ -212,6 +212,21 @@ describe("Desktop › Shell command", () => {
     expect(
       row.findComponent({ name: "v-switch" }).vm.$attrs["model-value"],
     ).toBe(false);
+  });
+
+  it("names the directory it is about to write, per platform", async () => {
+    // The destination differs by platform (#1060 gave Windows a bin directory
+    // of its own and put it on PATH), so the row reads it from the main process
+    // rather than hardcoding the POSIX one. A PATH change only reaches a shell
+    // started after it, which is why the row says to open a new terminal.
+    const { wrapper } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+      shellCommandDir: "C:\\Users\\me\\AppData\\Local\\PixlStash\\bin",
+    });
+    const sub = rowSub(shellRow(wrapper));
+    expect(sub).toContain("C:\\Users\\me\\AppData\\Local\\PixlStash\\bin");
+    expect(sub).toContain("new terminal");
   });
 
   it("turning it on asks the main process to install the shim", async () => {

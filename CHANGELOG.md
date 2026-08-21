@@ -1,3 +1,10 @@
+# [1.10.1]
+
+- Add missing dependency to docker images
+- Fix desktop icon in Electron app
+- Fix multiple icons showing up in macOS dock for CLI
+- Add pixlstash CLI to Windows PATH
+
 # [1.10.0]
 
 Pip, source, headless and Docker installations need one preparation command
@@ -17,8 +24,11 @@ reopen their links.
   plugins and add picture libraries. Lets you perform regular backups with cron.
 - The desktop app can run that CLI itself: `PixlStash.AppImage cli libraries
   list` works whether or not the app is open. Settings → Backend → Desktop →
-  Shell command adds a `pixlstash` command in `~/.local/bin` for any terminal,
-  and Settings → Libraries shows the exact command for your install.
+  Shell command adds a `pixlstash` command for any terminal — in `~/.local/bin`
+  on Linux and macOS, and on Windows in `%LOCALAPPDATA%\PixlStash\bin`, which it
+  adds to your user PATH so the command works in both cmd and PowerShell. Open a
+  new terminal after switching it on. Settings → Libraries shows the exact
+  command for your install.
 - Add `pixlstash-cli libraries backup` for an owner-readable local archive of a
   library and its hub, and `libraries restore` to read one back into a new
   folder and make it the library that opens — password and API tokens included.

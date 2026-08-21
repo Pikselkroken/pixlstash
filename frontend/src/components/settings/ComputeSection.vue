@@ -158,9 +158,13 @@ watch(
 // Desktop-shell preference: keep running in the tray when the window is closed.
 const hideToTrayOnClose = ref(true);
 // Desktop-shell preference: put a `pixlstash` command on the shell's PATH.
-// null means this install has nothing to install (Windows, or a dev run), and
-// the row is hidden rather than shown as a switch that would do nothing.
+// null means this install has nothing to install (a dev run), and the row is
+// hidden rather than shown as a switch that would do nothing.
 const shellCommand = ref(null);
+// Where that command lands, which differs per platform (and on Windows is a
+// directory we also add to the user's PATH). Named in the row so the switch
+// says what it is about to write.
+const shellCommandDir = ref("");
 
 async function refresh() {
   if (!desktop) return;
@@ -205,6 +209,7 @@ async function refreshDesktopPrefs() {
     hideToTrayOnClose.value = !!prefs.hideToTrayOnClose;
     shellCommand.value =
       typeof prefs.shellCommand === "boolean" ? prefs.shellCommand : null;
+    shellCommandDir.value = prefs.shellCommandDir || "";
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -220,6 +225,13 @@ async function setHideToTray(value) {
   }
 }
 
+// A PATH change (Windows) or a newly-created bin directory (everywhere else)
+// only reaches a shell started after it, so the row has to say so.
+const shellCommandSub = computed(
+  () =>
+    `Puts a pixlstash command in ${shellCommandDir.value || "your user bin directory"} so you can attach libraries and install plugins from a terminal. Open a new terminal afterwards.`,
+);
+
 // Installing can be refused (a `pixlstash` the user wrote themselves is in the
 // way, or the home directory is not writable), so the switch is set from what
 // the main process reports afterwards rather than from what was asked for. A
@@ -232,6 +244,7 @@ async function setShellCommand(value) {
     const prefs = await desktop.setDesktopPrefs({ shellCommand: value });
     shellCommand.value =
       typeof prefs?.shellCommand === "boolean" ? prefs.shellCommand : null;
+    shellCommandDir.value = prefs?.shellCommandDir || shellCommandDir.value;
   } catch (e) {
     error.value = e?.message || String(e);
     await refreshDesktopPrefs();
@@ -535,7 +548,7 @@ watch(
         <SettingsRow
           v-if="shellCommand !== null"
           label="Shell command"
-          sub="Puts a pixlstash command in ~/.local/bin so you can attach libraries and install plugins from a terminal."
+          :sub="shellCommandSub"
         >
           <v-switch
             :model-value="shellCommand"
