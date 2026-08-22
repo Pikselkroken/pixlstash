@@ -704,7 +704,14 @@ Detection: id, picture_id, frame_index, detection_index,
              Picture.detections relationship cascades on delete
 
 Character: id, name, description, extra_metadata,
-           reference_picture_set_id, project_id
+           reference_picture_set_id, thumbnail_picture_id, project_id
+           → thumbnail_picture_id pins which picture
+             GET /characters/{id}/thumbnail crops (NULL = automatic).
+             Deliberately NOT a foreign key: pictures are hard-deleted
+             (scrapheap purge, maintenance) and an FK would abort those
+             deletes. The purge clears the pin instead, and the route
+             ignores a pin whose picture no longer carries a face of
+             this character.
 
 Quality: id, picture_id, sharpness, edge_density, contrast,
          brightness, noise_level, colorfulness,

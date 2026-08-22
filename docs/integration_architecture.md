@@ -660,7 +660,7 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 
 ### Generated thumbnails: the URL is stable, so the *response* carries the freshness contract
 
-`GET /characters/{id}/thumbnail` and `GET /picture_sets/{id}/thumbnail` serve a **generated** image from a server-side cache file whose bytes change under an unchanged URL (the face crop is rebuilt when a better picture wins, the set collage when its top members change). Two facts make this a trap:
+`GET /characters/{id}/thumbnail` and `GET /picture_sets/{id}/thumbnail` serve a **generated** image from a server-side cache file whose bytes change under an unchanged URL (the face crop is rebuilt when a better picture wins **or when the user pins a different one** — `PATCH /characters/{id}` with `thumbnail_picture_id`, cleared with `null` — the set collage when its top members change). Two facts make this a trap:
 
 - Starlette's `FileResponse` sets an `ETag` but **answers no conditional request** — its only conditional logic is `If-Range` (verified against starlette 1.3.1).
 - With no `Cache-Control` at all, browsers fall back to **heuristic** caching, so a regenerated thumbnail can stay stale for an unbounded window with no revalidation.

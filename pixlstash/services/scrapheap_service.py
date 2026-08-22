@@ -98,11 +98,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from sqlalchemy import and_, delete, or_
+from sqlalchemy import and_, delete, or_, update
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import DeletedFileLog, Picture, ReferenceFolder
+from pixlstash.db_models import Character, DeletedFileLog, Picture, ReferenceFolder
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -633,6 +633,16 @@ def purge_rows_in_session(
     # ``deleted`` is repeated in the DELETE itself, not just in the SELECT
     # above: belt-and-braces against anything that could commit between the
     # two statements in this same session.
+    # Clear any character thumbnail pinned to a picture that is about to stop
+    # existing. ``Character.thumbnail_picture_id`` carries no foreign key on
+    # purpose (a real one would abort this DELETE), and SQLite reuses rowids, so
+    # a pin left behind can silently reattach to whatever picture is imported
+    # next into that id.
+    session.exec(
+        update(Character)
+        .where(Character.thumbnail_picture_id.in_(purge_scope))
+        .values(thumbnail_picture_id=None)
+    )
     session.exec(
         delete(Picture).where(Picture.id.in_(purge_scope), Picture.deleted.is_(True))
     )
