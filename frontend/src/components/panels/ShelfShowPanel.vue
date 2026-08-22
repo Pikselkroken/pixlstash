@@ -175,6 +175,26 @@
       </div>
     </div>
 
+    <!-- Copies. Its own section rather than a sixth box under Types, because
+         it does not narrow WHAT a row is — it narrows to the rows that are on
+         the disk more than once, whatever kind they are. `refetch: false`: the
+         count is computed from the `locations` every row already carries, so
+         there is nothing to ask the server for. -->
+    <div class="tbm-section">
+      <span class="tbm-label">Copies</span>
+      <label
+        class="tbm-check"
+        title="Files stored more than once — the same bytes, under one name or two"
+      >
+        <input
+          type="checkbox"
+          :checked="filters.duplicatesOnly"
+          @change="store.setFilters({ duplicatesOnly: $event.target.checked })"
+        />
+        Only duplicates
+      </label>
+    </div>
+
     <!-- Base model. "Not set" is an option, not an omission: a null base model
          is what most real adapters record, so dropping those rows from a
          filtered view would hide the largest group in the shelf. -->

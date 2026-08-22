@@ -52,6 +52,19 @@ beforeEach(() => {
 });
 
 describe("ShelfShowPanel", () => {
+  it("wires Only duplicates to the filter the store actually reads", async () => {
+    // The one thing a store test cannot catch: a mis-spelled key here writes a
+    // field nothing reads, the box ticks, and the shelf does not narrow.
+    const { wrapper, store } = await mountPanel([adapter()]);
+    const box = wrapper
+      .findAll("label.tbm-check")
+      .find((l) => l.text().includes("Only duplicates"))
+      .find("input");
+    expect(store.filters.duplicatesOnly).toBe(false);
+    await box.setValue(true);
+    expect(store.filters.duplicatesOnly).toBe(true);
+  });
+
   it("offers the null base model as 'Not set' rather than omitting it", async () => {
     const { wrapper } = await mountPanel([
       adapter({ id: 1 }),
