@@ -426,8 +426,10 @@ watch(
 
 <style scoped>
 /* The plugin lists scroll, the pane does not: the pane is a column, the
-   Auto-tagging section takes the leftover height, and each column's table body
-   is the only thing that overflows. Without this the two tables push the whole
+   Auto-tagging section takes the leftover height, and each column's plugin
+   table is the only thing that overflows. The scroll box wraps the whole
+   table, header included, so PluginsTable pins its header row (see the
+   `position: sticky` there). Without this the two tables push the whole
    Settings pane past its fixed height and the dialog grows a scrollbar. */
 .behaviour-pane {
   display: flex;
