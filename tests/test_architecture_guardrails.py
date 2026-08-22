@@ -2572,3 +2572,38 @@ def test_dockerfiles_install_every_runtime_dependency():
         "these runtime dependencies are never installed in the image, so the "
         "container will fail on import: " + ", ".join(missing)
     )
+
+
+def test_frontend_import_extensions_match_the_staging_allowlist():
+    """The importer's client-side filter must say exactly what the server takes.
+
+    The frontend used to filter a drop against the lists it uses to *display*
+    pictures, which are far wider than what the staging route accepts. A model
+    file, a `.psd` or a `.wmv` therefore uploaded in full — a gigabyte, in the
+    report that prompted this — before the route skipped it as unsupported and
+    the commit came back "No staged files to import". Two allowlists with
+    nothing holding them together is what made that possible, so this is the
+    thing holding them together.
+    """
+    from pixlstash.routes.pictures._import import STAGING_ALLOWED_MEDIA_EXTS
+
+    media_js = (REPO_ROOT / "frontend" / "src" / "utils" / "media.js").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"export const IMPORT_MEDIA_EXTENSIONS = \[(.*?)\];", media_js, re.DOTALL
+    )
+    assert match, (
+        "IMPORT_MEDIA_EXTENSIONS is gone from frontend/src/utils/media.js — the "
+        "importer is filtering against something else, and this guardrail can no "
+        "longer see what."
+    )
+    frontend_exts = {f".{ext}" for ext in re.findall(r'"([^"]+)"', match.group(1))}
+
+    assert frontend_exts == STAGING_ALLOWED_MEDIA_EXTS, (
+        "the client-side import filter and the staging route disagree: "
+        f"client-only={sorted(frontend_exts - STAGING_ALLOWED_MEDIA_EXTS)}, "
+        f"server-only={sorted(STAGING_ALLOWED_MEDIA_EXTS - frontend_exts)}. "
+        "A client-only extension uploads the whole file and then fails the "
+        "commit; a server-only one is refused before it is ever offered."
+    )

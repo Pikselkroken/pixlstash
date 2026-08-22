@@ -1136,16 +1136,17 @@ File type helpers.
 
 | Export | Description |
 |--------|-------------|
-| `PIL_IMAGE_EXTENSIONS` | Array of ~50 image format extensions. |
-| `VIDEO_EXTENSIONS` | `['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v']` |
+| `PIL_IMAGE_EXTENSIONS` | Array of ~50 image format extensions. What the app can **display** — never what it will import. |
+| `VIDEO_EXTENSIONS` | `['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v']` — display, as above. |
+| `IMPORT_MEDIA_EXTENSIONS` | What the importer will **take**, mirroring `STAGING_ALLOWED_MEDIA_EXTS` in `pixlstash/routes/pictures/_import.py`. Much shorter than the display lists, and the difference is not cosmetic: filtering a drop against those let a `.psd` or a `.wmv` upload in full before the route skipped it as unsupported and the commit returned "No staged files to import". `tests/test_architecture_guardrails.py::test_frontend_import_extensions_match_the_staging_allowlist` fails the build if the two lists drift. |
 | `ARCHIVE_EXTENSIONS` | `['zip']` |
 | `CAPTION_EXTENSIONS` | `['txt']` |
 | `isSupportedImageFile(file)` | Predicate by extension. |
 | `isSupportedVideoFile(file)` | Predicate by extension. |
 | `isSupportedArchiveFile(file)` | Predicate by extension. |
-| `isSupportedMediaFile(file)` | Image OR video. |
+| `isImportableMediaFile(file)` | Extension is in `IMPORT_MEDIA_EXTENSIONS` — the import test, not the display one. |
 | `isSupportedCaptionFile(file)` | `.txt` extension. |
-| `isSupportedImportFile(file)` | Media OR archive OR caption. |
+| `isSupportedImportFile(file)` | Importable media OR archive OR caption. Every import entry point filters through this one: the window-wide drop (`useWindowFileImport`), the grid's drop target, the sidebar set/character drops, and the import dialog. |
 | `collectImportFiles(dataTransfer)` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, deduplicates by `name::size::lastModified`. |
 
 ---

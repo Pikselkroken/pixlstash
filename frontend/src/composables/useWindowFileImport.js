@@ -1,5 +1,10 @@
 import { onMounted, onUnmounted } from "vue";
-import { isInternalImageDrag } from "../utils/media.js";
+import {
+  extractSupportedImportFilesFromDataTransfer,
+  isInternalImageDrag,
+  isSupportedImportFile,
+} from "../utils/media.js";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
 
 /**
@@ -16,6 +21,7 @@ import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
  */
 export function useWindowFileImport({ sidebarRef }) {
   const reviewSessionsStore = useReviewSessionsStore();
+  const noticeStore = useNoticeStore();
 
   function isInsideImageGrid(event) {
     const target = event?.target;
@@ -48,7 +54,7 @@ export function useWindowFileImport({ sidebarRef }) {
     event.preventDefault();
   }
 
-  function handleWindowDrop(event) {
+  async function handleWindowDrop(event) {
     if (!isExternalFileDragEvent(event)) return;
     // While the review overlay is open, swallow the drop without importing
     // (still preventDefault so the browser does not navigate to the dropped file).
@@ -60,10 +66,26 @@ export function useWindowFileImport({ sidebarRef }) {
     if (isInsideImageGrid(event)) {
       return;
     }
-    const droppedFiles = Array.from(event.dataTransfer?.files || []);
-    if (!droppedFiles.length) return;
+    // The same collect-and-filter the grid's own drop target runs, with no
+    // pre-guard of its own: this handler took `dataTransfer.files` raw, so a
+    // model file dropped on any other screen — the shelf, say — was streamed to
+    // the picture importer, which uploaded the whole gigabyte before the
+    // backend skipped it as unsupported and the commit failed with "No staged
+    // files to import". Reading through the helper also picks up a dropped
+    // DIRECTORY, which `dataTransfer.files` alone reports as one unreadable
+    // entry.
+    const files = await extractSupportedImportFilesFromDataTransfer(
+      event.dataTransfer,
+    );
+    if (!files.length) {
+      noticeStore.warning(
+        "None of those files are a supported image, video or archive.",
+        { key: "import-unsupported-files" },
+      );
+      return;
+    }
     const projectId = sidebarRef.value?.currentProjectId ?? null;
-    sidebarRef.value?.startLocalImport?.(droppedFiles, projectId);
+    sidebarRef.value?.startLocalImport?.(files, projectId);
   }
 
   function handleWindowPaste(event) {
@@ -84,7 +106,11 @@ export function useWindowFileImport({ sidebarRef }) {
           (item.type.startsWith("image/") || item.type.startsWith("video/")),
       )
       .map((item) => item.getAsFile())
-      .filter(Boolean);
+      // The MIME test above is the clipboard's own word for it and is wider
+      // than the importer: a Photoshop file pastes as
+      // `image/vnd.adobe.photoshop` and would upload in full only to be skipped
+      // server-side. Same filter as the drop path.
+      .filter((file) => file && isSupportedImportFile(file));
     if (!mediaFiles.length) return;
     event.preventDefault();
     const projectId = sidebarRef.value?.currentProjectId ?? null;

@@ -62,6 +62,40 @@ export const VIDEO_EXTENSIONS = [
   "m4v",
 ];
 
+/**
+ * What the picture importer will actually take.
+ *
+ * NOT `PIL_IMAGE_EXTENSIONS` + `VIDEO_EXTENSIONS`: those two say what the app
+ * can *display*, and the import endpoint takes a much shorter list. Filtering a
+ * drop against the display lists let a `.psd`, a `.pdf` or a `.wmv` upload in
+ * full before the backend skipped it as unsupported and the commit came back
+ * "No staged files to import" — a gigabyte spent to reach an error the name
+ * already gave away.
+ *
+ * Mirrors `STAGING_ALLOWED_MEDIA_EXTS` in
+ * `pixlstash/routes/pictures/_import.py`, which is the one the server enforces.
+ * `tests/test_architecture_guardrails.py::test_frontend_import_extensions_match_the_staging_allowlist`
+ * fails the build if the two drift apart.
+ */
+export const IMPORT_MEDIA_EXTENSIONS = [
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "bmp",
+  "tiff",
+  "tif",
+  "heic",
+  "heif",
+  "avif",
+  "mp4",
+  "webm",
+  "mov",
+  "avi",
+  "mkv",
+];
+
 const ARCHIVE_EXTENSIONS = ["zip"];
 
 const CAPTION_EXTENSIONS = ["txt"];
@@ -85,8 +119,10 @@ function isSupportedArchiveFile(file) {
   return ARCHIVE_EXTENSIONS.includes(ext);
 }
 
-function isSupportedMediaFile(file) {
-  return isSupportedImageFile(file) || isSupportedVideoFile(file);
+function isImportableMediaFile(file) {
+  const filename = typeof file === "string" ? file : file?.name || "";
+  const ext = filename.split(".").pop().toLowerCase();
+  return IMPORT_MEDIA_EXTENSIONS.includes(ext);
 }
 
 function isSupportedCaptionFile(file) {
@@ -101,7 +137,7 @@ function isSupportedCaptionFile(file) {
 
 export function isSupportedImportFile(file) {
   return (
-    isSupportedMediaFile(file) ||
+    isImportableMediaFile(file) ||
     isSupportedArchiveFile(file) ||
     isSupportedCaptionFile(file)
   );
