@@ -634,6 +634,15 @@ def test_pinning_a_picture_without_this_persons_face_is_rejected():
             f"/characters/{char_id}", json={"thumbnail_picture_id": "not-an-id"}
         )
         assert resp.status_code == 400
+
+        # A scrapheaped picture keeps its faces, so it passes a face-only check
+        # — and the renderer would still skip it, leaving a pin nothing can
+        # honour. Refused for the same reason and with the same status.
+        assert client.delete(f"/pictures/{first_pic}").status_code == 200
+        resp = client.patch(
+            f"/characters/{char_id}", json={"thumbnail_picture_id": first_pic}
+        )
+        assert resp.status_code == 400
         # And nothing was written: the person still has no pin.
         assert (
             client.get(f"/characters/{char_id}").json()["thumbnail_picture_id"] is None

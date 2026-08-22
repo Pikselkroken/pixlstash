@@ -884,8 +884,10 @@ def create_router(server) -> APIRouter:
             "**Thumbnail.** Send ``thumbnail_picture_id`` to pin which picture "
             "``GET /characters/{id}/thumbnail`` crops the face from; ``null`` "
             "restores the automatic choice (the highest-scoring picture of this "
-            "person). The picture must carry a face assigned to this character, "
-            "or the call answers 400."
+            "person). The picture must carry a face assigned to this character "
+            "and must not be in the scrapheap, or the call answers 400 — the "
+            "renderer skips deleted pictures, so a pin naming one could never "
+            "be honoured."
         ),
         response_model=CharacterMutationResponse,
     )
@@ -960,20 +962,30 @@ def create_router(server) -> APIRouter:
                     # pinned: the thumbnail is a crop of THEIR face, so an id
                     # with no face of theirs would render nothing and silently
                     # fall back.
+                    #
+                    # ``deleted`` is part of that, and not decoration: a
+                    # scrapheaped picture keeps its faces, so without this the
+                    # PATCH would accept an id the renderer refuses (its
+                    # selection filters on ``deleted``) and store a pin that
+                    # nothing can ever honour. Accept only what will be used.
                     if (
                         pinned is not None
                         and not session.exec(
-                            select(Face.id).where(
+                            select(Face.id)
+                            .join(Picture, Picture.id == Face.picture_id)
+                            .where(
                                 Face.picture_id == pinned,
                                 Face.character_id == id,
+                                Picture.deleted.is_(False),
                             )
                         ).first()
                     ):
                         raise HTTPException(
                             status_code=400,
                             detail=(
-                                "thumbnail_picture_id must name a picture with a "
-                                "face assigned to this character"
+                                "thumbnail_picture_id must name a picture, not in "
+                                "the scrapheap, with a face assigned to this "
+                                "character"
                             ),
                         )
                     if pinned != character.thumbnail_picture_id:
