@@ -82,6 +82,39 @@ IMAGE_EXTENSIONS = (
 _SEED_RE = re.compile(r"(^|_)(seed|noise_seed)$")
 _OUTPUT_PATH_RE = re.compile(r"^(output|save)_?(path|name)")
 
+# Inputs that carry what a person WROTE. The extension rules below are
+# name-blind by design (§Unknown-node defaults rule 4 and 5 exist because
+# custom nodes are unbounded), and name-blindness has one bad case: a prompt
+# ending in an image extension is read as a topology asset, which both forks
+# the recipe on a prompt-only edit and writes the prompt into the stored graph,
+# breaking the prompt-free guarantee library plan §5 rests on.
+#
+# So prose-carrying inputs are excluded first. The set is small and anchored
+# rather than a substring match, so a custom node's `text_encoder_name` still
+# resolves as the asset it is. Measured against the owner's libraries: not one
+# of these names currently reaches the extension test, so this closes a hole
+# without moving a single existing key.
+_TEXT_FIELD_NAMES = frozenset(
+    {
+        "text",
+        "text_g",
+        "text_l",
+        "prompt",
+        "caption",
+        "description",
+        "wildcard",
+    }
+)
+_TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I)
+
+# A filename is one path component; prose is not. A newline can never appear in
+# a filename and 255 bytes is the component limit on every filesystem
+# PixlStash runs on, so neither guard can reject a real asset. Measured: zero
+# real TA values trip either. They are the backstop for a prose field this
+# module has not been told about — 5,066 genuine `lora_name` and `image` values
+# DO contain spaces, which is why "has a space" is not one of these rules.
+_MAX_FILENAME_LENGTH = 255
+
 # The ComfyUI-PixlStash loaders name their asset by digest rather than by
 # filename (`lora_sha256`, `checkpoint_sha256`), so the extension rules below
 # cannot see them. Without this a LoRA swap on a PixlStash node would leave the
@@ -201,6 +234,11 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         return None
     if _SHA256_FIELD_RE.search(name):
         return value.lower()
+    lowered = name.lower()
+    if lowered in _TEXT_FIELD_NAMES or _TEXT_FIELD_SUFFIX_RE.search(lowered):
+        return None
+    if "\n" in value or len(value) > _MAX_FILENAME_LENGTH:
+        return None
     lowered = value.lower()
     if lowered.endswith(MODEL_EXTENSIONS) or lowered.endswith(IMAGE_EXTENSIONS):
         return _normalized_filename(value)
@@ -227,12 +265,29 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
     nodes: dict[str, ReducedNode] = {}
     for node_id, node in graph.items():
         if not isinstance(node, dict) or "class_type" not in node:
+            # Not node-shaped at all. Skipped rather than refused, because a
+            # caller may hand us a prompt envelope carrying sibling keys.
             continue
+        # Node-shaped but malformed is a different case, and it is refused.
+        # `str(None)` would otherwise become the class name "None" and key as a
+        # perfectly ordinary one-node recipe. Measured: zero occurrences in
+        # 28,289 real API graphs, so nothing real is being rejected here.
+        class_type = node["class_type"]
+        if not isinstance(class_type, str) or not class_type:
+            raise WorkflowGraphError(
+                f"node {node_id} has class_type {class_type!r}, which is not a "
+                "non-empty string"
+            )
         widgets: list[tuple[str, Optional[str]]] = []
         inputs: list[tuple[str, str, int]] = []
         raw_inputs = node.get("inputs")
-        if not isinstance(raw_inputs, dict):
+        if raw_inputs is None:
             raw_inputs = {}
+        elif not isinstance(raw_inputs, dict):
+            raise WorkflowGraphError(
+                f"node {node_id} has inputs of type "
+                f"{type(raw_inputs).__name__}, which is not a mapping"
+            )
         for name, value in raw_inputs.items():
             name = str(name)
             if _is_link(value):
@@ -251,7 +306,7 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
             else:
                 widgets.append((name, structural_widget_value(name, value)))
         nodes[str(node_id)] = ReducedNode(
-            class_type=str(node.get("class_type")),
+            class_type=class_type,
             widgets=tuple(sorted(widgets)),
             inputs=tuple(sorted(inputs)),
         )
@@ -512,7 +567,18 @@ class _UiGraph:
                 "or a chain longer than this guard allows"
             )
         node = self.nodes.get(key)
-        if node is None or node.get("mode") in _UI_INACTIVE_MODES:
+        if node is None:
+            # A link naming a node that is nowhere in the file. Dropping it
+            # would hash identically to the same graph with that connection
+            # deleted, and would do so while the API-side reduction KEEPS its
+            # dangling edges — so the two serialisations of one workflow could
+            # key differently, which is the portability claim this tier exists
+            # for. Measured: zero occurrences in 28,069 real UI graphs, so this
+            # refuses malformed input rather than rejecting anything real.
+            raise WorkflowGraphError(
+                f"UI graph link names origin node {key}, which the file does not define"
+            )
+        if node.get("mode") in _UI_INACTIVE_MODES:
             return None
         node_type = str(node.get("type", "?"))
         if node_type == _SUBGRAPH_INPUT:

@@ -2556,10 +2556,10 @@ values cannot be recovered without a hub backup.
 
 `workflow_topology`, `workflow_recipe` and `workflow_recipe_graph` are hub tables,
 and **that location is the irreversible decision in the release** (workflow
-library plan §4). 70.2% of the owner's structural recipes appear in more than
-one of his libraries, so a per-vault store would hold the same workflow three
-times and could never answer "have I built this before", which is the question
-the feature exists to answer. The backfill that fills them is a one-time pass
+library plan §4, which carries the measurement). Most structural recipes recur
+across more than one of a user's libraries, so a per-vault store would hold the
+same workflow several times and could never answer "have I built this before",
+which is the question the feature exists to answer. The backfill that fills them is a one-time pass
 over every picture in every library: writing the rows into a vault and moving
 them later means re-running it, and re-running it after pictures have been
 deleted cannot recover those pictures' rows at all.
@@ -2588,7 +2588,7 @@ The **instance** tier is deliberately absent. It is what holds the prompt and
 every parameter, it is written by ingest, and ingest is a later step; its
 location is not in question, since §4 puts the whole family here.
 
-The counts, the tier collapse and the 70.2% cross-library figure are in
+The counts, the tier collapse and the cross-library figure are in
 `pixlstash-workflow-extraction-measurement.md` and the library plan, which asks
 that they be cited rather than restated. What is worth recording here is that
 the shipped implementation was run over the same libraries and lands on the same

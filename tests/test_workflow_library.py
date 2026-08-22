@@ -387,6 +387,52 @@ def test_pixlstash_loader_keys_on_the_digest_not_the_pointer():
     assert structural_hash(api_graph(edited(spec, 8, lora_sha256="b" * 64))) != baseline
 
 
+def test_a_prompt_ending_in_an_image_extension_is_not_an_asset():
+    """The extension rules are name-blind, and this is their one bad case.
+
+    Read as a topology asset, a prompt both forks the recipe on a prompt-only
+    edit and lands in the stored graph, which is exactly what library plan §5's
+    prompt-free guarantee forbids. Prose-carrying inputs are therefore excluded
+    before the extension test.
+    """
+    spec = edited(TXT2IMG, 2, text="a photorealistic cat.png")
+    assert structural_hash(api_graph(spec)) == structural_hash(api_graph(TXT2IMG))
+    assert structural_document(api_graph(spec))["2"]["inputs"]["text"] is None
+    # A newline or an over-long value is prose whatever the field is called.
+    assert structural_hash(
+        api_graph(edited(TXT2IMG, 4, note="a cat\non a mat.png"))
+    ) == structural_hash(api_graph(edited(TXT2IMG, 4, note="a dog\nin a bog.png")))
+
+
+def test_an_asset_filename_containing_a_space_is_still_an_asset():
+    """The guard above must not catch real files.
+
+    Measured: 5,066 genuine `lora_name` and `image` values in the owner's
+    libraries contain a space, so "has a space" would have been a wrong rule
+    and this is the fixture that says so.
+    """
+    spaced = api_graph(edited(TXT2IMG, 1, ckpt_name="Some Model v2.safetensors"))
+    assert structural_hash(spaced) != structural_hash(api_graph(TXT2IMG))
+    assert (
+        structural_document(spaced)["1"]["inputs"]["ckpt_name"]
+        == "some model v2.safetensors"
+    )
+
+
+def test_a_malformed_node_is_refused_rather_than_keyed():
+    """`str(None)` would otherwise become the perfectly ordinary class "None"."""
+    with pytest.raises(WorkflowGraphError):
+        structural_hash({"1": {"class_type": None, "inputs": {}}})
+    with pytest.raises(WorkflowGraphError):
+        structural_hash({"1": {"class_type": "", "inputs": {}}})
+    with pytest.raises(WorkflowGraphError):
+        structural_hash({"1": {"class_type": "SaveImage", "inputs": ["images"]}})
+    # A sibling key that is not node-shaped at all is an envelope, not a defect.
+    assert structural_hash({**api_graph(TXT2IMG), "extra_data": {}}) == structural_hash(
+        api_graph(TXT2IMG)
+    )
+
+
 def test_structural_document_is_prompt_free_and_scrubs_credentials():
     spec = edited(TXT2IMG, 7, api_key="example-not-a-real-key")
     document = structural_document(api_graph(spec))
@@ -552,6 +598,19 @@ def test_a_passthrough_cycle_is_refused_rather_than_keyed():
         ui_topology_hash(workflow)
 
 
+def test_a_link_to_a_node_that_does_not_exist_is_refused():
+    """Dropping it would key the same as the graph with that edge deleted.
+
+    Worse, the API-side reduction keeps its dangling edges, so silently
+    dropping this one lets the two serialisations of one workflow disagree —
+    which is the portability claim the topology tier exists to make.
+    """
+    workflow = ui_workflow(TXT2IMG)
+    workflow["links"].append([len(workflow["links"]) + 1, 404, 0, 7, 0, "*"])
+    with pytest.raises(WorkflowGraphError):
+        ui_topology_hash(workflow)
+
+
 def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
     """The pairing the drop target actually performs, with subgraphs in play."""
     assert ui_topology_hash(subgraph_ui_workflow()) == topology_hash(
@@ -663,6 +722,50 @@ def test_the_stored_document_holds_no_prompt(hub):
     assert get_document(hub, keys.structural_hash) == structural_document(
         api_graph(TXT2IMG)
     )
+
+
+def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
+    """The compatibility path `_apply_v2` is re-run for, exercised directly.
+
+    These tables were amended into schema v2 rather than shipped as a v3, which
+    only works because `apply_migrations` re-runs `_apply_v2` for a hub already
+    at 2. A hub created by this build has them from its first open, so nothing
+    else in this file touches that path — and a regression that stopped
+    creating them for an existing hub would leave the whole suite green.
+    """
+    path = str(tmp_path / "hub.db")
+    first = HubDatabase(path)
+    try:
+        assert record_api_graph(first, api_graph(TXT2IMG)) is not None
+    finally:
+        first.close()
+
+    # An older v2 hub: the shape as it was before this change, version intact.
+    scratch = sqlite3.connect(path)
+    try:
+        for table in reversed(WORKFLOW_TABLES):
+            scratch.execute(f"DROP TABLE {table}")
+        scratch.commit()
+        assert scratch.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+    finally:
+        scratch.close()
+
+    reopened = HubDatabase(path)
+    try:
+        present = {
+            row[0]
+            for row in reopened.fetchall(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+            )
+        }
+        assert set(WORKFLOW_TABLES) <= present
+        assert "ix_workflow_recipe_topology" in present
+        # Re-running the shape reconciliation must not claim a new version.
+        assert reopened.fetchone("SELECT version FROM schema_version")["version"] == 2
+        # And the recreated tables are usable, not just present.
+        assert record_api_graph(reopened, api_graph(TXT2IMG)) is not None
+    finally:
+        reopened.close()
 
 
 def test_a_graph_cannot_name_a_recipe_that_does_not_exist(hub):
