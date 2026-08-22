@@ -58,10 +58,15 @@ import { apiClient } from "../utils/apiClient";
  *                                                                       cancelled_count, error }
  *
  * NOTE: the staging file endpoint accepts media, `.zip` archives (extracted
- * server-side) and `.txt` caption sidecars — the client streams whatever the
- * import file-collection allows (`isSupportedImportFile`) and lets the backend
- * decide. Truly unsupported files come back in `skipped[]`; a session that
- * stages nothing 400s on commit.
+ * server-side) and `.txt` caption sidecars, and the client streams whatever the
+ * import file-collection allows (`isSupportedImportFile`). That collection now
+ * mirrors the server's own media allowlist (`IMPORT_MEDIA_EXTENSIONS` in
+ * `utils/media.js` ↔ `STAGING_ALLOWED_MEDIA_EXTS` in the route), because
+ * "stream it and let the backend decide" charged the whole upload before
+ * refusing: a file the name already disqualifies came back in `skipped[]` after
+ * its last byte, and a session that staged nothing 400s on commit. What still
+ * reaches `skipped[]` is what only the bytes can settle — a corrupt image, a
+ * bad zip — never an extension.
  */
 
 export const IMPORT_ENDPOINTS = {

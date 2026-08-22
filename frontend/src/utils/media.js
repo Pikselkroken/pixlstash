@@ -62,9 +62,46 @@ export const VIDEO_EXTENSIONS = [
   "m4v",
 ];
 
+/**
+ * What the picture importer will actually take.
+ *
+ * NOT `PIL_IMAGE_EXTENSIONS` + `VIDEO_EXTENSIONS`: those two say what the app
+ * can *display*, and the import endpoint takes a much shorter list. Filtering a
+ * drop against the display lists let a `.psd`, a `.pdf` or a `.wmv` upload in
+ * full before the backend skipped it as unsupported and the commit came back
+ * "No staged files to import" — a gigabyte spent to reach an error the name
+ * already gave away.
+ *
+ * Mirrors `STAGING_ALLOWED_MEDIA_EXTS` in
+ * `pixlstash/routes/pictures/_import.py`, which is the one the server enforces.
+ * `tests/test_architecture_guardrails.py::test_frontend_import_extensions_match_the_staging_allowlist`
+ * fails the build if the two drift apart.
+ */
+export const IMPORT_MEDIA_EXTENSIONS = [
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "bmp",
+  "tiff",
+  "tif",
+  "heic",
+  "heif",
+  "avif",
+  "mp4",
+  "webm",
+  "mov",
+  "avi",
+  "mkv",
+];
+
 const ARCHIVE_EXTENSIONS = ["zip"];
 
 const CAPTION_EXTENSIONS = ["txt"];
+
+/** What the model shelf catalogues — `pixlstash/routes/model_files.py`. */
+const MODEL_FILE_EXTENSION = ".safetensors";
 
 export function isSupportedImageFile(file) {
   const filename = typeof file === "string" ? file : file?.name || "";
@@ -85,8 +122,10 @@ function isSupportedArchiveFile(file) {
   return ARCHIVE_EXTENSIONS.includes(ext);
 }
 
-function isSupportedMediaFile(file) {
-  return isSupportedImageFile(file) || isSupportedVideoFile(file);
+function isImportableMediaFile(file) {
+  const filename = typeof file === "string" ? file : file?.name || "";
+  const ext = filename.split(".").pop().toLowerCase();
+  return IMPORT_MEDIA_EXTENSIONS.includes(ext);
 }
 
 function isSupportedCaptionFile(file) {
@@ -99,9 +138,15 @@ function isSupportedCaptionFile(file) {
   return CAPTION_EXTENSIONS.includes(ext);
 }
 
+/** A file the model shelf catalogues. The route refuses anything else. */
+export function isModelFile(file) {
+  const filename = typeof file === "string" ? file : file?.name || "";
+  return filename.toLowerCase().endsWith(MODEL_FILE_EXTENSION);
+}
+
 export function isSupportedImportFile(file) {
   return (
-    isSupportedMediaFile(file) ||
+    isImportableMediaFile(file) ||
     isSupportedArchiveFile(file) ||
     isSupportedCaptionFile(file)
   );
@@ -116,8 +161,8 @@ function _fileDedupKey(file) {
   return `${name}::${size}::${lastModified}`;
 }
 
-function _addIfSupportedFile(file, uniqueMap) {
-  if (!file || !isSupportedImportFile(file)) return;
+function _addIfSupportedFile(file, uniqueMap, accept) {
+  if (!file || !accept(file)) return;
   const key = _fileDedupKey(file);
   if (!uniqueMap.has(key)) {
     uniqueMap.set(key, file);
@@ -141,13 +186,13 @@ function _readAllWebkitDirectoryEntries(reader) {
   });
 }
 
-async function _collectFromWebkitEntry(entry, uniqueMap) {
+async function _collectFromWebkitEntry(entry, uniqueMap, accept) {
   if (!entry) return;
   if (entry.isFile) {
     await new Promise((resolve) => {
       entry.file(
         (file) => {
-          _addIfSupportedFile(file, uniqueMap);
+          _addIfSupportedFile(file, uniqueMap, accept);
           resolve();
         },
         () => resolve(),
@@ -160,15 +205,27 @@ async function _collectFromWebkitEntry(entry, uniqueMap) {
     const reader = entry.createReader();
     const entries = await _readAllWebkitDirectoryEntries(reader);
     for (const child of entries) {
-      await _collectFromWebkitEntry(child, uniqueMap);
+      await _collectFromWebkitEntry(child, uniqueMap, accept);
     }
   } catch {
     // Ignore directory traversal errors and continue with other items.
   }
 }
 
+/**
+ * Every file in a drop that `accept` wants, directories walked.
+ *
+ * @param {DataTransfer} dataTransfer - the drop's payload.
+ * @param {object} [options]
+ * @param {(file: File) => boolean} [options.accept] - what to keep. Defaults to
+ *   what the picture importer takes. A caller that ALSO wants something else
+ *   out of the same drop must widen this and split the result itself rather
+ *   than call twice: the walk is destructive on Safari, which empties the
+ *   DataTransfer on the first `await`, so a second pass returns nothing.
+ */
 export async function extractSupportedImportFilesFromDataTransfer(
   dataTransfer,
+  { accept = isSupportedImportFile } = {},
 ) {
   if (!dataTransfer) return [];
 
@@ -211,15 +268,15 @@ export async function extractSupportedImportFilesFromDataTransfer(
   // ---
 
   for (const entry of webkitEntries) {
-    await _collectFromWebkitEntry(entry, unique);
+    await _collectFromWebkitEntry(entry, unique, accept);
   }
 
   for (const file of fallbackFiles) {
-    _addIfSupportedFile(file, unique);
+    _addIfSupportedFile(file, unique, accept);
   }
 
   for (const file of directFiles) {
-    _addIfSupportedFile(file, unique);
+    _addIfSupportedFile(file, unique, accept);
   }
 
   return Array.from(unique.values());
