@@ -25,6 +25,7 @@ import {
   defaultSortDirection,
   fileKindLabel,
   locationState,
+  presentCopies,
   trashName,
   modelName,
   offlineFolders,
@@ -467,6 +468,12 @@ function defaultFilters() {
     support: true,
     baseModels: [],
     capabilities: [],
+    // Deliberately NOT restored by `storedFilters()` on startup, unlike every box
+    // above it. "Only the files written twice" is a question somebody asks once
+    // while reclaiming disk, not a preference; remembered across a restart it is
+    // a shelf that opens showing four rows of an eighteen-hundred-row library
+    // with no obvious reason why.
+    duplicatesOnly: false,
   };
 }
 
@@ -1076,12 +1083,26 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           const key = baseModelKey(row) || BASE_MODEL_UNASSIGNED;
           if (!bases.includes(key)) return false;
         }
+        // Last, so it narrows whatever the boxes above left — the point is
+        // "duplicates among the files I am looking at", not a separate screen.
+        // Against the row's OWN copies, before the folder narrowing two
+        // computeds down: a file written twice into one folder must survive
+        // this on every grouping axis, including the one that then shows the
+        // reader only one of the two.
+        if (filters.duplicatesOnly && presentCopies(row.locations) < 2) {
+          return false;
+        }
         return true;
       })
       .map((row) => ({
         ...row,
         name: modelName(row),
         locState: locationState(row.locations),
+        // Counted HERE, off the row's whole `locations`, and carried on the row
+        // from then on. The folder axis narrows a draw to the one copy that
+        // folder holds, so a template calling `presentCopies` at render time
+        // would report `1` for exactly the rows this is meant to mark.
+        copies: presentCopies(row.locations),
         isNew: newIds.value.has(row.id),
       }));
     // Folded LAST, so the filters narrow individual models and the stack is
@@ -1204,7 +1225,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           group.location
             ? {
                 ...row,
-                rowKey: `${row.id}:${group.key}`,
+                // The COPY, not the folder. `group.key` is the folder path, so
+                // a file written twice into one folder produced two draws under
+                // one key — the very collision the note above describes, hit by
+                // the axis it was written for. `relpath` is unique within a
+                // folder by definition (it is half the `model_file` key), so
+                // appending it separates them and changes nothing for the
+                // single-copy rows that are the rest of the shelf.
+                rowKey: `${row.id}:${group.key}:${group.location.relpath}`,
                 locState: locationState([group.location]),
                 locations: [group.location],
                 ...(row.members ? { members: narrow(row.members, group) } : {}),
@@ -1334,6 +1362,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (filters.adapters && filters.adapterKinds.length) n += 1;
     if (filters.baseModels.length) n += 1;
     if (filters.capabilities.length) n += 1;
+    if (filters.duplicatesOnly) n += 1;
     return n;
   });
 

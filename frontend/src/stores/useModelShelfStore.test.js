@@ -2099,3 +2099,111 @@ describe("deleteReceipt", () => {
     );
   });
 });
+
+// The same bytes, written twice. The hub is content-addressed — one `model`
+// row per SHA-256 — so a second `present` copy is not a second model, it is
+// disk the owner can have back. Before this the fact lived only in a tooltip.
+describe("duplicate copies", () => {
+  it("counts only the copies that are actually on the disk", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "a.st" },
+          { state: "present", folder_path: "/m", relpath: "same-bytes.st" },
+        ],
+      }),
+      // One copy and one registration. Deleting the row would free nothing, so
+      // this must not read as a duplicate — the failure mode is a shelf that
+      // offers the owner a saving that is not there.
+      adapter({
+        id: 2,
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "b.st" },
+          { state: "missing", folder_path: "/n", relpath: "b.st" },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    expect(store.visibleRows.map((r) => r.copies)).toEqual([2, 1]);
+  });
+
+  it("narrows to the rows written more than once", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "a.st" },
+          { state: "present", folder_path: "/n", relpath: "a.st" },
+        ],
+      }),
+      adapter({ id: 2 }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    expect(store.visibleRows.length).toBe(2);
+
+    await store.setFilters({ duplicatesOnly: true });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+    // Counted as one active filter, or `Reset` reads as doing nothing.
+    expect(store.activeCount).toBe(1);
+
+    await store.resetFilters();
+    expect(store.visibleRows.length).toBe(2);
+  });
+
+  it("is a question, not a preference: it does not survive a reload", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ duplicatesOnly: true });
+    // A remembered `Only duplicates` is a shelf that opens showing four rows of
+    // eighteen hundred with nothing on screen saying why.
+    setActivePinia(createPinia());
+    expect(useModelShelfStore().filters.duplicatesOnly).toBe(false);
+  });
+
+  it("keeps the count when the folder axis narrows a draw to one copy", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "a.st" },
+          { state: "present", folder_path: "/n", relpath: "a.st" },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder" });
+    // The draw carries one location and still reports both copies: the count is
+    // a fact about the file, not about the group it is drawn under.
+    expect(store.groups[0].rows[0].locations.length).toBe(1);
+    expect(store.groups[0].rows.map((r) => r.copies)).toEqual([2]);
+  });
+
+  it("draws two copies in one folder under two keys, not one key twice", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "qwen_3_4b.st" },
+          { state: "present", folder_path: "/m", relpath: "zimage_te.st" },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder" });
+    const drawn = store.groups[0].rows;
+    // One folder, one header, two draws — and the whole point is that they are
+    // distinguishable. Equal `rowKey`s put `tabindex="0"` on both at once and
+    // made `indexOf` answer with the first, which is the collision the push
+    // site was already warning about on the other axis.
+    expect(drawn.length).toBe(2);
+    expect(new Set(drawn.map((r) => r.rowKey)).size).toBe(2);
+    expect(drawn.map((r) => r.locations[0].relpath)).toEqual([
+      "qwen_3_4b.st",
+      "zimage_te.st",
+    ]);
+  });
+});

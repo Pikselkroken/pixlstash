@@ -923,6 +923,27 @@ export function bandProjection(band, addedBytes) {
 }
 
 /**
+ * How many copies of this model are actually on the disk right now.
+ *
+ * Only `present` copies count. A `missing` or `not_downloaded` row is a
+ * registration, not bytes, so folding it in would report a model as taking
+ * twice the disk it takes and offer the reader nothing to delete.
+ *
+ * Two or more is the definition of a duplicate everywhere on the shelf: the hub
+ * is content-addressed, one `model` row per SHA-256, so a second `present` copy
+ * IS the same bytes written twice. That is why this counts copies rather than
+ * comparing anything — the comparison already happened, upstream, by hash.
+ *
+ * @param {Array<Object>} locations - the row's `locations` array.
+ * @returns {number} copies on disk; 0 for a row whose every copy is a promise.
+ */
+export function presentCopies(locations) {
+  return (Array.isArray(locations) ? locations : []).filter(
+    (loc) => loc?.state === "present",
+  ).length;
+}
+
+/**
  * Reduce a row's copies to the one state worth reporting.
  *
  * `missing` is a fact (the folder was readable and the file was not in it);

@@ -1164,6 +1164,18 @@
                       {{ row.filename
                       }}<template v-if="LOC_NOTE[row.locState]">
                         · {{ LOC_NOTE[row.locState] }}</template
+                      ><!-- The same bytes written twice. It rides the file line
+                        rather than taking a chip of its own because it is a
+                        fact ABOUT the file, and because the tooltip already
+                        beside it is what answers the question the count
+                        raises: where is the other one.
+                        `copies` and not `presentCopies(row.locations)`: the
+                        store counts before the folder axis narrows a draw to
+                        its own single copy, so the count reads the same on
+                        every axis instead of collapsing to `1` on the one axis
+                        that draws the duplicate twice.
+                        --><template v-if="row.copies > 1">
+                        · {{ row.copies }} copies</template
                       >
                     </span>
                   </span>
