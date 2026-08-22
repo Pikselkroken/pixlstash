@@ -1134,20 +1134,24 @@ Pure stack ordering and leader-selection utilities (no Vue dependency).
 
 File type helpers.
 
-| Export | Description |
-|--------|-------------|
+Every name below is `export`ed **except** the five marked *(module-local)*, which
+are listed because they are how the exported predicates are built, not because
+anything outside the file can reach them.
+
+| Name | Description |
+|------|-------------|
 | `PIL_IMAGE_EXTENSIONS` | Array of ~50 image format extensions. What the app can **display** — never what it will import. |
 | `VIDEO_EXTENSIONS` | `['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v']` — display, as above. |
 | `IMPORT_MEDIA_EXTENSIONS` | What the importer will **take**, mirroring `STAGING_ALLOWED_MEDIA_EXTS` in `pixlstash/routes/pictures/_import.py`. Much shorter than the display lists, and the difference is not cosmetic: filtering a drop against those let a `.psd` or a `.wmv` upload in full before the route skipped it as unsupported and the commit returned "No staged files to import". `tests/test_architecture_guardrails.py::test_frontend_import_extensions_match_the_staging_allowlist` fails the build if the two lists drift. |
-| `ARCHIVE_EXTENSIONS` | `['zip']` |
-| `CAPTION_EXTENSIONS` | `['txt']` |
+| `ARCHIVE_EXTENSIONS` | *(module-local)* `['zip']` |
+| `CAPTION_EXTENSIONS` | *(module-local)* `['txt']` |
 | `isSupportedImageFile(file)` | Predicate by extension. |
 | `isSupportedVideoFile(file)` | Predicate by extension. |
-| `isSupportedArchiveFile(file)` | Predicate by extension. |
-| `isImportableMediaFile(file)` | Extension is in `IMPORT_MEDIA_EXTENSIONS` — the import test, not the display one. |
-| `isSupportedCaptionFile(file)` | `.txt` extension. |
+| `isSupportedArchiveFile(file)` | *(module-local)* Predicate by extension. |
+| `isImportableMediaFile(file)` | *(module-local)* Extension is in `IMPORT_MEDIA_EXTENSIONS` — the import test, not the display one. |
+| `isSupportedCaptionFile(file)` | *(module-local)* `.txt` extension. |
 | `isSupportedImportFile(file)` | Importable media OR archive OR caption. Every import entry point filters through this one: the window-wide drop (`useWindowFileImport`), the grid's drop target, the sidebar set/character drops, and the import dialog. |
-| `collectImportFiles(dataTransfer)` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, deduplicates by `name::size::lastModified`. |
+| `extractSupportedImportFilesFromDataTransfer(dataTransfer)` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, keeps what `isSupportedImportFile` allows, deduplicates by `name::size::lastModified`. |
 
 ---
 
