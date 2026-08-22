@@ -3,7 +3,7 @@
     <SettingsTwoCol>
       <SettingsRow
         label="Check for updates"
-        sub="Checks once a day and shows a sidebar notice when a new version is out. Sends only your app version and install type."
+        sub="Checks daily. Sends only your version and install type, anonymously."
       >
         <v-switch
           v-model="checkForUpdatesModel"

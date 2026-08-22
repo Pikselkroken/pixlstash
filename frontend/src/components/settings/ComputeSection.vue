@@ -229,7 +229,7 @@ async function setHideToTray(value) {
 // only reaches a shell started after it, so the row has to say so.
 const shellCommandSub = computed(
   () =>
-    `Puts a pixlstash command in ${shellCommandDir.value || "your user bin directory"} so you can attach libraries and install plugins from a terminal. Open a new terminal afterwards.`,
+    `Puts a pixlstash command in ${shellCommandDir.value || "your user bin directory"} so you can attach libraries and install plugins from a terminal. Open a new terminal.`,
 );
 
 // Installing can be refused (a `pixlstash` the user wrote themselves is in the
@@ -385,7 +385,7 @@ watch(
   <div v-if="isBackend" class="compute-backend">
     <SettingsSection
       title="Remote access"
-      desc="Let other devices on your network open this library in a browser. The app window always uses a private local connection — this only controls the separate connection from the outside. Changing it restarts the local server."
+      desc="Let other devices on your network open this library in a browser. The app window always uses a private local connection. Changing this restarts the local server."
       first
     >
       <template v-if="server">
@@ -535,7 +535,7 @@ watch(
       <SettingsTwoCol>
         <SettingsRow
           label="Hide to tray on close"
-          sub="Keep PixlStash (and any remote server) running in the background when you close the window. Reopen it from the tray icon."
+          sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
         >
           <v-switch
             :model-value="hideToTrayOnClose"
@@ -546,21 +546,8 @@ watch(
           />
         </SettingsRow>
         <SettingsRow
-          v-if="shellCommand !== null"
-          label="Shell command"
-          :sub="shellCommandSub"
-        >
-          <v-switch
-            :model-value="shellCommand"
-            color="accent"
-            density="compact"
-            hide-details
-            @update:model-value="setShellCommand($event)"
-          />
-        </SettingsRow>
-        <SettingsRow
           label="Check for updates"
-          sub="Checks once a day and shows a sidebar notice when a new version is out. Sends only your app version and install type, anonymously."
+          sub="Checks daily. Sends only your version and install type, anonymously."
         >
           <v-switch
             v-model="checkForUpdatesModel"
@@ -570,6 +557,22 @@ watch(
           />
         </SettingsRow>
       </SettingsTwoCol>
+      <!-- Full width, not a half of the pair above: its sub names a path, and
+           the Windows one wraps to four lines in a half-width row — most of what
+           pushed this pane past its fixed height. -->
+      <SettingsRow
+        v-if="shellCommand !== null"
+        label="Shell command"
+        :sub="shellCommandSub"
+      >
+        <v-switch
+          :model-value="shellCommand"
+          color="accent"
+          density="compact"
+          hide-details
+          @update:model-value="setShellCommand($event)"
+        />
+      </SettingsRow>
       <!-- The other copy of this lives in the compute pane, which the backend
            pane never renders, so a failure here had nowhere to be shown. -->
       <div v-if="error" class="settings-error">{{ error }}</div>
