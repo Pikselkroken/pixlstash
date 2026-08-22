@@ -152,7 +152,9 @@ describe("CharacterEditor layout", () => {
     listPicturesByIds.mockResolvedValueOnce([{ id: 1, score: 4 }]);
     const w = mountCharacter({ open: true, character: { id: 7, name: "A" } });
     await flushPromises();
-    await w.find(".ref-picture-item").trigger("click");
+    // The picture itself now picks the thumbnail; the preview is its own
+    // corner control (see CharacterEditorThumbnail.test.js).
+    await w.find(".ref-picture-zoom").trigger("click");
     expect(w.vm.previewPic).not.toBeNull();
 
     await w.setProps({ open: false, character: null });

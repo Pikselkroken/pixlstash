@@ -1,13 +1,15 @@
 """Tests for the Characters API: create, update, delete, and reference pictures."""
 
 import gc
+import glob
+import hashlib
 import json
 import os
 import tempfile
 
 from fastapi.testclient import TestClient
 
-from pixlstash.db_models import Face
+from pixlstash.db_models import Face, Picture
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -265,8 +267,6 @@ def test_character_scoped_token_may_not_filter_by_project():
 
 
 def _import_one_picture(client):
-    import glob
-
     candidates = glob.glob(
         os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
     ) + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
@@ -407,6 +407,237 @@ def test_batch_character_membership_returns_assignments():
         data = resp.json()
         assert data["character_assignments"] == {str(char_id): [pic_id]}
         assert data["pictures_with_faces"] == [pic_id]
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _import_two_pictures(client):
+    """Import two DISTINCT images and return their picture ids."""
+    candidates = sorted(
+        glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png"))
+        + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
+    )
+    assert len(candidates) >= 2, "Need two test images in pictures/"
+    ids = []
+    for path in candidates[:2]:
+        mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+        with open(path, "rb") as image_file:
+            import_resp = upload_pictures_and_wait(
+                client, [("file", (os.path.basename(path), image_file, mime))]
+            )
+        ids.append(import_resp["results"][0]["picture_id"])
+    return ids
+
+
+def _link_face_with_bbox(server, pic_id, char_id):
+    """Assign a face with a REAL bbox, which the thumbnail crop needs.
+
+    ``_link_face`` above writes ``"0,0,10,10"``, which ``Face.bbox`` cannot
+    parse (it is JSON) — fine for the assignment tests that use it, useless for
+    a render.
+
+    ``face_index`` sits above anything detection produces: import runs the face
+    detector, and index 0 is whichever face it found, so writing there races the
+    import for the (picture, frame, index) unique constraint.
+    """
+
+    def _add(session):
+        session.add(
+            Face(
+                picture_id=pic_id,
+                frame_index=0,
+                face_index=99,
+                character_id=char_id,
+                bbox=[0, 0, 32, 32],
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_add)
+
+
+def _thumbnail_bytes(client, char_id):
+    """The rendered thumbnail itself.
+
+    The BYTES, not the render's cache metadata: that metadata records the
+    selection query's winner, which is not always the picture the route ends up
+    cropping, so asserting on it passes with the whole pin implementation
+    deleted. The image is the only thing the user sees and the only thing worth
+    asserting on.
+    """
+    resp = client.get(f"/characters/{char_id}/thumbnail")
+    assert resp.status_code == 200, resp.text
+    return hashlib.sha256(resp.content).hexdigest()
+
+
+def test_pinned_thumbnail_picture_overrides_the_automatic_choice():
+    """A pinned reference picture decides the crop, and clearing it restores the
+    automatic pick. Both directions, because a pin that cannot be undone is its
+    own defect."""
+    temp_dir, client, server = _setup()
+    try:
+        first_pic, second_pic = _import_two_pictures(client)
+        char_id = client.post("/characters", json={"name": "Pinned"}).json()[
+            "character"
+        ]["id"]
+        _link_face_with_bbox(server, first_pic, char_id)
+        _link_face_with_bbox(server, second_pic, char_id)
+
+        # Score them apart rather than relying on the id tie-break: a scoring
+        # sweep landing mid-test would otherwise decide which picture the
+        # automatic path picks, and the test would flake instead of failing.
+        automatic, pinned = max(first_pic, second_pic), min(first_pic, second_pic)
+        resp = client.post(
+            "/pictures/apply-scores",
+            json={"scores": {str(automatic): 5, str(pinned): 1}},
+        )
+        assert resp.status_code == 200
+        automatic_thumbnail = _thumbnail_bytes(client, char_id)
+
+        # Pin each of the two in turn and compare the RENDERED bytes. The two
+        # crops come from different source images, so equal bytes mean the pin
+        # did not decide the render.
+        #
+        # This order is deliberate: `automatic` is the picture the selection
+        # query names (and therefore what the cache metadata already held), so
+        # pinning it first is the case where a cache keyed on that id alone
+        # would hit and keep serving the previous crop. Under that bug both
+        # pins render the same picture and the assertion below fails.
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"thumbnail_picture_id": automatic}
+            ).json()["character"]["thumbnail_picture_id"]
+            == automatic
+        )
+        pinned_to_automatic = _thumbnail_bytes(client, char_id)
+
+        resp = client.patch(
+            f"/characters/{char_id}", json={"thumbnail_picture_id": pinned}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["character"]["thumbnail_picture_id"] == pinned
+        pinned_thumbnail = _thumbnail_bytes(client, char_id)
+        assert pinned_thumbnail != pinned_to_automatic
+
+        # And the pin is stable: going back to the first one renders the first
+        # one again rather than whatever was cached last.
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"thumbnail_picture_id": automatic}
+            ).status_code
+            == 200
+        )
+        assert _thumbnail_bytes(client, char_id) == pinned_to_automatic
+
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"thumbnail_picture_id": pinned}
+            ).status_code
+            == 200
+        )
+
+        # The list endpoint carries it too — that is where the editor reads the
+        # current pin from when it opens.
+        listed = [c for c in client.get("/characters").json() if c["id"] == char_id]
+        assert listed[0]["thumbnail_picture_id"] == pinned
+
+        # null clears it, and an untouched PATCH leaves it alone.
+        assert (
+            client.patch(f"/characters/{char_id}", json={"name": "Pinned"}).status_code
+            == 200
+        )
+        assert client.get(f"/characters/{char_id}").json()["thumbnail_picture_id"] == (
+            pinned
+        )
+        resp = client.patch(
+            f"/characters/{char_id}", json={"thumbnail_picture_id": None}
+        )
+        assert resp.status_code == 200
+        assert _thumbnail_bytes(client, char_id) == automatic_thumbnail
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pinning_a_thumbnail_does_not_invalidate_derived_picture_fields():
+    """The pin is not identity data.
+
+    Renaming a person nulls the description and text embedding of every picture
+    they appear in, because their name is baked into both. Choosing which
+    existing crop to show is not that, and letting it share the flag deleted
+    hand-written descriptions and queued a library-wide re-derive on one click.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _import_one_picture(client)
+        char_id = client.post("/characters", json={"name": "Keeper"}).json()[
+            "character"
+        ]["id"]
+        _link_face_with_bbox(server, pic_id, char_id)
+
+        def _seed(session):
+            picture = session.get(Picture, pic_id)
+            picture.description = "a description somebody typed"
+            picture.text_embedding = b"embedding-bytes"
+            session.add(picture)
+            session.commit()
+
+        server.vault.db.run_task(_seed)
+
+        assert (
+            client.patch(
+                f"/characters/{char_id}", json={"thumbnail_picture_id": pic_id}
+            ).status_code
+            == 200
+        )
+
+        def _read(session):
+            picture = session.get(Picture, pic_id)
+            return picture.description, picture.text_embedding is not None
+
+        description, has_embedding = server.vault.db.run_immediate_read_task(_read)
+        assert description == "a description somebody typed"
+        assert has_embedding is True
+
+        # The control: a RENAME still throws both away, so the assertion above
+        # is about the pin and not about a wipe that stopped working.
+        assert (
+            client.patch(f"/characters/{char_id}", json={"name": "Renamed"}).status_code
+            == 200
+        )
+        description, has_embedding = server.vault.db.run_immediate_read_task(_read)
+        assert description is None
+        assert has_embedding is False
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pinning_a_picture_without_this_persons_face_is_rejected():
+    temp_dir, client, server = _setup()
+    try:
+        first_pic, second_pic = _import_two_pictures(client)
+        char_id = client.post("/characters", json={"name": "NoFace"}).json()[
+            "character"
+        ]["id"]
+        _link_face_with_bbox(server, first_pic, char_id)
+
+        resp = client.patch(
+            f"/characters/{char_id}", json={"thumbnail_picture_id": second_pic}
+        )
+        assert resp.status_code == 400
+        resp = client.patch(
+            f"/characters/{char_id}", json={"thumbnail_picture_id": "not-an-id"}
+        )
+        assert resp.status_code == 400
+        # And nothing was written: the person still has no pin.
+        assert (
+            client.get(f"/characters/{char_id}").json()["thumbnail_picture_id"] is None
+        )
     finally:
         server.close()
         temp_dir.cleanup()

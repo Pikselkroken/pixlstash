@@ -255,6 +255,14 @@ class CharacterResponse(BaseModel):
         ),
     )
     reference_picture_set_id: Optional[int] = None
+    thumbnail_picture_id: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The picture ``GET /characters/{id}/thumbnail`` crops this person's "
+            "face from, when the user pinned one; ``null`` means the thumbnail "
+            "follows the automatic choice."
+        ),
+    )
 
 
 class CharacterListItemResponse(BaseModel):
@@ -282,6 +290,14 @@ class CharacterListItemResponse(BaseModel):
         ),
     )
     reference_picture_set_id: Optional[int] = None
+    thumbnail_picture_id: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The picture ``GET /characters/{id}/thumbnail`` crops this person's "
+            "face from, when the user pinned one; ``null`` means the thumbnail "
+            "follows the automatic choice."
+        ),
+    )
     has_reference_faces: bool = False
     image_count: Optional[int] = PydanticField(
         default=None,
@@ -864,7 +880,12 @@ def create_router(server) -> APIRouter:
             "project the character joins, and leave a project it leaves unless "
             "another character or picture set still anchors them there. Returns "
             "409 on a name clash inside any target project and 404 for an unknown "
-            "project id."
+            "project id.\n\n"
+            "**Thumbnail.** Send ``thumbnail_picture_id`` to pin which picture "
+            "``GET /characters/{id}/thumbnail`` crops the face from; ``null`` "
+            "restores the automatic choice (the highest-scoring picture of this "
+            "person). The picture must carry a face assigned to this character, "
+            "or the call answers 400."
         ),
         response_model=CharacterMutationResponse,
     )
@@ -873,11 +894,28 @@ def create_router(server) -> APIRouter:
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
+        # Sentinel, because ``null`` is a meaningful value here: it clears the
+        # pin back to the automatic choice, while an absent key leaves it alone.
+        thumbnail_picture_id = data.get("thumbnail_picture_id", _UNSET)
+        if thumbnail_picture_id is not _UNSET and thumbnail_picture_id is not None:
+            try:
+                thumbnail_picture_id = int(thumbnail_picture_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="thumbnail_picture_id must be a picture id or null",
+                )
         char = None
         project_membership_updated = False
         try:
 
-            def alter_char(session: Session, id: int, name: str, description: str):
+            def alter_char(
+                session: Session,
+                id: int,
+                name: str,
+                description: str,
+                thumbnail_picture_id,
+            ):
                 character = session.get(Character, id)
                 if character is None:
                     raise KeyError("Character not found")
@@ -898,12 +936,49 @@ def create_router(server) -> APIRouter:
                         session, final_name, target_project_ids, exclude_char_id=id
                     )
                 updated = False
+                # Tracked apart from ``updated`` because the invalidation below
+                # is about IDENTITY: the name and description are baked into
+                # every derived caption and text embedding of this person's
+                # pictures, so changing them has to throw those away. The
+                # thumbnail pin is not identity — it decides which existing crop
+                # is shown — and letting it flip this flag would null the
+                # description and text_embedding of EVERY picture the person
+                # appears in on a single click, deleting hand-written
+                # descriptions and queueing a library-wide re-derive.
+                identity_changed = False
                 if name is not None and name != character.name:
                     character.name = name
                     updated = True
+                    identity_changed = True
                 if description is not None and description != character.description:
                     character.description = description
                     updated = True
+                    identity_changed = True
+                if thumbnail_picture_id is not _UNSET:
+                    pinned = thumbnail_picture_id
+                    # Only a picture this person actually appears in may be
+                    # pinned: the thumbnail is a crop of THEIR face, so an id
+                    # with no face of theirs would render nothing and silently
+                    # fall back.
+                    if (
+                        pinned is not None
+                        and not session.exec(
+                            select(Face.id).where(
+                                Face.picture_id == pinned,
+                                Face.character_id == id,
+                            )
+                        ).first()
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "thumbnail_picture_id must name a picture with a "
+                                "face assigned to this character"
+                            ),
+                        )
+                    if pinned != character.thumbnail_picture_id:
+                        character.thumbnail_picture_id = pinned
+                        updated = True
                 # Single write path for both the join rows and the primary-project
                 # FK; raises 404 for an unknown project id.
                 project_change = None
@@ -912,6 +987,10 @@ def create_router(server) -> APIRouter:
                         session, character, target_project_ids
                     )
                     updated = updated or project_change.changed
+                    # A project move invalidated the derived fields before the
+                    # pin existed; keep it doing so. The pin is the ONLY thing
+                    # this change takes out of that set.
+                    identity_changed = identity_changed or project_change.changed
                 local_project_membership_updated = False
                 if updated:
                     session.add(character)
@@ -945,21 +1024,22 @@ def create_router(server) -> APIRouter:
                     # embedding is machine-derived (rule 4) and always cleared, but
                     # the description is frozen on a locked picture (rule 3): skip
                     # clearing it there. Character reassignment itself stays allowed.
-                    character_pic_ids = [
-                        face.picture_id
-                        for face in session.exec(
-                            select(Face).where(Face.character_id == id)
-                        ).all()
-                        if face.picture_id is not None
-                    ]
-                    locked_pics = locked_picture_ids(session, character_pic_ids)
-                    for pic_id in character_pic_ids:
-                        pic = session.get(Picture, pic_id)
-                        if pic:
-                            if pic.id not in locked_pics:
-                                pic.description = None
-                            pic.text_embedding = None
-                            session.add(pic)
+                    if identity_changed:
+                        character_pic_ids = [
+                            face.picture_id
+                            for face in session.exec(
+                                select(Face).where(Face.character_id == id)
+                            ).all()
+                            if face.picture_id is not None
+                        ]
+                        locked_pics = locked_picture_ids(session, character_pic_ids)
+                        for pic_id in character_pic_ids:
+                            pic = session.get(Picture, pic_id)
+                            if pic:
+                                if pic.id not in locked_pics:
+                                    pic.description = None
+                                pic.text_embedding = None
+                                session.add(pic)
 
                     session.commit()
                     session.refresh(character)
@@ -974,6 +1054,7 @@ def create_router(server) -> APIRouter:
                 id,
                 name,
                 description,
+                thumbnail_picture_id,
                 priority=DBPriority.IMMEDIATE,
             )
             server.vault.notify(
@@ -1243,34 +1324,65 @@ def create_router(server) -> APIRouter:
         require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
 
         if field == "thumbnail":
-            thumbnail_cache_version = 7
+            # 8, not 7: the cached metadata gained ``pinned_picture_id`` and the
+            # selection it records changed meaning, so every library's existing
+            # crop has to be re-derived once rather than served under the new
+            # contract.
+            thumbnail_cache_version = 8
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = resolve_path_within(cache_dir, f"character_{id}.png")
             meta_path = resolve_path_within(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
-                row = session.exec(
+                candidates = (
                     select(Picture.id, Picture.score)
                     .join(Face, Face.picture_id == Picture.id)
                     .where(
                         Face.character_id == character_id,
                         Picture.deleted.is_(False),
                     )
-                    .order_by(
-                        Picture.is_video,  # prefer still images (False/0) over videos
-                        Picture.score.is_(None),
-                        Picture.score.desc(),
-                        Picture.id.desc(),
-                    )
-                    .limit(1)
-                ).first()
+                )
+                # A pinned picture wins outright, but only while it still holds
+                # a face of this character (the same query, narrowed) — the pin
+                # is a plain id, so a purged or reassigned picture has to fall
+                # through to the automatic choice rather than 404 the person's
+                # avatar.
+                character = session.get(Character, character_id)
+                pinned_id = character.thumbnail_picture_id if character else None
+                row = None
+                if pinned_id is not None:
+                    row = session.exec(
+                        candidates.where(Picture.id == pinned_id).limit(1)
+                    ).first()
+                pinned = row is not None
+                if row is None:
+                    row = session.exec(
+                        candidates.order_by(
+                            Picture.is_video,  # prefer stills over videos
+                            Picture.score.is_(None),
+                            Picture.score.desc(),
+                            Picture.id.desc(),
+                        ).limit(1)
+                    ).first()
                 if not row:
                     return None
                 pic_id, score = row
                 return {
                     "picture_id": int(pic_id),
                     "score": float(score) if score is not None else None,
+                    "pinned": pinned,
+                    # Part of the cache identity in its own right, and not
+                    # derivable from ``picture_id``: on the automatic path that
+                    # id names the query's winner, which is NOT always the
+                    # picture the render below crops (it can fall through to the
+                    # reference set or to `char.faces`). Pinning the picture the
+                    # query already named would therefore leave the key
+                    # unchanged and serve the old crop — the most likely click
+                    # of all, since the grid is ordered by the same scorer.
+                    "pinned_picture_id": (
+                        int(pinned_id) if pinned_id is not None else None
+                    ),
                 }
 
             best_picture = server.vault.db.run_immediate_read_task(
@@ -1286,6 +1398,8 @@ def create_router(server) -> APIRouter:
                         meta = json.load(handle)
                     if (
                         meta.get("picture_id") == best_picture.get("picture_id")
+                        and meta.get("pinned_picture_id")
+                        == best_picture.get("pinned_picture_id")
                         and meta.get("version") == thumbnail_cache_version
                     ):
                         return conditional_file_response(request, cache_path)
@@ -1302,6 +1416,22 @@ def create_router(server) -> APIRouter:
             best_pic = None
             best_face = None
 
+            # The pin, resolved through the same two helpers the fallback path
+            # below uses. `pinned` was only set by a query that joined a face of
+            # this character onto a non-deleted picture, so both lookups hit.
+            if best_picture.get("pinned"):
+                pinned_id = best_picture["picture_id"]
+                pics = server.vault.db.run_immediate_read_task(
+                    Picture.find, id=pinned_id
+                )
+                faces = server.vault.db.run_immediate_read_task(
+                    Face.find, picture_id=pinned_id
+                )
+                best_pic = pics[0] if pics else None
+                best_face = next((f for f in faces if f.character_id == char.id), None)
+                if not (best_pic and best_face):
+                    best_pic = best_face = None
+
             def get_reference_set_and_members(session, reference_picture_set_id):
                 ref_set = (
                     session.get(PictureSet, reference_picture_set_id)
@@ -1317,7 +1447,7 @@ def create_router(server) -> APIRouter:
             ref_set, members = server.vault.db.run_immediate_read_task(
                 get_reference_set_and_members, char.reference_picture_set_id
             )
-            if ref_set and ref_set.members:
+            if not (best_pic and best_face) and ref_set and ref_set.members:
                 pics = sorted(members, key=lambda p: p.score or 0, reverse=True)
                 for pic in pics:
                     faces = server.vault.db.run_immediate_read_task(
