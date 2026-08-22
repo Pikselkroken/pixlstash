@@ -46,6 +46,17 @@ if (!existsSync(iconSrc)) {
   process.exit(0);
 }
 
+// GLib discards a whole .desktop file when it cannot resolve the Exec binary
+// (g_desktop_app_info_load_file runs g_find_program_in_path on argv[0] and
+// returns FALSE), so a dangling Exec costs the icon just as surely as a dangling
+// Icon did — and silently, because nothing reads the file back. A fresh worktree
+// has no electron/node_modules at all, which is exactly this case.
+if (!existsSync(electronBin)) {
+  console.warn(`dev-desktop: no electron binary at ${electronBin}; skipping`);
+  console.warn('dev-desktop: run `npm install` here, or symlink electron/node_modules');
+  process.exit(0);
+}
+
 const contents = `[Desktop Entry]
 Type=Application
 Name=PixlStash (dev)

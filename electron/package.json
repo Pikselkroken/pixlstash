@@ -83,7 +83,7 @@
         "deb"
       ],
       "category": "Graphics",
-      "icon": "assets/icon.png",
+      "icon": "assets/icons",
       "synopsis": "Self-hosted picture library with AI tagging and semantic search",
       "syncDesktopName": true
     },
