@@ -1514,6 +1514,33 @@ The Axios request interceptor rewrites all relative URLs:
 - Fully qualified URLs (`http://...`) are passed through unchanged, except same-origin requests get the share token injected.
 - Share token is injected as `?token=` query param for both relative and same-origin absolute requests.
 
+### Uploads: the transport clears the JSON default
+
+The Axios instance sets `Content-Type: application/json` for every request, and
+Axios 1.x decides in `transformRequest` from **that** header what the body is:
+a `FormData` under a JSON content type is rewritten as
+`JSON.stringify(formDataToJSON(form))`, in which a `File` or `Blob` serialises
+to `{}`. An upload that inherited the default therefore reached the server as
+the literal body `{"file":{}}` and was refused as a validation error, with
+nothing on the wire to suggest a file had been meant.
+
+The request interceptor **deletes** the content type whenever the body is a
+`FormData` (via `AxiosHeaders.delete`, with a plain-object walk behind it for a
+hand-assembled config), so the browser writes it with the boundary only it can
+generate. Deleted in the transport rather than remembered per call: the
+model-icon uploader was the one of four that did not pass
+`{headers: {"Content-Type": "multipart/form-data"}}` itself, which silently
+killed the model shelf's Set Thumbnail verb on both of its routes. The other
+three still pass it and are unaffected — the strip runs first and axios then
+re-derives the type from the body — but a new uploader does not have to.
+
+The alternative was to drop the instance-level JSON default and let Axios set
+`application/json` per request, which it does for any object payload. That is
+the smaller diff and the wider blast radius: it also changes what a POST with
+no body, a string body or a `URLSearchParams` body sends, across every route in
+the app. It is worth doing on its own, deliberately, and not inside a fix for a
+broken upload.
+
 ### `appendShareToken(url)`
 
 For `<img :src="...">` bindings and similar direct browser requests that bypass Axios, call `appendShareToken()` to add `?token=` manually.

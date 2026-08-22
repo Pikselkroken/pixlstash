@@ -227,7 +227,38 @@ function isMutatingRequest(config) {
   return MUTATING_METHODS.has(method);
 }
 
+// A multipart body must not inherit this instance's JSON default. Axios 1.x
+// reads the request's own Content-Type in `transformRequest`, and when it says
+// `application/json` it converts a FormData into `JSON.stringify(
+// formDataToJSON(form))` — a File or Blob serialises to `{}`, so
+// `POST /models/{id}/icon` received the literal body `{"file":{}}` and answered
+// 422. Cleared HERE rather than remembered at each call site: three uploaders
+// passed `Content-Type: multipart/form-data` themselves and the fourth
+// (`setModelIcon`) did not, which is the whole model-thumbnail verb, both its
+// routes, silently dead. The header is deleted rather than set, so the browser
+// writes it WITH the boundary it generates.
+function stripJsonContentTypeForFormData(config) {
+  if (typeof FormData === 'undefined' || !(config?.data instanceof FormData)) {
+    return;
+  }
+  const headers = config.headers;
+  if (!headers) return;
+  // `AxiosHeaders.delete` is the public way, and by this point in the pipeline
+  // `config.headers` is one of those. Its own-property store is an
+  // implementation detail, so the plain-object walk is the fallback rather than
+  // the route — it also covers a config assembled by hand, e.g. in a test.
+  if (typeof headers.delete === 'function') {
+    headers.delete('Content-Type');
+    return;
+  }
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === 'content-type') delete headers[key];
+  }
+}
+
 apiClient.interceptors.request.use((config) => {
+  stripJsonContentTypeForFormData(config);
+
   const rawUrl = config?.url;
   if (!rawUrl || typeof rawUrl !== 'string') {
     return config;
