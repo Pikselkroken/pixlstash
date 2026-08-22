@@ -625,6 +625,13 @@ list (capped, since the text is a third-party exception). `.tagger-cols` keeps a
 96px floor, so on a window too short to give the section a usable height the
 pane falls back to scrolling whole rather than crushing the tables to nothing.
 
+The columns also carry `min-width: 0`. A grid item's automatic minimum is its
+min-content, so a `PluginsTable` that refused to wrap widened its own `1fr`
+track and pushed the pane sideways — a horizontal scrollbar on the *pane*, not
+on the table. Plugin names therefore wrap (`PluginsTable`'s `.pt-plugin-name`),
+and the three fixed-width columns are padded at `--space-2` so the name column
+keeps enough of the ~280px to hold an ordinary name on one line.
+
 #### `WorkflowsSection.vue`
 Workflows tab content (extracted from inline markup): ComfyUI URL, workflow import/management.
 
