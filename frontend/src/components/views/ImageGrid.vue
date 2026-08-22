@@ -1841,6 +1841,33 @@ async function runPluginWithParameters(
     const createdIds = Array.isArray(res?.created_picture_ids)
       ? res.created_picture_ids
       : [];
+    // A deterministic filter re-run produces a byte-identical output, which the
+    // importer correctly refuses as a duplicate. Nothing is created and nothing
+    // moves on screen, so without this the run is indistinguishable from one
+    // that silently did nothing.
+    //
+    // De-duplicated because the backend builds `duplicate_picture_ids` by
+    // walking the output hashes (`image_plugins/service.py`), so two sources
+    // that filter down to the same image report the same picture id twice —
+    // and the sentence counts pictures in the library, not outputs produced.
+    const duplicateIds = Array.isArray(res?.duplicate_picture_ids)
+      ? res.duplicate_picture_ids
+      : [];
+    const duplicateCount = new Set(duplicateIds).size;
+    if (duplicateCount) {
+      const subject = duplicateCount === 1 ? "image is" : "images are";
+      const label =
+        availablePlugins.value.find((plugin) => plugin?.name === pluginName)
+          ?.display_name || pluginName;
+      noticeStore.info(
+        `${label}: ${duplicateCount} ${subject} already in your library`,
+        // Keyed per plugin, not globally: a second run of the SAME filter is a
+        // repeat of this sentence and should coalesce, while a run of a
+        // DIFFERENT one is its own report and must not overwrite this text and
+        // then wear a count badge that contradicts it.
+        { key: `plugin-run-duplicate:${pluginName}` },
+      );
+    }
     if (createdIds.length) {
       const newIds = createdIds
         .map((id) => getPictureId(id))
