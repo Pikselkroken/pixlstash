@@ -39,12 +39,15 @@ git worktree add ~/Projects/pixlstash/worktrees/<name>
 # then: EnterWorktree with path: ~/Projects/pixlstash/worktrees/<name>
 git fetch origin && git checkout -B <branch> origin/<base>
 ln -s ~/Projects/pixlstash/develop/frontend/node_modules frontend/node_modules
+ln -s ~/Projects/pixlstash/develop/electron/node_modules electron/node_modules
 ```
 
 Set the base explicitly: the default is `origin/main` and feature work is
-almost always based on `develop`. The `node_modules` symlink is what makes the
-worktree actually runnable: without it `npm run dev` and `vitest` both fail on
-a fresh worktree, which is most of why worktrees were awkward to test in.
+almost always based on `develop`. The `node_modules` symlinks are what make the
+worktree actually runnable: without them `npm run dev` and `vitest` both fail on
+a fresh worktree, which is most of why worktrees were awkward to test in. Both
+are needed — `electron/` has its own tree, and without it `npm run dev` in
+`electron/` dies on `Cannot find module 'electron'` before it builds anything.
 
 **The hub and the vault live outside the repo** (platformdirs user data dir), so
 every checkout runs against the same library you already have configured. That
