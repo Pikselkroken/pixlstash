@@ -1151,7 +1151,8 @@ anything outside the file can reach them.
 | `isImportableMediaFile(file)` | *(module-local)* Extension is in `IMPORT_MEDIA_EXTENSIONS` — the import test, not the display one. |
 | `isSupportedCaptionFile(file)` | *(module-local)* `.txt` extension. |
 | `isSupportedImportFile(file)` | Importable media OR archive OR caption. Every import entry point filters through this one: the window-wide drop (`useWindowFileImport`), the grid's drop target, the sidebar set/character drops, and the import dialog. |
-| `extractSupportedImportFilesFromDataTransfer(dataTransfer)` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, keeps what `isSupportedImportFile` allows, deduplicates by `name::size::lastModified`. |
+| `isModelFile(file)` | `.safetensors` — what the model shelf catalogues, not something the picture importer ever takes. |
+| `extractSupportedImportFilesFromDataTransfer(dataTransfer, { accept })` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, keeps what `accept` allows (default `isSupportedImportFile`), deduplicates by `name::size::lastModified`. Call it ONCE per drop: Safari empties the DataTransfer on the first `await`, so a caller wanting two kinds out of one drop widens `accept` and splits the result. |
 
 ---
 
@@ -3355,6 +3356,37 @@ onto a folder group already does, and it does it better — with the folder in
 front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
 and `shelf_bytes` moved with it, so the drive bands are stale too.
+
+**Dropping a `.safetensors` on the window is the same verb without the picker,
+and it works on the desktop only.** `useWindowFileImport` claims a model file
+before the picture importer or the grid can see it and calls the very same
+`POST /model-files` — by *path*, so nothing is uploaded. The path is the whole
+difficulty: a dropped `File` carries a name and bytes but never a location, so
+only the desktop shell can answer where it came from
+(`window.pixlstashDesktop.getDroppedFilePath`, `webUtils.getPathForFile` behind
+the preload bridge). In a browser tab there is nothing to resolve and nothing to
+send, and the drop says so, naming `Add ▾ → Add file…` rather than failing
+quietly — that menu works in a browser because the *server* enumerates the
+filesystem, which is the direction a drop cannot run in. A drop carrying both a
+model and pictures is split: the model goes to the shelf, and the pictures go to
+whichever importer owns the spot they landed on — dropped on the grid they are
+left to propagate to the grid's own handler, which threads the selected
+character into the import where the window-level one cannot. Only a drop of
+model files ALONE is stopped outright, because the grid would otherwise report
+it as unsupported while the shelf was busy accepting it.
+
+**A folder is walked, and the walk happens once.** A trainer's output directory
+holds the adapter beside its samples, and `dataTransfer.files` reports the whole
+directory as a single unreadable entry — reading the flat list imported the
+samples and lost the adapter in silence. `extractSupportedImportFilesFromDataTransfer`
+therefore takes an `accept` predicate, and the drop handler passes one widened to
+"picture **or** model" and splits the single result. It cannot call the walk twice:
+Safari empties the DataTransfer on the first `await`, so a second pass returns
+nothing. The picture import is started *before* the shelf copy is awaited and the
+two run side by side — a multi-gigabyte copy takes minutes, and the photos of a
+mixed drop must not queue behind it. Each drop also takes its own notice key, or
+a second drop coalesces onto the first one's sticky progress card and then
+dismisses it, leaving a running copy with nothing on screen.
 
 **The `Import from ai-toolkit` item is hidden, not disabled, when no `source`
 folder is registered** — unlike the selection bar's verbs, which are about a
