@@ -70,6 +70,7 @@
       <div class="pp-main">
         <div class="pp-head">
           <AppInput
+            ref="searchRef"
             v-model="search"
             class="pp-search"
             icon="magnify"
@@ -88,33 +89,62 @@
         </div>
 
         <div class="pp-scroll">
-          <p v-if="error" class="pp-note pp-note--error">{{ error }}</p>
-          <p v-else-if="loading && !pictures.length" class="pp-note">
-            Loading pictures…
+          <!-- One live region for all three, so a reader who cannot see the
+               grid fill is told that it did, that it did not, or that it
+               failed. -->
+          <p
+            v-if="error || loading || !pictures.length"
+            class="pp-note"
+            :class="{ 'pp-note--error': error }"
+            role="status"
+          >
+            {{
+              error ||
+              (loading
+                ? "Loading pictures…"
+                : "No pictures here. Try another grouping, search, or paste one in.")
+            }}
           </p>
-          <p v-else-if="!pictures.length" class="pp-note">
-            No pictures here. Try another grouping, search, or paste one in.
-          </p>
-          <div v-else class="pp-grid">
+          <div v-if="pictures.length" class="pp-grid">
             <button
-              v-for="pic in pictures"
+              v-for="(pic, i) in pictures"
               :key="pic.id"
+              :ref="(el) => (cellRefs[i] = el)"
               type="button"
               class="pp-cell"
-              :class="{ 'pp-cell--on': chosen?.id === pic.id }"
+              :class="{
+                'pp-cell--on': chosen?.id === pic.id,
+                'pp-cell--gone': unavailable.has(pic.id),
+              }"
               :aria-pressed="chosen?.id === pic.id"
-              :title="tileName(pic)"
-              @click="chosen = pic"
+              :aria-disabled="unavailable.has(pic.id) || undefined"
+              :tabindex="i === tabStop ? 0 : -1"
+              :title="tileTitle(pic)"
+              @click="pick(pic)"
               @dblclick="use"
+              @keydown="onCellKeydown($event, i)"
             >
               <img
+                v-if="!unavailable.has(pic.id)"
                 :src="thumbUrl(pic)"
                 alt=""
                 loading="lazy"
                 decoding="async"
+                @error="unavailable.add(pic.id)"
               />
+              <!-- Not an empty box: a picture whose file the server cannot
+                   reach — an unplugged drive, the state this very shelf models
+                   — has to say so, or it reads as a thumbnail that has not
+                   loaded yet and invites a click that cannot work. -->
+              <span v-else class="pp-gone">
+                <v-icon size="18">mdi-image-off-outline</v-icon>
+              </span>
             </button>
           </div>
+          <p v-if="capped" class="pp-note pp-note--after" role="status">
+            Showing the first {{ SEARCH_CAP }} matches. Narrow it with a
+            grouping, or search for something more particular.
+          </p>
           <div v-if="pictures.length && !done" class="pp-more-row">
             <AppButton
               variant="secondary"
@@ -160,7 +190,7 @@
 // Design: the `Picker` artboard of the 1.11 Workflow Library canvas. Facet rail
 // left, search + grid right, receipt + verbs in the footer.
 
-import { computed, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
 import AppInput from "./AppInput.vue";
@@ -170,10 +200,8 @@ import {
   searchPictures,
   streamPictures,
 } from "../../api/pictures";
-import { isSupportedImportFile } from "../../utils/media.js";
 import { errorDetail } from "../../utils/apiError";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
-import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
@@ -189,14 +217,24 @@ const emit = defineEmits(["close", "pick"]);
 // a 28k-picture library is narrowed; paging is the honest fallback, never the
 // route, which is why `Show more` is a button rather than an infinite scroll.
 const BATCH = 120;
+// The same ceiling for search, which needs one imposed HERE: `GET
+// /pictures/search` ignores `top_n` and defaults its `limit` to `sys.maxsize`,
+// so a loose query answers with every match above the similarity threshold and
+// this grid is not virtualised. Cut, and SAID (see `capped` below) — a silent
+// truncation reads as "that is all there is".
+const SEARCH_CAP = 120;
 // How many rows of a facet group are shown before `All N ›`. Three is the
 // artboard's count and is enough to show what the group is.
 const FACET_PREVIEW = 3;
+// Columns in the tile grid. The arrow keys need the number the CSS is using,
+// and `auto-fill` will not tell them, so the grid is held at a fixed count and
+// the tiles flex instead — which is also what the artboard draws.
+const COLUMNS = 5;
 
 const entityLists = useEntityListsStore();
-const notices = useNoticeStore();
 const tasks = useTasksStore();
 
+const searchRef = ref(null);
 const facet = reactive({ kind: "", id: null });
 const expanded = reactive({ character: false, set: false });
 const search = ref("");
@@ -207,9 +245,17 @@ const error = ref("");
 const done = ref(true);
 const nextOffset = ref(0);
 const totalCount = ref(null);
+// True when a search returned more than `SEARCH_CAP` and the tail was dropped.
+const capped = ref(false);
+// Picture ids whose thumbnail would not load. A thumbnail is generated on
+// demand, but only for a file the server can still reach and decode — an
+// unplugged drive is a state this app models, so a tile has to be able to say
+// "not available" rather than draw an empty box that can still be chosen.
+const unavailable = ref(new Set());
 
 // A request that was in flight when the facet changed must not overwrite the
-// list the reader is now looking at.
+// list the reader is now looking at. Asserted in the suite by resolving two
+// reads out of order.
 let loadSeq = 0;
 
 const facets = computed(() => ({
@@ -237,7 +283,7 @@ function isOn(kind, id) {
   return facet.kind === kind && facet.id === id;
 }
 
-/** Thin space between thousands, as the counts are drawn on the artboard. */
+/** A facet count, grouped the way every other count in the app is. */
 function groupedNumber(n) {
   return Number(n || 0).toLocaleString("en-GB").replace(/,/g, " ");
 }
@@ -251,6 +297,13 @@ function tileName(pic) {
   const path = pic.file_path || "";
   const name = path.split(/[\\/]/).pop();
   return name || `Picture ${pic.id}`;
+}
+
+/** The tile's accessible name, which has to carry the unavailable state too. */
+function tileTitle(pic) {
+  return unavailable.value.has(pic.id)
+    ? `${tileName(pic)} — not available`
+    : tileName(pic);
 }
 
 function choose(kind, id) {
@@ -275,19 +328,24 @@ async function load({ append = false } = {}) {
   try {
     const text = search.value.trim();
     if (text) {
-      // Search answers in one shot, so there is nothing to page through.
+      // Search answers in one shot, so there is nothing to page through — and
+      // no ceiling on the way back either, so one is applied here.
       const rows = await searchPictures(text, { query: scopeParams().toString() });
       if (seq !== loadSeq) return;
-      pictures.value = Array.isArray(rows) ? rows : [];
+      const all = Array.isArray(rows) ? rows : [];
+      capped.value = all.length > SEARCH_CAP;
+      pictures.value = all.slice(0, SEARCH_CAP);
       done.value = true;
       nextOffset.value = 0;
       return;
     }
     const params = scopeParams();
-    // `grid` rather than `grid_lite`: the lite projection drops `file_path`,
-    // and the file's own name is the only thing on a tile that tells two
-    // near-identical thumbnails apart.
-    params.set("fields", "grid");
+    // An explicit projection rather than `fields=grid`, which the route reads
+    // as "this is the picture grid" and silently forces `stack_leaders_only`
+    // (`_listing.py`) — a picker that cannot offer a stacked variant, with
+    // nothing on screen saying so, and a list that would then disagree with
+    // what the same query returns through search.
+    params.set("fields", "id,file_path");
     params.set("sort", "DATE");
     params.set("descending", "true");
     const batch = await streamPictures(params.toString(), {
@@ -296,6 +354,7 @@ async function load({ append = false } = {}) {
     });
     if (seq !== loadSeq) return;
     const rows = Array.isArray(batch?.pictures) ? batch.pictures : [];
+    capped.value = false;
     pictures.value = append ? [...pictures.value, ...rows] : rows;
     done.value = Boolean(batch?.done);
     nextOffset.value = Number(batch?.next_offset) || 0;
@@ -316,108 +375,139 @@ function loadMore() {
   load({ append: true });
 }
 
+function pick(pic) {
+  // An unreachable file cannot become a thumbnail, so it cannot be chosen
+  // either — the tile says why rather than failing after the dialog has shut.
+  if (unavailable.value.has(pic.id)) return;
+  chosen.value = pic;
+}
+
 function use() {
   if (!chosen.value) return;
   emit("pick", chosen.value);
 }
 
-// ── Paste ───────────────────────────────────────────────────────────────────
+// ── The grid's keyboard ─────────────────────────────────────────────────────
 //
-// The import itself is the app's, not this component's: `useWindowFileImport`
-// already claims a pasted image anywhere in the window and runs it through the
-// staging session. Re-implementing that here would be a second import path to
-// keep correct. What is missing is the part this picker owes the reader — being
-// told the paste FILED something, and finding it selectable straight after —
-// and that is all this adds.
+// One tab stop for the whole grid and the arrows move inside it (the listbox
+// pattern the app already uses in `DedupPictureStrip`). Without it a 120-tile
+// grid is 120 tab stops between the search field and the footer verbs, which
+// makes the keyboard route to `Use this picture` unusable — and it is the route
+// the ↵ badge on that button promises.
 
-const awaitingPaste = ref(false);
+const cellRefs = ref([]);
 
-function onPaste(event) {
-  // A paste into the search field is a search, not an import — and the window
-  // importer skips editable targets for the same reason.
-  const target = event.target;
-  if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target?.isContentEditable
-  ) {
+const tabStop = computed(() => {
+  const at = pictures.value.findIndex((p) => p.id === chosen.value?.id);
+  return at >= 0 ? at : 0;
+});
+
+function focusCell(index) {
+  const clamped = Math.max(0, Math.min(pictures.value.length - 1, index));
+  const pic = pictures.value[clamped];
+  if (!pic) return;
+  chosen.value = unavailable.value.has(pic.id) ? chosen.value : pic;
+  nextTick(() => cellRefs.value[clamped]?.focus());
+}
+
+function onCellKeydown(event, index) {
+  // Enter on a tile ACCEPTS. A tile is a `<button>`, and `AppDialog` exempts
+  // buttons from its Enter contract precisely so native activation wins — so
+  // without this the ↵ badge on `Use this picture` is a promise the one state
+  // it matters in cannot keep.
+  if (event.key === "Enter") {
+    event.preventDefault();
+    pick(pictures.value[index]);
+    use();
     return;
   }
-  const files = Array.from(event.clipboardData?.items || [])
-    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-    .map((item) => item.getAsFile())
-    .filter((file) => file && isSupportedImportFile(file));
-  if (!files.length) return;
-  awaitingPaste.value = true;
-  notices.push({
-    level: "info",
-    text:
-      files.length === 1
-        ? "Importing the pasted picture into your library — it will appear here when it lands."
-        : `Importing ${files.length} pasted pictures into your library — they will appear here when they land.`,
-  });
+  const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: COLUMNS, ArrowUp: -COLUMNS }[
+    event.key
+  ];
+  if (step === undefined) return;
+  event.preventDefault();
+  focusCell(index + step);
 }
+
+// ── Paste ───────────────────────────────────────────────────────────────────
+//
+// **This component does not handle the paste, and deliberately says nothing
+// about it.** `useWindowFileImport` already claims a pasted image anywhere in
+// the window, and `ImageImporter` — the thing it hands off to — is what
+// announces the import, from inside the import, where the truth is: it opens
+// its own progress dialog on the same keystroke, counts the files, and reports
+// the buckets at the end. A second announcement from here could only ever be a
+// guess, and it guessed wrong in three ways worth writing down, because they
+// are the reason this is subtraction rather than a fix:
+//
+//   * `startImport` refuses outright while another import is running, and
+//     refuses again under a read-only token — so a picker that announced
+//     "importing your pasted picture" said so about nothing at all;
+//   * neither refusal ever registers a run, so a flag armed on paste and
+//     disarmed on the run finishing stayed armed for the life of the dialog;
+//   * the window importer takes video as well as images, so a filter of this
+//     component's own reported one paste and stayed silent on another.
+//
+// What is left is the half that IS this component's business: what was pasted
+// has to become selectable without reopening the dialog. So the list is
+// re-read when an import finishes while the picker is open — the CURRENT list,
+// in place. It deliberately does not jump back to `Everything`: an import
+// finishing is not a reason to throw away the facet, the search and the choice
+// the reader has made in the meantime, and any import may be one this reader
+// never started.
 
 const importsRunning = computed(() => Object.keys(tasks.importRuns).length);
 
 watch(importsRunning, (now, before) => {
-  if (!awaitingPaste.value || now !== 0 || !before) return;
-  awaitingPaste.value = false;
-  // Newest first, so what was just pasted is the first tile.
-  facet.kind = "";
-  facet.id = null;
-  search.value = "";
-  reload();
+  if (!props.open || now !== 0 || !before) return;
+  load();
 });
 
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) {
-      facet.kind = "";
-      facet.id = null;
-      search.value = "";
-      chosen.value = null;
-      expanded.character = false;
-      expanded.set = false;
-      awaitingPaste.value = false;
-      entityLists.refresh("characters");
-      entityLists.refresh("sets");
-      if (entityLists.canSeeProjects) entityLists.refresh("projects");
-      getPictureCount()
-        .then((body) => {
-          totalCount.value = Number(body?.count);
-        })
-        .catch((err) => {
-          // A missing headline count is cosmetic: the rail still narrows and
-          // the grid still fills. Logged rather than surfaced.
-          console.warn("[PicturePicker] could not read the library count", err);
-          totalCount.value = null;
-        });
-      load();
-      window.addEventListener("paste", onPaste);
-    } else {
-      window.removeEventListener("paste", onPaste);
-    }
+    if (!isOpen) return;
+    facet.kind = "";
+    facet.id = null;
+    search.value = "";
+    chosen.value = null;
+    capped.value = false;
+    unavailable.value = new Set();
+    expanded.character = false;
+    expanded.set = false;
+    entityLists.refresh("characters");
+    entityLists.refresh("sets");
+    if (entityLists.canSeeProjects) entityLists.refresh("projects");
+    getPictureCount()
+      .then((body) => {
+        totalCount.value = Number(body?.count);
+      })
+      .catch((err) => {
+        // A missing headline count is cosmetic: the rail still narrows and the
+        // grid still fills. Logged rather than surfaced.
+        console.warn("[PicturePicker] could not read the library count", err);
+        totalCount.value = null;
+      });
+    load();
+    // The search field is where a reader who did not come for a facet starts,
+    // and the dialog would otherwise open with focus on its Close button.
+    nextTick(() => searchRef.value?.focus());
   },
   { immediate: true },
 );
-
-// The listener is added on open and removed on close, so a component unmounted
-// while still open would leave one behind on `window` for the life of the tab —
-// and it holds this instance's notice store and refs.
-onUnmounted(() => window.removeEventListener("paste", onPaste));
 </script>
 
 <style scoped>
 .pp {
   display: flex;
   min-height: 0;
+  /* 70vh so the grid is the tall thing on a tall screen, capped so it does not
+     become a wall of tiles on a very tall one. Both on the 4px grid. */
   height: min(660px, 70vh);
 }
 
 .pp-rail {
-  width: 210px;
+  width: 208px;
   flex-shrink: 0;
   overflow-y: auto;
   padding: var(--space-3);
@@ -442,7 +532,7 @@ onUnmounted(() => window.removeEventListener("paste", onPaste));
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 30px;
+  min-height: 32px;
   padding: var(--space-2) var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
@@ -504,7 +594,7 @@ onUnmounted(() => window.removeEventListener("paste", onPaste));
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 .pp-paste kbd {
-  padding: 3px 5px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));
@@ -519,7 +609,10 @@ onUnmounted(() => window.removeEventListener("paste", onPaste));
 }
 .pp-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* A fixed five, matching the artboard AND the arrow keys' `COLUMNS`: with
+     `auto-fill` the two would silently disagree the moment the dialog narrowed,
+     and Down would jump the wrong distance. The tiles flex instead. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-3);
 }
 .pp-cell {
@@ -537,12 +630,26 @@ onUnmounted(() => window.removeEventListener("paste", onPaste));
   object-fit: cover;
   display: block;
 }
+/* Outline rather than a second box-shadow: the focus ring below is a
+   box-shadow, and two of them at equal specificity means the later rule wins —
+   which hid the chosen state from exactly the reader who has no other way to
+   see it (a focused, chosen tile showed only the ring). */
 .pp-cell--on {
-  box-shadow: 0 0 0 2px var(--active-bar);
+  outline: 2px solid var(--active-bar);
+  outline-offset: -2px;
 }
 .pp-cell:focus-visible {
-  outline: none;
   box-shadow: var(--focus-ring);
+}
+.pp-cell--gone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: not-allowed;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+.pp-gone {
+  display: inline-flex;
 }
 .pp-note {
   margin: 0;
@@ -551,6 +658,9 @@ onUnmounted(() => window.removeEventListener("paste", onPaste));
 }
 .pp-note--error {
   color: rgb(var(--v-theme-error));
+}
+.pp-note--after {
+  padding-top: var(--space-5);
 }
 .pp-more-row {
   display: flex;

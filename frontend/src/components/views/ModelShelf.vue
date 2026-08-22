@@ -2198,14 +2198,22 @@ function pickIcon() {
  * recycles deleted ids, so a stored `picture_id` would silently re-point after
  * a delete-and-insert and break on every library switch
  * (`services/model_icons.py`). Copying the bytes is what makes the mark
- * survive. The thumbnail is the copy that gets sent: already WebP, generated
- * on demand so it always exists, and 384px on the short edge — an icon's size
- * rather than a 40 MB original the store would refuse.
+ * survive. The thumbnail is the copy that gets sent: already WebP, generated on
+ * demand for any file the server can still reach, and 384px on the short edge —
+ * an icon's size rather than a 40 MB original the store would refuse.
  */
 async function onThumbnailPicked(picture) {
-  thumbnailPickerOpen.value = false;
   try {
-    const blob = await getPictureThumbnailBlob(picture.id);
+    // Fetched with the picker still open, and only then shut. The read can
+    // fail — a thumbnail is generated from the file, so an unplugged drive
+    // 404s — and a dialog that has already closed leaves the refusal floating
+    // over a shelf the reader has to reopen the picker from to try again.
+    // Cache-busted because these bytes are about to be STORED: an hour-old
+    // thumbnail is a fine tile and the wrong thing to keep.
+    const blob = await getPictureThumbnailBlob(picture.id, {
+      cacheBuster: Date.now(),
+    });
+    thumbnailPickerOpen.value = false;
     await store.setIconOnSelected(blob);
   } catch (err) {
     useNoticeStore().push({
@@ -2215,9 +2223,15 @@ async function onThumbnailPicked(picture) {
   }
 }
 
-/** The secondary route, from inside the picker: any file on disk. */
+/**
+ * The secondary route, from inside the picker: any file on disk.
+ *
+ * The picker stays open behind the OS chooser and is closed only once a file
+ * really came back. Cancelling the chooser is the ordinary way to change your
+ * mind about the file route, and it should land the reader back where they
+ * were rather than on a bare shelf.
+ */
 function pickIconFile() {
-  thumbnailPickerOpen.value = false;
   // Cleared first, so choosing the SAME file twice still fires `change` — the
   // obvious way to retry after a refusal, and silent if the value persisted.
   if (iconInputRef.value) iconInputRef.value.value = "";
@@ -2227,6 +2241,7 @@ function pickIconFile() {
 async function onIconChosen(event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  thumbnailPickerOpen.value = false;
   await store.setIconOnSelected(file);
 }
 
@@ -2246,8 +2261,8 @@ async function confirmClearIcons() {
     const ok = await confirm({
       title: `Clear ${withIcons.length} thumbnails?`,
       message:
-        "Those models go back to a generated mark. The images stay in the " +
-        "icon store, but which model wore which is not recorded anywhere else.",
+        "Those models go back to a generated mark. The images themselves are " +
+        "kept, but which model wore which is not recorded anywhere else.",
       warning: "There is no undo for this.",
       confirmLabel: "Clear them",
       danger: true,

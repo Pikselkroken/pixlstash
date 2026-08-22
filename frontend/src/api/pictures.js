@@ -46,12 +46,26 @@ export function pictureThumbnailUrl(id, { version } = {}) {
  * it is generated on demand so it always exists, and its 384px short edge is
  * both what an icon needs and comfortably inside the store's 2 MB ceiling.
  *
+ * **It can 404.** "Generated on demand" means generated from the file, and the
+ * route refuses when the source is missing, unreachable or undecodable — an
+ * unplugged drive is a state this app models. The caller must have an answer
+ * for that; it is not a read that always succeeds.
+ *
  * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string|number} [options.cacheBuster] - forces a fresh read past the
+ *   route's one-hour `max-age`. Worth passing when the bytes are about to be
+ *   STORED rather than merely shown: an hour-old thumbnail is a fine tile and a
+ *   wrong thing to keep.
  * @returns {Promise<Blob>} the WebP bytes.
  */
-export async function getPictureThumbnailBlob(id) {
+export async function getPictureThumbnailBlob(id, { cacheBuster } = {}) {
+  const query =
+    cacheBuster == null ? "" : `?cb=${encodeURIComponent(cacheBuster)}`;
   return unwrap(
-    apiClient.get(`/pictures/thumbnails/${id}.webp`, { responseType: "blob" }),
+    apiClient.get(`/pictures/thumbnails/${id}.webp${query}`, {
+      responseType: "blob",
+    }),
   );
 }
 

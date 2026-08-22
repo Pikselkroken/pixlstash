@@ -844,17 +844,46 @@ primary route**: it swaps to `GET /pictures/search` and carries the same scope.
 thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
 be built on the argument that something might want it one day.
 
-**Paste imports, and says so.** The import itself is *not* this component's:
-`useWindowFileImport` already claims a pasted image anywhere in the window and
-runs it through the staging session, so a second import path here would be a
-second thing to keep correct. What the picker adds is the half the reader is
-owed — a notice at the moment of pasting that the picture is being **filed**,
-and a reload when `useTasksStore.importRuns` drains, so what was pasted is
-selectable in the same session. A paste while focus is in the search field is a
-search, and is left alone (the window importer skips editable targets for the
-same reason). This matters beyond politeness: everything downstream names a
-picture by id, and `generation_input` locks an image by sha256 **and** id, so a
-picture that was never imported cannot be locked.
+**Paste imports — and the picker deliberately handles none of it.**
+`useWindowFileImport` already claims a pasted image anywhere in the window, and
+`ImageImporter` — what it hands off to — announces the import from inside the
+import, where the truth is: its progress dialog opens on the same keystroke and
+it reports the buckets at the end. The picker shows the `Ctrl` `V` affordance
+and nothing else, because a second announcement from outside could only be a
+guess, and was wrong three ways: `startImport` refuses outright while another
+import runs *and* under a read-only token, neither refusal ever registers a run
+(so a flag armed on paste never disarmed), and the window importer takes video
+as well as images, so a filter of the picker's own reported one paste and stayed
+silent on another. **What the picker does own** is that the result becomes
+selectable without reopening the dialog: it re-reads the *current* list when
+`useTasksStore.importRuns` drains while it is open — in place, keeping the
+facet, the search and the choice, because an import finishing is not a reason to
+undo what the reader did while they waited, and any import may be one they never
+started. Why paste must import at all: everything downstream names a picture by
+id, and `generation_input` locks an image by sha256 **and** id, so a picture
+that was never imported cannot be locked.
+
+**Two ceilings, both stated on screen.** The browse path pages at 120 with
+`Show more`. The search path has no server-side ceiling to inherit — `GET
+/pictures/search` ignores `top_n` and defaults its `limit` to `sys.maxsize` —
+and this grid is not virtualised, so the cap is applied client-side and the
+panel says it cut the list. The browse path also asks for an explicit
+`fields=id,file_path` rather than `fields=grid`, because the route reads `grid`
+as "this is the picture grid" and silently forces `stack_leaders_only`: a picker
+that could not offer a stacked variant, and whose browse and search results
+would then disagree about the same picture.
+
+**A tile can say it is not available.** A thumbnail is generated *from* the
+file, so a picture on an unplugged drive 404s — a state the shelf beside it
+already models. Those tiles draw the off-glyph, carry it in their accessible
+name, and refuse to be chosen, rather than showing an empty box that invites a
+click which cannot work.
+
+**The grid is one tab stop.** Roving `tabindex` with arrow-key movement (the
+pattern `DedupPictureStrip` already uses), because 120 tiles as 120 tab stops
+puts the footer verbs out of reach — and Enter on a tile accepts, since
+`AppDialog` exempts `<button>` from its Enter contract and the ↵ badge on
+`Use this picture` would otherwise promise what the keyboard cannot do.
 
 First caller: the model shelf's thumbnail verb (§9.1). The workflow Fixed and
 run-time Picker modes are its second and third.
@@ -3153,8 +3182,13 @@ key spans the two, and SQLite recycles deleted ids
 **pixels**: `getPictureThumbnailBlob(id)` reads
 `GET /pictures/thumbnails/{id}.webp` and the result is posted to the same
 multipart route the file chooser uses. The thumbnail is the right copy to send —
-already WebP, generated on demand so it always exists, and 384px on the short
-edge, which is an icon's size and comfortably inside the store's 2 MB ceiling.
+already WebP, generated on demand for any file the server can still reach, and
+384px on the short edge, which is an icon's size and comfortably inside the
+store's 2 MB ceiling. It is fetched cache-busted, because these bytes are about
+to be *stored*: the route caches for an hour, which is fine for a tile and wrong
+for a copy. **The read can 404** — a thumbnail is generated from the file, so an
+unplugged drive refuses — which is why the picker is closed only once the bytes
+are actually in hand.
 That is what makes the mark a *copy* rather than a reference into the vault, and
 is why it survives the picture being deleted or the library being switched.
 
