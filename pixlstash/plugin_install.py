@@ -20,6 +20,7 @@ whoever can write to the plugin directory can already install a plugin by hand.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ import sys
 import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as metadata_version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator
@@ -757,6 +760,84 @@ def install(plan: InstallPlan, *, force: bool = False) -> None:
                 staged.unlink(missing_ok=True)
             )
         raise PluginError(f"could not install to {plan.destination}: {exc}") from exc
+
+
+@dataclass
+class DependencyChange:
+    """One package pip would install, and what is there now."""
+
+    name: str
+    version: str
+    #: The version already installed, or None when the package is new here.
+    installed: str | None = None
+
+    @property
+    def moves(self) -> bool:
+        """Whether installing this would change a package already in use.
+
+        The one distinction that matters. Adding a package cannot break what is
+        running; replacing one can, and PixlStash pins every dependency it has,
+        so the thing most likely to be replaced is PixlStash's own torch.
+        """
+        return self.installed is not None and self.installed != self.version
+
+
+def resolve_requirements(requirements: Path) -> list[DependencyChange]:
+    """Return every package installing *requirements* would add or replace.
+
+    Resolved by pip rather than by us: ``--dry-run --report`` runs the real
+    resolver, writes what it would do as JSON, and touches nothing.  The report
+    lists only what is not already satisfied, so an entry is by definition a
+    change, and the entries include transitive dependencies -- which is the
+    point, since a plugin asking for one package can pull in forty.
+
+    Nothing here decides whether the answer is acceptable; it says what would
+    happen, and the caller shows it to the person who has to agree to it.
+    """
+    with TemporaryDirectory(prefix="pixlstash-deps-") as scratch:
+        report = Path(scratch) / "report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--dry-run",
+                "--quiet",
+                "--report",
+                str(report),
+                "-r",
+                str(requirements),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise PluginError(
+                f"pip could not work out what {requirements.name} needs "
+                f"(exit {result.returncode})"
+                + (f": {detail[-1]}" if detail else "")
+                + ". Nothing was installed."
+            )
+        try:
+            entries = json.loads(report.read_text(encoding="utf-8"))["install"]
+        except (OSError, ValueError, KeyError) as exc:
+            raise PluginError(
+                f"pip did not report what it would install: {exc}. "
+                "Nothing was installed."
+            ) from exc
+
+    changes = []
+    for entry in entries:
+        name = entry["metadata"]["name"]
+        try:
+            installed = metadata_version(name)
+        except PackageNotFoundError:
+            installed = None
+        changes.append(DependencyChange(name, entry["metadata"]["version"], installed))
+    return sorted(changes, key=lambda change: change.name.lower())
 
 
 def read_requirements(requirements: Path) -> list[str]:

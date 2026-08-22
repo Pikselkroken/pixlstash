@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import os
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -794,16 +796,25 @@ def test_requirements_are_never_installed_implicitly(
 
 
 def test_with_deps_says_what_it_will_install(
-    tmp_path, plugin_root, monkeypatch, capsys
+    tmp_path, plugin_root, monkeypatch, pip_report, capsys
 ):
+    """What is listed is what pip resolved, not what the file asked for.
+
+    The two differ whenever a requirement pulls anything in, which is most of
+    the time, and it is the resolved set that lands in the environment.
+    """
     calls = []
     monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    pip_report(("something", "1.0"), ("a-dependency-of-it", "2.4"), installed={})
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
     _write(folder / "requirements.txt", "# a comment\nsomething==1.0\n")
 
     assert _install(folder, "--with-deps") == cli.EXIT_OK
-    assert "something==1.0" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "This operation will install the following Python packages:" in output
+    assert "something" in output
+    assert "a-dependency-of-it" in output
     assert len(calls) == 1
 
 
@@ -1536,3 +1547,191 @@ def test_the_hub_is_read_off_the_command_line_in_both_spellings(monkeypatch):
     assert cli._hub_from_argv() is None
     monkeypatch.setattr(cli.sys, "argv", ["x", "--hub"])
     assert cli._hub_from_argv() is None
+
+
+# ----------------------------------------------------------------------
+# Dependencies
+# ----------------------------------------------------------------------
+#
+# `resolve_requirements` shells out to pip, which needs a network and an index,
+# so the resolver itself is stubbed and what is tested is the rule applied to
+# its answer. The one thing that must not be stubbed away is the shape of the
+# report, so `_report` builds the real thing: pip's `--report` JSON, whose
+# `install` list holds only what is *not* already satisfied.
+
+
+def _report(*packages: tuple[str, str]) -> str:
+    """Return a pip install report naming *packages* as (name, version)."""
+    return json.dumps(
+        {
+            "install": [
+                {"metadata": {"name": name, "version": version}}
+                for name, version in packages
+            ]
+        }
+    )
+
+
+@pytest.fixture
+def pip_report(monkeypatch, tmp_path):
+    """Serve a canned pip `--report`, and record what pip was asked."""
+
+    def serve(*packages: tuple[str, str], installed: dict[str, str] | None = None):
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            index = command.index("--report")
+            Path(command[index + 1]).write_text(_report(*packages), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        def fake_version(name: str) -> str:
+            present = installed or {}
+            if name in present:
+                return present[name]
+            raise plugin_install.PackageNotFoundError(name)
+
+        monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+        monkeypatch.setattr(plugin_install, "metadata_version", fake_version)
+        return calls
+
+    return serve
+
+
+def test_a_new_package_is_an_addition(pip_report, tmp_path):
+    pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    changes = plugin_install.resolve_requirements(requirements)
+    assert [(c.name, c.version, c.installed) for c in changes] == [
+        ("flask", "3.1.3", None)
+    ]
+    assert not changes[0].moves
+
+
+def test_a_different_version_of_an_installed_package_moves_it(pip_report, tmp_path):
+    """The one case that can stop PixlStash starting."""
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("pillow==11.0.0\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.moves
+    assert change.installed == "12.3.0"
+
+
+def test_transitive_packages_are_reported_too(pip_report, tmp_path):
+    """A plugin asking for one package routinely pulls in several."""
+    pip_report(
+        ("Flask", "3.1.3"),
+        ("Werkzeug", "3.1.8"),
+        ("blinker", "1.9.0"),
+        installed={},
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    changes = plugin_install.resolve_requirements(requirements)
+    assert [c.name for c in changes] == ["blinker", "Flask", "Werkzeug"]
+
+
+def test_resolving_asks_pip_not_to_install_anything(pip_report, tmp_path):
+    """It runs before the plugin is copied, so it must change nothing."""
+    calls = pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    plugin_install.resolve_requirements(requirements)
+    assert "--dry-run" in calls[0]
+    assert calls[0][0] == sys.executable
+
+
+def test_a_pip_that_cannot_resolve_is_a_refusal_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        plugin_install.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="ERROR: no matching distribution\n"
+        ),
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("nope==1\n", encoding="utf-8")
+
+    with pytest.raises(PluginError, match="no matching distribution"):
+        plugin_install.resolve_requirements(requirements)
+
+
+def test_install_refuses_dependencies_that_replace_a_package_in_use(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """End to end: the plugin must not be copied when the deps are refused."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow==11.0.0\n", encoding="utf-8")
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+
+    exit_code = cli.main(["plugins", "install", str(source), "--with-deps", "--yes"])
+    assert exit_code != 0
+
+    captured = capsys.readouterr()
+    assert "This operation will install the following Python packages:" in captured.out
+    assert "replaces 12.3.0" in captured.out
+    assert "Refused" in captured.err
+    # Nothing copied: the refusal happens before the plugin is written, so
+    # there is no half-installed plugin to clean up.
+    assert not (plugin_install.user_dir(IMAGE) / "my_filter.py").exists()
+
+
+def test_force_deps_installs_anyway_and_says_so(
+    tmp_path, plugin_root, pip_report, monkeypatch, capsys
+):
+    """The owner's machine, the owner's call, once they have been told."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow==11.0.0\n", encoding="utf-8")
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+    installed: list[Path] = []
+    monkeypatch.setattr(
+        plugin_install, "install_requirements", lambda path: installed.append(path)
+    )
+
+    exit_code = cli.main(
+        ["plugins", "install", str(source), "--with-deps", "--force-deps", "--yes"]
+    )
+    assert exit_code == cli.EXIT_OK
+    assert "Proceeding anyway: --force-deps." in capsys.readouterr().out
+    assert installed and (plugin_install.user_dir(IMAGE) / "my_filter.py").exists()
+
+
+def test_a_plugin_whose_dependencies_are_all_present_says_so(
+    tmp_path, plugin_root, pip_report, monkeypatch, capsys
+):
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow\n", encoding="utf-8")
+    pip_report(installed={"pillow": "12.3.0"})
+    monkeypatch.setattr(plugin_install, "install_requirements", lambda path: None)
+
+    assert cli.main(["plugins", "install", str(source), "--with-deps", "--yes"]) == 0
+    assert "Everything it needs is already installed." in capsys.readouterr().out
+
+
+def test_without_with_deps_pip_is_never_consulted(
+    tmp_path, plugin_root, monkeypatch, capsys
+):
+    """Resolution costs a network round trip, so it is not done unasked."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("flask\n", encoding="utf-8")
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("pip was consulted without --with-deps")
+
+    monkeypatch.setattr(plugin_install, "resolve_requirements", explode)
+    assert cli.main(["plugins", "install", str(source), "--yes"]) == 0
+    assert "It is NOT installed" in capsys.readouterr().out
