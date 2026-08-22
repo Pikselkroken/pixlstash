@@ -140,6 +140,25 @@
               <span v-else class="pp-gone">
                 <v-icon size="18">mdi-image-off-outline</v-icon>
               </span>
+              <!-- The mark that says WHICH tile is chosen, so the edge is not
+                   the only carrier of the state — the lesson the Character
+                   editor's reference grid learned about a thin edge on a
+                   photograph.
+
+                   `aria-hidden`, and real markup rather than a `::before`,
+                   because generated `content` counts towards the accessible
+                   NAME (accname §4.3.2 step 2F, which Chromium implements). The
+                   tile's subtree is one `alt=""` image, i.e. empty, so its name
+                   falls through to `title`; a bare ✓ in there would make the
+                   chosen tile announce as "✓" and lose the picture's name — a
+                   regression on exactly the reader the badge is drawn for.
+                   `aria-pressed` already says chosen. -->
+              <span
+                v-if="chosen?.id === pic.id"
+                class="pp-tick"
+                aria-hidden="true"
+                >✓</span
+              >
             </button>
           </div>
           <p v-if="capped" class="pp-note pp-note--after" role="status">
@@ -631,6 +650,11 @@ watch(
   gap: var(--space-3);
 }
 .pp-cell {
+  position: relative;
+  /* A stacking context of its own, so the tick's z-index below is scoped to
+     this tile rather than escaping into whatever context an ancestor happens
+     to establish. */
+  isolation: isolate;
   aspect-ratio: 1 / 1;
   padding: 0;
   border: 0;
@@ -645,13 +669,54 @@ watch(
   object-fit: cover;
   display: block;
 }
-/* Outline rather than a second box-shadow: the focus ring below is a
-   box-shadow, and two of them at equal specificity means the later rule wins —
-   which hid the chosen state from exactly the reader who has no other way to
-   see it (a focused, chosen tile showed only the ring). */
+/* The chosen tile wears the whole §11 selected vocabulary — `--active-wash`
+   fill AND `--active-bar` edge — not the edge alone. The edge on its own is a
+   2px stroke drawn INSIDE a photograph that can be any colour, so whether it
+   registers depends on the frame behind it: `--active-bar` is `primary` on
+   dark and the `accent` amber on light, and either can land on a picture that
+   already contains it. That is what "the picker doesn't get any selection
+   marker" was — checked in a browser against real thumbnails, in both themes.
+
+   Outline rather than a box-shadow, because the focus ring below is a
+   box-shadow and the two would fight over one property — which is how the
+   chosen state was once hidden from the reader who has no other way to see it
+   (a focused, chosen tile showed only the ring). */
 .pp-cell--on {
-  outline: 2px solid var(--active-bar);
-  outline-offset: -2px;
+  outline: var(--space-1) solid var(--active-bar);
+  outline-offset: calc(-1 * var(--space-1));
+}
+/* The wash, over the image rather than under it — a tile IS its picture, so
+   there is no surface left to tint. A pseudo-element because it carries no
+   text: nothing for the accessibility tree to pick up (unlike the tick, see
+   the template). */
+.pp-cell--on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--active-wash);
+  pointer-events: none;
+}
+/* The tick. `z-index` to clear the wash, which is an ::after and therefore
+   paints after every child; the elevation is what lifts it off an arbitrary
+   photograph, the same job it does on the image grid's own check badge. */
+.pp-tick {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: var(--space-6);
+  height: var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--active-bar);
+  color: var(--active-text);
+  box-shadow: var(--elevation-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  pointer-events: none;
 }
 .pp-cell:focus-visible {
   box-shadow: var(--focus-ring);
