@@ -42,11 +42,12 @@ export function pictureThumbnailUrl(id, { version } = {}) {
  * resolves a picture id server-side — the icon is a COPY, so it cannot break
  * when the picture is deleted or the library is switched
  * (`services/model_icons.py`). So choosing a library picture means sending its
- * pixels, and the thumbnail is the right pixels to send: it is already WebP,
- * it is generated on demand so it always exists, and its 384px short edge is
- * both what an icon needs and comfortably inside the store's 2 MB ceiling.
+ * pixels, and the thumbnail is the right pixels to send: it is already WebP, it
+ * is generated on demand rather than having to have been made in advance, and
+ * its 384px short edge is both what an icon needs and comfortably inside the
+ * store's 2 MB ceiling.
  *
- * **It can 404.** "Generated on demand" means generated from the file, and the
+ * **It can still 404**, because "on demand" means generated FROM the file: the
  * route refuses when the source is missing, unreachable or undecodable — an
  * unplugged drive is a state this app models. The caller must have an answer
  * for that; it is not a read that always succeeds.

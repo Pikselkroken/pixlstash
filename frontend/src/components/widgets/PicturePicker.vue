@@ -79,10 +79,11 @@
           />
           <!-- Paste is a real route in, and it IMPORTS: a screenshot that was
                never imported cannot be chosen, because everything downstream of
-               this picker names a picture by its id. The app's window-level
-               paste handler does the import; this says so at the moment of
-               pasting rather than surprising someone later with a picture they
-               did not know they filed, and reloads the list when it lands. -->
+               this picker names a picture by its id. The affordance is all this
+               component contributes — the window-level paste handler runs the
+               import and `ImageImporter` announces it from inside, which is the
+               only place that knows whether it happened. See the Paste note in
+               the script block for why announcing it from here was removed. -->
           <span class="pp-paste">
             or press <kbd>Ctrl</kbd><kbd>V</kbd>
           </span>
@@ -121,7 +122,7 @@
               :tabindex="i === tabStop ? 0 : -1"
               :title="tileTitle(pic)"
               @click="pick(pic)"
-              @dblclick="use"
+              @dblclick="useTile(pic)"
               @keydown="onCellKeydown($event, i)"
             >
               <img
@@ -375,11 +376,26 @@ function loadMore() {
   load({ append: true });
 }
 
+/**
+ * Choose a tile, if it can be chosen at all.
+ *
+ * @returns {boolean} whether the choice landed — which the two "choose it AND
+ *   take it" gestures below have to ask, or a refused tile falls through to
+ *   `use()` and accepts whatever was chosen BEFORE it. That is the worst
+ *   possible outcome for a refusal: silent, and a picture the reader did not
+ *   point at.
+ */
 function pick(pic) {
   // An unreachable file cannot become a thumbnail, so it cannot be chosen
   // either — the tile says why rather than failing after the dialog has shut.
-  if (unavailable.value.has(pic.id)) return;
+  if (!pic || unavailable.value.has(pic.id)) return false;
   chosen.value = pic;
+  return true;
+}
+
+/** Double-click, and Enter: choose this one and take it, or do neither. */
+function useTile(pic) {
+  if (pick(pic)) use();
 }
 
 function use() {
@@ -417,8 +433,7 @@ function onCellKeydown(event, index) {
   // it matters in cannot keep.
   if (event.key === "Enter") {
     event.preventDefault();
-    pick(pictures.value[index]);
-    use();
+    useTile(pictures.value[index]);
     return;
   }
   const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: COLUMNS, ArrowUp: -COLUMNS }[

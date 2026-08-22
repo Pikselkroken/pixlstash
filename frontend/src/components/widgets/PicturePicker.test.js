@@ -1,10 +1,16 @@
 // The library picture picker.
 //
-// The four things worth guarding are the ones the plan's §3 fixtures name and
-// the ones a later caller would silently break: the facets are the vault's own
-// groupings and really scope the read, the selection is single, search is the
-// escape hatch (a different endpoint, same scope), and a paste says so and is
-// selectable once the import lands.
+// What is worth guarding is what the plan's §3 fixtures name plus what a later
+// caller would silently break: the facets are the vault's own groupings and
+// really scope the read, the selection is single and a refused tile can never
+// stand in for it, search is the escape hatch (a different endpoint, same
+// scope) and is capped where the route imposes no ceiling of its own, and a
+// picture imported while the picker is open becomes selectable without the
+// reader's facet, search or choice being thrown away.
+//
+// The picker deliberately says NOTHING about a paste — `ImageImporter`
+// announces the import from inside it, which is the only place that knows
+// whether it happened. See the Paste note in the component.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -308,6 +314,25 @@ describe("the facet rail's truncation", () => {
 });
 
 describe("a picture whose file cannot be reached", () => {
+  it("never stands in for the choice that was already made", async () => {
+    // The refusal has to reach the gestures that mean "choose this one AND
+    // take it". If it only reaches the choosing half, a double-click or Enter
+    // on a refused tile falls through and accepts whatever was chosen BEFORE
+    // it — silent, and a picture the reader did not point at.
+    const w = await mountPicker();
+    await w.findAll(".pp-cell")[0].trigger("click");
+    expect(w.findAll(".pp-cell--on")).toHaveLength(1);
+
+    await w.findAll(".pp-cell img")[1].trigger("error");
+    await flush(w);
+    const gone = w.findAll(".pp-cell")[1];
+
+    await gone.trigger("dblclick");
+    expect(w.emitted("pick")).toBeFalsy();
+    await gone.trigger("keydown", { key: "Enter" });
+    expect(w.emitted("pick")).toBeFalsy();
+  });
+
   it("says so and refuses to be chosen", async () => {
     // A thumbnail is generated FROM the file, so an unplugged drive 404s. An
     // empty box that can still be clicked reads as one that has not loaded yet.
