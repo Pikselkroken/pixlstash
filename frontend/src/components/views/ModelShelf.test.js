@@ -142,6 +142,26 @@ vi.mock("../../api/pictureSets", async (importOriginal) => ({
   listPictureSets: (...args) => listPictureSets(...args),
 }));
 
+// The thumbnail verb's library route: the picker hands back a picture, the view
+// fetches ITS BYTES and posts them to the icon store. Both halves are doubled
+// here — the read because it is a network call on a user gesture, and the write
+// because a suite that really called it would be asserting the server's gate
+// rather than this view's wiring.
+const getPictureThumbnailBlob = vi.fn();
+// `importOriginal` spread, like its two neighbours: a bare replacement leaves
+// every OTHER export of that module `undefined` across this view's whole module
+// graph, so the next child to import `pictureThumbnailUrl` would die with a
+// bare "is not a function" in a suite that has nothing to do with thumbnails.
+vi.mock("../../api/pictures", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getPictureThumbnailBlob: (...args) => getPictureThumbnailBlob(...args),
+}));
+const setModelIcon = vi.fn();
+vi.mock("../../api/modelIcons", async (importOriginal) => ({
+  ...(await importOriginal()),
+  setModelIcon: (...args) => setModelIcon(...args),
+}));
+
 import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -171,6 +191,17 @@ const globalOpts = {
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
       FolderBrowser: true,
+      // The library picture picker the thumbnail verb opens. Its own suite
+      // mounts it; real here it would drag Vuetify's dialog provider into a
+      // suite that installs none, and read the shared entity lists on every
+      // mount. The stub RENDERS ITS SLOTS rather than being `true`, because the
+      // `Choose a file…` route this change deliberately keeps lives in one —
+      // and a `true` stub would let that route be deleted with the suite green.
+      PicturePicker: {
+        name: "PicturePicker",
+        props: ["open"],
+        template: "<div class='picker-stub'><slot name='footer-start' /></div>",
+      },
       ProgressOverlay: true,
       // The picker inside the selection bar, which the bar's own suite covers.
       // Left real it would read the shared entity lists on every mount here.
@@ -228,6 +259,11 @@ beforeEach(() => {
   listSupport.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
+  // The thumbnail verb's two halves. Reset here rather than per-test: a
+  // rejection armed for the unreachable-file case would otherwise still be
+  // armed for whatever ran next.
+  getPictureThumbnailBlob.mockReset();
+  setModelIcon.mockReset();
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
   nav.route.name = "models";
@@ -3188,8 +3224,8 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
   });
 });
 
-describe("the icon verb", () => {
-  it("offers Set icon for one model and refuses it for two", async () => {
+describe("the thumbnail verb", () => {
+  it("offers Set thumbnail for one model and refuses it for two", async () => {
     const wrapper = await mountShelf([
       adapter({ id: 1 }),
       adapter({ id: 2, sha256: "b".repeat(64) }),
@@ -3205,18 +3241,127 @@ describe("the icon verb", () => {
     expect(setIcon().attributes("disabled")).toBeDefined();
   });
 
-  it("offers Clear icon only when something has one", async () => {
+  it("offers Clear thumbnail only when something has one", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
     const clear = () =>
-      wrapper.findAll("button").find((b) => b.text().includes("Clear icon"));
+      wrapper.findAll("button").find((b) => b.text().includes("Clear thumbnail"));
     expect(clear()).toBeUndefined();
 
     store.rows = [adapter({ id: 1, icon_sha256: "a".repeat(64) })];
     await wrapper.vm.$nextTick();
     expect(clear()).toBeDefined();
+  });
+
+  it("sends the chosen picture's BYTES, never a reference to it", async () => {
+    // The icon store is content-addressed and lives beside the hub, while a
+    // picture is a vault row — nothing keys across the two. So the library
+    // route has to copy pixels, and the thumbnail is the copy it sends.
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "c".repeat(64) });
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    await wrapper.findComponent({ name: "PicturePicker" }).vm.$emit("pick", {
+      id: 55,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Cache-busted: these bytes get STORED, so an hour-old thumbnail is the
+    // wrong thing to keep.
+    expect(getPictureThumbnailBlob).toHaveBeenCalledWith(55, {
+      cacheBuster: expect.any(Number),
+    });
+    expect(setModelIcon).toHaveBeenCalledWith(1, bytes);
+  });
+
+  it("keeps Escape and Delete away from the rows while the picker is up", async () => {
+    // The picker is one of the shelf's OWN dialogs, and the window-level guard
+    // lists those by ref rather than by target: a press with nothing focused
+    // inside a dialog targets `<body>`, which no ancestor test can see. Without
+    // the ref, Escape over the picker would also wipe the selection underneath
+    // it and Delete would open the delete confirmation for it.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    wrapper.findComponent({ name: "PicturePicker" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    // Sanity: with the picker shut, Escape is the shelf's and clears.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+  });
+
+  it("keeps the picker open behind the file chooser, and shuts it on a file", async () => {
+    // `Choose a file…` is the shipped route this change deliberately does not
+    // remove, and it lives in the picker's footer slot. Cancelling the OS
+    // chooser must land the reader back in the picker rather than on a bare
+    // shelf, so the picker is closed by a file ARRIVING, never by the chooser
+    // opening.
+    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "d".repeat(64) });
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const picker = () => wrapper.findComponent({ name: "PicturePicker" });
+    expect(picker().props("open")).toBe(true);
+    const chooseAFile = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Choose a file"));
+    expect(chooseAFile).toBeDefined();
+
+    const input = wrapper.find('input[type="file"]');
+    const clicked = vi.spyOn(input.element, "click");
+    await chooseAFile.trigger("click");
+    expect(clicked).toHaveBeenCalled();
+    // Still open: nothing has come back from the chooser yet.
+    expect(picker().props("open")).toBe(true);
+
+    const file = new File(["png"], "mark.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(picker().props("open")).toBe(false);
+    expect(setModelIcon).toHaveBeenCalledWith(1, file);
+  });
+
+  it("keeps the picker open when the picture's bytes cannot be read", async () => {
+    // A thumbnail is generated FROM the file, so an unplugged drive 404s. The
+    // refusal must not land over a shelf the reader has to reopen the picker
+    // from to try again.
+    getPictureThumbnailBlob.mockRejectedValue(new Error("nope"));
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const picker = () => wrapper.findComponent({ name: "PicturePicker" });
+    picker().vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(picker().props("open")).toBe(true);
+    expect(setModelIcon).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
   });
 
   it("accepts only the image types the store will take", async () => {

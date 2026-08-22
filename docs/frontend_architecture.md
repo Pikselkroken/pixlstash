@@ -144,7 +144,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), `PicturePicker` (one faceted, single-select library picker: the shelf's thumbnail verb today, the workflow Fixed and run-time modes next), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
 
 ---
@@ -823,6 +823,70 @@ The house-styled form/control primitives that wrap Vuetify with the PixlStash to
 **`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms keep the fixed `width`.
 
 **The dialog keyboard contract (owner decision, 2026-07-29).** Every dialog dismisses on **Escape** and accepts on plain **Enter**, and the buttons wear the keys. `AppDialog` implements both on its own subtree so no page-level Escape owner is consulted first: Escape emits `close` (suppressed while `persistent`), Enter emits `accept`. Enter is deliberately inert where the key already has a meaning — multiline fields, buttons and links (native activation wins, so Enter on a focused Cancel cancels), selects, `<summary>`, ARIA text boxes, and any element that already handled the event (`defaultPrevented`). To adopt: wire the primary action to `@accept`, give the accept/confirm button `AppButton key-hint="enter"` (an ↵ badge, plus `aria-keyshortcuts`) and the cancel/abort button `key-hint="esc"`, and let the disabled state of the button — not the handler — be what gates the keypress (the `accept` handler must check the same `canSubmit` the button uses). New dialogs must follow this; existing dialogs adopt it as they are touched. First adopter: `RemixDialog`.
+
+#### `PicturePicker.vue` (`widgets/`)
+**One picker for "which picture?", faceted by the groupings the vault already
+stores.** Props: `open`, `subtitle` (what the picture is *for*, in the caller's
+own words). Emits `close` and `pick(picture)`; a `footer-start` slot is where a
+caller puts the route the picker deliberately does not replace. Built on
+`AppDialog` (so it inherits the Escape/Enter contract), with the facet rail
+left, search and tile grid right, and the receipt plus verbs in the footer —
+the `Picker` artboard of the 1.11 Workflow Library canvas.
+
+**Facets are project / character / picture set**, read from
+`useEntityListsStore` (so the picker costs no request the sidebar was not making
+anyway; reference sets are filtered out exactly as the sidebar filters them).
+One facet is active at a time and it becomes `project_id` / `character_id` /
+`set_id` on `GET /pictures/stream`. Free search is the **escape hatch, not the
+primary route**: it swaps to `GET /pictures/search` and carries the same scope.
+
+**Single-select on purpose.** Every caller needs exactly one picture — a model's
+thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
+be built on the argument that something might want it one day.
+
+**Paste imports — and the picker deliberately handles none of it.**
+`useWindowFileImport` already claims a pasted image anywhere in the window, and
+`ImageImporter` — what it hands off to — announces the import from inside the
+import, where the truth is: its progress dialog opens on the same keystroke and
+it reports the buckets at the end. The picker shows the `Ctrl` `V` affordance
+and nothing else, because a second announcement from outside could only be a
+guess, and was wrong three ways: `startImport` refuses outright while another
+import runs *and* under a read-only token, neither refusal ever registers a run
+(so a flag armed on paste never disarmed), and the window importer takes video
+as well as images, so a filter of the picker's own reported one paste and stayed
+silent on another. **What the picker does own** is that the result becomes
+selectable without reopening the dialog: it re-reads the *current* list when
+`useTasksStore.importRuns` drains while it is open — in place, keeping the
+facet, the search and the choice, because an import finishing is not a reason to
+undo what the reader did while they waited, and any import may be one they never
+started. Why paste must import at all: everything downstream names a picture by
+id, and `generation_input` locks an image by sha256 **and** id, so a picture
+that was never imported cannot be locked.
+
+**Two ceilings, both stated on screen.** The browse path pages at 120 with
+`Show more`. The search path has no server-side ceiling to inherit — `GET
+/pictures/search` ignores `top_n` and defaults its `limit` to `sys.maxsize` —
+and this grid is not virtualised, so the cap is applied client-side and the
+panel says it cut the list. The browse path also asks for an explicit
+`fields=id,file_path` rather than `fields=grid`, because the route reads `grid`
+as "this is the picture grid" and silently forces `stack_leaders_only`: a picker
+that could not offer a stacked variant, and whose browse and search results
+would then disagree about the same picture.
+
+**A tile can say it is not available.** A thumbnail is generated *from* the
+file, so a picture on an unplugged drive 404s — a state the shelf beside it
+already models. Those tiles draw the off-glyph, carry it in their accessible
+name, and refuse to be chosen, rather than showing an empty box that invites a
+click which cannot work.
+
+**The grid is one tab stop.** Roving `tabindex` with arrow-key movement (the
+pattern `DedupPictureStrip` already uses), because 120 tiles as 120 tab stops
+puts the footer verbs out of reach — and Enter on a tile accepts, since
+`AppDialog` exempts `<button>` from its Enter contract and the ↵ badge on
+`Use this picture` would otherwise promise what the keyboard cannot do.
+
+First caller: the model shelf's thumbnail verb (§9.1). The workflow Fixed and
+run-time Picker modes are its second and third.
 
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
 The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
@@ -3063,7 +3127,7 @@ shelf root**, the same landing `closeMove` uses: the button destroys the element
 the keyboard is standing on, and focus falling to `<body>` restarts the next Tab
 at the top of an 1,800-row document.
 
-#### The icon verb, on the shelf
+#### The thumbnail verb, on the shelf
 
 **Unset is never blank.** The identity column used to be a bare kind glyph, so
 every checkpoint row and the 37% of adapters carrying no title rendered
@@ -3089,16 +3153,44 @@ is, and a mark announcing "FL" would be the same fact twice, less usefully.
 
 **Set is single-row, clear is bulk.** An icon answers "which one is this?", so
 giving forty rows one mark would remove the only thing telling them apart — Set
-icon is gated to a selection of one, shown-and-disabled like Rename. Clear
+thumbnail is gated to a selection of one, shown-and-disabled like Rename. Clear
 appears only when something in the selection has one. Setting or clearing a
 single row prompts for nothing (both are reconstructable by doing them again); a
 **bulk** clear is not and confirms, the same test the bulk base-model overwrite
 falls on.
 
-**One upload path.** The picker is a real `<input type="file">` — the platform's
-own chooser, keyboard-accessible for free — and the client posts the bytes. That
-is what makes "pick a library picture" a *copy* rather than a reference into the
-vault, which is the constraint the hub/vault split imposes.
+**The verb is `Set Thumbnail…`, and the field is still `icon`.** The vocabulary
+change (workflow plan §3 S3) aligns the user-facing verb with the word the code
+already used for what it produces — `ModelMark` describes `set_icon` as "what
+its **thumbnail** was replaced BY" — and keeps *sample* (what a model produces:
+derived, plural, automatic) distinct from what a model *is*. `set_icon`,
+`icon_sha256`, `POST /models/{id}/icon` and `POST /models/icons/clear` are
+unchanged: renaming the column is churn with no user-visible benefit, and
+`set_icon` is separately in use for picture-set glyphs in `SideBar.vue`.
+
+**The library route is primary; the file route survives as the secondary.**
+`PicturePicker` (below) opens on the verb, and its `footer-start` slot carries
+the shelf's `Choose a file…`, which is still the same hidden `<input
+type="file">`. Removing a shipped way of doing the job would be a regression,
+and the point of the step was to prove the picker without taking anything away.
+
+**One upload path, whichever route was taken.** `POST /models/{id}/icon` takes
+bytes and nothing else — there is deliberately no route that resolves a picture
+id server-side, because `model` is a hub row and a picture is a vault row, no
+key spans the two, and SQLite recycles deleted ids
+(`pixlstash/services/model_icons.py`). So the library route sends the picture's
+**pixels**: `getPictureThumbnailBlob(id)` reads
+`GET /pictures/thumbnails/{id}.webp` and the result is posted to the same
+multipart route the file chooser uses. The thumbnail is the right copy to send —
+already WebP, generated on demand for any file the server can still reach, and
+384px on the short edge, which is an icon's size and comfortably inside the
+store's 2 MB ceiling. It is fetched cache-busted, because these bytes are about
+to be *stored*: the route caches for an hour, which is fine for a tile and wrong
+for a copy. **The read can 404** — a thumbnail is generated from the file, so an
+unplugged drive refuses — which is why the picker is closed only once the bytes
+are actually in hand.
+That is what makes the mark a *copy* rather than a reference into the vault, and
+is why it survives the picture being deleted or the library being switched.
 
 **The sample/icon view toggle is NOT built, and cannot be yet.** The ruling
 defines two fallback chains (sample → icon → mark, and icon → mark), but the
@@ -3368,8 +3460,8 @@ in a file mode rather than an `<input type=file>`.** The file is on the machine
 running PixlStash and the server copies it there, so an upload would push a
 gigabyte through the browser to land it a directory away from where it started —
 and `<input type=file>` cannot give the host path the route needs anyway. (The
-icon verb *does* use a real file input, because an icon is small and its bytes
-genuinely have to travel.) The picker's file mode is opt-in on both sides: the
+thumbnail verb's secondary `Choose a file…` route *does* use a real file input,
+because an icon is small and its bytes genuinely have to travel.) The picker's file mode is opt-in on both sides: the
 `pickModelFile` prop turns a click on a file into a selection instead of a
 no-op, and it is what sets `include_model_files` on `GET /filesystem/browse`, so
 every other folder picker keeps a directory-only list. A click **selects**, it

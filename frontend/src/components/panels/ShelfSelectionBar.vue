@@ -174,7 +174,7 @@
       class="selbar-btn"
       type="button"
       data-verb="set-icon"
-      aria-label="Set icon"
+      aria-label="Set thumbnail"
       :disabled="!single"
       :title="iconTitle"
       @click="emit('set-icon')"
@@ -942,13 +942,13 @@ const VerbMenu = (props) => {
         })
       : null,
     props.single
-      ? item("mdi-image-outline", "Set icon…", {
+      ? item("mdi-image-outline", "Set thumbnail…", {
           on: () => props.onVerb("set-icon"),
           title: props.iconTitle,
         })
       : null,
     props.hasIcons
-      ? item("mdi-image-off-outline", "Clear icon", {
+      ? item("mdi-image-off-outline", "Clear thumbnail", {
           on: () => props.onVerb("clear-icons"),
           title: props.clearIconTitle,
         })

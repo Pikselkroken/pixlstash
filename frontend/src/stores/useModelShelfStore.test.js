@@ -1345,7 +1345,7 @@ describe("Assign", () => {
   });
 });
 
-describe("the icon verb", () => {
+describe("the thumbnail verb", () => {
   beforeEach(() => {
     setModelIcon.mockReset().mockResolvedValue({ icon_sha256: "a".repeat(64) });
     clearModelIcons.mockReset().mockResolvedValue({ cleared: [] });
@@ -1401,7 +1401,7 @@ describe("the icon verb", () => {
     await store.clearIconsOnSelected();
     expect(clearModelIcons).toHaveBeenCalledWith([1, 2]);
     expect(useNoticeStore().notices.at(-1).text).toBe(
-      "Cleared the icon on 1 model.",
+      "Cleared the thumbnail on 1 model.",
     );
   });
 
