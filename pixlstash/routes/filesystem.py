@@ -162,20 +162,39 @@ def create_router(server) -> APIRouter:
             if not show_hidden and entry.name.startswith("."):
                 continue
 
-            # Keep results constrained to the browsed directory even if an
-            # entry is a symlink that points somewhere else.
-            try:
-                safe_entry_path = resolve_path_within(safe_browse_path, entry.name)
-                if safe_entry_path == safe_browse_path:
-                    continue
-            except (OSError, ValueError):
-                # Skip entries that cannot be resolved within the parent directory (e.g. broken symlinks or entries with permission issues).
-                continue
-
             try:
                 is_dir = entry.is_dir(follow_symlinks=True)
             except OSError:
                 # Skip entries that cannot be accessed (e.g. permission issues).
+                continue
+
+            # Keep results constrained to the browsed directory even if an
+            # entry is a symlink that points somewhere else.
+            try:
+                safe_entry_path = resolve_path_within(safe_browse_path, entry.name)
+            except (OSError, ValueError):
+                # Skip entries that cannot be resolved within the parent directory (e.g. broken symlinks or entries with permission issues).
+                #
+                # A DIRECTORY symlink leaving the tree is the exception, and it
+                # is ordinary rather than suspect: `Models -> /vault/Models` is
+                # how a launcher keeps its models off the system disk, and the
+                # folder picker was dropping exactly those — silently, so the
+                # folder simply was not there to click. Nothing is loosened by
+                # listing it: this route browses any directory the owner names,
+                # so it is reachable by typing the path already, and the
+                # fallback is the same sanitizer the browsed path itself goes
+                # through (blocklist, configured roots, then the fullmatch
+                # barrier). Files still get containment — a listed file is a
+                # file this route is offering to read.
+                if not is_dir:
+                    continue
+                try:
+                    safe_entry_path = _resolve_safe_directory_path(
+                        os.path.join(safe_browse_path, entry.name)
+                    )
+                except HTTPException:
+                    continue
+            if safe_entry_path == safe_browse_path:
                 continue
             if is_dir:
                 entries.append(

@@ -4766,6 +4766,50 @@ def test_the_picker_lists_model_files_only_when_it_is_asked_to(shelf_env, loose_
     assert entries[0]["is_dir"] is True
 
 
+def test_the_picker_lists_a_directory_symlink_that_leaves_the_tree(
+    shelf_env, loose_file, tmp_path
+):
+    """`Models -> /vault/Models` has to be clickable, or it cannot be registered.
+
+    A launcher keeping its models off the system disk is the ordinary case, and
+    the entry-level containment check dropped every one of them — silently, so
+    the folder simply was not in the listing. Nothing is loosened by listing it:
+    the route browses any directory the owner names, so the target is reachable
+    by typing its path already.
+
+    A file symlink leaving the tree still goes, which is the other half of the
+    assertion: a listed file is one this route is offering to read.
+    """
+    home = loose_file.source.parent
+    outside = tmp_path / "vault"
+    outside.mkdir()
+    (outside / "VAE").mkdir()
+    (outside / "secret.safetensors").write_bytes(b"not yours")
+
+    (home / "Models").symlink_to(outside, target_is_directory=True)
+    (home / "escaping.safetensors").symlink_to(outside / "secret.safetensors")
+
+    r = shelf_env.owner.get(
+        f"{API}/filesystem/browse",
+        params={"path": str(home), "include_model_files": True},
+    )
+    assert r.status_code == 200, r.text
+    entries = {entry["name"]: entry for entry in r.json()["entries"]}
+
+    assert "Models" in entries, "the symlinked folder was dropped from the picker"
+    assert entries["Models"]["is_dir"] is True
+    # The resolved target, so browsing into it (and registering it) works.
+    assert entries["Models"]["path"] == os.path.realpath(str(outside))
+    assert "escaping.safetensors" not in entries
+
+    # And it can be browsed once clicked.
+    into = shelf_env.owner.get(
+        f"{API}/filesystem/browse", params={"path": entries["Models"]["path"]}
+    )
+    assert into.status_code == 200, into.text
+    assert [entry["name"] for entry in into.json()["entries"]] == ["VAE"]
+
+
 def test_the_copy_is_hashed_on_its_way_in_and_never_read_again(
     shelf_env, loose_file, monkeypatch
 ):
