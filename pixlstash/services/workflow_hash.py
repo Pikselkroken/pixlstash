@@ -58,8 +58,11 @@ HASH_VERSION = "v1"
 # only distinguishable four hops out.
 REFINEMENT_ROUNDS = 4
 
-# Recursion guard for the UI graph's boundary and passthrough walks.
-_MAX_RESOLVE_DEPTH = 64
+# Recursion guard for the UI graph's boundary and passthrough walks. Counted in
+# CALL frames, and `source_of` and `resolve_output` each take one, so this is
+# ~128 hops rather than 256 — comfortably past any chain of reroutes a person
+# would build, while still bounded well under CPython's own recursion limit.
+_MAX_RESOLVE_DEPTH = 256
 
 MODEL_EXTENSIONS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft")
 IMAGE_EXTENSIONS = (
@@ -158,10 +161,22 @@ def _digest(payload: Any) -> str:
 
 
 def _is_link(value: Any) -> bool:
-    """True for an API-format ``[node_id, output_slot]`` connection."""
+    """True for an API-format ``[node_id, output_slot]`` connection.
+
+    **The node id must be a string, and that is load-bearing rather than
+    defensive.** A widget can legitimately hold a two-element list of numbers —
+    a resolution pair, a pair of coordinates — and reading one as a connection
+    puts a bucket-P value into the topology *and* writes a dangling edge into
+    the stored document. The spec calls that direction unrecoverable:
+    "misclassifying a param as T shatters grouping into near-duplicate recipes
+    (destroys the feature)". Measured over the owner's three libraries, all
+    501,128 links in 28,289 API graphs carry a string node id, and every one of
+    them resolves to a node in its own graph.
+    """
     return (
         isinstance(value, list)
         and len(value) == 2
+        and isinstance(value[0], str)
         and isinstance(value[1], int)
         and not isinstance(value[1], bool)
     )
@@ -192,12 +207,17 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     return None
 
 
-def reduce_api_graph(graph: dict, *, keep_widgets: bool) -> dict[str, ReducedNode]:
-    """Reduce an API-format ``prompt`` graph to keyable nodes.
+def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
+    """Reduce an API-format ``prompt`` graph to keyable nodes, once.
+
+    One walk serves all three products: :func:`structural_hash` keys this
+    directly, :func:`topology_hash` keys :func:`drop_widgets` of it, and
+    :func:`structural_document` renders it. The backfill is a pass over every
+    picture in every library, so re-parsing the same graph three times is a
+    cost worth not paying.
 
     Args:
         graph: The API-format graph, ``{node_id: {"class_type", "inputs"}}``.
-        keep_widgets: True for the structural tier, False for topology.
 
     Raises:
         WorkflowGraphError: The graph holds no usable node.
@@ -214,10 +234,22 @@ def reduce_api_graph(graph: dict, *, keep_widgets: bool) -> dict[str, ReducedNod
         if not isinstance(raw_inputs, dict):
             raw_inputs = {}
         for name, value in raw_inputs.items():
+            name = str(name)
             if _is_link(value):
-                inputs.append((str(name), str(value[0]), int(value[1])))
-            elif keep_widgets:
-                widgets.append((str(name), structural_widget_value(str(name), value)))
+                inputs.append((name, str(value[0]), int(value[1])))
+            elif SECRET_FIELD_RE.search(name):
+                # Dropped here rather than nulled, so a credential-named widget
+                # is absent from the stored document AND absent from the key.
+                # Whether a third-party node carried one is not what makes a
+                # graph a different graph.
+                logger.info(
+                    "Dropping widget %r on node class %s from the workflow "
+                    "recipe: its name matches the credential pattern.",
+                    name,
+                    node.get("class_type"),
+                )
+            else:
+                widgets.append((name, structural_widget_value(name, value)))
         nodes[str(node_id)] = ReducedNode(
             class_type=str(node.get("class_type")),
             widgets=tuple(sorted(widgets)),
@@ -226,6 +258,19 @@ def reduce_api_graph(graph: dict, *, keep_widgets: bool) -> dict[str, ReducedNod
     if not nodes:
         raise WorkflowGraphError("API graph holds no node carrying a class_type")
     return nodes
+
+
+def drop_widgets(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
+    """The topology tier: the same graph with every widget removed.
+
+    Topology is *node classes and named-input edges, nothing else*, so it is
+    literally the structural reduction minus its assets — which is also why a
+    recipe can never span two topologies.
+    """
+    return {
+        node_id: ReducedNode(node.class_type, (), node.inputs)
+        for node_id, node in nodes.items()
+    }
 
 
 def graph_key(nodes: dict[str, ReducedNode]) -> str:
@@ -289,45 +334,39 @@ def _wired_inputs(node: ReducedNode, labels: dict[str, str]) -> list[list[Any]]:
 
 def structural_hash(api_graph: dict) -> str:
     """The recipe key: the graph bound to its models, parameters nulled."""
-    return graph_key(reduce_api_graph(api_graph, keep_widgets=True))
+    return graph_key(reduce_api_graph(api_graph))
 
 
 def topology_hash(api_graph: dict) -> str:
     """The portable key: node classes and named-input edges, nothing else."""
-    return graph_key(reduce_api_graph(api_graph, keep_widgets=False))
+    return graph_key(drop_widgets(reduce_api_graph(api_graph)))
 
 
-def structural_document(api_graph: dict) -> dict:
-    """The graph as it is stored: topology and assets kept, everything else nulled.
+def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
+    """Render a reduced graph back as the document that gets stored.
 
     This is what makes the library plan's §5 deletion boundary true rather than
     aspirational. A recipe is *prompt-free by construction*, so "forget the
     pictures" can purge instances and ghosts and leave the recipe standing
-    without rewriting a single stored document. Node titles go too: ``_meta``
-    is bucket V, and a title is something a person wrote.
+    without rewriting a single stored graph. Node titles go the same way:
+    ``_meta`` is bucket V, and a title is something a person wrote.
+
+    It is rendered from the reduction rather than from the graph so that the
+    document and the hash can never disagree about what was kept.
     """
+    if not nodes:
+        raise WorkflowGraphError("cannot render an empty graph")
     document: dict[str, Any] = {}
-    for node_id, node in api_graph.items():
-        if not isinstance(node, dict) or "class_type" not in node:
-            continue
-        inputs: dict[str, Any] = {}
-        raw_inputs = node.get("inputs")
-        if not isinstance(raw_inputs, dict):
-            raw_inputs = {}
-        for name, value in raw_inputs.items():
-            if _is_link(value):
-                inputs[str(name)] = [str(value[0]), int(value[1])]
-            elif SECRET_FIELD_RE.search(str(name)):
-                continue
-            else:
-                inputs[str(name)] = structural_widget_value(str(name), value)
-        document[str(node_id)] = {
-            "class_type": str(node.get("class_type")),
-            "inputs": inputs,
-        }
-    if not document:
-        raise WorkflowGraphError("API graph holds no node carrying a class_type")
+    for node_id, node in nodes.items():
+        inputs: dict[str, Any] = {name: value for name, value in node.widgets}
+        inputs.update({name: [source, slot] for name, source, slot in node.inputs})
+        document[node_id] = {"class_type": node.class_type, "inputs": inputs}
     return document
+
+
+def structural_document(api_graph: dict) -> dict:
+    """The graph as it is stored: topology and assets kept, everything else nulled."""
+    return document_from_reduction(reduce_api_graph(api_graph))
 
 
 # --------------------------------------------------------------------------
@@ -397,16 +436,21 @@ class _UiGraph:
             self.nodes[key] = node
             node_type = str(node.get("type", "?"))
             definition = self.definitions.get(node_type)
+            inactive = node.get("mode") in _UI_INACTIVE_MODES
             if definition is None:
-                if (
-                    self.inline
-                    and _UUID_RE.match(node_type)
-                    and node.get("mode") not in _UI_INACTIVE_MODES
-                ):
+                if self.inline and _UUID_RE.match(node_type) and not inactive:
                     raise MissingSubgraphDefinitionError(
                         f"node {key} instantiates subgraph {node_type}, which is "
                         "absent from definitions.subgraphs"
                     )
+                continue
+            if inactive:
+                # A muted or bypassed instance does not execute, and neither
+                # does anything inside it. Expanding it anyway would leave its
+                # whole node set standing while every edge through it vanished
+                # — a key for a graph ComfyUI has never run. The instance node
+                # itself stays registered and is dropped by `reduce`, exactly
+                # as a bypassed ordinary node is.
                 continue
             self._expand(key, node, definition, depth=depth)
         for origin, origin_slot, target, target_slot in _normalized_ui_links(links):
@@ -422,6 +466,17 @@ class _UiGraph:
         output_node = definition.get("outputNode") or {}
         boundary_in = f"{inner}{input_node.get('id', -10)}"
         boundary_out = f"{inner}{output_node.get('id', -20)}"
+        self.nodes[key] = dict(node, _definition=definition, _boundary_out=boundary_out)
+        self._flatten(
+            definition.get("nodes"),
+            definition.get("links"),
+            prefix=inner,
+            depth=depth + 1,
+        )
+        # AFTER the definition's own node list, deliberately. A definition that
+        # serialises its IO nodes into `nodes` would otherwise overwrite these
+        # two synthetic entries and key both boundaries as ordinary graph nodes
+        # (9 nodes emitted for a 7-node graph). Ours must win.
         self.nodes[boundary_in] = {
             "type": _SUBGRAPH_INPUT,
             "instance": key,
@@ -432,13 +487,6 @@ class _UiGraph:
             "outer_slot": _boundary_slot_map(node, definition),
         }
         self.nodes[boundary_out] = {"type": _SUBGRAPH_OUTPUT}
-        self.nodes[key] = dict(node, _definition=definition, _boundary_out=boundary_out)
-        self._flatten(
-            definition.get("nodes"),
-            definition.get("links"),
-            prefix=inner,
-            depth=depth + 1,
-        )
 
     def source_of(
         self, key: str, slot: int, depth: int = 0
@@ -454,32 +502,52 @@ class _UiGraph:
     ) -> Optional[tuple[str, int]]:
         """Resolve an origin to a real node, stepping through everything else."""
         if depth > _MAX_RESOLVE_DEPTH:
-            logger.warning(
-                "Gave up resolving UI graph origin %s slot %s at depth %s; the "
-                "graph has a passthrough or subgraph cycle.",
-                key,
-                slot,
-                depth,
+            # Refused, not dropped. Returning None here would delete one edge
+            # and hand back a confident key for a graph missing a connection,
+            # which is the silent-failure shape the house rules forbid; a key
+            # nobody can compute is a state the caller can report.
+            raise WorkflowGraphError(
+                f"gave up resolving UI graph origin {key} slot {slot} after "
+                f"{_MAX_RESOLVE_DEPTH} hops: a passthrough or subgraph cycle, "
+                "or a chain longer than this guard allows"
             )
-            return None
         node = self.nodes.get(key)
         if node is None or node.get("mode") in _UI_INACTIVE_MODES:
             return None
         node_type = str(node.get("type", "?"))
         if node_type == _SUBGRAPH_INPUT:
             outer = node["outer_slot"]
-            if slot >= len(outer) or outer[slot] is None:
+            if slot >= len(outer):
+                logger.warning(
+                    "Subgraph instance %s declares %d inputs but an inner link "
+                    "reads slot %d; the edge is dropped from the key.",
+                    node["instance"],
+                    len(outer),
+                    slot,
+                )
+                return None
+            if outer[slot] is None:
+                # Normal and common: the instance proxies that input as a
+                # widget rather than wiring it, so there is no edge to follow.
                 return None
             return self.source_of(node["instance"], outer[slot], depth + 1)
         if "_definition" in node:
             outputs = node.get("outputs") or ()
-            if slot >= len(outputs):
-                return None
-            name = str((outputs[slot] or {}).get("name"))
-            inner_slot = _slot_index_by_name(node["_definition"].get("outputs")).get(
-                name
+            entry = outputs[slot] if slot < len(outputs) else None
+            name = str((entry or {}).get("name")) if isinstance(entry, dict) else None
+            inner_slot = (
+                _slot_index_by_name(node["_definition"].get("outputs")).get(name)
+                if name is not None
+                else None
             )
             if inner_slot is None:
+                logger.warning(
+                    "Subgraph instance %s output slot %d does not match any "
+                    "output its definition declares; the edge is dropped from "
+                    "the key.",
+                    key,
+                    slot,
+                )
                 return None
             return self.source_of(node["_boundary_out"], inner_slot, depth + 1)
         if node_type in UI_PASSTHROUGH_CLASSES:
@@ -529,10 +597,12 @@ def _boundary_slot_map(node: dict, definition: dict) -> list[Optional[int]]:
     order. Matching by position would silently cross the wires.
     """
     outer = _slot_index_by_name(node.get("inputs"))
+    # A malformed entry emits None rather than being skipped: skipping would
+    # shift every later slot by one and quietly cross the wires, which is the
+    # exact failure matching by name exists to avoid.
     return [
-        outer.get(str(entry.get("name")))
+        outer.get(str(entry.get("name"))) if isinstance(entry, dict) else None
         for entry in (definition.get("inputs") or ())
-        if isinstance(entry, dict)
     ]
 
 

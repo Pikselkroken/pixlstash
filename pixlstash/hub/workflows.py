@@ -26,15 +26,13 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
-    reduce_api_graph,
+    document_from_reduction,
+    drop_widgets,
     graph_key,
-    structural_document,
+    reduce_api_graph,
 )
 
 logger = get_logger(__name__)
-
-FORMAT_API = "api"
-FORMAT_UI = "ui"
 
 
 @dataclass(frozen=True)
@@ -77,13 +75,12 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
             nothing keyable. Callers ingesting arbitrary images are expected to
             catch this and skip the picture rather than fail the batch.
     """
-    structural_nodes = reduce_api_graph(api_graph, keep_widgets=True)
-    topology_nodes = reduce_api_graph(api_graph, keep_widgets=False)
-    document = _canonical_document(structural_document(api_graph))
+    nodes = reduce_api_graph(api_graph)
+    document = _canonical_document(document_from_reduction(nodes))
     keys = WorkflowKeys(
-        topology_hash=graph_key(topology_nodes),
-        structural_hash=graph_key(structural_nodes),
-        node_count=len(structural_nodes),
+        topology_hash=graph_key(drop_widgets(nodes)),
+        structural_hash=graph_key(nodes),
+        node_count=len(nodes),
     )
 
     now = _now()
@@ -95,7 +92,7 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
             "INSERT OR IGNORE INTO workflow_topology "
             "(topology_hash, hash_version, node_count, first_seen_at) "
             "VALUES (?, ?, ?, ?)",
-            (keys.topology_hash, HASH_VERSION, len(topology_nodes), now),
+            (keys.topology_hash, HASH_VERSION, keys.node_count, now),
         )
         conn.execute(
             "INSERT OR IGNORE INTO workflow_recipe "
@@ -110,14 +107,12 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
             ),
         )
         conn.execute(
-            "INSERT OR IGNORE INTO workflow_document "
-            "(document_sha256, format, topology_hash, structural_hash, document, "
-            "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO workflow_recipe_graph "
+            "(structural_hash, document_sha256, document, created_at) "
+            "VALUES (?, ?, ?, ?)",
             (
-                hashlib.sha256(document.encode("utf-8")).hexdigest(),
-                FORMAT_API,
-                keys.topology_hash,
                 keys.structural_hash,
+                hashlib.sha256(document.encode("utf-8")).hexdigest(),
                 document,
                 now,
             ),
@@ -128,9 +123,8 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
 def get_document(hub: HubDatabase, structural_hash: str) -> Optional[dict]:
     """Return the stored structural graph for a recipe, or None if unknown."""
     row = hub.fetchone(
-        "SELECT document FROM workflow_document WHERE structural_hash = ? "
-        "AND format = ?",
-        (structural_hash, FORMAT_API),
+        "SELECT document FROM workflow_recipe_graph WHERE structural_hash = ?",
+        (structural_hash,),
     )
     if row is None:
         return None

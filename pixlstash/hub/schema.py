@@ -508,6 +508,8 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #   seeds are nulled before hashing, so a recipe is **prompt-free by
 #   construction** (library plan §5) and needs no purge to stay that way.
 #
+# ``workflow_recipe_graph`` holds the graph itself, in exactly that nulled form.
+#
 # The instance tier is deliberately absent. It is what holds the prompt and
 # every parameter, it is written by ingest, and ingest is a later step; adding
 # an unwritten table now would only fix its shape before anything has had to
@@ -542,55 +544,42 @@ CREATE TABLE IF NOT EXISTS workflow_recipe (
 # The graph itself, split off the recipe row because it is the only large
 # column here and the library view never lists it.
 #
-# **What is stored is the structural document, not the file as it arrived.**
-# Parameter and volatile widget values are already nulled and any field named
-# like a credential is dropped, which is what makes library plan §5's deletion
-# boundary real: "forget the pictures" purges instances and ghosts and leaves
-# the recipe standing, without a purge having to rewrite a single stored
-# document. The verbatim import store is a different thing on a later step
-# (implementation plan §B5) and belongs beside the workflow file, not here.
-_V2_WORKFLOW_DOCUMENT = """
-CREATE TABLE IF NOT EXISTS workflow_document (
-    -- The digest of the document text itself, so re-ingesting the same graph
-    -- is an idempotent write rather than a duplicate row.
-    document_sha256  TEXT PRIMARY KEY,
-    -- 'api' today. The UI serialisation is stored by the drop-and-match step,
-    -- which is what needs it; the column exists now so that arrival is not a
-    -- reshape of a released table.
-    format           TEXT NOT NULL CHECK (format IN ('api', 'ui')),
-    topology_hash    TEXT NOT NULL REFERENCES workflow_topology(topology_hash),
-    -- NULL for a UI-format document dropped with no ComfyUI to resolve its
-    -- assets against: topology is portable, the recipe tier is not.
-    structural_hash  TEXT REFERENCES workflow_recipe(structural_hash),
+# **Named for what it holds.** This is the RECIPE's graph, not the file that
+# was imported: parameter and volatile widget values are already nulled and any
+# field named like a credential is dropped. That is what makes library plan §5's
+# deletion boundary real — "forget the pictures" purges instances and ghosts and
+# leaves the recipe standing, with no purge having to rewrite a stored graph —
+# and it is also why this row cannot be handed back to ComfyUI as a runnable
+# workflow. The verbatim import store (implementation plan §B5) is a different
+# thing that belongs beside the workflow file, and the name `workflow_document`
+# is deliberately left free for it.
+#
+# One row per recipe. The same workflow rebuilt from scratch has different node
+# ids and so different document TEXT at the same identity, so a key on the
+# document's own digest would let those accumulate; `document_sha256` is kept as
+# a plain column because it is what a content-addressed export filename is made
+# of (library plan §9.2).
+_V2_WORKFLOW_RECIPE_GRAPH = """
+CREATE TABLE IF NOT EXISTS workflow_recipe_graph (
+    structural_hash  TEXT PRIMARY KEY REFERENCES workflow_recipe(structural_hash),
+    document_sha256  TEXT NOT NULL,
     document         TEXT NOT NULL,
     created_at       TEXT NOT NULL
 )
 """
 
 _V2_WORKFLOW_INDEXES = (
-    # "Which recipes are variants of this workflow" — the library view's
-    # expand interaction, and the only query that is not a primary-key lookup.
+    # "Which recipes are variants of this workflow" — the library view's expand
+    # interaction, and the only query here that is not a primary-key lookup.
     "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_topology "
     "ON workflow_recipe(topology_hash)",
-    # "Give me this recipe's graph". UNIQUE, so INSERT OR IGNORE keeps exactly
-    # one document per recipe per format: the same workflow rebuilt from
-    # scratch has different node ids, so its document text differs even though
-    # its identity does not, and the content-addressed primary key alone would
-    # let those accumulate. SQLite treats NULLs as distinct in a UNIQUE index,
-    # which is what still allows many UI-format documents that no recipe owns.
-    "CREATE UNIQUE INDEX IF NOT EXISTS ix_workflow_document_recipe "
-    "ON workflow_document(structural_hash, format)",
-    # The drop target's whole query: a UI file keys to a topology and asks what
-    # is already filed under it.
-    "CREATE INDEX IF NOT EXISTS ix_workflow_document_topology "
-    "ON workflow_document(topology_hash)",
 )
 
 _V2_WORKFLOW_TABLES = (
-    # Ordered by reference: recipe points at topology, document at both.
+    # Ordered by reference: recipe points at topology, graph at recipe.
     _V2_WORKFLOW_TOPOLOGY,
     _V2_WORKFLOW_RECIPE,
-    _V2_WORKFLOW_DOCUMENT,
+    _V2_WORKFLOW_RECIPE_GRAPH,
     *_V2_WORKFLOW_INDEXES,
 )
 

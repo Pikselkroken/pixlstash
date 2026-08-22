@@ -30,9 +30,9 @@ from pixlstash.hub.workflows import (
     recipes_for_topology,
 )
 from pixlstash.services.workflow_hash import (
-    HASH_VERSION,
     MissingSubgraphDefinitionError,
     WorkflowGraphError,
+    reduce_ui_graph,
     structural_document,
     structural_hash,
     topology_hash,
@@ -294,6 +294,67 @@ def test_node_deleted_forks_the_recipe():
     assert structural_hash(trimmed) != structural_hash(api_graph(TXT2IMG))
 
 
+def test_rewiring_forks_the_key_with_the_nodes_left_alone():
+    """The **edges** half of "node classes and named-input edges".
+
+    Every other fork fixture forks by removing a node or changing a widget, so
+    all of them would still pass with the edges deleted from the key entirely —
+    at which point topology degenerates into the class multiset the library
+    plan retired. This one holds the node multiset and every widget constant
+    and moves one connection: VAEDecode takes the raw latent instead of the
+    sampled one, which is a different workflow made of the same parts.
+    """
+    rewired = api_graph(TXT2IMG)
+    rewired["6"]["inputs"]["samples"] = ["4", 0]
+    assert structural_hash(rewired) != structural_hash(api_graph(TXT2IMG))
+    assert topology_hash(rewired) != topology_hash(api_graph(TXT2IMG))
+
+
+def test_refinement_separates_graphs_that_agree_one_hop_out():
+    """Weisfeiler-Leman refinement, and the reason the module runs it at all.
+
+    Both graphs hold the same nodes with the same widgets, and every node sees
+    the same neighbour *classes*. They differ only in that one shares a loader
+    between both text encoders while the other gives each its own. Nothing a
+    single hop can see tells them apart, so without refinement they collide —
+    which is the whole failure mode the corrected rule exists to answer, one
+    tier down from the twin-node case.
+    """
+    shared = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "a.safetensors"},
+        },
+        "2": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "a.safetensors"},
+        },
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1]}},
+    }
+    split = copy.deepcopy(shared)
+    split["4"]["inputs"]["clip"] = ["2", 1]
+    assert structural_hash(shared) != structural_hash(split)
+    assert topology_hash(shared) != topology_hash(split)
+
+
+def test_a_two_number_widget_is_not_read_as_a_connection():
+    """A resolution pair is bucket P, not an edge.
+
+    Reading ``[1024, 1024]`` as ``[node_id, slot]`` puts a parameter into the
+    topology, which the spec calls the unrecoverable direction — it shatters
+    grouping into near-duplicate recipes — and writes a link to a node that
+    does not exist into the stored graph. All 501,128 links measured across the
+    owner's libraries carry a string node id, so the class is closed on that.
+    """
+    spec = edited(TXT2IMG, 4, resolution=[1024, 1024])
+    baseline = structural_hash(api_graph(spec))
+    assert (
+        structural_hash(api_graph(edited(spec, 4, resolution=[768, 768]))) == baseline
+    )
+    assert structural_document(api_graph(spec))["4"]["inputs"]["resolution"] is None
+
+
 # ---------------------------------------------------------------------------
 # Bucketing
 # ---------------------------------------------------------------------------
@@ -437,6 +498,60 @@ def test_a_missing_subgraph_definition_is_reported():
         ui_topology_hash(workflow)
 
 
+def test_a_bypassed_subgraph_takes_its_whole_contents_with_it():
+    """ComfyUI does not execute a bypassed instance, so neither do we.
+
+    Expanding it anyway leaves its inner nodes standing while every edge
+    through it disappears — a key for a graph that has never run. A bypassed
+    *ordinary* node already drops correctly, and this is the same rule applied
+    one level down.
+    """
+    workflow = subgraph_ui_workflow()
+    for node in workflow["nodes"]:
+        if node["type"] == SUBGRAPH_UUID:
+            node["mode"] = 4
+    reduced = reduce_ui_graph(workflow)
+    assert not any(":" in key for key in reduced)
+    assert sorted(node.class_type for node in reduced.values()) == [
+        "CLIPTextEncode",
+        "CLIPTextEncode",
+        "CheckpointLoaderSimple",
+        "SaveImage",
+        "VAEDecode",
+    ]
+
+
+def test_a_definition_that_serialises_its_own_io_nodes_keys_the_same():
+    """The synthetic boundary nodes must survive the definition's node list.
+
+    Installed before it, they would be overwritten by any definition that
+    serialises ``inputNode``/``outputNode`` into ``nodes``, and both boundaries
+    would key as ordinary graph nodes — nine emitted for a seven-node graph.
+    """
+    workflow = subgraph_ui_workflow()
+    definition = workflow["definitions"]["subgraphs"][0]
+    definition["nodes"] = definition["nodes"] + [
+        ui_node(-10, "SubgraphInputNode", [], outputs=["model"]),
+        ui_node(-20, "SubgraphOutputNode", ["LATENT"]),
+    ]
+    assert len(reduce_ui_graph(workflow)) == len(TXT2IMG)
+    assert ui_topology_hash(workflow) == ui_topology_hash(ui_workflow(TXT2IMG))
+
+
+def test_a_passthrough_cycle_is_refused_rather_than_keyed():
+    """Refused, not quietly keyed over a graph missing an edge."""
+    workflow = ui_workflow(TXT2IMG)
+    workflow["nodes"].append(ui_node(93, "Reroute", ["in"], outputs=["out"]))
+    workflow["nodes"].append(ui_node(94, "Reroute", ["in"], outputs=["out"]))
+    workflow["links"].append([len(workflow["links"]) + 1, 94, 0, 93, 0, "*"])
+    workflow["links"].append([len(workflow["links"]) + 1, 93, 0, 94, 0, "*"])
+    for link in workflow["links"]:
+        if link[3] == 7 and link[4] == 0:
+            link[1] = 93
+    with pytest.raises(WorkflowGraphError):
+        ui_topology_hash(workflow)
+
+
 def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
     """The pairing the drop target actually performs, with subgraphs in play."""
     assert ui_topology_hash(subgraph_ui_workflow()) == topology_hash(
@@ -448,7 +563,7 @@ def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
 # B1 — the hub tables
 # ---------------------------------------------------------------------------
 
-WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_document")
+WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_graph")
 
 
 @pytest.fixture
@@ -525,7 +640,9 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
         "SELECT hash_version, node_count FROM workflow_recipe WHERE structural_hash = ?",
         (keys.structural_hash,),
     )
-    assert row["hash_version"] == HASH_VERSION
+    # The literal the spec names, not the module's own constant: comparing a
+    # written value against the thing that wrote it asserts nothing.
+    assert row["hash_version"] == "v1"
     assert row["node_count"] == len(TXT2IMG)
 
 
@@ -538,7 +655,7 @@ def test_the_stored_document_holds_no_prompt(hub):
     """
     keys = record_api_graph(hub, api_graph(TXT2IMG))
     stored = hub.fetchone(
-        "SELECT document FROM workflow_document WHERE structural_hash = ?",
+        "SELECT document FROM workflow_recipe_graph WHERE structural_hash = ?",
         (keys.structural_hash,),
     )["document"]
     assert "lighthouse" not in stored
@@ -548,23 +665,27 @@ def test_the_stored_document_holds_no_prompt(hub):
     )
 
 
-def test_a_document_cannot_name_a_recipe_that_does_not_exist(hub):
+def test_a_graph_cannot_name_a_recipe_that_does_not_exist(hub):
+    """The recipe foreign key, exercised on its own rather than through another.
+
+    Every other column here is content-addressed and crosses no boundary, so
+    this reference is the one piece of referential integrity the schema has.
+    """
+    record_api_graph(hub, api_graph(TXT2IMG))
     with pytest.raises(sqlite3.IntegrityError):
         with hub.transaction() as conn:
             conn.execute(
-                "INSERT INTO workflow_document (document_sha256, format, "
-                "topology_hash, structural_hash, document, created_at) "
-                "VALUES ('deadbeef', 'api', 'nosuchtopology', NULL, '{}', 'now')"
+                "INSERT INTO workflow_recipe_graph (structural_hash, "
+                "document_sha256, document, created_at) "
+                "VALUES ('nosuchrecipe', 'deadbeef', '{}', 'now')"
             )
 
 
-def test_the_document_format_column_is_closed(hub):
-    keys = record_api_graph(hub, api_graph(TXT2IMG))
+def test_a_recipe_cannot_name_a_topology_that_does_not_exist(hub):
     with pytest.raises(sqlite3.IntegrityError):
         with hub.transaction() as conn:
             conn.execute(
-                "INSERT INTO workflow_document (document_sha256, format, "
-                "topology_hash, structural_hash, document, created_at) "
-                "VALUES ('cafe', 'yaml', ?, ?, '{}', 'now')",
-                (keys.topology_hash, keys.structural_hash),
+                "INSERT INTO workflow_recipe (structural_hash, topology_hash, "
+                "hash_version, node_count, first_seen_at) "
+                "VALUES ('r', 'nosuchtopology', 'v1', 1, 'now')"
             )
