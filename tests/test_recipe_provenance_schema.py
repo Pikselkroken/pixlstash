@@ -24,10 +24,13 @@ four decisions that are expensive to change once rows exist:
    **ghost**, and permanently forgetting one deletes the generation and keeps
    the recipe.
 
-4. **Strict identity underneath, aggressive grouping on top.** ``family_hash``
-   and ``topology_hash`` group hard for the Workflows view and are deliberately
-   not unique, while ``structural_hash`` never merges. A group can be split
-   later; a merged identity cannot be recovered.
+4. **Strict identity underneath, grouping on top.** ``topology_hash`` groups
+   for the Workflows view and is deliberately not unique, while
+   ``structural_hash`` never merges. A group can be split later; a merged
+   identity cannot be recovered. There is deliberately no ``family_hash``: the
+   role-set grouping is a candidate for the view, not an adopted tier (library
+   plan §10.1), and this asserts the column stays absent until that is
+   answered.
 """
 
 import os
@@ -58,7 +61,6 @@ HUB_TABLES = ("recipe", "recipe_asset", "recipe_instance")
 
 STRUCTURAL_HASH = "s" * 64
 TOPOLOGY_HASH = "t" * 64
-FAMILY_HASH = "r" * 64
 INSTANCE_HASH = "i" * 64
 IMAGE_SHA = "f" * 64
 GENERATED_SHA = "e" * 64
@@ -99,17 +101,15 @@ def make_recipe(
     structural_hash=STRUCTURAL_HASH,
     hash_version=HASH_VERSION_V1,
     topology_hash=TOPOLOGY_HASH,
-    family_hash=FAMILY_HASH,
 ):
     cur = hub.execute(
         "INSERT INTO recipe (engine, document, structural_hash, topology_hash, "
-        "family_hash, hash_version) VALUES (?, ?, ?, ?, ?, ?)",
+        "hash_version) VALUES (?, ?, ?, ?, ?)",
         (
             ENGINE_COMFYUI,
             "{}",
             structural_hash,
             topology_hash,
-            family_hash,
             hash_version,
         ),
     )
@@ -235,37 +235,48 @@ class TestOneTopologyOneRecipe:
         assert {r.instance_hash for r in rows} == {INSTANCE_HASH}
 
 
-class TestThreeHashesGroupAtThreeStrengths:
-    def test_recipes_sharing_a_family_hash_stay_separate_rows(self, hub):
-        """Two variants of one workflow: one group, two replayable recipes."""
-        make_recipe(hub, structural_hash="a" * 64, topology_hash="p" * 64)
-        make_recipe(hub, structural_hash="b" * 64, topology_hash="q" * 64)
+class TestTopologyGroupsWithoutMerging:
+    def test_recipes_sharing_a_topology_stay_separate_rows(self, hub):
+        """One workflow, two model variants: one group, two replayable recipes."""
+        make_recipe(hub, structural_hash="a" * 64)
+        make_recipe(hub, structural_hash="b" * 64)
 
         rows = hub.execute(
-            "SELECT structural_hash FROM recipe WHERE family_hash = ?",
-            (FAMILY_HASH,),
+            "SELECT structural_hash FROM recipe WHERE topology_hash = ?",
+            (TOPOLOGY_HASH,),
         ).fetchall()
         # Grouping is a read, never a merge. Both keep their own identity, so
         # "which images used this LoRA" still resolves underneath the group.
         assert {r[0] for r in rows} == {"a" * 64, "b" * 64}
 
-    def test_the_looser_hashes_are_not_unique_indexes(self, hub):
+    def test_topology_is_not_a_unique_index(self, hub):
         """A unique index here would make the whole grouping design impossible."""
         unique = {
             row[1]: bool(row[2]) for row in hub.execute("PRAGMA index_list('recipe')")
         }
-        assert unique["ix_recipe_family"] is False
         assert unique["ix_recipe_topology"] is False
         assert unique["ux_recipe_structural_identity"] is True
 
-    def test_a_graphless_recipe_may_have_no_grouping_hashes(self, hub):
+    def test_there_is_no_family_hash_column(self, hub):
+        """The role-set grouping is a candidate, not an adopted tier.
+
+        Library plan §10.1 reopened "does the view group at 192 or at 93" after
+        the retirement of "family" turned out to have been decided against the
+        class multiset rather than against the role set. A column that exists
+        before that is answered is a column something starts depending on.
+        """
+        columns = {row[1] for row in hub.execute("PRAGMA table_info(recipe)")}
+        assert "topology_hash" in columns
+        assert "family_hash" not in columns
+
+    def test_a_graphless_recipe_may_have_no_topology_hash(self, hub):
         """An ai-toolkit training config is a recipe with no node graph.
 
         NULL is the honest value there, not a hash of nothing.
         """
-        make_recipe(hub, topology_hash=None, family_hash=None)
-        row = hub.execute("SELECT topology_hash, family_hash FROM recipe").fetchone()
-        assert row == (None, None)
+        make_recipe(hub, topology_hash=None)
+        row = hub.execute("SELECT topology_hash FROM recipe").fetchone()
+        assert row == (None,)
 
 
 class TestTheWorkflowOutlivesTheImage:

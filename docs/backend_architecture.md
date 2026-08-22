@@ -830,7 +830,7 @@ only the picture-linked half is in the vault.
 --- HUB (pixlstash/hub/schema.py, _V2_RECIPE_TABLES) ---
 
 recipe: id, engine, engine_version, document, document_ui,
-        structural_hash, topology_hash, family_hash,
+        structural_hash, topology_hash,
         hash_version, created_at
         (UNIQUE structural_hash+hash_version)
 
@@ -901,42 +901,52 @@ param / query / volatile) is specified per node in
 `pixlstash-hash-field-classification.md` in the business repo, and that
 document's fixture list is the acceptance suite for the canonicalizer.
 
-#### Three hashes, one walk, three questions
+#### Two hashes, one walk, two questions
 
-The hub's `recipe` carries three hashes, nested loosest-last. All three are
-**exact**:
-there is no similarity threshold anywhere in this design, which is a deliberate
-choice and not an omission (see below).
+The hub's `recipe` carries two hashes. Both are **exact**: there is no
+similarity threshold anywhere in this design, which is a deliberate choice and
+not an omission (see below).
 
 | Column | Answers | On a 13,463-image library |
 |---|---|---|
 | `structural_hash` | "can I replay this exactly?" | 281 recipes |
-| `topology_hash` | "same graph, different checkpoint?" | 192 groups |
-| `family_hash` | "same *kind* of workflow?" | 93 groups |
+| `topology_hash` | "is this the same workflow?" | 192 groups |
 
 `structural_hash` is the identity and is **never merged**. That is precisely
-what lets the other two be as aggressive as the Workflows view wants: grouping
-is a read, so "which images used this LoRA" still resolves underneath a group,
-and a group can be split later where a merged identity could not be recovered.
-Neither of the looser columns is unique-indexed; many recipes sharing one is the
-entire point.
+what lets `topology_hash` group as hard as the Workflows view wants: grouping is
+a read, so "which images used this LoRA" still resolves underneath a group, and
+a group can be split later where a merged identity could not be recovered.
+`topology_hash` is not unique-indexed; many recipes sharing one topology is the
+entire point, and it is what collapses 617 rows into 192.
 
-`family_hash` is what makes the Workflows view browsable, and its trick is that
-**a node's identity comes from what it feeds into, not from what it is called.**
-The API-format JSON carries no type names, but the input name a node is wired to
-is ComfyUI's type discipline showing through: anything wired to `model` is a
-model source, anything wired to `clip` is a text encoder. Node versions and
-node-pack variants therefore merge with no synonym table to maintain, which
-matters because a hand-kept table over ~120 node classes goes stale every time a
-pack updates. Measured against the alternative on a real library: name-based
-families caught 2 of ~120 classes, while the role rule merged `CLIPLoader` with
-`CLIPLoaderGGUF`, `UNETLoader` with `UNETLoaderDisTorch2MultiGPU`, and
-`EmptyLatentImage` with `EmptySD3LatentImage` unaided.
+`topology_hash` is the **topology tier** from the workflow library plan: node
+classes and named-input edges, nothing else. Two properties make it worth its
+own column rather than being derived:
 
-`family_hash` is a **set**, not a multiset. Dropping multiplicity is what puts a
-one-LoRA and a four-LoRA version of a graph in one group. That is the intended
-aggressive behaviour; the group detail view is expected to show the variants
-rather than hide them.
+- It is **computable from either ComfyUI serialisation**, which the structural
+  hash is not. That is what lets a `.json` dropped on the app be filed against
+  the workflows already in the library without ComfyUI running at all (measured
+  91.7% one-to-one against the API-side key, and that figure is a floor pending
+  re-derivation with subgraph inlining).
+- It survives model swapping, so one workflow run against two checkpoints is one
+  row in the view with two recipes under it.
+
+Computing it from a UI graph needs a reduction first (drop `mode` 2 and 4 nodes,
+step through `Reroute` / `GetNode` / `SetNode`, and inline
+`definitions.subgraphs` — 20% of a real library uses subgraphs, and without
+inlining a 17-node graph keys as 8). That belongs to the canonicalizer; this
+column is only where the result lands.
+
+**There is deliberately no `family_hash`.** A looser "same *kind* of workflow"
+grouping was measured at 93 groups (against topology's 192), by taking a node's
+identity from the input names it feeds into rather than from its class name,
+which merges `CLIPLoader`/`CLIPLoaderGGUF` and
+`UNETLoader`/`UNETLoaderDisTorch2MultiGPU` with no synonym table to maintain. It
+is a **candidate for how the library view groups at its top level, not an
+adopted tier** — see workflow library plan §10.1. The column stays absent until
+that is answered, because a column that exists early is a column something
+starts depending on. `tests/test_recipe_provenance_schema.py` asserts its
+absence.
 
 **Why not similarity clustering.** Agglomerative clustering over a
 Weisfeiler-Leman graph kernel was measured on the same 281 recipes. At a 0.9
@@ -949,9 +959,9 @@ gives the same answer. If a similarity pass is ever revisited, it must follow
 the house rule the dedup and stack-detection features already follow: detection
 proposes, it never applies.
 
-Both grouping columns are **nullable**, because they describe a node graph and
-an ai-toolkit training config is a recipe with no graph to roll up. NULL there
-is the honest value, not a hash of nothing.
+`topology_hash` is **nullable**, because it describes a node graph and an
+ai-toolkit training config is a recipe with no graph to roll up. NULL there is
+the honest value, not a hash of nothing.
 
 `RecipeAsset` exists to keep uncertainty **honest**. A workflow names its models
 by filename, and a filename is not an identity, so the row records what the

@@ -497,6 +497,23 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # no foreign key spans the hub and a vault, and SQLite reissues a deleted row's
 # id to the next insert, so an integer would silently come to name a different
 # instance. Same rule as `adapter_attachment.adapter_sha256`.
+# `topology_hash` is the workflow library plan's **topology tier**: node classes
+# and named-input edges, nothing else. It is deliberately NOT "the structural
+# hash with asset filenames dropped", which is what an earlier draft of this
+# column held. The difference is the point of the tier: topology is defined to
+# be computable from **either** ComfyUI serialisation, which is what lets a
+# dropped `.json` be filed without ComfyUI running, and the structural hash is
+# API-format only. Reducing a UI graph for comparison (drop `mode` 2 and 4
+# nodes, step through `Reroute` / `GetNode` / `SetNode`, inline
+# `definitions.subgraphs` first) belongs to the canonicalizer; this column is
+# only where the result lands.
+#
+# There is no `family_hash` column, and adding one is a decision nobody has
+# taken yet. The role-set grouping measured at 93 groups against topology's 192
+# is a candidate for how the library view groups at its top level, not an
+# adopted tier: see workflow library plan §10.1 and the status note on
+# `pixlstash-hash-field-classification.md` §Family. A column that exists before
+# the question is answered is a column something starts depending on.
 _V2_RECIPE = """
 CREATE TABLE IF NOT EXISTS recipe (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -506,7 +523,6 @@ CREATE TABLE IF NOT EXISTS recipe (
     document_ui      TEXT,
     structural_hash  TEXT NOT NULL,
     topology_hash    TEXT,
-    family_hash      TEXT,
     hash_version     TEXT NOT NULL DEFAULT 'v1',
     created_at       TEXT
 )
@@ -553,10 +569,10 @@ _V2_RECIPE_INDEXES = (
     # other.
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_recipe_structural_identity "
     "ON recipe(structural_hash, hash_version)",
-    # The Workflows view pages on family_hash; topology_hash is the
-    # model-variant rollup inside a family. Non-unique by design: many recipes
-    # sharing one is the entire point.
-    "CREATE INDEX IF NOT EXISTS ix_recipe_family ON recipe(family_hash)",
+    # The Workflows view pages on topology_hash: one row per workflow, with the
+    # recipes under it as the model variants. Non-unique by design, and that is
+    # the entire point of the tier — many recipes sharing one topology is what
+    # collapses 617 rows into 192.
     "CREATE INDEX IF NOT EXISTS ix_recipe_topology ON recipe(topology_hash)",
     "CREATE INDEX IF NOT EXISTS ix_recipe_asset_recipe ON recipe_asset(recipe_id)",
     # The retro-resolve pass arrives from the other direction: a model has just
