@@ -235,9 +235,15 @@ function isMutatingRequest(config) {
 // 422. Cleared HERE rather than remembered at each call site: three uploaders
 // passed `Content-Type: multipart/form-data` themselves and the fourth
 // (`setModelIcon`) did not, which is the whole model-thumbnail verb, both its
-// routes, silently dead. The header is deleted rather than set, so the browser
-// writes it WITH the boundary it generates.
-function stripJsonContentTypeForFormData(config) {
+// routes, silently dead.
+//
+// **Every** content type goes, not only the JSON one, which is why the name
+// does not say `Json`. A hand-written `multipart/form-data` is wrong too: it
+// carries no boundary, and only the thing that serialises the body can know
+// one. Deleting is what hands that decision to the adapter, which then writes
+// the header with the boundary it generated. So a caller cannot set a
+// FormData's content type here — deliberately, because a caller cannot know it.
+function stripContentTypeForFormData(config) {
   if (typeof FormData === 'undefined' || !(config?.data instanceof FormData)) {
     return;
   }
@@ -257,7 +263,7 @@ function stripJsonContentTypeForFormData(config) {
 }
 
 apiClient.interceptors.request.use((config) => {
-  stripJsonContentTypeForFormData(config);
+  stripContentTypeForFormData(config);
 
   const rawUrl = config?.url;
   if (!rawUrl || typeof rawUrl !== 'string') {

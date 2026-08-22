@@ -28,7 +28,6 @@ vi.mock("axios", () => {
   return { default: { create: () => axiosInstance } };
 });
 
-import AxiosHeaders from "axios/unsafe/core/AxiosHeaders.js";
 import {
   API_BASE_URL,
   activateShareToken,
@@ -44,6 +43,11 @@ import {
 } from "./apiClient";
 
 const requestInterceptor = requestInterceptors[0];
+
+// The real `AxiosHeaders`, reached past this file's own `vi.mock("axios")`.
+// It is a named export of the package — `axios/unsafe/...` is a private path
+// and would break on an axios release for no reason to do with this app.
+const { AxiosHeaders } = await vi.importActual("axios");
 
 beforeEach(() => {
   activateShareToken(null);
@@ -327,9 +331,8 @@ describe("a multipart body does not inherit the JSON default", () => {
   // the four uploaders remembered to pass the header and the fourth did not.
   // The header is DELETED, never set: only the browser can write the boundary.
   //
-  // The REAL `AxiosHeaders` is what production hands the interceptor, and this
-  // module's `vi.mock("axios")` above does not cover the subpath it lives on —
-  // so the first case below is the shape that actually ships, not a stand-in
+  // The REAL `AxiosHeaders` is what production hands the interceptor, so the
+  // first case below is the shape that actually ships rather than a stand-in
   // for it. A plain object is covered too, because a hand-assembled config is
   // what every other test in this file passes.
   function interceptForm(headers) {
