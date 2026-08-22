@@ -480,6 +480,121 @@ _V2_MODEL_SHELF_TABLES = (
 _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 
 
+# ---------------------------------------------------------------------------
+# The workflow library (v1.11, workflow library plan §4)
+# ---------------------------------------------------------------------------
+#
+# **These live in the hub and not in a vault, and that is the irreversible
+# decision in the release.** 70.2% of the owner's structural recipes appear in
+# more than one of his libraries, so a per-vault store would hold the same
+# workflow three times and could never answer "have I built this before" —
+# which is the question the feature exists to answer. The backfill that fills
+# these tables is a one-time pass over every picture in every library: writing
+# the rows into a vault and moving them later means re-running it, and
+# re-running it after pictures have been deleted cannot recover the rows for
+# those pictures at all.
+#
+# **Identity is the content, so nothing crosses the database boundary.** A
+# vault's generation refers to a recipe by its structural hash. That is not a
+# foreign key, needs no coordinated migration, and still resolves after a
+# library has been detached and reattached somewhere else.
+#
+# Two tiers, one row each, from ``services/workflow_hash.py``:
+#
+# * ``workflow_topology`` — the graph alone, node classes and named-input
+#   edges. The only tier computable from *either* ComfyUI serialisation, which
+#   is what lets a dropped ``workflow.json`` be filed with ComfyUI stopped.
+# * ``workflow_recipe`` — that graph bound to specific models. Parameters and
+#   seeds are nulled before hashing, so a recipe is **prompt-free by
+#   construction** (library plan §5) and needs no purge to stay that way.
+#
+# The instance tier is deliberately absent. It is what holds the prompt and
+# every parameter, it is written by ingest, and ingest is a later step; adding
+# an unwritten table now would only fix its shape before anything has had to
+# use it. Its location is not in question — §4 puts the whole family here.
+
+_V2_WORKFLOW_TOPOLOGY = """
+CREATE TABLE IF NOT EXISTS workflow_topology (
+    -- Content address, so this is the primary key. No surrogate id: an integer
+    -- would have to be resolved across the hub/vault boundary, which is the
+    -- exact thing §4 chose content addressing to avoid.
+    topology_hash  TEXT PRIMARY KEY,
+    -- Which rule produced the hash. A later rule is a new value here rather
+    -- than a silent reinterpretation of rows written under the old one.
+    hash_version   TEXT NOT NULL,
+    node_count     INTEGER NOT NULL,
+    first_seen_at  TEXT NOT NULL
+)
+"""
+
+_V2_WORKFLOW_RECIPE = """
+CREATE TABLE IF NOT EXISTS workflow_recipe (
+    structural_hash  TEXT PRIMARY KEY,
+    -- Within one database, so an ordinary foreign key. Every recipe has
+    -- exactly one topology: the coarser key is computed from the same graph.
+    topology_hash    TEXT NOT NULL REFERENCES workflow_topology(topology_hash),
+    hash_version     TEXT NOT NULL,
+    node_count       INTEGER NOT NULL,
+    first_seen_at    TEXT NOT NULL
+)
+"""
+
+# The graph itself, split off the recipe row because it is the only large
+# column here and the library view never lists it.
+#
+# **What is stored is the structural document, not the file as it arrived.**
+# Parameter and volatile widget values are already nulled and any field named
+# like a credential is dropped, which is what makes library plan §5's deletion
+# boundary real: "forget the pictures" purges instances and ghosts and leaves
+# the recipe standing, without a purge having to rewrite a single stored
+# document. The verbatim import store is a different thing on a later step
+# (implementation plan §B5) and belongs beside the workflow file, not here.
+_V2_WORKFLOW_DOCUMENT = """
+CREATE TABLE IF NOT EXISTS workflow_document (
+    -- The digest of the document text itself, so re-ingesting the same graph
+    -- is an idempotent write rather than a duplicate row.
+    document_sha256  TEXT PRIMARY KEY,
+    -- 'api' today. The UI serialisation is stored by the drop-and-match step,
+    -- which is what needs it; the column exists now so that arrival is not a
+    -- reshape of a released table.
+    format           TEXT NOT NULL CHECK (format IN ('api', 'ui')),
+    topology_hash    TEXT NOT NULL REFERENCES workflow_topology(topology_hash),
+    -- NULL for a UI-format document dropped with no ComfyUI to resolve its
+    -- assets against: topology is portable, the recipe tier is not.
+    structural_hash  TEXT REFERENCES workflow_recipe(structural_hash),
+    document         TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+)
+"""
+
+_V2_WORKFLOW_INDEXES = (
+    # "Which recipes are variants of this workflow" — the library view's
+    # expand interaction, and the only query that is not a primary-key lookup.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_topology "
+    "ON workflow_recipe(topology_hash)",
+    # "Give me this recipe's graph". UNIQUE, so INSERT OR IGNORE keeps exactly
+    # one document per recipe per format: the same workflow rebuilt from
+    # scratch has different node ids, so its document text differs even though
+    # its identity does not, and the content-addressed primary key alone would
+    # let those accumulate. SQLite treats NULLs as distinct in a UNIQUE index,
+    # which is what still allows many UI-format documents that no recipe owns.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_workflow_document_recipe "
+    "ON workflow_document(structural_hash, format)",
+    # The drop target's whole query: a UI file keys to a topology and asks what
+    # is already filed under it.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_document_topology "
+    "ON workflow_document(topology_hash)",
+)
+
+_V2_WORKFLOW_TABLES = (
+    # Ordered by reference: recipe points at topology, document at both.
+    _V2_WORKFLOW_TOPOLOGY,
+    _V2_WORKFLOW_RECIPE,
+    _V2_WORKFLOW_DOCUMENT,
+    *_V2_WORKFLOW_INDEXES,
+)
+
+
 # Ordered schema steps. Append only: a released version's statement list is
 # never edited, exactly as for an applied Alembic migration. ``library`` is
 # created before ``user_token`` because the latter references it.
@@ -674,6 +789,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         _rebuild_model_with_kind_check(conn)
 
     for statement in _V2_MODEL_SHELF_TABLES:
+        conn.execute(statement)
+
+    # The workflow library (v1.11), amended into v2 for the same reason the
+    # model shelf was: a build shipped before this change has
+    # CURRENT_SCHEMA_VERSION = 2 and would refuse a v3 hub outright, locking
+    # that user out of a downgrade. CREATE TABLE IF NOT EXISTS throughout, so
+    # re-running is a no-op and an existing developer hub picks these up on its
+    # next open.
+    for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest

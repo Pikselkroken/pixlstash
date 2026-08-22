@@ -1,0 +1,570 @@
+"""Workflow identity: the two hash tiers, subgraph inlining, and the hub store.
+
+The fixtures here are the contract from
+``pixlstash-hash-field-classification.md``, and two groups of them exist
+because a rule shipped without them was found broken by measurement:
+
+* **§Node identity's six invariants.** The superseded canonicalization
+  relabelled nodes by topological sort and tie-broke on ``(class_type, input
+  signature)`` — which does not break the tie two twin ``CLIPTextEncode`` nodes
+  produce, so the "canonical" id fell through to JSON serialisation order. 12
+  of 40 real workflows changed their structural hash when only the key order
+  moved. :func:`test_reshuffled_key_order_keys_the_same` is that case.
+* **§Subgraphs' five.** The API format is already flat, so the structural hash
+  needs nothing; the UI format is not, and 20% of the owner's images use
+  subgraphs. :func:`test_ui_keys_differ_without_inlining` asserts the two keys
+  **differ** when inlining is skipped, precisely so the step cannot be dropped
+  and go unnoticed.
+"""
+
+import copy
+import json
+import sqlite3
+
+import pytest
+
+from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflows import (
+    get_document,
+    record_api_graph,
+    recipes_for_topology,
+)
+from pixlstash.services.workflow_hash import (
+    HASH_VERSION,
+    MissingSubgraphDefinitionError,
+    WorkflowGraphError,
+    structural_document,
+    structural_hash,
+    topology_hash,
+    ui_topology_hash,
+)
+
+# One ordinary txt2img graph, held once in a format-neutral shape so the API
+# and UI builders below cannot drift apart. Nodes 2 and 3 are the twin
+# CLIPTextEncode pair the automorphism case turns on.
+#
+# (node id, class, [(input name, source id, source slot)], {widget: value})
+TXT2IMG = [
+    (1, "CheckpointLoaderSimple", [], {"ckpt_name": "sd_xl_base_1.0.safetensors"}),
+    (2, "CLIPTextEncode", [("clip", 1, 1)], {"text": "a lighthouse at dusk"}),
+    (3, "CLIPTextEncode", [("clip", 1, 1)], {"text": "blurry, watermark"}),
+    (4, "EmptyLatentImage", [], {"width": 1024, "height": 1024, "batch_size": 1}),
+    (
+        5,
+        "KSampler",
+        [
+            ("model", 1, 0),
+            ("positive", 2, 0),
+            ("negative", 3, 0),
+            ("latent_image", 4, 0),
+        ],
+        {
+            "seed": 42,
+            "steps": 20,
+            "cfg": 7.0,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1.0,
+        },
+    ),
+    (6, "VAEDecode", [("samples", 5, 0), ("vae", 1, 2)], {}),
+    (7, "SaveImage", [("images", 6, 0)], {"filename_prefix": "ComfyUI"}),
+]
+
+SUBGRAPH_UUID = "7b34ab90-36f9-45ba-a665-71d418f0df18"
+INNER_SUBGRAPH_UUID = "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9"
+
+
+def api_graph(spec, *, prefix=""):
+    """Render the neutral spec as ComfyUI API format.
+
+    ``prefix`` gives every node a colon-path id, which is exactly what a
+    subgraph produces in a real API graph. Nothing in the hash reads an id, so
+    this must not change a single key.
+    """
+    graph = {}
+    for node_id, class_type, links, widgets in spec:
+        inputs = {name: [f"{prefix}{src}", slot] for name, src, slot in links}
+        inputs.update(widgets)
+        graph[f"{prefix}{node_id}"] = {"class_type": class_type, "inputs": inputs}
+    return graph
+
+
+def ui_node(node_id, class_type, input_names, *, mode=0, outputs=None):
+    return {
+        "id": node_id,
+        "type": class_type,
+        "mode": mode,
+        "inputs": [{"name": name} for name in input_names],
+        "outputs": [{"name": name} for name in (outputs or ())],
+    }
+
+
+def ui_workflow(spec):
+    """Render the neutral spec as a flat ComfyUI UI-format workflow."""
+    nodes, links = [], []
+    for node_id, class_type, node_links, _widgets in spec:
+        nodes.append(ui_node(node_id, class_type, [name for name, _, _ in node_links]))
+        for slot, (_name, src, src_slot) in enumerate(node_links):
+            links.append([len(links) + 1, src, src_slot, node_id, slot, "*"])
+    return {"nodes": nodes, "links": links}
+
+
+def _sub_links(pairs):
+    """Subgraph definitions spell their links as objects, not arrays.
+
+    Both spellings occur in one real file, so both are exercised: the top level
+    of every workflow built here uses the array form.
+    """
+    return [
+        {
+            "id": index + 1,
+            "origin_id": origin,
+            "origin_slot": origin_slot,
+            "target_id": target,
+            "target_slot": target_slot,
+            "type": "*",
+        }
+        for index, (origin, origin_slot, target, target_slot) in enumerate(pairs)
+    ]
+
+
+def subgraph_ui_workflow():
+    """The same graph with nodes 4 and 5 moved inside one subgraph.
+
+    The instance node lists only the three inputs it wires while the definition
+    declares them in its own order, which is the shape measured in a real file
+    (3 against 7) and the reason the boundary is mapped by name.
+    """
+    definition = {
+        "id": SUBGRAPH_UUID,
+        "name": "sampler",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [{"name": "model"}, {"name": "positive"}, {"name": "negative"}],
+        "outputs": [{"name": "LATENT"}],
+        "nodes": [
+            ui_node(4, "EmptyLatentImage", [], outputs=["LATENT"]),
+            ui_node(
+                5,
+                "KSampler",
+                ["model", "positive", "negative", "latent_image"],
+                outputs=["LATENT"],
+            ),
+        ],
+        "links": _sub_links(
+            [
+                (-10, 0, 5, 0),
+                (-10, 1, 5, 1),
+                (-10, 2, 5, 2),
+                (4, 0, 5, 3),
+                (5, 0, -20, 0),
+            ]
+        ),
+    }
+    nodes = [
+        ui_node(1, "CheckpointLoaderSimple", [], outputs=["MODEL", "CLIP", "VAE"]),
+        ui_node(2, "CLIPTextEncode", ["clip"], outputs=["CONDITIONING"]),
+        ui_node(3, "CLIPTextEncode", ["clip"], outputs=["CONDITIONING"]),
+        ui_node(
+            10, SUBGRAPH_UUID, ["model", "positive", "negative"], outputs=["LATENT"]
+        ),
+        ui_node(6, "VAEDecode", ["samples", "vae"], outputs=["IMAGE"]),
+        ui_node(7, "SaveImage", ["images"]),
+    ]
+    edges = [
+        (1, 1, 2, 0),
+        (1, 1, 3, 0),
+        (1, 0, 10, 0),
+        (2, 0, 10, 1),
+        (3, 0, 10, 2),
+        (10, 0, 6, 0),
+        (1, 2, 6, 1),
+        (6, 0, 7, 0),
+    ]
+    links = [
+        [index + 1, origin, origin_slot, target, target_slot, "*"]
+        for index, (origin, origin_slot, target, target_slot) in enumerate(edges)
+    ]
+    return {"nodes": nodes, "links": links, "definitions": {"subgraphs": [definition]}}
+
+
+def nested_subgraph_ui_workflow():
+    """Two levels: EmptyLatentImage moves one subgraph deeper again.
+
+    Real data carries ``a:b:c`` ids, so inlining has to recurse rather than
+    expand one level and stop.
+    """
+    workflow = copy.deepcopy(subgraph_ui_workflow())
+    outer = workflow["definitions"]["subgraphs"][0]
+    inner = {
+        "id": INNER_SUBGRAPH_UUID,
+        "name": "latent",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [],
+        "outputs": [{"name": "LATENT"}],
+        "nodes": [ui_node(4, "EmptyLatentImage", [], outputs=["LATENT"])],
+        "links": _sub_links([(4, 0, -20, 0)]),
+    }
+    outer["nodes"] = [
+        ui_node(20, INNER_SUBGRAPH_UUID, [], outputs=["LATENT"]),
+        ui_node(
+            5,
+            "KSampler",
+            ["model", "positive", "negative", "latent_image"],
+            outputs=["LATENT"],
+        ),
+    ]
+    outer["links"] = _sub_links(
+        [(-10, 0, 5, 0), (-10, 1, 5, 1), (-10, 2, 5, 2), (20, 0, 5, 3), (5, 0, -20, 0)]
+    )
+    workflow["definitions"]["subgraphs"].append(inner)
+    return workflow
+
+
+def edited(spec, node_id, **widgets):
+    """Return the spec with one node's widgets overridden."""
+    return [
+        (nid, cls, links, {**values, **widgets} if nid == node_id else values)
+        for nid, cls, links, values in spec
+    ]
+
+
+# ---------------------------------------------------------------------------
+# §Node identity — the six invariants
+# ---------------------------------------------------------------------------
+
+
+def test_every_node_id_replaced_keys_the_same():
+    assert structural_hash(api_graph(TXT2IMG)) == structural_hash(
+        api_graph(TXT2IMG, prefix="900")
+    )
+
+
+def test_reshuffled_key_order_keys_the_same():
+    """The fixture whose absence let the superseded rule ship broken."""
+    graph = api_graph(TXT2IMG)
+    reshuffled = dict(reversed(list(graph.items())))
+    for node in reshuffled.values():
+        node["inputs"] = dict(reversed(list(node["inputs"].items())))
+    assert list(reshuffled) != list(graph)
+    assert structural_hash(reshuffled) == structural_hash(graph)
+
+
+def test_twin_text_encoders_key_the_same_in_either_order():
+    """The automorphism case, stated directly rather than left to chance.
+
+    Nodes 2 and 3 are identical on class, on widget names and on upstream
+    structure. Their prompts are bucket P and nulled, so after nulling they are
+    genuine twins and swapping which one feeds ``positive`` must not move the
+    key.
+    """
+    graph = api_graph(TXT2IMG)
+    swapped = copy.deepcopy(graph)
+    swapped["5"]["inputs"]["positive"] = ["3", 0]
+    swapped["5"]["inputs"]["negative"] = ["2", 0]
+    assert structural_hash(swapped) == structural_hash(graph)
+
+
+def test_seed_change_keys_the_same():
+    assert structural_hash(
+        api_graph(edited(TXT2IMG, 5, seed=99999))
+    ) == structural_hash(api_graph(TXT2IMG))
+
+
+def test_prompt_edit_keeps_the_same_recipe():
+    """Bucket P is nulled, so the recipe survives an edited prompt.
+
+    The instance tier is what forks here, and it is a later step's to write.
+    """
+    assert structural_hash(
+        api_graph(edited(TXT2IMG, 2, text="a lighthouse at dawn"))
+    ) == structural_hash(api_graph(TXT2IMG))
+
+
+def test_model_swap_forks_the_recipe():
+    swapped = api_graph(edited(TXT2IMG, 1, ckpt_name="dreamshaper_8.safetensors"))
+    assert structural_hash(swapped) != structural_hash(api_graph(TXT2IMG))
+
+
+def test_node_deleted_forks_the_recipe():
+    trimmed = api_graph(TXT2IMG)
+    del trimmed["7"]
+    assert structural_hash(trimmed) != structural_hash(api_graph(TXT2IMG))
+
+
+# ---------------------------------------------------------------------------
+# Bucketing
+# ---------------------------------------------------------------------------
+
+
+def test_filename_prefix_change_keys_the_same():
+    assert structural_hash(
+        api_graph(edited(TXT2IMG, 7, filename_prefix="lighthouses/final"))
+    ) == structural_hash(api_graph(TXT2IMG))
+
+
+def test_pixlstash_loader_keys_on_the_digest_not_the_pointer():
+    """``lora_sha256`` is the identity; ``pixlstash_lora_id`` is install-local.
+
+    Named rather than extension-shaped, so without an explicit rule a LoRA swap
+    on a PixlStash node would leave the recipe unchanged — the one direction
+    the spec calls unrecoverable.
+    """
+    spec = TXT2IMG + [
+        (
+            8,
+            "PixlStashLoraLoader",
+            [("model", 1, 0)],
+            {"lora_sha256": "a" * 64, "pixlstash_lora_id": 17, "strength_model": 0.8},
+        )
+    ]
+    baseline = structural_hash(api_graph(spec))
+    assert structural_hash(api_graph(edited(spec, 8, pixlstash_lora_id=41))) == baseline
+    assert structural_hash(api_graph(edited(spec, 8, strength_model=0.6))) == baseline
+    assert structural_hash(api_graph(edited(spec, 8, lora_sha256="b" * 64))) != baseline
+
+
+def test_structural_document_is_prompt_free_and_scrubs_credentials():
+    spec = edited(TXT2IMG, 7, api_key="example-not-a-real-key")
+    document = structural_document(api_graph(spec))
+    rendered = json.dumps(document)
+    assert "lighthouse" not in rendered
+    assert "example-not-a-real-key" not in rendered
+    assert "api_key" not in document["7"]["inputs"]
+    # The graph itself survives intact: classes, edges and the model filename.
+    assert document["1"]["inputs"]["ckpt_name"] == "sd_xl_base_1.0.safetensors"
+    assert document["5"]["inputs"]["positive"] == ["2", 0]
+    assert document["5"]["inputs"]["seed"] is None
+
+
+def test_an_unkeyable_graph_is_refused_rather_than_hashed():
+    with pytest.raises(WorkflowGraphError):
+        structural_hash({})
+    with pytest.raises(WorkflowGraphError):
+        structural_hash({"1": {"inputs": {}}})
+
+
+# ---------------------------------------------------------------------------
+# The topology tier
+# ---------------------------------------------------------------------------
+
+
+def test_topology_is_coarser_than_the_recipe():
+    """A model swap forks the recipe and leaves the topology alone."""
+    swapped = api_graph(edited(TXT2IMG, 1, ckpt_name="dreamshaper_8.safetensors"))
+    assert topology_hash(swapped) == topology_hash(api_graph(TXT2IMG))
+    assert structural_hash(swapped) != structural_hash(api_graph(TXT2IMG))
+
+
+def test_topology_forks_when_the_graph_does():
+    trimmed = api_graph(TXT2IMG)
+    del trimmed["7"]
+    assert topology_hash(trimmed) != topology_hash(api_graph(TXT2IMG))
+
+
+def test_topology_agrees_across_the_two_serialisations():
+    """The portability claim the drop target is built on.
+
+    The same workflow, keyed from the executed API graph and from the UI
+    document a user would drag in, has to land on one row.
+    """
+    assert ui_topology_hash(ui_workflow(TXT2IMG)) == topology_hash(api_graph(TXT2IMG))
+
+
+def test_ui_only_and_bypassed_nodes_do_not_reach_the_key():
+    workflow = ui_workflow(TXT2IMG)
+    workflow["nodes"].append(ui_node(90, "Note", [], outputs=[]))
+    workflow["nodes"].append(ui_node(91, "PreviewImage", ["images"], mode=4))
+    workflow["links"].append([len(workflow["links"]) + 1, 6, 0, 91, 0, "IMAGE"])
+    assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+def test_a_reroute_is_stepped_through():
+    """A Reroute exists only in the UI graph, so it must not key as a node."""
+    workflow = ui_workflow(TXT2IMG)
+    workflow["nodes"].append(ui_node(92, "Reroute", ["in"], outputs=["out"]))
+    # VAEDecode's samples input now arrives via the reroute instead of directly.
+    for link in workflow["links"]:
+        if link[3] == 6 and link[4] == 0:
+            link[3], link[4] = 92, 0
+    workflow["links"].append([len(workflow["links"]) + 1, 92, 0, 6, 0, "LATENT"])
+    assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+# ---------------------------------------------------------------------------
+# §Subgraphs — the five fixtures that section names
+# ---------------------------------------------------------------------------
+
+
+def test_api_structural_hash_ignores_subgraph_authoring():
+    """Flat and nested API graphs key identically; a colon path is just an id."""
+    nested = api_graph(TXT2IMG, prefix="75:")
+    assert structural_hash(nested) == structural_hash(api_graph(TXT2IMG))
+    assert topology_hash(nested) == topology_hash(api_graph(TXT2IMG))
+
+
+def test_ui_keys_match_once_subgraphs_are_inlined():
+    assert ui_topology_hash(subgraph_ui_workflow()) == ui_topology_hash(
+        ui_workflow(TXT2IMG)
+    )
+
+
+def test_ui_keys_differ_without_inlining():
+    """The step cannot be silently dropped, because this asserts it is missing.
+
+    Without inlining the 7-node graph keys as 6 nodes, one of them typed by a
+    UUID that is generated per definition and so differs between two people who
+    built the same workflow.
+    """
+    assert ui_topology_hash(subgraph_ui_workflow(), inline=False) != ui_topology_hash(
+        ui_workflow(TXT2IMG)
+    )
+
+
+def test_inlining_recurses_through_two_levels():
+    assert ui_topology_hash(nested_subgraph_ui_workflow()) == ui_topology_hash(
+        ui_workflow(TXT2IMG)
+    )
+
+
+def test_a_missing_subgraph_definition_is_reported():
+    """Never treated as a leaf: an instance stands for its whole definition."""
+    workflow = subgraph_ui_workflow()
+    workflow["definitions"]["subgraphs"] = []
+    with pytest.raises(MissingSubgraphDefinitionError):
+        ui_topology_hash(workflow)
+
+
+def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
+    """The pairing the drop target actually performs, with subgraphs in play."""
+    assert ui_topology_hash(subgraph_ui_workflow()) == topology_hash(
+        api_graph(TXT2IMG, prefix="10:")
+    )
+
+
+# ---------------------------------------------------------------------------
+# B1 — the hub tables
+# ---------------------------------------------------------------------------
+
+WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_document")
+
+
+@pytest.fixture
+def hub(tmp_path):
+    database = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        yield database
+    finally:
+        database.close()
+
+
+def test_the_workflow_tables_land_in_the_hub(hub):
+    """The irreversible decision, asserted where it is made.
+
+    70% of the owner's recipes appear in more than one library, so these rows
+    are per-machine and not per-vault. A vault references them by hash, which
+    is why nothing here is a cross-database foreign key.
+    """
+    present = {
+        row[0]
+        for row in hub.fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert set(WORKFLOW_TABLES) <= present
+
+
+def test_reopening_a_hub_is_a_no_op(tmp_path):
+    path = str(tmp_path / "hub.db")
+    first = HubDatabase(path)
+    try:
+        keys = record_api_graph(first, api_graph(TXT2IMG))
+    finally:
+        first.close()
+    second = HubDatabase(path)
+    try:
+        assert get_document(second, keys.structural_hash) is not None
+    finally:
+        second.close()
+
+
+def test_recording_the_same_graph_twice_writes_one_row(hub):
+    """Idempotent, so the backfill can be re-run without a reconciliation pass.
+
+    The second graph is the same workflow with every node id replaced, which is
+    the "rebuilt from scratch" case: the identity is unchanged, the document
+    text is not, and only one document survives per recipe.
+    """
+    first = record_api_graph(hub, api_graph(TXT2IMG))
+    second = record_api_graph(hub, api_graph(TXT2IMG, prefix="500"))
+    assert first == second
+    for table in WORKFLOW_TABLES:
+        assert hub.fetchone(f"SELECT COUNT(*) AS n FROM {table}")["n"] == 1
+    # First one filed wins, rather than the last write silently replacing it.
+    assert get_document(hub, first.structural_hash) == structural_document(
+        api_graph(TXT2IMG)
+    )
+
+
+def test_two_recipes_share_one_topology(hub):
+    first = record_api_graph(hub, api_graph(TXT2IMG))
+    second = record_api_graph(
+        hub, api_graph(edited(TXT2IMG, 1, ckpt_name="dreamshaper_8.safetensors"))
+    )
+    assert first.topology_hash == second.topology_hash
+    assert first.structural_hash != second.structural_hash
+    assert hub.fetchone("SELECT COUNT(*) AS n FROM workflow_topology")["n"] == 1
+    assert {
+        row["structural_hash"] for row in recipes_for_topology(hub, first.topology_hash)
+    } == {first.structural_hash, second.structural_hash}
+
+
+def test_the_stored_row_records_which_rule_keyed_it(hub):
+    keys = record_api_graph(hub, api_graph(TXT2IMG))
+    row = hub.fetchone(
+        "SELECT hash_version, node_count FROM workflow_recipe WHERE structural_hash = ?",
+        (keys.structural_hash,),
+    )
+    assert row["hash_version"] == HASH_VERSION
+    assert row["node_count"] == len(TXT2IMG)
+
+
+def test_the_stored_document_holds_no_prompt(hub):
+    """Library plan §5: a recipe is prompt-free by construction.
+
+    That is what makes "forget the pictures" a narrow act — purge the instances
+    and the ghosts, keep the recipe — rather than something a purge would have
+    to reach in and rewrite.
+    """
+    keys = record_api_graph(hub, api_graph(TXT2IMG))
+    stored = hub.fetchone(
+        "SELECT document FROM workflow_document WHERE structural_hash = ?",
+        (keys.structural_hash,),
+    )["document"]
+    assert "lighthouse" not in stored
+    assert "sd_xl_base_1.0.safetensors" in stored
+    assert get_document(hub, keys.structural_hash) == structural_document(
+        api_graph(TXT2IMG)
+    )
+
+
+def test_a_document_cannot_name_a_recipe_that_does_not_exist(hub):
+    with pytest.raises(sqlite3.IntegrityError):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_document (document_sha256, format, "
+                "topology_hash, structural_hash, document, created_at) "
+                "VALUES ('deadbeef', 'api', 'nosuchtopology', NULL, '{}', 'now')"
+            )
+
+
+def test_the_document_format_column_is_closed(hub):
+    keys = record_api_graph(hub, api_graph(TXT2IMG))
+    with pytest.raises(sqlite3.IntegrityError):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_document (document_sha256, format, "
+                "topology_hash, structural_hash, document, created_at) "
+                "VALUES ('cafe', 'yaml', ?, ?, '{}', 'now')",
+                (keys.topology_hash, keys.structural_hash),
+            )
