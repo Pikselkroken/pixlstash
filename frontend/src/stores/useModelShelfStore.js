@@ -1820,13 +1820,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // A row in the `needs-a-name` state has no name to say, by design —
         // its `text` is empty so the shelf can draw it as a field. The receipt
         // still has to name something the reader can recognise.
-        text: `Set the icon on ${row.name.text || row.filename || "the model"}.`,
+        text: `Set the thumbnail on ${row.name.text || row.filename || "the model"}.`,
       });
       return true;
     } catch (err) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not set that icon.",
+        text: errorDetail(err) || "Could not set that thumbnail.",
       });
       return false;
     }
@@ -1855,14 +1855,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       notices.push({
         level: cleared ? "success" : "info",
         text: cleared
-          ? `Cleared the icon on ${modelCount(cleared)}.`
-          : "None of those had an icon.",
+          ? `Cleared the thumbnail on ${modelCount(cleared)}.`
+          : "None of those had a thumbnail.",
       });
       return true;
     } catch (err) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not clear those icons.",
+        text: errorDetail(err) || "Could not clear those thumbnails.",
       });
       return false;
     }

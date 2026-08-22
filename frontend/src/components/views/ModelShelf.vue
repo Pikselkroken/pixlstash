@@ -416,11 +416,13 @@
       </div>
     </div>
 
-    <!-- The file picker the Set icon verb drives. A real <input type=file>
-         rather than a drop zone or a dialog: it is the platform's own chooser,
-         it is keyboard-accessible for free, and picking a file is the whole
-         interaction. Hidden rather than styled, because the verb beside it is
-         already the affordance. -->
+    <!-- The SECONDARY route into the thumbnail verb, kept rather than removed:
+         any file on disk worked before the picker existed, and taking that away
+         would be a regression on a shipped feature. It is reached from inside
+         the picker (see its `footer-start` slot below), so the library route is
+         the one that is offered first. A real <input type=file> because it is
+         the platform's own chooser and keyboard-accessible for free; hidden
+         rather than styled, because the button beside it is the affordance. -->
     <input
       ref="iconInputRef"
       class="visually-hidden"
@@ -428,6 +430,21 @@
       accept="image/png,image/jpeg,image/webp"
       @change="onIconChosen"
     />
+
+    <!-- Set Thumbnail…, the primary route: a picture from the library, chosen
+         by project / character / set. A picture that PixlStash can see is one
+         it can search, reuse and repair; the file the OS chooser returns is one
+         it never sees again. -->
+    <PicturePicker
+      :open="thumbnailPickerOpen"
+      :subtitle="thumbnailSubject"
+      @close="thumbnailPickerOpen = false"
+      @pick="onThumbnailPicked"
+    >
+      <template #footer-start>
+        <AppButton variant="ghost" @click="pickIconFile">Choose a file…</AppButton>
+      </template>
+    </PicturePicker>
 
     <!-- `inert` while a move runs, not merely dimmed. A move repoints
          `model_file` rows under the list, so a verb pressed mid-move acts on a
@@ -1411,10 +1428,13 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import PicturePicker from "../widgets/PicturePicker.vue";
+import AppButton from "../widgets/AppButton.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
+import { getPictureThumbnailBlob } from "../../api/pictures";
 import { openModelLocation } from "../../api/modelShelf";
 import {
   createStack,
@@ -2058,6 +2078,7 @@ function shelfOwnsTheKey(event) {
     addSourceOpen.value ||
     foldersOpen.value ||
     addFileOpen.value ||
+    thumbnailPickerOpen.value ||
     editVerb.value
   ) {
     return false;
@@ -2147,11 +2168,56 @@ function onShelfKeydown(event) {
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
-// ── The icon verb ───────────────────────────────────────────────────────────
+// ── The thumbnail verb ──────────────────────────────────────────────────────
 
 const iconInputRef = ref(null);
+const thumbnailPickerOpen = ref(false);
+
+/**
+ * What the thumbnail is FOR, in the picker's subtitle.
+ *
+ * A row in the `needs-a-name` state has no name by design, so this falls back
+ * the same way the receipt does — the reader has to recognise what they are
+ * about to change.
+ */
+const thumbnailSubject = computed(() => {
+  const row = store.selectedRows[0];
+  if (!row) return "";
+  return `for ${row.name?.text || row.filename || "this model"}`;
+});
 
 function pickIcon() {
+  thumbnailPickerOpen.value = true;
+}
+
+/**
+ * The library route: send the picture's PIXELS, never a reference to it.
+ *
+ * The icon store is content-addressed and lives beside the hub, and `model` is
+ * a hub row while a picture is a vault row — no key spans the two, and SQLite
+ * recycles deleted ids, so a stored `picture_id` would silently re-point after
+ * a delete-and-insert and break on every library switch
+ * (`services/model_icons.py`). Copying the bytes is what makes the mark
+ * survive. The thumbnail is the copy that gets sent: already WebP, generated
+ * on demand so it always exists, and 384px on the short edge — an icon's size
+ * rather than a 40 MB original the store would refuse.
+ */
+async function onThumbnailPicked(picture) {
+  thumbnailPickerOpen.value = false;
+  try {
+    const blob = await getPictureThumbnailBlob(picture.id);
+    await store.setIconOnSelected(blob);
+  } catch (err) {
+    useNoticeStore().push({
+      level: "error",
+      text: errorDetail(err) || "Could not read that picture.",
+    });
+  }
+}
+
+/** The secondary route, from inside the picker: any file on disk. */
+function pickIconFile() {
+  thumbnailPickerOpen.value = false;
   // Cleared first, so choosing the SAME file twice still fires `change` — the
   // obvious way to retry after a refusal, and silent if the value persisted.
   if (iconInputRef.value) iconInputRef.value.value = "";
@@ -2168,7 +2234,7 @@ async function onIconChosen(event) {
  * Clearing one row needs no prompt; clearing a selection does.
  *
  * The shelf's rule is to confirm only where the prior state cannot be
- * reconstructed. One icon is one file-picker away from back; a bulk clear is
+ * reconstructed. One thumbnail is one picker away from back; a bulk clear is
  * not, and falls on the same side of that test as the bulk base-model
  * overwrite. Counted on the rows that HAVE one, because that is what the verb
  * will actually destroy.
@@ -2178,7 +2244,7 @@ async function confirmClearIcons() {
   if (!withIcons.length) return;
   if (withIcons.length > 1) {
     const ok = await confirm({
-      title: `Clear ${withIcons.length} icons?`,
+      title: `Clear ${withIcons.length} thumbnails?`,
       message:
         "Those models go back to a generated mark. The images stay in the " +
         "icon store, but which model wore which is not recorded anywhere else.",

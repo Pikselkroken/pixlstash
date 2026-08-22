@@ -34,6 +34,28 @@ export function pictureThumbnailUrl(id, { version } = {}) {
 }
 
 /**
+ * Read a picture's thumbnail as image BYTES.
+ *
+ * The one caller so far is the model shelf's thumbnail verb, and the shape of
+ * that verb is why this exists: `POST /models/{id}/icon` takes bytes and stores
+ * them content-addressed beside the hub, deliberately with no route that
+ * resolves a picture id server-side — the icon is a COPY, so it cannot break
+ * when the picture is deleted or the library is switched
+ * (`services/model_icons.py`). So choosing a library picture means sending its
+ * pixels, and the thumbnail is the right pixels to send: it is already WebP,
+ * it is generated on demand so it always exists, and its 384px short edge is
+ * both what an icon needs and comfortably inside the store's 2 MB ceiling.
+ *
+ * @param {number|string} id
+ * @returns {Promise<Blob>} the WebP bytes.
+ */
+export async function getPictureThumbnailBlob(id) {
+  return unwrap(
+    apiClient.get(`/pictures/thumbnails/${id}.webp`, { responseType: "blob" }),
+  );
+}
+
+/**
  * Count the pictures matching a filter scope.
  *
  * A single indexed COUNT, deliberately separate from the stream below: the
