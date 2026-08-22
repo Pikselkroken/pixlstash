@@ -451,7 +451,12 @@ watch(
   min-height: 96px;
 }
 
+/* min-width as well as min-height: a grid item's automatic minimum is its
+   min-content, so a table that refuses to wrap widens its own 1fr track and
+   pushes the whole pane sideways. That is a horizontal scrollbar on the pane,
+   not on the table, and it is why PluginsTable lets a long plugin name wrap. */
 .tagger-col {
+  min-width: 0;
   min-height: 0;
 }
 
