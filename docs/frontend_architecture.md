@@ -565,6 +565,21 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
+**Pane height is fixed** (`.settings-content`, 524px) so the dialog does not
+resize as the rail is clicked. A pane that outgrows it scrolls whole, header and
+all, which is what the Models pane did once a library had six tagger plugins.
+A pane with unbounded content should bound and scroll that content instead:
+Models gives the Auto-tagging section the leftover height and scrolls each
+plugin table inside its column (`BehaviourSection` below).
+
+A pane whose content is merely *long* has to fit, and the budget is roughly
+500px. Two things spend it faster than they look: a row's sub is only ~190px
+wide inside `SettingsTwoCol`, and a path is one unbreakable word, so a row whose
+sub names a path belongs at full width rather than in the pair — that is why the
+Backend pane's Shell command row sits below its `SettingsTwoCol` instead of in
+it. The remaining slack is ~13px on the worst platform, so lengthening any
+Backend sub is a change that has to be measured.
+
 **Libraries.** An ordinary rail item ordered next to Scrapheap and Snapshots —
 the open library's bin and its backups — rather than set apart at the top by a
 divider, which read as a section of its own. The rail is one flat list with no
@@ -602,6 +617,13 @@ Appearance tab content: sidebar thumbnail size, sidebar width (Full / Dock toggl
 
 #### `BehaviourSection.vue`
 Behaviour tab content (extracted from inline `UserSettingsDialog` markup): hidden tags, VRAM limits, tagger configuration.
+The pane is a flex column: Model Memory and VRAM Budget keep their natural
+height and Auto-tagging takes what is left. Two things inside it can grow
+without limit, and both are bounded and scrolled rather than allowed to push the
+pane: the plugin tables (one scroll region per column) and the plugin load-error
+list (capped, since the text is a third-party exception). `.tagger-cols` keeps a
+96px floor, so on a window too short to give the section a usable height the
+pane falls back to scrolling whole rather than crushing the tables to nothing.
 
 #### `WorkflowsSection.vue`
 Workflows tab content (extracted from inline markup): ComfyUI URL, workflow import/management.

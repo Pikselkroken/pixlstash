@@ -266,7 +266,7 @@ watch(
 </script>
 
 <template>
-  <div>
+  <div class="behaviour-pane">
     <SettingsSection
       title="Model Memory"
       desc="Keep models loaded in RAM/VRAM for faster processing. Turn off to unload models when idle and save memory."
@@ -315,11 +315,12 @@ watch(
     </SettingsSection>
 
     <SettingsSection
+      class="tagger-section"
       title="Auto-tagging"
       desc="Plugins that generate tags and captions automatically. Hint: you can also pick taggers for selected pictures in the tag panel or context menu."
     >
-      <SettingsTwoCol>
-        <SettingsFieldBlock title="Tag plugin" top>
+      <SettingsTwoCol class="tagger-cols">
+        <SettingsFieldBlock class="tagger-col" title="Tag plugin" top>
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
@@ -331,7 +332,7 @@ watch(
             @update:settings="(s) => (taggerSettings.value = s)"
           />
         </SettingsFieldBlock>
-        <SettingsFieldBlock title="Description plugin" top>
+        <SettingsFieldBlock class="tagger-col" title="Description plugin" top>
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
@@ -424,6 +425,40 @@ watch(
 </template>
 
 <style scoped>
+/* The plugin lists scroll, the pane does not: the pane is a column, the
+   Auto-tagging section takes the leftover height, and each column's table body
+   is the only thing that overflows. Without this the two tables push the whole
+   Settings pane past its fixed height and the dialog grows a scrollbar. */
+.behaviour-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tagger-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A floor, not 0: on a short window the pane is allowed to overflow and scroll
+   as it used to rather than crush the tables to nothing. */
+.tagger-cols {
+  flex: 1 1 auto;
+  min-height: 96px;
+}
+
+.tagger-col {
+  min-height: 0;
+}
+
+.tagger-col :deep(.field-block__control) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .settings-tagger-loading {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
@@ -563,6 +598,9 @@ watch(
   }
 }
 
+/* A plugin's load error is exception text from third-party code and has no
+   length limit, so it is bounded and scrolled too — otherwise it is a second
+   unbounded thing in this section and squeezes the tables it sits under. */
 .settings-tagger-plugin-errors {
   list-style: none;
   padding: 0;
@@ -570,6 +608,9 @@ watch(
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
   overflow-wrap: anywhere;
+  flex-shrink: 0;
+  max-height: 72px;
+  overflow-y: auto;
 }
 
 .settings-error {
