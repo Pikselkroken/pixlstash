@@ -468,11 +468,11 @@ function defaultFilters() {
     support: true,
     baseModels: [],
     capabilities: [],
-    // Deliberately NOT persisted by `storedFilters`, unlike every box above
-    // it. "Only the files written twice" is a question somebody asks once
-    // while reclaiming disk, not a preference; remembered across a restart it
-    // is a shelf that opens showing four rows of an eighteen-hundred-row
-    // library with no obvious reason why.
+    // Deliberately NOT restored by `storedFilters()` on startup, unlike every box
+    // above it. "Only the files written twice" is a question somebody asks once
+    // while reclaiming disk, not a preference; remembered across a restart it is
+    // a shelf that opens showing four rows of an eighteen-hundred-row library
+    // with no obvious reason why.
     duplicatesOnly: false,
   };
 }
