@@ -2190,15 +2190,55 @@ const thumbnailPickerOpen = ref(false);
  *
  * A row in the `needs-a-name` state has no name by design, so this falls back
  * the same way the receipt does — the reader has to recognise what they are
- * about to change.
+ * about to change. A selection is named by its size instead: the picture is
+ * about to land on all of them, and that is the fact worth stating before the
+ * click rather than after it.
  */
 const thumbnailSubject = computed(() => {
+  const count = store.selectedModelIds.length;
+  if (!count) return "";
+  if (count > 1) return `for ${count} models`;
   const row = store.selectedRows[0];
-  if (!row) return "";
   return `for ${row.name?.text || row.filename || "this model"}`;
 });
 
-function pickIcon() {
+/**
+ * Ask before a bulk set that would REPLACE marks, not before one that adds.
+ *
+ * The shelf's rule is to confirm only where the prior state cannot be
+ * reconstructed, and this falls on the same side of that test as the bulk
+ * clear: the images survive in the content-addressed store, but which model
+ * wore which is not recorded anywhere else. Counted on the models that already
+ * HAVE one, because that is what the verb will actually overwrite — a
+ * selection of forty bare rows loses nothing and is not worth a prompt. Asked
+ * BEFORE the picker opens, so the reader is not made to choose a picture and
+ * then defend the choice.
+ *
+ * Both counts are expanded through `members`, the way the write is: a ticked
+ * run is one row wearing the cover's `icon_sha256`, and prompting on that
+ * would be counting one of twelve.
+ *
+ * Everything material goes in `message`. `useConfirm` has no host mounted yet
+ * and falls back to `window.confirm(message)`, which shows nothing else — a
+ * count parked in `title` would simply not reach the reader.
+ */
+async function pickIcon() {
+  const models = store.selectedRows.flatMap((row) => row.members ?? [row]);
+  const withIcons = models.filter((row) => row.icon_sha256);
+  if (models.length > 1 && withIcons.length) {
+    const ok = await confirm({
+      title: `Replace ${withIcons.length} thumbnails?`,
+      message:
+        `All ${models.length} selected models get the picture you pick next, ` +
+        `replacing the ${withIcons.length} that already have one. The images ` +
+        `themselves are kept, but which model wore which is not recorded ` +
+        `anywhere else, and there is no undo.`,
+      warning: "There is no undo for this.",
+      confirmLabel: "Pick a picture",
+      danger: true,
+    });
+    if (!ok) return;
+  }
   thumbnailPickerOpen.value = true;
 }
 
@@ -2213,6 +2253,9 @@ function pickIcon() {
  * survive. The thumbnail is the copy that gets sent: already WebP, generated on
  * demand for any file the server can still reach, and 384px on the short edge —
  * an icon's size rather than a 40 MB original the store would refuse.
+ *
+ * Read ONCE for the whole selection: every model gets the same bytes, and the
+ * store is content-addressed, so they collapse to one file on disk.
  */
 async function onThumbnailPicked(picture) {
   try {
