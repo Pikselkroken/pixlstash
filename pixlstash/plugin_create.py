@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 import re
 import shlex
@@ -48,6 +49,8 @@ from pixlstash.plugin_install import (
     builtin_names,
     read_source,
 )
+
+logger = logging.getLogger(__name__)
 
 #: What each kind is scaffolded from when ``--from`` is not given.  Both load
 #: no model, so a contributor can run the copy before changing a line of it.
@@ -941,6 +944,13 @@ def find_submission(directory: Path, name: str | None = None) -> Submission:
     return Submission(directory, kind, name, folder, branch, _dev_python(directory))
 
 
+#: Where a virtualenv keeps its executables, which is the one thing about one
+#: that differs by platform.  Named once: the setup hint prints these paths for
+#: someone to type, so a Unix-only spelling here is a command that fails on
+#: Windows rather than a wrong path nobody sees.
+VENV_BIN = Path(".venv") / ("Scripts" if os.name == "nt" else "bin")
+
+
 def _dev_python(directory: Path) -> Path:
     """Return the interpreter holding the repository's dev tools.
 
@@ -949,8 +959,7 @@ def _dev_python(directory: Path) -> Path:
     whitespace.  Falling back to ours is what makes the checks runnable at all
     on a machine that has not made one yet.
     """
-    binaries = directory / ".venv" / ("Scripts" if os.name == "nt" else "bin")
-    candidate = binaries / ("python.exe" if os.name == "nt" else "python")
+    candidate = directory / VENV_BIN / ("python.exe" if os.name == "nt" else "python")
     return candidate if candidate.exists() else Path(sys.executable)
 
 
@@ -975,13 +984,13 @@ def missing_tools(submission: Submission) -> list[str]:
 
 def dev_setup_hint(submission: Submission, missing: list[str]) -> str:
     """Return the commands that give the checkout the tools it is missing."""
-    venv = "python -m venv .venv && .venv/bin/pip"
+    pip = VENV_BIN / "pip"
     return (
         f"{submission.python} cannot import {', '.join(missing)}, so the "
         "checks cannot run. Give the checkout its own tools:\n"
         f"  cd {submission.checkout}\n"
-        f"  {venv} install -r requirements-dev.txt\n"
-        "  .venv/bin/pip install --no-deps pixlstash"
+        f"  python -m venv .venv && {pip} install -r requirements-dev.txt\n"
+        f"  {pip} install --no-deps pixlstash"
     )
 
 
@@ -1065,13 +1074,60 @@ def pull_request_body(submission: Submission, tested: str) -> str:
     )
 
 
+#: An `origin` URL, in any of the spellings git accepts, down to its owner.
+_ORIGIN_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def compare_url(submission: Submission) -> str:
+    """Return the web URL that opens *submission*'s pull request by hand.
+
+    The branch is on whatever ``origin`` is, and for everyone but a maintainer
+    that is a fork — where ``compare/<branch>`` names a branch the upstream
+    repository does not have.  GitHub spells a cross-repository comparison
+    ``main...<owner>:<branch>``, so the owner has to be read off the remote.
+    An unreadable remote falls back to the same-repository form: a URL that
+    might be wrong beats no way out of a failure this branch is already in.
+    """
+    head = submission.branch
+    try:
+        listed = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=submission.checkout,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        # No git on PATH, or a checkout that is no longer there. Neither is
+        # worth raising over -- this URL is itself the handling of a failure --
+        # but it does mean the URL may name the wrong repository, so say so
+        # rather than let a puzzling empty compare page be the first anyone
+        # hears of it.
+        logger.warning(
+            "Could not read `origin` in %s (%s), so the manual pull request "
+            "URL assumes the branch is on %s itself.",
+            submission.checkout,
+            exc,
+            PLUGINS_REPO,
+        )
+        return f"https://github.com/{PLUGINS_REPO}/compare/main...{head}"
+    match = (
+        _ORIGIN_OWNER_RE.search(listed.stdout.strip())
+        if not listed.returncode
+        else None
+    )
+    if match and f"{match[1]}/{match[2]}" != PLUGINS_REPO:
+        head = f"{match[1]}:{submission.branch}"
+    return f"https://github.com/{PLUGINS_REPO}/compare/main...{head}"
+
+
 def open_pull_request(submission: Submission, title: str, body: str) -> str:
     """Open the pull request against the upstream repository, returning its URL."""
     if shutil.which("gh") is None:
         raise PluginError(
             "`gh` is not installed, so the pull request cannot be opened from "
             "here. The branch is pushed, so nothing is lost: open it at "
-            f"https://github.com/{PLUGINS_REPO}/compare/{submission.branch}"
+            f"{compare_url(submission)}"
         )
     return _run(
         [

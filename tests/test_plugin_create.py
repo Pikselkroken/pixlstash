@@ -11,6 +11,7 @@ repository would turn down for its name.
 from __future__ import annotations
 
 import ast
+import os
 import shlex
 import shutil
 import subprocess
@@ -1171,3 +1172,87 @@ def test_missing_tools_reports_what_this_interpreter_really_lacks(tmp_path):
     )
     # This interpreter runs the suite, so pytest is importable by definition.
     assert "pytest" not in plugin_create.missing_tools(submission)
+
+
+def _submission(checkout: Path) -> plugin_create.Submission:
+    return plugin_create.Submission(
+        checkout=checkout,
+        kind=IMAGE,
+        name="edge_glow",
+        folder=checkout / "plugins" / "image" / "edge_glow",
+        branch="add-edge_glow",
+        python=Path(sys.executable),
+    )
+
+
+def test_the_setup_hint_prints_paths_this_platform_can_type(tmp_path, monkeypatch):
+    """The hint is commands for a person to type, so `bin` is wrong on Windows.
+
+    Forced to the other platform's layout rather than read off this one: a
+    Unix-only spelling is invisible to a test that runs on Unix, and this
+    suite is where a Windows-only defect has to be caught.
+    """
+    other = Path(".venv") / ("bin" if os.name == "nt" else "Scripts")
+    monkeypatch.setattr(plugin_create, "VENV_BIN", other)
+    hint = plugin_create.dev_setup_hint(_submission(tmp_path), ["ruff"])
+
+    # Both commands the hint prints: the requirements install and pixlstash.
+    # Two, not one, is what says neither line kept a hardcoded spelling --
+    # the interpreter's own path is in the hint too and is legitimately this
+    # platform's, so the check is on what it tells someone to type.
+    assert hint.count(str(other / "pip")) == 2
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+@pytest.mark.parametrize(
+    "remote, expected",
+    [
+        # The ordinary case: the branch is on the contributor's fork, which is
+        # not a branch the upstream repository has.
+        (
+            "git@github.com:someone/pixlstash-plugins.git",
+            "main...someone:add-edge_glow",
+        ),
+        (
+            "https://github.com/someone/pixlstash-plugins",
+            "main...someone:add-edge_glow",
+        ),
+        # A maintainer pushing to upstream itself compares within the repository.
+        (
+            f"https://github.com/{plugin_create.PLUGINS_REPO}.git",
+            "main...add-edge_glow",
+        ),
+    ],
+)
+def test_the_manual_compare_url_names_the_repository_the_branch_is_on(
+    tmp_path, remote, expected
+):
+    directory = tmp_path / "repo"
+    directory.mkdir()
+    for command in (
+        ["git", "init", "-q", "-b", "main"],
+        ["git", "remote", "add", "origin", remote],
+    ):
+        subprocess.run(command, cwd=directory, check=True)
+
+    assert plugin_create.compare_url(_submission(directory)) == (
+        f"https://github.com/{plugin_create.PLUGINS_REPO}/compare/{expected}"
+    )
+
+
+def test_a_checkout_with_no_origin_still_gets_a_url(tmp_path):
+    """A way out beats no way out: this branch is already handling a failure."""
+    url = plugin_create.compare_url(_submission(tmp_path / "nowhere"))
+    assert url.endswith("/compare/main...add-edge_glow")
+
+
+def test_the_no_gh_message_points_at_the_branch_where_it_actually_is(
+    tmp_path, monkeypatch
+):
+    """The way out of a missing `gh` is that URL, so it has to be the real one."""
+    monkeypatch.setattr(plugin_create.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        plugin_create, "compare_url", lambda _s: "https://example.invalid/compare"
+    )
+    with pytest.raises(PluginError, match=r"https://example\.invalid/compare"):
+        plugin_create.open_pull_request(_submission(tmp_path), "Add edge_glow", "body")
