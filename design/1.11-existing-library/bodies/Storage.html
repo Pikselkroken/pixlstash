@@ -1,0 +1,173 @@
+<div class="app">
+  <div class="titlebar">
+    <span class="wordmark">PixlStash</span>
+    <span class="spacer"></span>
+    <span class="version">Settings &rsaquo; Library</span>
+  </div>
+  <div class="app-body">
+    <div class="main">
+      <div class="scroll pad">
+
+        <h2 class="t">How your folders are laid out</h2>
+        <p class="sub">Where a new picture is written, and the one rule that decides when an existing
+          one is ever moved again.</p>
+
+        <div class="card" style="margin-top:var(--space-5)">
+          <div class="rowf" style="gap:var(--space-3);flex-wrap:wrap">
+            <span class="muted" style="font-size:var(--text-sm)">Organise by</span>
+            <span class="ent ent--project etag" style="height:28px;padding:0 var(--space-3);font-size:var(--text-xs)">
+              <span class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h18v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg></span>Project &#9662;
+            </span>
+            <span class="muted">/</span>
+            <span class="rowf" style="gap:var(--space-2);padding:0 var(--space-2);height:28px;
+                 border:1px dashed var(--border);border-radius:var(--radius-sm)">
+              <span class="ent ent--character etag" style="height:22px;padding:0 var(--space-2);font-size:var(--text-2xs)">
+                <span class="mark"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span>Person
+              </span>
+              <span class="muted" style="font-size:var(--text-2xs)">or</span>
+              <span class="ent ent--set etag" style="height:22px;padding:0 var(--space-2);font-size:var(--text-2xs)">
+                <span class="mark"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/></svg></span>Set
+              </span>
+              <span class="muted" style="font-size:var(--text-2xs)">&#9662;</span>
+            </span>
+            <span class="muted">/</span>
+            <button class="btn btn--outline" style="height:28px;font-size:var(--text-xs)">+ add one</button>
+          </div>
+
+          <div class="grid3" style="margin-top:var(--space-5);gap:var(--space-4)">
+            <div class="ins-field">
+              <div class="lbl" style="margin-bottom:var(--space-2)">has a project and a person</div>
+              <div class="mono" style="font-size:var(--text-xs)">2024 Shoots / Mira /</div>
+            </div>
+            <div class="ins-field">
+              <div class="lbl" style="margin-bottom:var(--space-2)">has a project and a set</div>
+              <div class="mono" style="font-size:var(--text-xs)">2024 Shoots / mira-lora-v3 /</div>
+            </div>
+            <div class="ins-field">
+              <div class="lbl" style="margin-bottom:var(--space-2)">has only a set</div>
+              <div class="mono" style="font-size:var(--text-xs)">mira-lora-v3 /</div>
+            </div>
+          </div>
+
+          <div class="note" style="margin-top:var(--space-4)">
+            A segment can hold more than one thing, and the first that applies wins. A segment with
+            nothing to fill it is skipped rather than left as an empty folder, which is what keeps
+            the tree two deep instead of five. <b>A new, empty library starts on exactly this
+            layout</b>, since it has no folders to read a better guess from.
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:var(--space-5);border-left:3px solid var(--accent)">
+          <div style="font-size:var(--text-md);font-weight:var(--weight-semibold)">
+            A picture only moves when its folder stops being true
+          </div>
+          <p class="sub" style="margin-bottom:var(--space-5)">Not whenever something about it
+            changes. Only when the folder it is sitting in would otherwise be saying something that
+            is no longer the case.</p>
+
+          <table class="table">
+            <thead>
+              <tr><th>You do this</th><th>Is the folder still true?</th><th class="right">Files moved</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Import your library</td>
+                <td class="muted">true the moment it is written &mdash; the folder is where the
+                  assignment came from</td>
+                <td class="right"><span class="chip chip--quiet">none, ever</span></td>
+              </tr>
+              <tr>
+                <td>Add a second project, or a second person</td>
+                <td class="muted">yes. It is still in the first one</td>
+                <td class="right"><span class="chip chip--quiet">none</span></td>
+              </tr>
+              <tr>
+                <td>Rename a project</td>
+                <td class="muted">yes, under a new name</td>
+                <td class="right"><span class="chip chip--quiet">none &mdash; the folder is renamed</span></td>
+              </tr>
+              <tr class="on">
+                <td>Remove the project its folder is named after</td>
+                <td>no</td>
+                <td class="right"><span class="chip" style="border-color:var(--accent);color:var(--accent)">moves</span></td>
+              </tr>
+              <tr class="on">
+                <td>Swap one project for another</td>
+                <td>no</td>
+                <td class="right"><span class="chip" style="border-color:var(--accent);color:var(--accent)">moves</span></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="grid2" style="gap:var(--space-5);margin-top:var(--space-5)">
+            <div class="ins-field">
+              <div class="lbl" style="margin-bottom:var(--space-2)">was</div>
+              <div class="mono" style="font-size:var(--text-sm);color:var(--text-muted)">
+                Generations / <span style="color:var(--text)">2024 Shoots</span> / Mira / 2026-08 / 0412.png
+              </div>
+            </div>
+            <div class="ins-field">
+              <div class="lbl" style="margin-bottom:var(--space-2)">after removing that project</div>
+              <div class="mono" style="font-size:var(--text-sm);color:var(--text-muted)">
+                Generations / <span style="color:var(--accent)">Client &middot; Nordvik</span> / Mira / 2026-08 / 0412.png
+              </div>
+            </div>
+          </div>
+
+          <div class="stack" style="gap:var(--space-3);margin-top:var(--space-5)">
+            <div class="worked"><span class="tick" style="color:var(--success)">&check;</span>
+              <span>Counted before it happens, and one undo puts every file back</span></div>
+            <div class="worked"><span class="tick" style="color:var(--success)">&check;</span>
+              <span>Two changes in a row are one move, not two</span></div>
+            <div class="worked"><span class="tick" style="color:var(--success)">&check;</span>
+              <span>A folder left empty is kept, never deleted</span></div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-top:var(--space-5);gap:var(--space-5);align-items:start">
+
+          <div class="card">
+            <div class="lbl">A folder that does not match the layout is never wrong</div>
+            <p class="sub" style="margin:0 0 var(--space-4)">Drag something into
+              <span class="mono">_unsorted</span> or a folder of your own and there is nothing for
+              PixlStash to contradict, so it stays there. Permanently. That is the override, and it
+              needs no setting.</p>
+            <div class="note">
+              This is also why the rule is safe to leave on. The worst it can do is move a picture
+              out of a folder that has stopped describing it.
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="lbl">Where it drifts, and what you do about it</div>
+            <p class="sub" style="margin:0 0 var(--space-4)">A picture filed under
+              <span class="mono">2024 Shoots</span> that becomes mostly a Nordvik job stays where it
+              is, because that never stopped being true. The tree is never wrong; it is not always
+              what you would have picked.</p>
+            <div class="ins-field">
+              <div class="rowf" style="gap:var(--space-3)">
+                <span style="flex:1;font-size:var(--text-sm)">In folder
+                  <span class="mono">2024 Shoots / Mira / 2026-08</span></span>
+                <button class="btn btn--outline" style="height:26px;font-size:var(--text-2xs)">Move to match</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="card" style="margin-top:var(--space-5)">
+          <div class="lbl">New pictures with nothing to file them by</div>
+          <p class="sub" style="margin:0 0 var(--space-4)">No project, no person, nothing. They land
+            here, and leave on their own the moment you give them one.</p>
+          <div class="rowf" style="gap:var(--space-3)">
+            <span class="ins-field mono" style="flex:1;padding:var(--space-3) var(--space-4)">
+              Generations / _Inbox
+            </span>
+            <button class="btn btn--outline">Choose&hellip;</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
