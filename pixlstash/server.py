@@ -1204,25 +1204,20 @@ class Server(
         return server_config
 
     def _add_cors_exception_handler(self):
-        @self.api.exception_handler(HTTPException)
-        async def cors_exception_handler(request, exc):
-            origin = request.headers.get("origin")
-            headers = {
-                "Access-Control-Allow-Credentials": "true",
-            }
-            if origin and (
-                origin in self.allow_origins
-                or (
-                    self.allow_origin_regex
-                    and re.match(self.allow_origin_regex, origin)
-                )
-            ):
-                headers["Access-Control-Allow-Origin"] = origin
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-                headers=headers,
-            )
+        # No HTTPException handler here on purpose. One used to rebuild every
+        # HTTPException as a fresh JSONResponse to re-add the CORS pair, and in
+        # doing so dropped exc.headers — so no route's Retry-After ever reached
+        # a client (#1097). It was never needed: FastAPI's default handler
+        # already forwards exc.headers, and CORSMiddleware sits outside
+        # ExceptionMiddleware, so it stamps Access-Control-Allow-Origin and
+        # Vary: Origin on the result anyway. Measured identical on an allowed
+        # origin, a disallowed one and no origin at all.
+        #
+        # The Exception handler below is *not* redundant in the same way: a
+        # 500 is answered by ServerErrorMiddleware, which sits outside
+        # CORSMiddleware and so never gets stamped. The validation handler
+        # probably is redundant, but it takes no headers from its exception,
+        # so it is left alone rather than widened into this fix.
 
         @self.api.exception_handler(Exception)
         async def generic_exception_handler(request, exc):
