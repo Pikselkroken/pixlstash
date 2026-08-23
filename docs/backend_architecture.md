@@ -2711,13 +2711,27 @@ that reason: a workflow whose every picture sits in the Scrapheap has to read as
 
 #### Picture ghosts, and the purge that reaches them (v1.11, B4)
 
-A **ghost** is the thumbnail **and** the prompt of a picture that has been
+A **ghost** is the thumbnail and the prompt of a picture that has been
 permanently destroyed, kept because something else finds it useful — the
-dehydrated stack member that promised it could be made again. Library plan §5
-insists the word always means both halves: they are equally sensitive, and they
-are created, retained and destroyed together, so no later optimisation may keep
-"just the prompt" on the grounds that it is only text. `workflow_picture_ghost`
-is shaped for that, and `hub/workflows.PictureGhost` carries them as one value.
+dehydrated stack member that promised it could be made again.
+
+**The rule library plan §5 states is that a ghost never keeps the prompt alone.**
+The prompt is the sensitive half, and "it is only text" is precisely the argument
+a later optimisation would use to keep it once the thumbnail had gone. So the
+thumbnail is required in all three places it can be: `_prepare_ghosts` refuses to
+build a ghost without one (thumbnails are generated lazily, so a picture
+destroyed before its own existed genuinely reaches that branch),
+`hub/workflows.PictureGhost` declares it with no default, and
+`workflow_picture_ghost.thumbnail` is `NOT NULL`.
+
+**The converse is deliberately not the rule, and `positive_prompt` is nullable.**
+An upscale or img2img graph has no `CLIPTextEncode` at all: it still hashes, still
+has a recipe and a seed, and is exactly as worth rehydrating as any other
+workflow. `NULL` there means the picture never had a prompt, never that one was
+dropped — it is copied straight off `picture.comfyui_positive_prompt`, and
+nothing between that column and the row can lose it. Requiring a prompt would
+delete the feature for a whole class of real workflows in the name of a rule
+about not keeping the prompt alone.
 
 It is keyed on `(library_uuid, pixel_sha)`. The `pixel_sha` half identifies the
 picture: the vault row is gone by the time a ghost exists and SQLite reuses its
@@ -2733,13 +2747,6 @@ is careful about. Every hub query here is scoped to one library.
 outlive a recipe that was never filed (an unwritable hub, or a graph the hash
 layer refused), and a reference that could abort the write would trade a privacy
 record for referential tidiness.
-
-**A ghost with no thumbnail is not written at all.** Thumbnails are generated
-lazily, so a picture destroyed before its own thumbnail existed reaches the write
-with only a prompt — and keeping the prompt alone retains the more sensitive half
-on its own *and* destroys the argument that makes `covered` a safe default, which
-is that the thumbnail is the only marginal exposure. `_prepare_ghosts` refuses it
-and logs why.
 
 **Retention is a three-position setting, `workflow_ghost_retention`, default
 `covered`** (`services/workflow_ghost_service.py`, settled with the owner

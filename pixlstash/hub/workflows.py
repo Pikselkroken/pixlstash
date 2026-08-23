@@ -238,9 +238,16 @@ class PictureGhost:
     does. It is the key only *with* ``library_uuid`` — see the table comment in
     ``hub/schema.py`` for why a hub-global key would be wrong.
 
-    ``thumbnail`` and ``positive_prompt`` are the ghost proper and are BOTH
-    required: a ghost is the thumbnail and the prompt, never one without the
-    other, so the caller refuses to build one rather than dropping a half.
+    ``thumbnail`` is required and has no default, so the type itself refuses a
+    ghost that would be a retained prompt on its own -- which is the artefact
+    library plan §5 forbids, and the reason ``covered`` can be a safe default.
+
+    ``positive_prompt`` is optional, and that is not the same rule relaxed. §5
+    says a ghost never keeps the prompt ALONE; it does not say a prompt must
+    exist. An upscale or img2img graph has no ``CLIPTextEncode``, so it has no
+    prompt to keep, and it is still worth being able to make again. ``None``
+    here means the picture never had one: it is copied straight off
+    ``picture.comfyui_positive_prompt``, so nothing on the way in can drop it.
     """
 
     library_uuid: str

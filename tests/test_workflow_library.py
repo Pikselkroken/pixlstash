@@ -109,6 +109,16 @@ TXT2IMG = [
     (7, "SaveImage", [("images", 6, 0)], {"filename_prefix": "ComfyUI"}),
 ]
 
+# An upscale graph: a real workflow shape with no CLIPTextEncode anywhere, so it
+# hashes and has a recipe but genuinely carries no prompt. The fixture for §5's
+# "a ghost never keeps the prompt ALONE, but a prompt need not exist" rule.
+UPSCALE = [
+    (1, "LoadImage", [], {"image": "in.png"}),
+    (2, "UpscaleModelLoader", [], {"model_name": "x4-upscaler.pth"}),
+    (3, "ImageUpscaleWithModel", [("upscale_model", 2, 0), ("image", 1, 0)], {}),
+    (4, "SaveImage", [("images", 3, 0)], {"filename_prefix": "upscaled"}),
+]
+
 SUBGRAPH_UUID = "7b34ab90-36f9-45ba-a665-71d418f0df18"
 INNER_SUBGRAPH_UUID = "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9"
 
@@ -1926,7 +1936,7 @@ def test_the_missing_file_purge_clears_ghosts_at_off(store):
     assert ghosts(store) == {}
 
 
-def test_one_librarys_purge_never_cascades_another_librarys_ghost(store):
+def test_a_purge_never_cascades_a_ghost_belonging_to_another_library(store):
     """The hub is shared; the cover that justifies a ghost is not.
 
     Only one vault is live at a time, so a purge cannot see whether ANOTHER
@@ -2058,3 +2068,84 @@ def test_the_ghost_reads_survive_the_bound_parameter_ceiling(store):
 
     assert candidates == []
     assert surviving == set()
+
+
+def test_a_workflow_with_no_prompt_still_leaves_a_ghost(store):
+    """The prompt half is optional; the thumbnail half is not (library plan §5).
+
+    §5's rule is that a ghost never keeps the prompt ALONE — the prompt is the
+    sensitive half and "it is only text" is the argument that would keep it once
+    the thumbnail had gone. It is NOT a rule that a prompt must exist. An upscale
+    graph has no ``CLIPTextEncode`` at all, and it still hashes, still has a
+    recipe and a seed, and is exactly as worth rehydrating as any other. Refusing
+    it would delete the feature for a whole class of real workflows.
+    """
+    ids = [
+        add_picture(
+            store,
+            write_png(Path(store.image_root), name, api=api_graph(UPSCALE)),
+        )
+        for name in ("noprompt-a.png", "noprompt-b.png")
+    ]
+    run_extraction(store, ids)
+    kept_id, cover_id = ids
+    kept = read_picture(store, kept_id)
+    # The premise: hashed and coverable, but genuinely promptless.
+    assert kept.workflow_instance_hash
+    assert (
+        kept.workflow_instance_hash
+        == read_picture(store, cover_id).workflow_instance_hash
+    )
+    assert kept.comfyui_positive_prompt is None
+
+    scrapheap(store, kept_id, pixel_sha="sha-noprompt", thumbnail=b"upscaled thumb")
+    outcome = purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    assert outcome.ghosts_kept == 1
+    ghost = ghosts(store)["sha-noprompt"]
+    assert ghost["thumbnail"] == b"upscaled thumb"
+    assert ghost["positive_prompt"] is None
+    assert ghost["structural_hash"] == structural_hash(api_graph(UPSCALE))
+
+
+def test_a_prompt_the_picture_had_is_never_dropped_on_the_way_in(store):
+    """NULL in the ghost means "no prompt", never "we lost it".
+
+    The pair with the test above: together they say the nullable column is a
+    faithful copy and not a place a half-ghost can appear. Without this one,
+    ``positive_prompt IS NULL`` would be indistinguishable from a write that
+    silently dropped the sensitive half.
+    """
+    kept = write_png(Path(store.image_root), "keptprompt-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "keptprompt-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=67)),
+    )
+    kept_id, cover_id = (add_picture(store, name) for name in (kept, cover))
+    run_extraction(store, [kept_id, cover_id])
+    stored = read_picture(store, kept_id).comfyui_positive_prompt
+    assert stored == "a lighthouse at dusk"
+
+    scrapheap(store, kept_id, pixel_sha="sha-keptprompt")
+    purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    assert ghosts(store)["sha-keptprompt"]["positive_prompt"] == stored
+
+
+def test_the_store_itself_refuses_a_ghost_with_no_thumbnail(store):
+    """The invariant at the storage layer, not only in the writer.
+
+    ``_prepare_ghosts`` already refuses to build one, so this asserts the second
+    line of defence: a FUTURE caller that bypassed the writer still cannot
+    create a retained prompt with no thumbnail beside it.
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        with store.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_picture_ghost (library_uuid, pixel_sha, "
+                "instance_hash, positive_prompt, thumbnail, created_at) "
+                "VALUES (?, ?, ?, ?, NULL, 'now')",
+                (LIBRARY, "sha-half-ghost", "some-instance", "a secret prompt"),
+            )
+    assert ghosts(store) == {}

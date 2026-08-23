@@ -1,8 +1,15 @@
 """Picture ghosts: what a permanently destroyed picture is allowed to leave behind.
 
-A **ghost is a thumbnail and a prompt, always together** (library plan §5). It is
-written at the moment a picture is destroyed, and it lives in the hub because
-that is where a workflow outlives the pictures it came from. This module owns the
+A ghost is written at the moment a picture is destroyed, and it lives in the hub
+because that is where a workflow outlives the pictures it came from.
+
+**It never keeps the prompt on its own** (library plan §5). The prompt is the
+sensitive half, and "it is only text" is exactly the argument a later
+optimisation would use to keep it after the thumbnail had gone. So the thumbnail
+is required — no thumbnail on disk, no ghost at all, even at ``on``. The converse
+is NOT the rule: an upscale or img2img graph has no ``CLIPTextEncode``, so it has
+no prompt to keep, and its ghost is a thumbnail plus a recipe plus a seed, which
+is still worth being able to make again. This module owns the
 one decision the store deliberately does not make: **whether a ghost may exist at
 all**, which is the user's, expressed as a three-position setting.
 
@@ -417,13 +424,19 @@ def _prepare_ghosts(
 ) -> list[PictureGhost]:
     """Build the ghosts for the retained candidates, reading their files.
 
-    **A candidate with no thumbnail on disk gets no ghost at all.** A ghost is
-    the thumbnail AND the prompt; keeping the prompt alone would retain the more
-    sensitive half on its own, and it would also destroy the argument that makes
-    ``covered`` a safe default — that a covered ghost's only marginal exposure
-    is a thumbnail of a near-duplicate. Thumbnails are generated lazily, so a
-    picture destroyed before its thumbnail existed genuinely reaches here with
-    nothing to keep.
+    **A candidate with no thumbnail on disk gets no ghost at all.** Keeping the
+    prompt alone would retain the more sensitive half on its own, and it would
+    also destroy the argument that makes ``covered`` a safe default — that a
+    covered ghost's only marginal exposure is a thumbnail of a near-duplicate.
+    Thumbnails are generated lazily, so a picture destroyed before its thumbnail
+    existed genuinely reaches here with nothing to keep.
+
+    **A candidate with no PROMPT is written anyway, and that is not the same
+    rule relaxed.** The prompt is copied straight off the picture row, so a
+    missing one means the graph had none — an upscale or img2img workflow, which
+    hashes, has a recipe and a seed, and is exactly as worth rehydrating as any
+    other. Refusing it would remove the feature for a whole class of real
+    workflows in the name of a rule that is about not keeping the prompt alone.
     """
     ghosts = []
     for candidate in destroyed:
