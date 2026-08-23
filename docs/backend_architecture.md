@@ -3607,6 +3607,38 @@ Two writers create rows — the scrapheap purge (`routes/pictures/_crud.py::dele
 
 **Explicit re-import overrides the ledger; a routine sync does not.** The reference-folder scanner (`tasks/reference_folder_scan_task.py`) normally skips any disk path present in the ledger — no fully-automatic re-import of a removed-but-kept file. The override fires **iff** a dedicated one-shot signal is set: `reference_folder.pending_reimport` (migration `0078_add_reference_folder_pending_reimport`, default `False`). That flag is written `True` in exactly one place — the deliberate folder-add endpoint `create_reference_folder` (`routes/reference_folders.py`); **no** routine path (sync-toggle, rename, relocate, mount-recovery, the filesystem watcher, or a periodic re-scan) ever sets it. On an explicit re-import the scanner re-imports files found on disk and **clears** their matching ledger rows so restore can resurface them, then clears `pending_reimport` in the same transaction that completes the scan (one-shot; a mount_error exit leaves it set so the intent survives until a real scan consumes it). This replaces an earlier `last_scanned IS NULL` + no-pictures heuristic that the watcher (it resets `last_scanned`) could spoof — closing the edge where an already-emptied folder whose `last_scanned` was reset would have auto-resurfaced removed-but-kept files. **Invariant:** the override only ever clears rows for paths drawn from `disk_paths` (files actually present on disk), so genuinely-gone content — absent on disk, `file_removed=True` — is never in the disk set, is never cleared, and stays permanently guarded by restore.
 
+**A move inside a reference folder is followed, not re-imported.** A file moved
+within the scanned tree arrives as one path in `removed_paths` and another in
+`new_paths` in the *same* pass. Taken in that order it is a delete plus a
+re-add, which frees the picture id and everything hanging off it — tags, smart
+score, faces, likeness pairs, project/set/stack membership, review state — so
+reorganising a reference folder used to discard everything PixlStash had added
+to it. `_match_moved_paths` pairs the two halves before the removal block runs
+and updates `file_path` on the existing row instead.
+
+- **The key is `(pixel_sha, size_bytes)`, and the match must be 1:1 with no
+  unchanged file sharing that key.** `pixel_sha` alone is not an identity:
+  `ImageUtils.calculate_hash_from_file_path` samples 8 x 8 KiB windows of
+  anything over 128 KiB and does not mix the size into the digest, which is why
+  import de-duplication treats it as a candidate key. A false pair here is worse
+  than the bug being fixed — a lost row is visible, one picture's curation
+  silently rebound onto another picture's file is not — so every ambiguous group
+  logs and falls through to the previous delete-and-re-add.
+- **Confirmation stops at the size.** Import de-dup follows a candidate match
+  with a full-byte hash of *both* sides; here one side is a file that no longer
+  exists, so the stored columns are all there is to compare.
+- **A followed move blanks `thumbnail_width` / `thumbnail_height`.** Thumbnails
+  are keyed `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the stored
+  bitmap is unreachable from the new path; blank dimensions are what
+  `MissingThumbnailFinder` keys on, so the existing sweep regenerates it.
+- **Scoped to one folder, and to one pass.** The scan covers a single reference
+  folder, so a move *between* two folders is a removal in one scan and an
+  addition in another with no shared pass to match in. Two races remain open and
+  are marked at the helper: `os.walk` is not atomic, and `MissingFilePurgeTask`
+  can delete the row in the up-to-`_RESCAN_INTERVAL_S` window before the
+  rescuing scan runs. Both degrade to the old delete-and-re-add; the second logs
+  a warning when it is observed.
+
 ---
 
 ## 19. Mermaid Diagrams

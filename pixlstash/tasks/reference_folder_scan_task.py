@@ -298,9 +298,30 @@ class ReferenceFolderScanTask(BaseTask):
             def apply_moves(session: Session, pairs: list[tuple[int, str]]) -> None:
                 for pic_id, new_path in pairs:
                     pic = session.get(Picture, pic_id)
-                    if pic is not None:
-                        pic.file_path = new_path
-                        session.add(pic)
+                    if pic is None:
+                        # The row went between the scan's read and this write —
+                        # the purge sweep is the likely author.  The pair has
+                        # already been taken out of removed_paths and new_paths,
+                        # so the file is now neither moved nor imported until the
+                        # next scan; say so rather than losing it silently.
+                        logger.warning(
+                            "Reference folder %s: picture %d vanished before its "
+                            "move to %s could be applied; the file will be "
+                            "re-imported on the next scan.",
+                            self._folder_path,
+                            pic_id,
+                            new_path,
+                        )
+                        continue
+                    pic.file_path = new_path
+                    # The thumbnail is stored under sha256(file_path), so the
+                    # old bitmap is unreachable at the new path.  Blanking the
+                    # dimensions is what MissingThumbnailFinder keys on, so the
+                    # existing sweep regenerates it; leaving them set points the
+                    # picture at a thumbnail that is not there.
+                    pic.thumbnail_width = None
+                    pic.thumbnail_height = None
+                    session.add(pic)
                 session.commit()
 
             self._db.run_task(
@@ -576,12 +597,19 @@ class ReferenceFolderScanTask(BaseTask):
             scan of a large folder has no removals and never hashes here, and a
             folder losing files without gaining any never hashes either.
 
-        Only a 1:1 pixel match counts as a move.  Identical pixels at several
-        paths are genuine copies, and the rows behind them can differ in tags,
-        sets and scores — pairing them by guess would move one picture's work
-        onto another picture's file, which is the loss this exists to prevent.
-        Ambiguous groups fall through to the delete-and-re-add path, which is
-        no worse than the behaviour before this existed.
+        Only a 1:1 match on ``(pixel_sha, size_bytes)`` counts as a move, and
+        only when no unchanged file in the folder shares that key either.
+        Identical pixels at several paths are genuine copies, and the rows
+        behind them can differ in tags, sets and scores — pairing them by guess
+        would move one picture's work onto another picture's file, which is the
+        loss this exists to prevent.  Ambiguous groups fall through to the
+        delete-and-re-add path, which is no worse than the behaviour before
+        this existed.
+
+        The confirmation stops at the size.  Import de-duplication follows a
+        ``(sampled hash, size)`` candidate match with a full-byte hash of both
+        sides; here one side is a file that no longer exists, so its bytes are
+        unavailable and the stored columns are all there is to compare.
 
         Scoped to one reference folder, because the scan is: a file moved
         between two reference folders is a removal in one scan and an addition
@@ -596,17 +624,36 @@ class ReferenceFolderScanTask(BaseTask):
         # unvisited directory into a visited one is in neither set and still
         # reads as a removal.  Deferring deletion by one scan (mark and sweep)
         # would close it; not worth the state for a race this narrow.
-        gone_by_sha: dict[str, list[str]] = {}
+        # The key is ``(pixel_sha, size_bytes)``, never ``pixel_sha`` alone.
+        # ``calculate_hash_from_file_path`` samples 8 x 8 KiB windows of
+        # anything over 128 KiB and does not mix the size into the digest, so
+        # on its own it is a candidate key and not an identity -- its own
+        # docstring says so, and import de-duplication pairs it with the size
+        # for exactly this reason.  Here a false pair is worse than the bug
+        # being fixed: a lost row is visible, one picture's tags and
+        # memberships silently rebound onto another picture's file are not.
+        gone_by_key: dict[tuple[str, int | None], list[str]] = {}
         for path in removed_paths:
-            pixel_sha = existing_by_path[path].pixel_sha
-            if pixel_sha:
-                gone_by_sha.setdefault(pixel_sha, []).append(path)
-        if not gone_by_sha:
+            picture = existing_by_path[path]
+            if picture.pixel_sha:
+                key = (picture.pixel_sha, picture.size_bytes)
+                gone_by_key.setdefault(key, []).append(path)
+        if not gone_by_key:
             return {}
 
-        arrived_by_sha: dict[str, list[str]] = {}
+        # An unchanged file sharing the key makes the group ambiguous too, and
+        # the stable rows cost nothing to count: their hash is already loaded.
+        # Without this, deleting A and separately adding an identical C while
+        # an identical B sits untouched in the folder reads as a clean 1:1.
+        stable_keys: set[tuple[str, int | None]] = set()
+        for path, picture in existing_by_path.items():
+            if path not in removed_paths and picture.pixel_sha:
+                stable_keys.add((picture.pixel_sha, picture.size_bytes))
+
+        arrived_by_key: dict[tuple[str, int | None], list[str]] = {}
         for path in sorted(new_paths):
             try:
+                size_bytes = os.path.getsize(path)
                 pixel_sha = ImageUtils.calculate_hash_from_file_path(path)
             except Exception as exc:
                 # Not fatal: an unhashable file simply cannot be matched, and
@@ -619,20 +666,24 @@ class ReferenceFolderScanTask(BaseTask):
                 )
                 continue
             if pixel_sha:
-                arrived_by_sha.setdefault(pixel_sha, []).append(path)
+                arrived_by_key.setdefault((pixel_sha, size_bytes), []).append(path)
 
         moved: dict[str, str] = {}
-        for pixel_sha, old_paths in gone_by_sha.items():
-            candidates = arrived_by_sha.get(pixel_sha, ())
-            if len(old_paths) == 1 and len(candidates) == 1:
+        for key, old_paths in gone_by_key.items():
+            candidates = arrived_by_key.get(key, ())
+            if not candidates:
+                continue
+            if len(old_paths) == 1 and len(candidates) == 1 and key not in stable_keys:
                 moved[old_paths[0]] = candidates[0]
-            elif candidates:
+            else:
                 logger.info(
-                    "Reference folder %s: %d vanished and %d new file(s) share "
-                    "one pixel hash; too ambiguous to call a move, re-importing.",
+                    "Reference folder %s: %d vanished, %d new and %d unchanged "
+                    "file(s) share one pixel hash and size; too ambiguous to "
+                    "call a move, re-importing.",
                     self._folder_path,
                     len(old_paths),
                     len(candidates),
+                    1 if key in stable_keys else 0,
                 )
         return moved
 
