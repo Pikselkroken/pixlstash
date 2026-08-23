@@ -1400,6 +1400,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
@@ -2879,6 +2880,57 @@ this record and needs its own independent adversarial sign-off.
 | Quality stats | In-memory (≈60 s TTL) | Used by aggregate endpoints |
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
+
+### The library layout (v1.11 Phase 4a)
+
+`utils/library_layout.py` is the model of **where a picture belongs and whether
+it still belongs there**. Model only: no move engine, no file writes, no UI —
+see Phase 4b for those.
+
+A `Layout` is an ordered list of segments, one folder level each. A segment
+holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
+picture has a value for wins; a segment nothing fills is **skipped rather than
+left as an empty folder**, which keeps the tree two deep instead of five. A new
+library starts on `DEFAULT_LAYOUT`, `Project / Person or Set`.
+
+Two pure functions:
+
+| Function | Answers |
+|---|---|
+| `render(facets, layout)` | The folder path the picture should have, relative to the library root. A picture nothing files goes to `layout.unfiled` (`_Inbox`), never the root. |
+| `is_true(path, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. |
+
+The release rests on `is_true`, and on one property of it: **a path that does
+not parse against the layout can never be false.** A file at the library root
+matches no segment, so an existing flat library needs no migration; a file the
+owner dragged into `_unsorted` contradicts nothing, so it stays there
+permanently and the override needs no setting.
+
+Three things follow from how it is written:
+
+- **Truth is membership, not equality with `render`.** The folder `Mira/` says
+  "this is a Mira picture" and stays true while Mira is one of the picture's
+  people, whoever `render` would pick today. That is what makes adding a second
+  project or person move nothing.
+- **`known_names` is not optional.** Only the library's whole vocabulary
+  separates *this folder names a project the picture is no longer in* (false, it
+  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
+  moves). Deleting an entity takes its name out of the language and freezes the
+  folders named after it; a caller that wants those judged one last time passes
+  the name it is deleting in `known_names`.
+- **Skipping is not re-validated, and neither is anything below the layout.** A
+  set-only picture filed one level deep stays there when it gains a project
+  (nothing is ever re-derived), and `2024 Shoots/Mira/2026-08/` is judged on its
+  first two components only — the third is the owner's own.
+
+Where a component could be read as more than one facet, any reading that is
+still true wins. This decides whether a file moves, so it errs towards leaving
+it alone. Entity names are written down through `folder_name()`, which is the
+chokepoint that stops a name like `Mira/2024` from inventing a folder level or
+escaping the root, and comparison is case-folded and NFC-normalised because
+Windows and macOS are case-insensitive and macOS decomposes accents.
+
+`tests/test_library_layout.py` covers it, unparseable-path cases first.
 
 ---
 
