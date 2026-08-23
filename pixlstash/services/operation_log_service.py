@@ -89,7 +89,7 @@ from pixlstash.utils.image_processing.orientation import (
     rotate_orientation,
     write_orientation,
 )
-from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.service.label_ledger import MANUAL_MODEL_VERSION, UNKNOWN
 from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
@@ -1250,16 +1250,48 @@ def apply_orientation(
     # ORIGINAL bytes, so it is the last place that should be taking the row's word
     # for it. Reference folders are already refused above, so the vault root is
     # the only legitimate location left.
-    if not image_root or not path_is_within(file_path, image_root):
+    #
+    # Containment here is STRICT — `resolve_path_within`, which realpaths both
+    # sides — and not `path_is_within`, which answers True on a purely lexical
+    # pass before any symlink is resolved (#1024). What that lenience costs is
+    # not what the name suggests: a symlink planted inside the library cannot
+    # carry the *write* out of it, because `write_orientation` renames a
+    # `mkstemp` sibling over the path and `os.replace` replaces a symlink rather
+    # than following it. `read_orientation` does follow it, though, so the
+    # outside file's bytes — and, through `_carry_file_identity`, its mode and
+    # owner — would be copied into the library under the link's name. That is a
+    # read escape wearing a write sink's clothes, and this is the sink that can
+    # close it.
+    #
+    # The price is deliberate and paid here rather than argued away: a symlinked
+    # SUBFOLDER inside the library, photos kept on a second disk, is refused too,
+    # because realpath cannot tell one from a planted link. Rotate declines those
+    # pictures; nothing else about them changes. `path_is_within` itself is left
+    # alone, so every read path and the model shelf keep the lenient form its
+    # docstring promises.
+    if not image_root:
         logger.error(
-            "operation_log: refusing to set orientation %s on picture %s — its "
-            "stored path %r resolves to %s, which is outside the library root %r; "
-            "the file is not touched",
+            "operation_log: refusing to set orientation %s on picture %s — no "
+            "library root was supplied, so its stored path %r cannot be confirmed "
+            "to be inside one; the file is not touched",
             orientation,
             picture_id,
             picture.file_path,
-            file_path,
+        )
+        return False
+    try:
+        file_path = resolve_path_within(image_root, os.path.abspath(file_path))
+    except ValueError as exc:
+        logger.error(
+            "operation_log: refusing to set orientation %s on picture %s — its "
+            "stored path %r resolves through to %s, which is outside the library "
+            "root %r (%s); the file is not touched",
+            orientation,
+            picture_id,
+            picture.file_path,
+            os.path.realpath(file_path),
             image_root,
+            exc,
         )
         return False
 
