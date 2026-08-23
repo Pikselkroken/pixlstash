@@ -493,7 +493,17 @@
           </div>
         </div>
       </div>
-      <div v-if="showEmptyState" class="empty-state">
+      <!-- All three routes reuse wiring App.vue already had: `local-import`
+           reaches `SideBar.startLocalImport`, `open-settings` reaches
+           `SideBar.openSettingsDialog`, and `choose-folder` is the one new
+           signal, for the reference-folder editor the sidebar owns. -->
+      <LibraryEmptyState
+        v-if="showLibraryEmptyState"
+        @choose-folder="emit('choose-folder')"
+        @connect-comfyui="emit('open-settings', 'workflows')"
+        @add-files="(files) => emit('local-import', { files })"
+      />
+      <div v-else-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
             <img
@@ -1174,6 +1184,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import LibraryEmptyState from "./LibraryEmptyState.vue";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1389,6 +1400,9 @@ const emit = defineEmits([
   "open-import",
   "local-import",
   "confirm-export-zip",
+  // The empty library's folder route. The reference-folder editor is the
+  // sidebar's, and App.vue already holds the ref that reaches it.
+  "choose-folder",
 ]);
 
 // Props
@@ -6741,6 +6755,18 @@ const canShowAllPicturesButton = computed(() => {
   return totalAllPicturesCount.value > 0;
 });
 
+// The library holds nothing at all, as opposed to "the filter matched nothing"
+// or "the scrap heap is empty". Those are different questions with different
+// answers and keep the card they had; this one is the first screen of an
+// install, and it gets the three routes out.
+const showLibraryEmptyState = computed(
+  () =>
+    showEmptyState.value &&
+    totalAllPicturesCount.value === 0 &&
+    !isScrapheapView.value &&
+    !isSetOverlapView.value,
+);
+
 const emptyStateTitle = computed(() => {
   if (isSetOverlapView.value) {
     return "No overlap";
@@ -6748,9 +6774,10 @@ const emptyStateTitle = computed(() => {
   if (isScrapheapView.value) {
     return "No pictures in the scrap heap";
   }
-  return totalAllPicturesCount.value > 0
-    ? "No pictures match the current filters"
-    : "No pictures in the database.";
+  // The `totalAllPicturesCount === 0` arm is what `LibraryEmptyState` now
+  // answers; this branch is only reached for a view that has its own empty
+  // question (scrap heap, set overlap) or a filter that matched nothing.
+  return "No pictures match the current filters";
 });
 
 const emptyStateSubtitle = computed(() => {
@@ -6760,9 +6787,7 @@ const emptyStateSubtitle = computed(() => {
   if (isScrapheapView.value) {
     return "Are all your pictures that good?";
   }
-  return totalAllPicturesCount.value > 0
-    ? "Try clearing filters, adjusting your search, or switching sets."
-    : "Add pictures by dragging them here.";
+  return "Try clearing filters, adjusting your search, or switching sets.";
 });
 
 const emptyStateImage = computed(() => {

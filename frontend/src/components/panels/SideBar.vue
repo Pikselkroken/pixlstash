@@ -3976,6 +3976,10 @@ function openCurrentSelectionEditor() {
 defineExpose({
   refreshSidebar,
   openSettingsDialog,
+  // Reached from the empty library's "Choose a folder…", which is the first
+  // thing pointing anyone at reference folders — they have always worked and
+  // were a sidebar accessory nobody was sent to.
+  openAddFolderTypeDialog,
   startLocalImport,
   currentProjectId,
   openCurrentSelectionEditor,

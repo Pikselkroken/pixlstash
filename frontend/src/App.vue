@@ -316,6 +316,11 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
+/** The empty library's "Choose a folder…" — the sidebar's own add-folder flow. */
+function openAddFolder() {
+  sidebarRef.value?.openAddFolderTypeDialog?.();
+}
+
 // ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
 // App.vue owns `--floating-bottom-h`: the height of the tallest bottom-anchored
 // floating element currently visible inside the notice column's footprint, plus
@@ -656,6 +661,7 @@ defineExpose({
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
+                @choose-folder="openAddFolder"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
