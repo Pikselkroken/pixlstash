@@ -24,6 +24,7 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
     assets_from_reduction,
@@ -35,6 +36,12 @@ from pixlstash.services.workflow_hash import (
 )
 
 logger = get_logger(__name__)
+
+# Ghost rows per INSERT batch. Each carries a thumbnail BLOB, so this bounds
+# peak memory on a purge of an entire scrapheap rather than materialising every
+# retained thumbnail at once. Membership tests use ``sql_chunking.chunked``'s
+# own default, which is sized against SQLite's bound-parameter cap.
+_GHOST_WRITE_CHUNK = 100
 
 
 @dataclass(frozen=True)
@@ -209,3 +216,115 @@ def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.R
         "FROM workflow_recipe WHERE topology_hash = ? ORDER BY first_seen_at",
         (topology_hash,),
     )
+
+
+# ---------------------------------------------------------------------------
+# Picture ghosts — the thumbnail and prompt a destroyed picture leaves behind
+# ---------------------------------------------------------------------------
+#
+# Storage only, and **scoped to one library on every call**. Whether a ghost may
+# exist at all is decided by ``services/workflow_ghost_service.py`` against the
+# user's retention setting, and nothing here consults it: a store that quietly
+# declined a write would put the consent decision in two places, and the one
+# that is easy to forget is the one that keeps data.
+
+
+@dataclass(frozen=True)
+class PictureGhost:
+    """One destroyed picture's retained trace, within one library.
+
+    ``pixel_sha`` identifies the picture: the vault row is gone by the time this
+    is written and SQLite reuses its id on the next import, so nothing else
+    does. It is the key only *with* ``library_uuid`` — see the table comment in
+    ``hub/schema.py`` for why a hub-global key would be wrong.
+
+    ``thumbnail`` is required and has no default, so the type itself refuses a
+    ghost that would be a retained prompt on its own -- which is the artefact
+    library plan §5 forbids, and the reason ``covered`` can be a safe default.
+
+    ``positive_prompt`` is optional, and that is not the same rule relaxed. §5
+    says a ghost never keeps the prompt ALONE; it does not say a prompt must
+    exist. An upscale or img2img graph has no ``CLIPTextEncode``, so it has no
+    prompt to keep, and it is still worth being able to make again. ``None``
+    here means the picture never had one: it is copied straight off
+    ``picture.comfyui_positive_prompt``, so nothing on the way in can drop it.
+    """
+
+    library_uuid: str
+    pixel_sha: str
+    instance_hash: str
+    thumbnail: bytes
+    structural_hash: Optional[str] = None
+    positive_prompt: Optional[str] = None
+    seed: Optional[int] = None
+
+
+def record_picture_ghosts(hub: HubDatabase, ghosts: list[PictureGhost]) -> int:
+    """Write retained ghosts, replacing any earlier trace of the same picture.
+
+    ``INSERT OR REPLACE`` rather than ``INSERT OR IGNORE``: the same
+    ``(library_uuid, pixel_sha)`` recurring means the file was re-imported into
+    that library and destroyed again, and the newer trace is the truthful one.
+
+    Written in chunks so a purge of a whole scrapheap never holds every retained
+    thumbnail in memory at once, and returns the number of ROWS written — the
+    caller's list is de-duplicated on the key first, because two pictures with
+    the same pixel_sha are the same bytes and collapse to one row.
+    """
+    unique = {(ghost.library_uuid, ghost.pixel_sha): ghost for ghost in ghosts}
+    rows = list(unique.values())
+    for batch in chunked(rows, _GHOST_WRITE_CHUNK):
+        now = _now()
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO workflow_picture_ghost "
+                "(library_uuid, pixel_sha, instance_hash, structural_hash, "
+                " positive_prompt, seed, thumbnail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        ghost.library_uuid,
+                        ghost.pixel_sha,
+                        ghost.instance_hash,
+                        ghost.structural_hash,
+                        ghost.positive_prompt,
+                        ghost.seed,
+                        ghost.thumbnail,
+                        now,
+                    )
+                    for ghost in batch
+                ],
+            )
+    return len(rows)
+
+
+def destroy_ghosts_for_instances(
+    hub: HubDatabase, library_uuid: str, instance_hashes: list[str]
+) -> int:
+    """Destroy this library's ghosts leaning on the named instance hashes.
+
+    This is the **covered-ghost cascade**: the caller has established that no
+    surviving picture in THIS library carries these hashes any more, so the
+    ghosts that were kept because one did are no longer covered and must go.
+    Another library's ghosts are never touched — its cover lives in a vault this
+    process cannot see.
+    """
+    if not library_uuid or not instance_hashes:
+        return 0
+    removed = 0
+    with hub.transaction() as conn:
+        for batch in chunked(instance_hashes):
+            placeholders = ",".join("?" for _ in batch)
+            cursor = conn.execute(
+                "DELETE FROM workflow_picture_ghost WHERE library_uuid = ? "
+                f"AND instance_hash IN ({placeholders})",
+                (library_uuid, *batch),
+            )
+            removed += cursor.rowcount or 0
+    if removed:
+        logger.info(
+            "Covered-ghost cascade: destroyed %d ghost(s) whose last covering "
+            "picture was purged.",
+            removed,
+        )
+    return removed

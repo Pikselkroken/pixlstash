@@ -517,6 +517,12 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # hub-side ``recipe_instance`` table is AI-toolkit Phase 2 and moved to v1.12
 # with the rest of it, so nothing in this release stores an instance ROW
 # anywhere. Its location is not in question — §4 puts the whole family here.
+#
+# ``workflow_picture_ghost`` below is not that table and must not grow into it.
+# It carries an instance HASH plus the two things a destroyed picture leaves
+# behind — a thumbnail and a prompt — because those are what the retention
+# setting is about. The parameters an instance is made of stay out of it until
+# v1.12 models them properly.
 
 _V2_WORKFLOW_TOPOLOGY = """
 CREATE TABLE IF NOT EXISTS workflow_topology (
@@ -599,6 +605,79 @@ CREATE TABLE IF NOT EXISTS workflow_recipe_asset (
 )
 """
 
+# A **picture ghost**: the thumbnail and the prompt of a picture that has been
+# permanently destroyed, kept because something else finds it useful (library
+# plan §5, implementation plan §B4).
+#
+# **A ghost is the thumbnail AND the prompt, never one without the other.** The
+# two are equally sensitive, they are created together, retained together and
+# destroyed together, and this table is shaped so no later optimisation can keep
+# "just the prompt" on the grounds that it is only text.
+#
+# It lives in the hub because that is where a workflow outlives its pictures,
+# and within a library it is keyed on ``pixel_sha``, the one identifier of a
+# destroyed picture that survives the row: the vault id is reused by SQLite the
+# moment the next import lands, and the path is not stable across libraries.
+#
+# **But the key is the PAIR, and that is not a detail.** Unlike every other
+# table here a ghost is not content-addressed identity, it is retained content,
+# and whether it may be retained is a fact about ONE library: the cover that
+# justifies it is a picture in that library's vault, and only one vault is live
+# at a time so no purge can see any other's. A hub-global key would let library
+# A's purge cascade away a ghost library B still has cover for — silent loss in
+# the other direction from the one this feature is careful about. So every ghost
+# names its library and every query below is scoped to one.
+#
+# ``instance_hash`` is the column the **covered-ghost cascade** turns on. At the
+# default retention setting a ghost is kept only while a SURVIVING picture
+# carries the same value, so destroying the last such picture un-covers its
+# dependants and the purge must destroy them in the same pass
+# (``services/workflow_ghost_service.py``). Indexed with the library for exactly
+# that lookup.
+#
+# ``structural_hash`` is a plain column and NOT a foreign key to
+# ``workflow_recipe``: a ghost can outlive a recipe that was never filed (the
+# hub was unwritable when its picture was ingested, or the graph was refused by
+# the hash layer), and a reference that could abort the write would trade a
+# privacy record for referential tidiness.
+_V2_WORKFLOW_PICTURE_GHOST = """
+CREATE TABLE IF NOT EXISTS workflow_picture_ghost (
+    library_uuid     TEXT NOT NULL,
+    pixel_sha        TEXT NOT NULL,
+    instance_hash    TEXT NOT NULL,
+    structural_hash  TEXT,
+    -- Nullable ON PURPOSE, and it is the one asymmetry here worth explaining.
+    -- The rule §5 states is that a ghost never keeps the PROMPT ALONE, because
+    -- the prompt is the sensitive half and "it is only text" is the argument a
+    -- later optimisation would use to keep it. It is not a rule that a prompt
+    -- must exist: an upscale or img2img graph has no CLIPTextEncode at all, and
+    -- it still hashes, still has a recipe and a seed, and is still worth being
+    -- able to make again. NULL here means the picture never had a prompt, never
+    -- that one was dropped -- nothing between the vault column and this row can
+    -- lose it.
+    positive_prompt  TEXT,
+    seed             INTEGER,
+    -- NOT NULL, because this is the half the rule is actually about. A row with
+    -- no thumbnail would be a retained prompt on its own, which is the exact
+    -- artefact §5 forbids, and it would also destroy the argument that makes
+    -- `covered` a safe default -- that a covered ghost's only marginal exposure
+    -- is a thumbnail of a near-duplicate. The writer refuses to build one; this
+    -- is the same refusal at the storage layer, so a future caller cannot.
+    --
+    -- Tightened in place rather than by a rebuild, because `CREATE TABLE IF NOT
+    -- EXISTS` cannot add a constraint to a table that already exists and this
+    -- one exists nowhere: it was introduced on this same unmerged branch, so
+    -- every install creates it with the constraint on its first open. A
+    -- developer who ran an earlier commit of the branch keeps the nullable
+    -- shape until the hub is recreated, and the writer's own refusal covers
+    -- them. Once this is released the rule from CLAUDE.md applies and any
+    -- further tightening is a rebuild, as `_rebuild_model_with_kind_check` is.
+    thumbnail        BLOB NOT NULL,
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (library_uuid, pixel_sha)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" — the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -608,6 +687,11 @@ _V2_WORKFLOW_INDEXES = (
     # sets, and the lookup a shelf row does to say what it is used by.
     "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_asset_filename "
     "ON workflow_recipe_asset(normalized_filename)",
+    # The covered-ghost cascade: "is any ghost still leaning on this instance
+    # hash". Run once per purge per destroyed instance, on the one irreversible
+    # path, so it is not a lookup that may degrade into a scan.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_picture_ghost_instance "
+    "ON workflow_picture_ghost(library_uuid, instance_hash)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -616,6 +700,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_RECIPE,
     _V2_WORKFLOW_RECIPE_GRAPH,
     _V2_WORKFLOW_RECIPE_ASSET,
+    _V2_WORKFLOW_PICTURE_GHOST,
     *_V2_WORKFLOW_INDEXES,
 )
 

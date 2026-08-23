@@ -19,22 +19,27 @@ because a rule shipped without them was found broken by measurement:
 
 import copy
 import json
+import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
-from sqlmodel import delete as sqlmodel_delete
+from sqlalchemy.exc import OperationalError
+from sqlmodel import delete as sqlmodel_delete, select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import DeletedFileLog, Picture
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
+    PictureGhost,
     assets_for_recipe,
     forget_asset_names,
     get_document,
     record_api_graph,
+    record_picture_ghosts,
     recipes_for_topology,
 )
 from pixlstash.services.workflow_hash import (
@@ -51,11 +56,26 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
+from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
+from pixlstash.services.workflow_ghost_service import (
+    DEFAULT_GHOST_RETENTION,
+    GHOST_RETENTION_COVERED,
+    GHOST_RETENTION_KEY,
+    GHOST_RETENTION_OFF,
+    GHOST_RETENTION_ON,
+    GhostPurgeContext,
+    apply_purge_to_hub,
+    collect_ghost_candidates_in_session,
+    read_ghost_retention,
+    surviving_instance_hashes_in_session,
+)
 from pixlstash.services.workflow_library_service import topology_picture_counts
 from pixlstash.tasks.comfyui_extraction_task import ComfyUIExtractionTask
+from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
 from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
 )
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 # One ordinary txt2img graph, held once in a format-neutral shape so the API
 # and UI builders below cannot drift apart. Nodes 2 and 3 are the twin
@@ -87,6 +107,16 @@ TXT2IMG = [
     ),
     (6, "VAEDecode", [("samples", 5, 0), ("vae", 1, 2)], {}),
     (7, "SaveImage", [("images", 6, 0)], {"filename_prefix": "ComfyUI"}),
+]
+
+# An upscale graph: a real workflow shape with no CLIPTextEncode anywhere, so it
+# hashes and has a recipe but genuinely carries no prompt. The fixture for §5's
+# "a ghost never keeps the prompt ALONE, but a prompt need not exist" rule.
+UPSCALE = [
+    (1, "LoadImage", [], {"image": "in.png"}),
+    (2, "UpscaleModelLoader", [], {"model_name": "x4-upscaler.pth"}),
+    (3, "ImageUpscaleWithModel", [("upscale_model", 2, 0), ("image", 1, 0)], {}),
+    (4, "SaveImage", [("images", 3, 0)], {"filename_prefix": "upscaled"}),
 ]
 
 SUBGRAPH_UUID = "7b34ab90-36f9-45ba-a665-71d418f0df18"
@@ -651,14 +681,16 @@ def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
 
 WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_graph")
 
-# Every workflow table including the asset child, deepest first. Separate from
-# WORKFLOW_TABLES above because that one is asserted on one-row-per-recipe
-# counts and a recipe names several assets.
+# Every workflow table including the asset child and the ghost store, deepest
+# first. Separate from WORKFLOW_TABLES above because that one is asserted on
+# one-row-per-recipe counts and a recipe names several assets, and because a
+# ghost is not a recipe row at all.
 WORKFLOW_WIPE_ORDER = (
     "workflow_recipe_asset",
     "workflow_recipe_graph",
     "workflow_recipe",
     "workflow_topology",
+    "workflow_picture_ghost",
 )
 
 
@@ -836,7 +868,7 @@ def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
     # An older v2 hub: the shape as it was before this change, version intact.
     scratch = sqlite3.connect(path)
     try:
-        for table in reversed(WORKFLOW_TABLES):
+        for table in WORKFLOW_WIPE_ORDER:
             scratch.execute(f"DROP TABLE {table}")
         scratch.commit()
         assert scratch.execute("SELECT version FROM schema_version").fetchone()[0] == 2
@@ -851,8 +883,9 @@ def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
             )
         }
-        assert set(WORKFLOW_TABLES) <= present
+        assert set(WORKFLOW_WIPE_ORDER) <= present
         assert "ix_workflow_recipe_topology" in present
+        assert "ix_workflow_picture_ghost_instance" in present
         # Re-running the shape reconciliation must not claim a new version.
         assert reopened.fetchone("SELECT version FROM schema_version")["version"] == 2
         # And the recreated tables are usable, not just present.
@@ -1001,6 +1034,10 @@ def reset(request):
 
 
 def _wipe_pictures(session):
+    # The purge tests below write permanent-deletion ledger rows, which are
+    # keyed by PATH rather than by picture: leaving them behind would let one
+    # test's destroyed path change what the next test's purge owns.
+    session.exec(sqlmodel_delete(DeletedFileLog))
     session.exec(sqlmodel_delete(Picture))
     session.commit()
 
@@ -1327,3 +1364,788 @@ def test_counts_exclude_soft_deleted_pictures(store):
     assert topology_hash(api_graph(TXT2IMG)) not in store.vault.run_immediate_read_task(
         topology_picture_counts
     )
+
+
+# ---------------------------------------------------------------------------
+# B4 — purge reaches the hub, and the covered-ghost cascade
+# ---------------------------------------------------------------------------
+#
+# The same feature has to survive one deletion and not another, so both
+# directions are asserted here rather than assumed:
+#
+# * a recipe and its topology outlive EVERY picture deletion, purge included —
+#   that is B3's whole point and the thing dehydration's promise rests on;
+# * a ghost is thumbnail-and-prompt of a destroyed picture, and a purge must
+#   reach it, because leaving it behind is a privacy defect rather than a
+#   missing feature.
+
+
+def scrapheap(store, picture_id, *, pixel_sha, thumbnail=b"thumbnail-bytes"):
+    """Put a picture in the Scrapheap with the sha the ghost will be keyed on.
+
+    A thumbnail is written by default because a ghost is thumbnail-AND-prompt
+    and one without a thumbnail is refused: a helper that quietly omitted it
+    would make every retention assertion below pass for the wrong reason.
+    ``thumbnail=None`` is the case that exercises the refusal.
+    """
+    if thumbnail is not None:
+        write_thumbnail(store, read_picture(store, picture_id).file_path, thumbnail)
+
+    def mark(session):
+        picture = session.get(Picture, picture_id)
+        picture.deleted = True
+        picture.deleted_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+        picture.pixel_sha = pixel_sha
+        session.commit()
+
+    store.vault.run_task(mark)
+
+
+LIBRARY = "11111111-2222-4333-8444-555555555555"
+OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
+
+
+def purge(store, picture_ids, *, retention, library_uuid=LIBRARY):
+    """Run THE destruction path against the shared store.
+
+    A ``SimpleNamespace`` rather than a real ``Vault`` for the same reason the
+    rest of this section uses a bare ``VaultDatabase``: standing a Vault up
+    loads an inference engine and a work planner, and the purge only ever
+    reaches these five members.
+    """
+    vault = SimpleNamespace(
+        db=store.vault,
+        image_root=store.image_root,
+        hub=store.hub,
+        library_uuid=library_uuid,
+        ghost_retention=retention,
+        reference_folder_roots=lambda: (),
+    )
+    return purge_scrapheap_pictures(vault, picture_ids, include_protected=False)
+
+
+def ghosts(store):
+    return {
+        row["pixel_sha"]: row
+        for row in store.hub.fetchall(
+            "SELECT * FROM workflow_picture_ghost ORDER BY pixel_sha"
+        )
+    }
+
+
+def write_thumbnail(store, file_name, payload):
+    thumb_path = ImageUtils.get_thumbnail_path(store.image_root, file_name)
+    with open(thumb_path, "wb") as handle:
+        handle.write(payload)
+    return thumb_path
+
+
+def test_the_default_position_is_covered_only():
+    """Settled with the owner 2026-08-23, and the whole cascade hangs off it."""
+    assert read_ghost_retention({}) == GHOST_RETENTION_COVERED
+    assert DEFAULT_GHOST_RETENTION == GHOST_RETENTION_COVERED
+
+
+def test_an_unreadable_position_keeps_no_ghosts():
+    """The fail-safe direction, which is the OPPOSITE of the retention window's.
+
+    There an unparseable config must not license a deletion. Here it must not
+    license keeping a thumbnail and a prompt for a picture the user destroyed.
+    Both fall to the position holding less of the user's data.
+    """
+    assert read_ghost_retention({GHOST_RETENTION_KEY: "sometimes"}) == (
+        GHOST_RETENTION_OFF
+    )
+    assert read_ghost_retention({GHOST_RETENTION_KEY: None}) == GHOST_RETENTION_OFF
+    # A valid position is honoured whatever case it was saved in.
+    assert read_ghost_retention({GHOST_RETENTION_KEY: " ON "}) == GHOST_RETENTION_ON
+
+
+def test_a_purge_destroys_the_picture_and_leaves_the_recipe_standing(store):
+    """Direction one: the rows that must SURVIVE a purge.
+
+    Ordinary deletion is already covered by
+    ``test_hub_rows_outlive_the_pictures_they_came_from``; this is the harder
+    case, because the purge is the one path that now reaches into the hub at
+    all. A step that destroyed the recipe would take dehydration's rehydrate
+    promise with it.
+    """
+    name = write_png(
+        Path(store.image_root), "purged-recipe.png", api=api_graph(TXT2IMG)
+    )
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    structural = read_picture(store, picture_id).workflow_structural_hash
+    scrapheap(store, picture_id, pixel_sha="sha-purged-recipe")
+
+    outcome = purge(store, [picture_id], retention=GHOST_RETENTION_ON)
+
+    assert outcome.deleted_count == 1
+    assert read_picture(store, picture_id) is None
+    assert not os.path.exists(os.path.join(store.image_root, name))
+    for table in WORKFLOW_TABLES:
+        assert store.hub.fetchone(f"SELECT COUNT(*) AS n FROM {table}")["n"] == 1
+    assert get_document(store.hub, structural) is not None
+    assert assets_for_recipe(store.hub, structural)
+
+
+def test_a_purge_with_ghosts_off_leaves_nothing_of_the_picture(store):
+    """Direction two, at the strictest position: no trace at all."""
+    name = write_png(Path(store.image_root), "no-ghost.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    write_thumbnail(store, name, b"thumbnail-bytes")
+    scrapheap(store, picture_id, pixel_sha="sha-no-ghost")
+
+    outcome = purge(store, [picture_id], retention=GHOST_RETENTION_OFF)
+
+    assert outcome.deleted_count == 1
+    assert outcome.ghosts_kept == 0
+    assert ghosts(store) == {}
+
+
+def test_a_covered_picture_leaves_a_ghost_and_an_uncovered_one_does_not(store):
+    """The default position, and both of its branches in one environment.
+
+    ``covered`` is not "keep a ghost when the workflow survives" — it is "keep
+    one when a SURVIVING PICTURE carries the same instance hash". The lone
+    picture below shares the recipe with the other two and still gets no ghost,
+    which is the distinction the structural hash cannot make.
+    """
+    covered = write_png(Path(store.image_root), "cov-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "cov-b.png", api=api_graph(edited(TXT2IMG, 5, seed=99))
+    )
+    lone = write_png(
+        Path(store.image_root),
+        "cov-c.png",
+        api=api_graph(edited(TXT2IMG, 2, text="a different prompt entirely")),
+    )
+    ids = [add_picture(store, name) for name in (covered, cover, lone)]
+    run_extraction(store, ids)
+    same_instance = read_picture(store, ids[0]).workflow_instance_hash
+    assert same_instance == read_picture(store, ids[1]).workflow_instance_hash
+    assert same_instance != read_picture(store, ids[2]).workflow_instance_hash
+
+    scrapheap(store, ids[0], pixel_sha="sha-covered")
+    scrapheap(store, ids[2], pixel_sha="sha-lone")
+    outcome = purge(store, [ids[0], ids[2]], retention=GHOST_RETENTION_COVERED)
+
+    assert outcome.deleted_count == 2
+    assert outcome.ghosts_kept == 1
+    assert set(ghosts(store)) == {"sha-covered"}
+
+
+def test_the_cascade_destroys_a_ghost_when_its_last_cover_is_purged(store):
+    """The hole the safe class would otherwise leave, closed on the DEFAULT path.
+
+    A covered ghost is safe *because* a covering picture survives. Destroy the
+    cover later and it stops being covered, retroactively, with nothing on
+    screen to say so. So the purge that destroys the last picture carrying an
+    instance hash must destroy the ghosts leaning on it, in the same pass.
+    """
+    member = write_png(Path(store.image_root), "casc-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "casc-b.png", api=api_graph(edited(TXT2IMG, 5, seed=11))
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+
+    scrapheap(store, member_id, pixel_sha="sha-member")
+    assert purge(store, [member_id], retention=GHOST_RETENTION_COVERED).ghosts_kept == 1
+    assert set(ghosts(store)) == {"sha-member"}
+
+    scrapheap(store, cover_id, pixel_sha="sha-cover")
+    outcome = purge(store, [cover_id], retention=GHOST_RETENTION_COVERED)
+
+    # The cover was itself uncovered by then, so it leaves no ghost of its own
+    # AND takes its dependant with it.
+    assert outcome.ghosts_kept == 0
+    assert outcome.ghosts_cascaded == 1
+    assert ghosts(store) == {}
+
+
+def test_on_keeps_every_ghost_and_runs_no_cascade(store):
+    """The opposite setting, on the same shape, so the cascade is not universal.
+
+    Asserted because a cascade that ran regardless of the position would make
+    ``on`` mean ``covered`` and nobody would notice until a rehydrate failed.
+    """
+    member = write_png(Path(store.image_root), "keep-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "keep-b.png", api=api_graph(edited(TXT2IMG, 5, seed=13))
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+
+    scrapheap(store, member_id, pixel_sha="sha-keep-member")
+    purge(store, [member_id], retention=GHOST_RETENTION_ON)
+    scrapheap(store, cover_id, pixel_sha="sha-keep-cover")
+    outcome = purge(store, [cover_id], retention=GHOST_RETENTION_ON)
+
+    assert outcome.ghosts_cascaded == 0
+    assert set(ghosts(store)) == {"sha-keep-member", "sha-keep-cover"}
+
+
+def test_a_soft_deleted_picture_is_not_cover(store):
+    """A sibling still in the Scrapheap must not keep a ghost alive.
+
+    It exists and can be restored, but it is sitting in the destruction queue,
+    so reading it as cover would retain a prompt on the strength of a picture
+    that is itself on its way out. Same rule as the workflow counts.
+    """
+    going = write_png(Path(store.image_root), "soft-a.png", api=api_graph(TXT2IMG))
+    also_binned = write_png(
+        Path(store.image_root), "soft-b.png", api=api_graph(edited(TXT2IMG, 5, seed=17))
+    )
+    going_id, binned_id = (add_picture(store, name) for name in (going, also_binned))
+    run_extraction(store, [going_id, binned_id])
+    assert (
+        read_picture(store, going_id).workflow_instance_hash
+        == read_picture(store, binned_id).workflow_instance_hash
+    )
+
+    # The sibling is soft-deleted but NOT purged: still a row, still restorable.
+    scrapheap(store, binned_id, pixel_sha="sha-soft-sibling")
+    scrapheap(store, going_id, pixel_sha="sha-soft-going")
+    outcome = purge(store, [going_id], retention=GHOST_RETENTION_COVERED)
+
+    assert read_picture(store, binned_id) is not None
+    assert outcome.ghosts_kept == 0
+    assert ghosts(store) == {}
+
+
+def test_a_ghost_carries_the_thumbnail_and_the_prompt_together(store):
+    """One word, two things, and it always means both (library plan §5).
+
+    Written down as an assertion because the optimisation this guards against
+    is a plausible one: keeping "just the prompt" because it is only text.
+    """
+    kept = write_png(Path(store.image_root), "both-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "both-b.png", api=api_graph(edited(TXT2IMG, 5, seed=23))
+    )
+    kept_id, cover_id = (add_picture(store, name) for name in (kept, cover))
+    run_extraction(store, [kept_id, cover_id])
+    scrapheap(store, kept_id, pixel_sha="sha-both", thumbnail=b"a real thumbnail")
+
+    purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    ghost = ghosts(store)["sha-both"]
+    assert ghost["thumbnail"] == b"a real thumbnail"
+    assert ghost["positive_prompt"] == "a lighthouse at dusk"
+    # The seed is the ONLY thing distinguishing this ghost from its cover, and
+    # it is not a picture column — it is re-read from the file the purge is
+    # about to delete.
+    assert ghost["seed"] == 42
+    assert ghost["structural_hash"] == structural_hash(api_graph(TXT2IMG))
+    assert ghost["instance_hash"] == instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_picture_with_no_workflow_leaves_no_ghost(store):
+    """Nothing to key the cascade on and nothing that could be made again."""
+    plain = write_png(Path(store.image_root), "plain.png")
+    picture_id = add_picture(store, plain)
+    run_extraction(store, [picture_id])
+    assert read_picture(store, picture_id).workflow_instance_hash is None
+    scrapheap(store, picture_id, pixel_sha="sha-plain")
+
+    outcome = purge(store, [picture_id], retention=GHOST_RETENTION_ON)
+
+    assert outcome.deleted_count == 1
+    assert ghosts(store) == {}
+
+
+def test_the_purge_leaves_no_derived_copy_of_the_prompt(store):
+    """ "Forgetting reaches every derived copy" — an acceptance criterion.
+
+    A prompt lives in the column AND, in vector form, in ``text_embedding``.
+    Both are columns of the row the purge deletes, so this holds structurally;
+    it is asserted rather than argued because a future "keep the embedding, it
+    is only numbers" would pass every other test in this file.
+    """
+    name = write_png(Path(store.image_root), "derived.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+
+    def give_it_an_embedding(session):
+        session.get(Picture, picture_id).text_embedding = b"pretend-vector"
+        session.commit()
+
+    store.vault.run_task(give_it_an_embedding)
+    scrapheap(store, picture_id, pixel_sha="sha-derived")
+    purge(store, [picture_id], retention=GHOST_RETENTION_OFF)
+
+    assert read_picture(store, picture_id) is None
+    remaining = store.vault.run_immediate_read_task(
+        lambda session: session.exec(
+            select(Picture).where(Picture.text_embedding.is_not(None))
+        ).all()
+    )
+    assert remaining == []
+
+
+def test_a_vault_with_no_hub_purges_without_reaching_for_one(store):
+    """The CLI tools and most tests open a vault with no hub attached."""
+    name = write_png(Path(store.image_root), "hubless.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    scrapheap(store, picture_id, pixel_sha="sha-hubless")
+
+    hubless = SimpleNamespace(
+        db=store.vault,
+        image_root=store.image_root,
+        hub=None,
+        library_uuid=None,
+        ghost_retention=GHOST_RETENTION_ON,
+        reference_folder_roots=lambda: (),
+    )
+    outcome = purge_scrapheap_pictures(hubless, [picture_id], include_protected=False)
+
+    assert outcome.deleted_count == 1
+    assert outcome.ghosts_kept == 0
+    assert read_picture(store, picture_id) is None
+
+
+def test_the_missing_file_purge_cascades_too(store):
+    """The OTHER path that removes a picture row for good (§B4).
+
+    ``MissingFilePurgeTask`` never writes a ghost — the file it purges is
+    already gone from disk, so there is no thumbnail to keep — but it can
+    destroy the last picture covering an instance hash. Leaving it out of the
+    cascade would let the safe class decay into the unsafe one exactly where
+    nobody is looking, which is the failure library plan §5 names.
+    """
+    member = write_png(Path(store.image_root), "mfp-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "mfp-b.png", api=api_graph(edited(TXT2IMG, 5, seed=31))
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+
+    scrapheap(store, member_id, pixel_sha="sha-mfp-member")
+    assert purge(store, [member_id], retention=GHOST_RETENTION_COVERED).ghosts_kept == 1
+
+    # The cover's file vanishes from under the library — a sync agent, a moved
+    # folder — which is what this task exists to reconcile.
+    os.remove(os.path.join(store.image_root, cover))
+    task = MissingFilePurgeTask(
+        database=store.vault,
+        pictures=[read_picture(store, cover_id)],
+        hub=store.hub,
+        library_uuid=LIBRARY,
+        ghost_retention=GHOST_RETENTION_COVERED,
+    )
+    result = task._run_task()
+
+    assert result["purged"] == 1
+    assert result["ghosts_cascaded"] == 1
+    assert ghosts(store) == {}
+
+
+def test_the_missing_file_purge_leaves_a_still_covered_ghost_alone(store):
+    """The positive control: over-destroying is its own regression.
+
+    A cascade that fired on every purged picture rather than on the ones that
+    were actually covering something would pass the test above and silently
+    break the feature the setting exists to enable.
+    """
+    member = write_png(Path(store.image_root), "mfp-keep-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "mfp-keep-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=37)),
+    )
+    unrelated = write_png(
+        Path(store.image_root),
+        "mfp-keep-c.png",
+        api=api_graph(edited(TXT2IMG, 2, text="something else entirely")),
+    )
+    member_id, cover_id, other_id = (
+        add_picture(store, name) for name in (member, cover, unrelated)
+    )
+    run_extraction(store, [member_id, cover_id, other_id])
+
+    scrapheap(store, member_id, pixel_sha="sha-mfp-keep")
+    purge(store, [member_id], retention=GHOST_RETENTION_COVERED)
+    assert set(ghosts(store)) == {"sha-mfp-keep"}
+
+    # A DIFFERENT picture's file vanishes. The cover is untouched, so the ghost
+    # is still covered and must survive.
+    os.remove(os.path.join(store.image_root, unrelated))
+    result = MissingFilePurgeTask(
+        database=store.vault,
+        pictures=[read_picture(store, other_id)],
+        hub=store.hub,
+        library_uuid=LIBRARY,
+        ghost_retention=GHOST_RETENTION_COVERED,
+    )._run_task()
+
+    assert result["purged"] == 1
+    assert result["ghosts_cascaded"] == 0
+    assert set(ghosts(store)) == {"sha-mfp-keep"}
+
+
+def test_a_picture_with_no_thumbnail_leaves_no_ghost_at_all(store):
+    """A ghost is thumbnail AND prompt, so half a ghost is no ghost.
+
+    Thumbnails are generated lazily by ``MissingThumbnailFinder``, so a picture
+    destroyed before its thumbnail existed genuinely reaches this branch. Keeping
+    the prompt alone would retain the more sensitive half on its own AND destroy
+    the argument that makes ``covered`` a safe default — that the only marginal
+    exposure is a thumbnail of a near-duplicate.
+    """
+    bare = write_png(Path(store.image_root), "nothumb-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "nothumb-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=41)),
+    )
+    bare_id, cover_id = (add_picture(store, name) for name in (bare, cover))
+    run_extraction(store, [bare_id, cover_id])
+    # Covered by its sibling, and would otherwise be retained.
+    assert (
+        read_picture(store, bare_id).workflow_instance_hash
+        == read_picture(store, cover_id).workflow_instance_hash
+    )
+    scrapheap(store, bare_id, pixel_sha="sha-nothumb", thumbnail=None)
+
+    outcome = purge(store, [bare_id], retention=GHOST_RETENTION_ON)
+
+    assert outcome.deleted_count == 1
+    assert outcome.ghosts_kept == 0
+    assert ghosts(store) == {}
+
+
+def test_a_picture_restored_mid_purge_leaves_no_ghost(store):
+    """The ``destroyed_ids`` guard, exercised where the purge cannot reach it.
+
+    ``purge_rows_in_session`` re-checks ``deleted`` at the point of deletion and
+    reports what it spared, and a spared picture still EXISTS — so writing its
+    thumbnail and prompt into the hub would retain a trace of a picture the user
+    just rescued. Driven through ``apply_purge_to_hub`` directly because the
+    interleaving it guards against cannot be produced from the endpoint.
+    """
+    kept = write_png(Path(store.image_root), "restored-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "restored-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=43)),
+    )
+    kept_id, cover_id = (add_picture(store, name) for name in (kept, cover))
+    run_extraction(store, [kept_id, cover_id])
+    scrapheap(store, kept_id, pixel_sha="sha-restored", thumbnail=b"still here")
+    instance = read_picture(store, kept_id).workflow_instance_hash
+
+    candidates = store.vault.run_immediate_read_task(
+        collect_ghost_candidates_in_session, [kept_id]
+    )
+    assert len(candidates) == 1 and candidates[0].pixel_sha == "sha-restored"
+
+    # The purge planned it, then the guarded DELETE spared it: destroyed_ids is
+    # empty even though the candidate was gathered.
+    written, cascaded = apply_purge_to_hub(
+        store.hub,
+        LIBRARY,
+        store.image_root,
+        GHOST_RETENTION_ON,
+        GhostPurgeContext(candidates=candidates, surviving_instance_hashes={instance}),
+        set(),
+    )
+
+    assert (written, cascaded) == (0, 0)
+    assert ghosts(store) == {}
+    # Positive control: the SAME call with the id actually destroyed does write
+    # one, so the negative above is the guard and not a broken fixture.
+    written, _ = apply_purge_to_hub(
+        store.hub,
+        LIBRARY,
+        store.image_root,
+        GHOST_RETENTION_ON,
+        GhostPurgeContext(candidates=candidates, surviving_instance_hashes={instance}),
+        {kept_id},
+    )
+    assert written == 1
+
+
+def test_the_missing_file_purge_never_cascades_at_on(store):
+    """``on`` keeps every ghost, on BOTH destruction paths.
+
+    Covered separately from the scrapheap purge because the cascade helper is a
+    different function with its own retention gate; a regression that dropped
+    that gate would make ``on`` mean ``covered`` and only show up as a failed
+    rehydrate months later.
+    """
+    member = write_png(Path(store.image_root), "on-mfp-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "on-mfp-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=47)),
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+
+    scrapheap(store, member_id, pixel_sha="sha-on-mfp")
+    purge(store, [member_id], retention=GHOST_RETENTION_ON)
+    assert set(ghosts(store)) == {"sha-on-mfp"}
+
+    os.remove(os.path.join(store.image_root, cover))
+    result = MissingFilePurgeTask(
+        database=store.vault,
+        pictures=[read_picture(store, cover_id)],
+        hub=store.hub,
+        library_uuid=LIBRARY,
+        ghost_retention=GHOST_RETENTION_ON,
+    )._run_task()
+
+    assert result["purged"] == 1
+    assert result["ghosts_cascaded"] == 0
+    assert set(ghosts(store)) == {"sha-on-mfp"}
+
+
+def test_the_missing_file_purge_clears_ghosts_at_off(store):
+    """``off`` means no ghosts, and it has to mean that on both paths.
+
+    Without this the two hard-delete paths disagree: a user who has said "keep
+    nothing" gets tidied up by one and not the other.
+    """
+    member = write_png(Path(store.image_root), "off-mfp-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "off-mfp-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=53)),
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+
+    # Written while the setting was ON, then the user turns it off.
+    scrapheap(store, member_id, pixel_sha="sha-off-mfp")
+    purge(store, [member_id], retention=GHOST_RETENTION_ON)
+    assert set(ghosts(store)) == {"sha-off-mfp"}
+
+    os.remove(os.path.join(store.image_root, cover))
+    result = MissingFilePurgeTask(
+        database=store.vault,
+        pictures=[read_picture(store, cover_id)],
+        hub=store.hub,
+        library_uuid=LIBRARY,
+        ghost_retention=GHOST_RETENTION_OFF,
+    )._run_task()
+
+    assert result["ghosts_cascaded"] == 1
+    assert ghosts(store) == {}
+
+
+def test_a_purge_never_cascades_a_ghost_belonging_to_another_library(store):
+    """The hub is shared; the cover that justifies a ghost is not.
+
+    Only one vault is live at a time, so a purge cannot see whether ANOTHER
+    library still holds a covering picture. A hub-global cascade would therefore
+    destroy a ghost that library still has cover for — silent loss, in the
+    opposite direction from the one this feature is careful about. Every hub
+    query is scoped to one library so that cannot happen.
+    """
+    mine = write_png(Path(store.image_root), "xlib-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root), "xlib-b.png", api=api_graph(edited(TXT2IMG, 5, seed=59))
+    )
+    mine_id, cover_id = (add_picture(store, name) for name in (mine, cover))
+    run_extraction(store, [mine_id, cover_id])
+    instance = read_picture(store, mine_id).workflow_instance_hash
+
+    # Another library holds a ghost on the same instance hash — the same
+    # workflow used in two of the owner's libraries, which the measurement says
+    # is the common case.
+    record_picture_ghosts(
+        store.hub,
+        [
+            PictureGhost(
+                library_uuid=OTHER_LIBRARY,
+                pixel_sha="sha-other-library",
+                instance_hash=instance,
+                thumbnail=b"other library thumbnail",
+                positive_prompt="a lighthouse at dusk",
+            )
+        ],
+    )
+
+    # This library destroys both pictures carrying the hash, so its own ghost is
+    # uncovered and cascades.
+    scrapheap(store, mine_id, pixel_sha="sha-mine")
+    purge(store, [mine_id], retention=GHOST_RETENTION_COVERED)
+    scrapheap(store, cover_id, pixel_sha="sha-mine-cover")
+    outcome = purge(store, [cover_id], retention=GHOST_RETENTION_COVERED)
+
+    assert outcome.ghosts_cascaded == 1
+    assert set(ghosts(store)) == {"sha-other-library"}
+
+
+def test_the_write_rechecks_cover_at_the_last_moment(store):
+    """The vault and the hub are separate databases, so coverage can go stale.
+
+    ``apply_purge_to_hub`` runs off the DB worker thread — it reads thumbnails
+    and re-parses embedded graphs — so an unknown amount of wall-clock separates
+    the coverage read inside the purge's submission from the hub write. If the
+    cover disappears in that window the ghost must not be written. Simulated by
+    a recheck that reports the hash uncovered.
+    """
+    member = write_png(Path(store.image_root), "stale-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "stale-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=61)),
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+    scrapheap(store, member_id, pixel_sha="sha-stale", thumbnail=b"about to be stale")
+    instance = read_picture(store, member_id).workflow_instance_hash
+
+    # An earlier purge already left a ghost on this instance, so the cascade has
+    # something to destroy and its count means what it says.
+    record_picture_ghosts(
+        store.hub,
+        [
+            PictureGhost(
+                library_uuid=LIBRARY,
+                pixel_sha="sha-stale-earlier",
+                instance_hash=instance,
+                thumbnail=b"earlier ghost",
+            )
+        ],
+    )
+
+    candidates = store.vault.run_immediate_read_task(
+        collect_ghost_candidates_in_session, [member_id]
+    )
+    written, cascaded = apply_purge_to_hub(
+        store.hub,
+        LIBRARY,
+        store.image_root,
+        GHOST_RETENTION_COVERED,
+        # The early read said covered...
+        GhostPurgeContext(candidates=candidates, surviving_instance_hashes={instance}),
+        {member_id},
+        # ...and by write time the cover was gone.
+        recheck_surviving=lambda hashes: set(),
+    )
+
+    assert written == 0
+    assert cascaded == 1
+    assert ghosts(store) == {}
+
+
+def test_the_ghost_reads_survive_the_bound_parameter_ceiling(store):
+    """Emptying a whole scrapheap must not abort inside the purge (§B4).
+
+    Both new reads run INSIDE ``plan_and_purge_in_session`` — the candidate read
+    before the DELETE, the coverage read after it — so an ``OperationalError``
+    from either takes the whole purge down and destroys nothing. The list they
+    are handed is the entire purge plan, which for "delete forever, everything"
+    is the entire scrapheap.
+
+    Pinned to SQLite's historical 999-variable floor with ``setlimit``, the same
+    build-independent proof ``tests/test_scope_table.py`` uses, at a size well
+    under any modern default so the failure can only come from the ceiling.
+    """
+    size = 1500
+    ids = list(range(1, size + 1))
+    hashes = [f"instance-{n}" for n in range(size)]
+
+    def probe(session):
+        session.connection().connection.setlimit(
+            sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999
+        )
+        # A plain ``.in_()`` at this size is what the ceiling refuses, so the
+        # two calls below are not passing for want of a big enough list.
+        with pytest.raises(OperationalError, match="too many SQL variables"):
+            session.exec(select(Picture.id).where(Picture.id.in_(ids))).all()
+        return (
+            collect_ghost_candidates_in_session(session, ids),
+            surviving_instance_hashes_in_session(session, hashes),
+        )
+
+    candidates, surviving = store.vault.run_immediate_read_task(probe)
+
+    assert candidates == []
+    assert surviving == set()
+
+
+def test_a_workflow_with_no_prompt_still_leaves_a_ghost(store):
+    """The prompt half is optional; the thumbnail half is not (library plan §5).
+
+    §5's rule is that a ghost never keeps the prompt ALONE — the prompt is the
+    sensitive half and "it is only text" is the argument that would keep it once
+    the thumbnail had gone. It is NOT a rule that a prompt must exist. An upscale
+    graph has no ``CLIPTextEncode`` at all, and it still hashes, still has a
+    recipe and a seed, and is exactly as worth rehydrating as any other. Refusing
+    it would delete the feature for a whole class of real workflows.
+    """
+    ids = [
+        add_picture(
+            store,
+            write_png(Path(store.image_root), name, api=api_graph(UPSCALE)),
+        )
+        for name in ("noprompt-a.png", "noprompt-b.png")
+    ]
+    run_extraction(store, ids)
+    kept_id, cover_id = ids
+    kept = read_picture(store, kept_id)
+    # The premise: hashed and coverable, but genuinely promptless.
+    assert kept.workflow_instance_hash
+    assert (
+        kept.workflow_instance_hash
+        == read_picture(store, cover_id).workflow_instance_hash
+    )
+    assert kept.comfyui_positive_prompt is None
+
+    scrapheap(store, kept_id, pixel_sha="sha-noprompt", thumbnail=b"upscaled thumb")
+    outcome = purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    assert outcome.ghosts_kept == 1
+    ghost = ghosts(store)["sha-noprompt"]
+    assert ghost["thumbnail"] == b"upscaled thumb"
+    assert ghost["positive_prompt"] is None
+    assert ghost["structural_hash"] == structural_hash(api_graph(UPSCALE))
+
+
+def test_a_prompt_the_picture_had_is_never_dropped_on_the_way_in(store):
+    """NULL in the ghost means "no prompt", never "we lost it".
+
+    The pair with the test above: together they say the nullable column is a
+    faithful copy and not a place a half-ghost can appear. Without this one,
+    ``positive_prompt IS NULL`` would be indistinguishable from a write that
+    silently dropped the sensitive half.
+    """
+    kept = write_png(Path(store.image_root), "keptprompt-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "keptprompt-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=67)),
+    )
+    kept_id, cover_id = (add_picture(store, name) for name in (kept, cover))
+    run_extraction(store, [kept_id, cover_id])
+    stored = read_picture(store, kept_id).comfyui_positive_prompt
+    assert stored == "a lighthouse at dusk"
+
+    scrapheap(store, kept_id, pixel_sha="sha-keptprompt")
+    purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    assert ghosts(store)["sha-keptprompt"]["positive_prompt"] == stored
+
+
+def test_the_store_itself_refuses_a_ghost_with_no_thumbnail(store):
+    """The invariant at the storage layer, not only in the writer.
+
+    ``_prepare_ghosts`` already refuses to build one, so this asserts the second
+    line of defence: a FUTURE caller that bypassed the writer still cannot
+    create a retained prompt with no thumbnail beside it.
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        with store.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_picture_ghost (library_uuid, pixel_sha, "
+                "instance_hash, positive_prompt, thumbnail, created_at) "
+                "VALUES (?, ?, ?, ?, NULL, 'now')",
+                (LIBRARY, "sha-half-ghost", "some-instance", "a secret prompt"),
+            )
+    assert ghosts(store) == {}

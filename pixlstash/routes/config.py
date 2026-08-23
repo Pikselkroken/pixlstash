@@ -22,6 +22,7 @@ from pixlstash.services import (
     config_service,
     library_settings_service,
     scrapheap_service,
+    workflow_ghost_service,
 )
 from pixlstash.telemetry import mark_install_established
 from pixlstash.utils.atomic_write import write_json_atomic
@@ -1090,6 +1091,89 @@ def create_router(server) -> APIRouter:
         if config_path:
             write_json_atomic(config_path, server._server_config)
         return _scrapheap_retention_payload()
+
+    class GhostRetentionConfigResponse(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        status: str
+        workflow_ghost_retention: str
+        workflow_ghost_retention_choices: list[str]
+
+    def _ghost_retention_payload() -> dict:
+        """Build the picture-ghost retention response from server-config."""
+        return {
+            "status": "success",
+            "workflow_ghost_retention": workflow_ghost_service.read_ghost_retention(
+                server._server_config
+            ),
+            "workflow_ghost_retention_choices": list(
+                workflow_ghost_service.GHOST_RETENTION_CHOICES
+            ),
+        }
+
+    @router.get(
+        "/server-config/ghost-retention",
+        summary="Get picture-ghost retention configuration",
+        response_model=GhostRetentionConfigResponse,
+        description=(
+            "Returns which picture ghosts a purge is allowed to keep. A "
+            "**ghost** is the thumbnail AND the prompt of a picture that has "
+            "been permanently destroyed, held in the hub so a dehydrated stack "
+            "member can be made again.\n\n"
+            "`off` keeps none. `covered` (the default) keeps a ghost only where "
+            "a SURVIVING picture already carries the same workflow instance "
+            "hash, so the retained prompt is one the library already holds and "
+            "the only marginal exposure is a thumbnail of a near-duplicate. "
+            "`on` keeps every ghost."
+        ),
+    )
+    def get_ghost_retention_config(request: Request):
+        _ensure_secure_when_required(request)
+        return _ghost_retention_payload()
+
+    class GhostRetentionConfigPatch(BaseModel):
+        model_config = ConfigDict(
+            json_schema_extra={"example": {"workflow_ghost_retention": "covered"}}
+        )
+
+        workflow_ghost_retention: str = Field(
+            description=("One of `off`, `covered` or `on`. Any other value is a 422."),
+            examples=["covered"],
+        )
+
+    @router.patch(
+        "/server-config/ghost-retention",
+        summary="Update picture-ghost retention configuration",
+        response_model=GhostRetentionConfigResponse,
+        description=(
+            "Sets which picture ghosts a purge may keep and persists it to "
+            "server-config.json.\n\n"
+            "**Saving destroys nothing.** Lowering the position is a statement "
+            "about what FUTURE purges may retain; clearing what is already held "
+            "is the separately confirmed purge in Settings › Privacy. Raising "
+            "it to `on` does not resurrect a ghost that was never written."
+        ),
+        responses={
+            422: {"description": "workflow_ghost_retention is not off/covered/on."}
+        },
+    )
+    def patch_ghost_retention_config(request: Request, body: GhostRetentionConfigPatch):
+        _ensure_secure_when_required(request)
+        value = str(body.workflow_ghost_retention).strip().lower()
+        if value not in workflow_ghost_service.GHOST_RETENTION_CHOICES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "workflow_ghost_retention must be one of "
+                    f"{list(workflow_ghost_service.GHOST_RETENTION_CHOICES)}."
+                ),
+            )
+        server._server_config[workflow_ghost_service.GHOST_RETENTION_KEY] = value
+        server.vault.set_ghost_retention(value)
+        config_path = getattr(server, "_server_config_path", None)
+        if config_path:
+            write_json_atomic(config_path, server._server_config)
+        return _ghost_retention_payload()
 
     @router.get(
         "/server-config/scrapheap-retention/impact",

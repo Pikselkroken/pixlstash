@@ -795,6 +795,18 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
     being inserted — still exactly one row. (Under rev-4 the scrapheap writer
     itself only ever writes True, so the False row is seeded to represent a
     pre-existing kept entry.)
+
+    **The picture is a reference-folder original, and that is load-bearing
+    rather than incidental.** An absolute ``Picture.file_path`` means a
+    reference-folder picture in this product, and since #776 ``remove_picture_files``
+    refuses to unlink a stored path that resolves OUTSIDE the library roots —
+    ``image_root`` plus ``Vault.reference_folder_roots()``. A picture invented at
+    a bare ``tmp_path`` therefore has its removal refused, its ledger row
+    honestly corrected back to False, and this assertion fails against perfectly
+    correct behaviour. It is also the realistic shape: ``file_removed=False``
+    means "removed from the library, file kept", which is exactly what a
+    protected reference original is. ``allow_delete=True`` so the folder does not
+    ALSO make it skip-protected, which is a different exemption tested elsewhere.
     """
     client = TestClient(server.api)
     login_resp = client.post(
@@ -802,27 +814,27 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
     )
     assert login_resp.status_code == 200
 
-    abs_file_path = str(tmp_path / "kept_then_forever.png")
-    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(abs_file_path, format="PNG")
+    _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
+        server,
+        str(tmp_path / "refs_kept_then_forever"),
+        "kept_then_forever.png",
+        allow_delete=True,
+    )
+    assert abs_file_path in [
+        os.path.join(root, "kept_then_forever.png")
+        for root in server.vault.reference_folder_roots()
+    ], "the fixture must live under a registered reference root, or #776 refuses it"
 
     # Seed a stale kept (file_removed=False) ledger row for this path.
     _seed_deleted_log(server, abs_file_path, file_removed=False, pixel_sha="sha_keep")
     assert _ledger_flags_for(server, abs_file_path) == [False]
 
-    # A picture points at the SAME path and is soft-deleted then delete-forever.
-    def _insert_plain(session: Session):
-        pic = Picture(
-            file_path=abs_file_path,
-            pixel_sha="sha_gone",
-            original_file_name="kept_then_forever.png",
-            deleted=True,
-        )
-        session.add(pic)
+    # The picture at that SAME path is soft-deleted, then delete-forever.
+    def _scrapheap(session: Session):
+        session.get(Picture, pic_id).deleted = True
         session.commit()
-        session.refresh(pic)
-        return pic.id
 
-    server.vault.db.run_task(_insert_plain)
+    server.vault.db.run_task(_scrapheap)
     assert _purge_scrapheap(client).json()["deleted_count"] == 1
 
     flags = _ledger_flags_for(server, abs_file_path)

@@ -277,6 +277,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "deleter), so the §16.3 host-capability tiers do not apply."
         ),
     ),
+    ("GET", "/api/v1/server-config/ghost-retention"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner server-config read; returns no per-object data. Sibling of "
+            "GET /server-config/scrapheap-retention (same owner-settings "
+            "tier). It reports a PRIVACY position — which thumbnails and "
+            "prompts of destroyed pictures this install keeps — so owner_only "
+            "rather than any_token. Not a §16.3 host-capability route."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/ghost-retention"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner server-config write; PATCH is blocked for READ tokens, so "
+            "only an unscoped owner reaches it. Sibling of PATCH "
+            "/server-config/scrapheap-retention. It sets which picture ghosts "
+            "a purge may keep and performs NO destruction itself (the purge in "
+            "scrapheap_service is the only deleter), so the §16.3 "
+            "host-capability tiers do not apply."
+        ),
+    ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",

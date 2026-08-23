@@ -6,6 +6,11 @@ from sqlmodel import Session, select
 from pixlstash.db_models import DeletedFileLog, Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.scrapheap_service import file_location_is_unreachable
+from pixlstash.services.workflow_ghost_service import (
+    DEFAULT_GHOST_RETENTION,
+    cascade_uncovered_ghosts,
+    surviving_instance_hashes_in_session,
+)
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -21,19 +26,44 @@ class MissingFilePurgeTask(BaseTask):
     1. Inserts a row into ``deleted_file_log`` (if one does not already exist
        for that ``file_path``).
     2. Deletes the picture row from the ``picture`` table.
+    3. Runs the **covered-ghost cascade** (§B4) over the instance hashes it just
+       destroyed.
+
+    Step 3 is here and not only in ``scrapheap_service`` because this is the one
+    other path that removes a picture row for good. It can never *write* a
+    ghost — the file it is purging is already gone from disk, so there is no
+    thumbnail to keep — but it can remove the last picture covering an instance
+    hash, and a ghost that quietly stops being covered is precisely the decay
+    library plan §5 says must not be allowed to happen unobserved.
 
     The task operates at ``TaskPriority.LOW`` so it never starves active work.
     """
 
     BATCH_SIZE = 250
 
-    def __init__(self, database, pictures: list):
+    def __init__(
+        self,
+        database,
+        pictures: list,
+        hub=None,
+        library_uuid=None,
+        ghost_retention: str = DEFAULT_GHOST_RETENTION,
+    ):
         """Initialise the task.
 
         Args:
             database: The application database instance.
             pictures: Sequence of picture rows returned by the finder (must
                 expose ``id``, ``file_path``, and ``pixel_sha`` attributes).
+            hub: The hub database, or ``None`` for a vault opened without one
+                (the CLI tools, most tests) — then there is no ghost store to
+                cascade over.
+            library_uuid: Which library's ghosts to cascade over. ``None``
+                alongside a ``None`` hub; a ghost is scoped to the library whose
+                vault holds its cover.
+            ghost_retention: The user's ghost-retention position. Only
+                ``covered`` cascades; see
+                :func:`~pixlstash.services.workflow_ghost_service.cascade_uncovered_ghosts`.
         """
         picture_ids = [p.id for p in (pictures or []) if getattr(p, "id", None)]
         super().__init__(
@@ -42,6 +72,9 @@ class MissingFilePurgeTask(BaseTask):
         )
         self._db = database
         self._pictures = pictures or []
+        self._hub = hub
+        self._library_uuid = library_uuid
+        self._ghost_retention = ghost_retention
 
     @property
     def priority(self) -> TaskPriority:
@@ -92,7 +125,7 @@ class MissingFilePurgeTask(BaseTask):
             )
 
         if not missing:
-            return {"purged": 0}
+            return {"purged": 0, "ghosts_cascaded": 0}
 
         logger.info(
             "MissingFilePurgeTask: found %s missing file(s) in batch of %s — purging.",
@@ -100,14 +133,35 @@ class MissingFilePurgeTask(BaseTask):
             len(self._pictures),
         )
 
-        purged = self._db.run_task(self._purge_pictures, missing)
+        purged, destroyed_hashes, surviving = self._db.run_task(
+            self._purge_pictures, missing
+        )
         logger.info("MissingFilePurgeTask: purged %s picture record(s).", purged)
-        return {"purged": purged}
+        cascaded = cascade_uncovered_ghosts(
+            self._hub,
+            self._library_uuid,
+            self._ghost_retention,
+            destroyed_hashes,
+            surviving,
+        )
+        return {"purged": purged, "ghosts_cascaded": cascaded}
 
     @staticmethod
-    def _purge_pictures(session: Session, pictures: list) -> int:
-        """Delete picture rows and log them to deleted_file_log."""
+    def _purge_pictures(
+        session: Session, pictures: list
+    ) -> tuple[int, set[str], set[str]]:
+        """Delete picture rows, log them, and report what the cascade needs.
+
+        Returns ``(purged, destroyed_instance_hashes, surviving_instance_hashes)``.
+        The surviving set is read after the deletes, in this same submission, so
+        no picture being destroyed can count as its own cover. (SQLAlchemy's
+        autoflush would make the read see the pending deletes even before the
+        commit; the commit is placed first because that is the order that stays
+        correct if autoflush is ever turned off, not because it is what makes
+        the read right today.)
+        """
         purged = 0
+        destroyed_hashes: set[str] = set()
         now = datetime.now(timezone.utc)
 
         for pic in pictures:
@@ -142,8 +196,13 @@ class MissingFilePurgeTask(BaseTask):
 
             db_pic = session.get(Picture, pic.id)
             if db_pic is not None:
+                if db_pic.workflow_instance_hash:
+                    destroyed_hashes.add(db_pic.workflow_instance_hash)
                 session.delete(db_pic)
                 purged += 1
 
         session.commit()
-        return purged
+        surviving = surviving_instance_hashes_in_session(
+            session, sorted(destroyed_hashes)
+        )
+        return purged, destroyed_hashes, surviving
