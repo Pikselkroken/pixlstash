@@ -26,10 +26,13 @@ import {
   ACTIVITY_BITS,
 } from "../src/activity.js";
 import {
+  accumulateRow,
   buildAggregate,
   checkinsInActiveWindow,
   createAccumulator,
   deserializeAccumulator,
+  finalizeAggregate,
+  serializeAccumulator,
   hasResurrected,
   activeInLifeWeek,
   ACTIVE_WINDOW_DAYS,
@@ -803,7 +806,53 @@ describe("checkinsInActiveWindow", () => {
     assert.equal(checkinsInActiveWindow(row("2026-06-21", 0b111n), "2026-07-20"), 0);
   });
 
-  it("restores a checkpoint written before the field existed", () => {
+  it("does not widen the window for a last_seen in the future", () => {
+    // Clock skew. Without the clamp the negative gap reads bits from before the
+    // window opened, so all three would count instead of the one inside it.
+    const skewed = { last_seen: "2026-07-22", activity: encodeActivity(0b111n) };
+    assert.equal(daysBetween(skewed.last_seen, "2026-07-20"), -2);
+    assert.equal(
+      checkinsInActiveWindow(skewed, "2026-07-20"),
+      3,
+      "bits at or inside the clamped window still count",
+    );
+    // The clamp is what stops the window from extending past ACTIVE_WINDOW_DAYS.
+    const wide = {
+      last_seen: "2026-07-22",
+      activity: encodeActivity((1n << 40n) - 1n),
+    };
+    assert.equal(checkinsInActiveWindow(wide, "2026-07-20"), ACTIVE_WINDOW_DAYS + 1);
+  });
+});
+
+describe("the aggregation checkpoint", () => {
+  const row = {
+    install_id: "checkpointed",
+    first_seen: "2026-06-01",
+    last_seen: "2026-07-20",
+    activity: encodeActivity(0b1011n),
+    has_resurrected: 0,
+    is_new_install: 0,
+    install_type: "pip",
+  };
+
+  it("carries counted check-ins across a slice boundary", () => {
+    const state = createAccumulator();
+    accumulateRow(state, row, "2026-07-20");
+    assert.equal(state.checkinsByType.pip, 3, "guard: the row was counted");
+
+    const resumed = deserializeAccumulator(serializeAccumulator(state));
+    // The scan is split across five-minute slices, so anything not serialised
+    // here is silently dropped from every day that needs more than one slice.
+    assert.deepEqual(resumed.checkinsByType, state.checkinsByType);
+
+    accumulateRow(resumed, { ...row, install_id: "second" }, "2026-07-20");
+    assert.equal(resumed.checkinsByType.pip, 6);
+  });
+
+  it("publishes null, not a partial count, when resuming a legacy checkpoint", () => {
+    // Written by a Worker deployed before checkinsByType existed: byType carries
+    // its prefix, and those rows' check-ins can never be recovered.
     const legacy = JSON.stringify({
       active: 4,
       byType: { docker: 0, pip: 4, electron: 0, other: 0, dev: 1 },
@@ -813,7 +862,18 @@ describe("checkinsInActiveWindow", () => {
       cohorts: [],
     });
     const state = deserializeAccumulator(legacy);
-    assert.deepEqual(state.checkinsByType, createAccumulator().checkinsByType);
-    assert.equal(state.active, 4);
+    assert.equal(state.active, 4, "the rest of the checkpoint still resumes");
+    assert.equal(state.checkinsByType, null);
+
+    // Still null after folding in the remaining rows, and still null through a
+    // further checkpoint: a partial count must never look like a real one.
+    accumulateRow(state, row, "2026-07-20");
+    assert.equal(state.byType.pip, 5, "byType keeps accumulating");
+    const resumed = deserializeAccumulator(serializeAccumulator(state));
+    assert.equal(resumed.checkinsByType, null);
+    assert.equal(
+      finalizeAggregate(resumed, "2026-07-20").id_bearing_checkins_by_type,
+      null,
+    );
   });
 });

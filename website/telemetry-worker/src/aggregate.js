@@ -202,6 +202,13 @@ export function deserializeAccumulator(serialized) {
   return {
     ...createAccumulator(),
     ...value,
+    // A checkpoint written before this field existed has already folded in rows
+    // whose check-ins were never counted, so this day's total can no longer be
+    // completed. Null, not the partial count: the snapshot is immutable and
+    // never backfilled, so a confident wrong number here would be permanent.
+    // Same reasoning as resurrection_rate below -- "cannot say" and "zero" must
+    // not look alike. Null is sticky through the rest of the scan.
+    checkinsByType: value.checkinsByType ?? null,
     cohorts: new Map(value.cohorts ?? []),
   };
 }
@@ -220,12 +227,15 @@ export function deserializeAccumulator(serialized) {
 export function accumulateRow(state, row, today) {
   if (daysBetween(row.last_seen, today) <= ACTIVE_WINDOW_DAYS) {
     state.active += 1;
-    // Independent defaults: a checkpoint written before checkinsByType existed
-    // can carry a bucket in byType that the restored map has never seen.
     state.byType[row.install_type] ??= 0;
-    state.checkinsByType[row.install_type] ??= 0;
     state.byType[row.install_type] += 1;
-    state.checkinsByType[row.install_type] += checkinsInActiveWindow(row, today);
+    // Null means a legacy resume already lost part of this day; see
+    // deserializeAccumulator. Independent default because a checkpoint can
+    // carry a bucket in byType that the restored map has never seen.
+    if (state.checkinsByType) {
+      state.checkinsByType[row.install_type] ??= 0;
+      state.checkinsByType[row.install_type] += checkinsInActiveWindow(row, today);
+    }
   }
 
   if (daysBetween(row.first_seen, today) >= RESURRECTION_GAP_DAYS) {
@@ -291,6 +301,7 @@ export function finalizeAggregate(state, today) {
     active_installs_by_type: state.byType,
     // Same window and same buckets as active_installs_by_type, but check-ins
     // rather than installs. Aggregate counts only; no identifier leaves here.
+    // Null when a legacy checkpoint made the day uncountable.
     id_bearing_checkins_by_type: state.checkinsByType,
     new_installs_last_7d: state.newLast7d,
     // Null rather than 0 when there is nothing to divide by: a rate of "0%"
