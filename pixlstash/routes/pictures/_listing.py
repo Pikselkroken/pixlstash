@@ -933,6 +933,7 @@ def select_pictures_for_listing(
                 face_filter=face_filter,
                 stack_state=stack_state,
                 impossible_sources=impossible_sources,
+                file_path_prefix=file_path_prefix,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
                 tags_confidence_above_filter=query_params.get(
@@ -979,6 +980,7 @@ def select_pictures_for_listing(
             face_filter=face_filter,
             stack_state=stack_state,
             impossible_sources=impossible_sources,
+            file_path_prefix=file_path_prefix,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
                 if query_params.get("id")

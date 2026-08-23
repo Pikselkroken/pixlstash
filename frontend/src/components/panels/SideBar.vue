@@ -180,6 +180,17 @@ const READ_ONLY_DEDUP_HINT =
 const READ_ONLY_SHELF_HINT =
   "The model shelf is only available in your own library";
 
+// "About your library" is a destination too: it reads the library rather than
+// showing it, so it has no selection to express.
+const isInsightsView = computed(() => route.name === "insights");
+
+// Same show-but-disable rule again. GET /insights is owner-only because its
+// numbers ARE the vault-wide aggregate — narrowing them to a share token's
+// scope would leak that out-of-scope pictures exist — so the row is visible,
+// inert, and says why rather than quietly vanishing for a demo visitor.
+const READ_ONLY_INSIGHTS_HINT =
+  "Findings about a library are only available in your own";
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
@@ -189,6 +200,7 @@ const props = defineProps({
 const emit = defineEmits([
   "select-duplicates",
   "select-models",
+  "select-insights",
   "select-character",
   "select-set",
   "import-finished",
@@ -2637,16 +2649,19 @@ function isCountSelected(id) {
 
 /**
  * Whether a selection-driven row may render as active at all. The Duplicates
- * view and the model shelf are addressed by ROUTE, not by the selection
- * system, so while either is open
+ * view, the model shelf and "About your library" are addressed by ROUTE, not
+ * by the selection system, so while any of them is open
  * the underlying selection (kept so back-navigation restores it) must yield
  * the highlight — otherwise the sidebar shows two active destinations. A live
- * folder filter suppresses the same rows for the same reason, so the two
- * guards travel together.
+ * folder filter suppresses the same rows for the same reason, so the guards
+ * travel together.
  */
 const selectionOwnsHighlight = computed(
   () =>
-    !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
+    !hasFolderFilter.value &&
+    !isDuplicatesView.value &&
+    !isModelsView.value &&
+    !isInsightsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -5204,6 +5219,28 @@ defineExpose({
             </button>
           </div>
 
+          <!-- "About your library" in the dock. Icon-only, so the title is the
+               accessible name and must carry the whole label. -->
+          <div :class="['sidebar-collapsed-row', { active: isInsightsView }]">
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{
+                active: isInsightsView,
+                'sidebar-collapsed-item--unavailable': isReadOnly,
+              }"
+              :aria-current="isInsightsView ? 'page' : undefined"
+              :aria-disabled="isReadOnly || undefined"
+              aria-label="About your library"
+              :title="
+                isReadOnly ? READ_ONLY_INSIGHTS_HINT : 'About your library'
+              "
+              @click="isReadOnly || emit('select-insights')"
+            >
+              <v-icon>mdi-lightbulb-on-outline</v-icon>
+            </button>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -5692,6 +5729,32 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
+              </button>
+            </div>
+
+            <!-- "About your library" — a destination, and deliberately one
+                 without a count. Every row on it is a finding rather than a
+                 to-do, and half of them say there is nothing to do; a badge
+                 here would turn a screen that reports into a screen that
+                 nags. Inert-not-hidden for a READ session, same as the two
+                 rows above. -->
+            <div class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                class="sidebar-list-item sidebar-destination-btn"
+                :class="{
+                  active: isInsightsView,
+                  'sidebar-list-item--unavailable': isReadOnly,
+                }"
+                :aria-current="isInsightsView ? 'page' : undefined"
+                :aria-disabled="isReadOnly || undefined"
+                :title="isReadOnly ? READ_ONLY_INSIGHTS_HINT : undefined"
+                @click="isReadOnly || emit('select-insights')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-lightbulb-on-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">About your library</span>
               </button>
             </div>
 
