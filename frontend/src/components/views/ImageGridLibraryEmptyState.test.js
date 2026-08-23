@@ -184,6 +184,34 @@ describe("an install with nothing in it", () => {
     expect(wrapper.emitted("local-import")[0][0]).toEqual({ files: [keep] });
   });
 
+  it("takes a FileList as readily as an array", async () => {
+    // The card emits a real Array, but `importChosenFiles` is the obvious place
+    // to hand the `FileList` off an <input>, which has no `.filter`. Taking
+    // both means a future caller gets an import rather than a TypeError thrown
+    // a long way from the mistake.
+    const wrapper = await settleEmpty(mountGrid());
+    const keep = new File(["x"], "one.jpg", { type: "image/jpeg" });
+    // jsdom will not construct a FileList, so this is its array-like shape:
+    // indexed keys, a length and `item()`, but no Array methods.
+    const fileList = {
+      0: keep,
+      length: 1,
+      item: (i) => (i === 0 ? keep : null),
+    };
+
+    await emptyState(wrapper).vm.$emit("add-files", fileList);
+
+    expect(wrapper.emitted("local-import")[0][0]).toEqual({ files: [keep] });
+  });
+
+  it("takes nothing at all without reading a length off it", async () => {
+    const wrapper = await settleEmpty(mountGrid());
+
+    await emptyState(wrapper).vm.$emit("add-files", undefined);
+
+    expect(wrapper.emitted("local-import")).toBeFalsy();
+  });
+
   it("starts no import at all when nothing chosen is readable", async () => {
     const wrapper = await settleEmpty(mountGrid());
     const drop = new File(["y"], "notes.docx", { type: "application/msword" });
