@@ -196,19 +196,31 @@ export function serializeAccumulator(state) {
   });
 }
 
-/** Restore an accumulator written by serializeAccumulator. */
-export function deserializeAccumulator(serialized) {
+/**
+ * Restore an accumulator written by serializeAccumulator.
+ *
+ * @param {string} serialized Checkpointed accumulator JSON.
+ * @param {boolean} pristine True when the checkpoint has folded in no rows yet,
+ *   i.e. its run still has an empty cursor. It decides what a checkpoint
+ *   written before `checkinsByType` existed means: nothing was lost if nothing
+ *   was scanned, so the day stays countable rather than being nulled for the
+ *   whole scan. runScheduledSlice persists an initial accumulator before it
+ *   reads a single row, so a crash or a redeploy in that gap is exactly the
+ *   reachable case.
+ * @returns {object}
+ */
+export function deserializeAccumulator(serialized, pristine = false) {
   const value = JSON.parse(serialized);
   return {
     ...createAccumulator(),
     ...value,
-    // A checkpoint written before this field existed has already folded in rows
-    // whose check-ins were never counted, so this day's total can no longer be
-    // completed. Null, not the partial count: the snapshot is immutable and
-    // never backfilled, so a confident wrong number here would be permanent.
-    // Same reasoning as resurrection_rate below -- "cannot say" and "zero" must
-    // not look alike. Null is sticky through the rest of the scan.
-    checkinsByType: value.checkinsByType ?? null,
+    // A partial pre-field checkpoint has already folded in rows whose check-ins
+    // were never counted, so this day's total can no longer be completed. Null,
+    // not the partial count: the snapshot is immutable and never backfilled, so
+    // a confident wrong number here would be permanent. Same reasoning as
+    // resurrection_rate below -- "cannot say" and "zero" must not look alike.
+    // Null is sticky through the rest of the scan.
+    checkinsByType: value.checkinsByType ?? (pristine ? emptyBuckets() : null),
     cohorts: new Map(value.cohorts ?? []),
   };
 }

@@ -788,8 +788,9 @@ describe("checkinsInActiveWindow", () => {
   });
 
   it("shifts the window by the gap between last_seen and today", () => {
-    // Bits 0 and 1 are two days before last_seen, which is itself
-    // ACTIVE_WINDOW_DAYS - 1 days before today: both still inside the window.
+    // Bits 0 and 1 are the day of last_seen and the day before it. last_seen is
+    // itself ACTIVE_WINDOW_DAYS - 1 days before today, so those two days sit
+    // ACTIVE_WINDOW_DAYS - 1 and ACTIVE_WINDOW_DAYS days back: both inside.
     const lastSeen = "2026-06-23"; // 27 days before 2026-07-20
     assert.equal(daysBetween(lastSeen, "2026-07-20"), ACTIVE_WINDOW_DAYS - 1);
     assert.equal(checkinsInActiveWindow(row(lastSeen, 0b11n), "2026-07-20"), 2);
@@ -807,16 +808,20 @@ describe("checkinsInActiveWindow", () => {
   });
 
   it("does not widen the window for a last_seen in the future", () => {
-    // Clock skew. Without the clamp the negative gap reads bits from before the
-    // window opened, so all three would count instead of the one inside it.
+    // Clock skew. A sparse bitmap cannot tell the two apart -- clamped or not,
+    // these three bits are inside either window -- so this is only a control
+    // that skew does not lose ordinary counts.
     const skewed = { last_seen: "2026-07-22", activity: encodeActivity(0b111n) };
     assert.equal(daysBetween(skewed.last_seen, "2026-07-20"), -2);
     assert.equal(
       checkinsInActiveWindow(skewed, "2026-07-20"),
       3,
-      "bits at or inside the clamped window still count",
+      "bits inside the window still count",
     );
-    // The clamp is what stops the window from extending past ACTIVE_WINDOW_DAYS.
+    // This is the assertion that proves the clamp. A bitmap dense enough to
+    // reach past the window edge counts ACTIVE_WINDOW_DAYS + 1 days clamped and
+    // two more than that unclamped, because a negative gap would widen the
+    // window backwards into days before it opened.
     const wide = {
       last_seen: "2026-07-22",
       activity: encodeActivity((1n << 40n) - 1n),
@@ -848,6 +853,29 @@ describe("the aggregation checkpoint", () => {
 
     accumulateRow(resumed, { ...row, install_id: "second" }, "2026-07-20");
     assert.equal(resumed.checkinsByType.pip, 6);
+  });
+
+  it("still counts a pre-field checkpoint that had scanned nothing", () => {
+    // runScheduledSlice persists an initial accumulator before it reads a row,
+    // so an old Worker that crashed in that gap leaves a pre-field checkpoint
+    // with an empty cursor. Nothing was lost, so the day stays countable.
+    const pristine = JSON.stringify({
+      active: 0,
+      byType: { docker: 0, pip: 0, electron: 0, other: 0 },
+      newLast7d: 0,
+      resurrectionEligible: 0,
+      resurrected: 0,
+      cohorts: [],
+    });
+    const state = deserializeAccumulator(pristine, true);
+    assert.deepEqual(state.checkinsByType, createAccumulator().checkinsByType);
+
+    accumulateRow(state, row, "2026-07-20");
+    assert.equal(
+      finalizeAggregate(state, "2026-07-20").id_bearing_checkins_by_type.pip,
+      3,
+      "a complete total, not null",
+    );
   });
 
   it("publishes null, not a partial count, when resuming a legacy checkpoint", () => {
