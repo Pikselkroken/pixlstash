@@ -316,6 +316,16 @@ class Server(
     # tests/test_install_type_buckets.py, which fails if they drift.
     INSTALL_TYPES = ("docker", "pip", "electron", "other", "dev")
 
+    #: Token in ``frontend/index.html`` replaced with the detected install type
+    #: when the server hands the SPA out. The frontend cannot wait for
+    #: ``GET /version``: the version check runs from a child component's
+    #: ``onMounted`` and stamps its 24h throttle before the request, so whatever
+    #: it knows at that instant is what gets reported for the day. Passing the
+    #: value in the document removes the race for every channel at once, and
+    #: keeps the backend the single source of truth -- no bucket list is
+    #: duplicated frontend-side (see tests/test_install_type_buckets.py).
+    INSTALL_TYPE_PLACEHOLDER = "__PIXLSTASH_INSTALL_TYPE__"
+
     #: Marks the host as a development machine, whatever channel it runs.
     #:
     #: Needed because ``PIXLSTASH_INSTALL_TYPE`` is not only a telemetry label:
@@ -1326,6 +1336,34 @@ class Server(
             return None
         return index_path
 
+    def _index_html_response(self):
+        """Return the SPA document with the install type substituted in.
+
+        ``None`` when there is no built frontend, so callers fall back the same
+        way they did when this served the file straight off disk.
+
+        Cached on ``(path, install_type)`` rather than re-read per request: the
+        SPA entry point is hit on every cold navigation, and the substitution is
+        the same string every time until one of those two changes.
+        """
+        index_path = self._get_frontend_index_path()
+        if not index_path:
+            return None
+
+        install_type = Server.detect_install_type()
+        key = (index_path, install_type)
+        if (
+            getattr(self, "_index_html_cache", None) is None
+            or self._index_html_cache[0] != key
+        ):
+            with open(index_path, encoding="utf-8") as handle:
+                html = handle.read()
+            self._index_html_cache = (
+                key,
+                html.replace(Server.INSTALL_TYPE_PLACEHOLDER, install_type),
+            )
+        return HTMLResponse(content=self._index_html_cache[1])
+
     def _setup_routes(self):
         ###############################
         # Rate limiting              ##
@@ -1375,9 +1413,9 @@ class Server(
 
         @self.api.get("/", include_in_schema=False)
         async def read_root():
-            index_path = self._get_frontend_index_path()
-            if index_path:
-                return FileResponse(index_path)
+            index_response = self._index_html_response()
+            if index_response:
+                return index_response
             version = self._get_version()
             return {"message": "PixlStash REST API", "version": version}
 
@@ -1725,7 +1763,7 @@ class Server(
             if candidate.startswith(dist_dir) and os.path.isfile(candidate):
                 return FileResponse(candidate)
 
-            index_path = self._get_frontend_index_path()
-            if not index_path:
+            index_response = self._index_html_response()
+            if not index_response:
                 raise HTTPException(status_code=404, detail="Not Found")
-            return FileResponse(index_path)
+            return index_response
