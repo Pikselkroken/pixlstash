@@ -1,6 +1,8 @@
 import { onMounted, onUnmounted } from "vue";
 import { isInternalImageDrag } from "../utils/media.js";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
+import { resolveImportTarget } from "../utils/importTarget.js";
 
 /**
  * Import media dropped or pasted anywhere in the window.
@@ -16,6 +18,7 @@ import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
  */
 export function useWindowFileImport({ sidebarRef }) {
   const reviewSessionsStore = useReviewSessionsStore();
+  const selectionStore = useSelectionStore();
 
   function isInsideImageGrid(event) {
     const target = event?.target;
@@ -88,7 +91,13 @@ export function useWindowFileImport({ sidebarRef }) {
     if (!mediaFiles.length) return;
     event.preventDefault();
     const projectId = sidebarRef.value?.currentProjectId ?? null;
-    sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
+    // File it where you are looking. Unlike a drop, a paste has no target
+    // element to read context from, so it takes it from the selection.
+    sidebarRef.value?.startLocalImport?.(
+      mediaFiles,
+      projectId,
+      resolveImportTarget(selectionStore),
+    );
   }
 
   onMounted(() => {
