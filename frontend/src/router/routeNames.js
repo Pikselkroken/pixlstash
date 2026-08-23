@@ -27,3 +27,14 @@
  * holds.
  */
 export const MODEL_SHELF_ROUTES = ["models", "models-runs"];
+
+/**
+ * Every route the workflow library answers to.
+ *
+ * A list of one today, and a constant rather than a literal for exactly the
+ * reason the shelf's is: the same three places have to agree about it —
+ * `useAppNavigation` (mount the view), `SideBar` (light the entry, and refuse
+ * to light a second destination underneath it), and `App.vue` through the
+ * first. When a second workflow route lands, adding it here is the whole edit.
+ */
+export const WORKFLOW_ROUTES = ["workflows"];

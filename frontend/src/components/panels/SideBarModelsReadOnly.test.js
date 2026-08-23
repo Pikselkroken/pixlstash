@@ -109,6 +109,8 @@ async function mountSidebar({ docked = false } = {}) {
 
 const SHELF_HINT = "The model shelf is only available in your own library";
 const DEDUP_HINT = "Duplicate review is only available in your own library";
+const WORKFLOWS_HINT =
+  "The workflow library is only available in your own library";
 
 /** The expanded rail's Models button, by its label. */
 function expandedModels(wrapper) {
@@ -118,11 +120,29 @@ function expandedModels(wrapper) {
 }
 
 /**
- * The collapsed dock's Models button. Located by class, not by title: the title
- * is the thing under test and swaps to the refusal hint for a READ session.
+ * The collapsed dock's destination buttons, in DOM order: Models, then
+ * Workflows. Located by class and position, never by title: the title is the
+ * thing under test and swaps to the refusal hint for a READ session.
  */
+function dockedDestinations(wrapper) {
+  return wrapper.findAll(
+    "button.sidebar-collapsed-item.sidebar-destination-btn",
+  );
+}
+
 function dockedModels(wrapper) {
-  return wrapper.find("button.sidebar-collapsed-item.sidebar-destination-btn");
+  return dockedDestinations(wrapper)[0];
+}
+
+function dockedWorkflows(wrapper) {
+  return dockedDestinations(wrapper)[1];
+}
+
+/** The expanded rail's Workflows button, by its label. */
+function expandedWorkflows(wrapper) {
+  return wrapper
+    .findAll("button.sidebar-list-item")
+    .find((b) => b.text().includes("Workflows"));
 }
 
 beforeEach(() => {
@@ -195,7 +215,7 @@ describe("the collapsed dock's Models entry", () => {
     expect(duplicates).toBeTruthy();
 
     const models = dockedModels(wrapper);
-    expect(models.exists()).toBe(true);
+    expect(models).toBeTruthy();
     expect(models.attributes("aria-disabled")).toBe("true");
     expect(models.attributes("title")).toBe(SHELF_HINT);
 
@@ -209,7 +229,7 @@ describe("the collapsed dock's Models entry", () => {
     const wrapper = await mountSidebar({ docked: true });
 
     const models = dockedModels(wrapper);
-    expect(models.exists()).toBe(true);
+    expect(models).toBeTruthy();
     expect(models.attributes("title")).toBe("Models");
     expect(models.attributes("aria-disabled")).toBeUndefined();
 
@@ -217,5 +237,57 @@ describe("the collapsed dock's Models entry", () => {
     expect(wrapper.emitted("select-models")).toHaveLength(1);
 
     wrapper.unmount();
+  });
+});
+
+describe("the Workflows entry", () => {
+  // Same rule, same reason: every /workflows route is owner-only, so the
+  // destination must not be live for a session the backend refuses on all of
+  // it — and must not be hidden either, because the demo site IS a read-only
+  // session.
+  it("is visible, inert and explained for a READ session, in both layouts", async () => {
+    isReadOnly.value = true;
+    const wrapper = await mountSidebar();
+
+    const workflows = expandedWorkflows(wrapper);
+    expect(workflows).toBeTruthy();
+    expect(workflows.attributes("aria-disabled")).toBe("true");
+    expect(workflows.attributes("title")).toBe(WORKFLOWS_HINT);
+    // `aria-disabled`, not the native attribute: the control stays tabbable so
+    // a keyboard user reaches the explanation too.
+    expect(workflows.attributes("disabled")).toBeUndefined();
+    await workflows.trigger("click");
+    expect(wrapper.emitted("select-workflows")).toBeUndefined();
+    wrapper.unmount();
+
+    const docked = await mountSidebar({ docked: true });
+    const dockedRow = dockedWorkflows(docked);
+    expect(dockedRow).toBeTruthy();
+    expect(dockedRow.attributes("aria-disabled")).toBe("true");
+    expect(dockedRow.attributes("title")).toBe(WORKFLOWS_HINT);
+    await dockedRow.trigger("click");
+    expect(docked.emitted("select-workflows")).toBeUndefined();
+    docked.unmount();
+  });
+
+  it("still navigates for the owner, in both layouts", async () => {
+    // The positive control: an inert-for-everybody row is its own regression.
+    const wrapper = await mountSidebar();
+
+    const workflows = expandedWorkflows(wrapper);
+    expect(workflows).toBeTruthy();
+    expect(workflows.attributes("aria-disabled")).toBeUndefined();
+    await workflows.trigger("click");
+    expect(wrapper.emitted("select-workflows")).toHaveLength(1);
+    wrapper.unmount();
+
+    const docked = await mountSidebar({ docked: true });
+    const dockedRow = dockedWorkflows(docked);
+    expect(dockedRow).toBeTruthy();
+    expect(dockedRow.attributes("title")).toBe("Workflows");
+    expect(dockedRow.attributes("aria-disabled")).toBeUndefined();
+    await dockedRow.trigger("click");
+    expect(docked.emitted("select-workflows")).toHaveLength(1);
+    docked.unmount();
   });
 });

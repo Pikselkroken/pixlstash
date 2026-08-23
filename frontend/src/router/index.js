@@ -23,6 +23,7 @@ import App from "../App.vue";
 //   /moves                                  → Moves made outside PixlStash (reconciliation queue)
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
+//   /workflows                              → the workflow library (topologies)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
@@ -57,6 +58,7 @@ const routes = [
   { path: "/moves", name: "moves", component: App },
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
+  { path: "/workflows", name: "workflows", component: App },
   // The runs were briefly a destination of their own. They are a view of the
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },

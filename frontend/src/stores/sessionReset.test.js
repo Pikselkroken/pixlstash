@@ -57,6 +57,7 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
+import { useWorkflowShelfStore } from "./useWorkflowShelfStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -123,6 +124,27 @@ const STORES = [
       s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
     },
     isEmpty: (s) => s.pending === null,
+  },
+  {
+    // The topology rows are hub-side facts about this machine, but every count
+    // on them is read across the ACTIVE library's pictures, and the sample ids
+    // the inspector holds ARE that library's pictures. All of it is owner-only,
+    // so none of it may survive a credential change. The view axes are kept:
+    // they are the user's own preference and hold no id.
+    name: "useWorkflowShelfStore",
+    use: useWorkflowShelfStore,
+    seed: (s) => {
+      s.rows = [{ topology_hash: "a".repeat(64), pictures: 1075, variants: 3 }];
+      s.scan = { pictures: 28172, scanned: 28172 };
+      s.selectedHash = "a".repeat(64);
+      s.samples["a".repeat(64)] = [11, 12];
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.rows.length === 0 &&
+      !s.loaded &&
+      s.selectedHash === null &&
+      Object.keys(s.samples).length === 0,
   },
   {
     name: "useLockedSetsStore",

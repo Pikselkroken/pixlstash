@@ -7,7 +7,7 @@ import {
   watch,
   nextTick,
 } from "vue";
-import { MODEL_SHELF_ROUTES } from "../../router/routeNames";
+import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../../router/routeNames";
 import ImageImporter from "../io/ImageImporter.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
@@ -170,6 +170,7 @@ const isDuplicatesView = computed(() => route.name === "duplicates");
 // Both of the shelf's routes, from the one list, so the runs tab cannot fall
 // out of this the way it did when the two predicates were separate literals.
 const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
+const isWorkflowsView = computed(() => WORKFLOW_ROUTES.includes(route.name));
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature
@@ -206,6 +207,9 @@ const READ_ONLY_INSIGHTS_HINT =
 // session because nothing here ever calls GET /moves/pending for one.
 const isMovesView = computed(() => route.name === "moves");
 
+const READ_ONLY_WORKFLOWS_HINT =
+  "The workflow library is only available in your own library";
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
@@ -217,6 +221,7 @@ const emit = defineEmits([
   "select-models",
   "select-insights",
   "select-moves",
+  "select-workflows",
   "select-character",
   "select-set",
   "import-finished",
@@ -3143,7 +3148,8 @@ const selectionOwnsHighlight = computed(
     !hasFolderFilter.value &&
     !isDuplicatesView.value &&
     !isModelsView.value &&
-    !isInsightsView.value,
+    !isInsightsView.value &&
+    !isWorkflowsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -5777,6 +5783,24 @@ defineExpose({
             </button>
           </div>
 
+          <!-- The workflow library's dock mirror, same treatment as Models. -->
+          <div :class="['sidebar-collapsed-row', { active: isWorkflowsView }]">
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{
+                active: isWorkflowsView,
+                'sidebar-collapsed-item--unavailable': isReadOnly,
+              }"
+              :aria-current="isWorkflowsView ? 'page' : undefined"
+              :aria-disabled="isReadOnly || undefined"
+              :title="isReadOnly ? READ_ONLY_WORKFLOWS_HINT : 'Workflows'"
+              @click="isReadOnly || emit('select-workflows')"
+            >
+              <v-icon>mdi-sitemap-outline</v-icon>
+            </button>
+          </div>
+
           <!-- Moves in the dock: reachable whenever the queue holds anything
                at all (movesStore.hasAnyPending), never shown-and-disabled the
                way the three permanent destinations above are - see the
@@ -6316,6 +6340,32 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
+              </button>
+            </div>
+
+            <!-- Workflows sits under Models because it is the same kind of
+                 destination: a list of what this MACHINE holds, which no
+                 picture view can express. Owner-only for the same reason as
+                 well — every /workflows route is, so the row is inert and
+                 carries no count rather than starting a fetch a share session
+                 cannot satisfy. -->
+            <div class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                class="sidebar-list-item sidebar-destination-btn"
+                :class="{
+                  active: isWorkflowsView,
+                  'sidebar-list-item--unavailable': isReadOnly,
+                }"
+                :aria-current="isWorkflowsView ? 'page' : undefined"
+                :aria-disabled="isReadOnly || undefined"
+                :title="isReadOnly ? READ_ONLY_WORKFLOWS_HINT : undefined"
+                @click="isReadOnly || emit('select-workflows')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-sitemap-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Workflows</span>
               </button>
             </div>
 
