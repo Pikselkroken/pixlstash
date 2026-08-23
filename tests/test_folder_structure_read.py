@@ -20,19 +20,31 @@ import pytest
 
 from pixlstash.server import Server
 from pixlstash.services.folder_structure_service import (
+    DEFAULT_DEADLINE_S,
     FolderStructureRead,
     MAX_FOLDERS,
     MIN_FACE_SAMPLE,
+    FACE_MAJORITY,
+    MIN_SIDECAR_PICTURES,
     SAME_IDENTITY_COSINE,
     SAMPLED_PER_FOLDER,
+    _LEVEL_VOTE_SHARE_PCT,
+    _TAG_MAX_DISTINCT_NAMES,
+    _TAG_MIN_PARENTS,
+    _TAG_REPEAT_FACTOR,
     _dominant_identity_count,
     _evenly_spaced,
     load_existing_entities,
     normalise_name,
 )
+from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 from tests.authz_guard import assert_real_route
 
 API = "/api/v1"
+
+#: A folder the sidecar signal will speak about: every picture captioned, and
+#: enough of them to clear MIN_SIDECAR_PICTURES.
+_CAPTIONED = ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "c.txt"]
 
 
 # ===========================================================================
@@ -236,22 +248,29 @@ def test_the_root_level_never_carries_a_cardinality_reading():
 
 
 def test_a_caption_beside_every_picture_reads_as_set():
-    with _tree({"": [], "shoot": ["a.jpg", "a.txt", "b.png", "b.txt"]}) as root:
+    with _tree(
+        {"": [], "shoot": ["a.jpg", "a.txt", "b.png", "b.txt", "c.jpg", "c.jpg.txt"]}
+    ) as root:
         result = FolderStructureRead(root).run()
 
     proposal = _rows(result, 2)["shoot"]["proposal"]
     assert proposal["kind"] == "set"
     (evidence,) = proposal["evidence"]
     assert evidence["signal"] == "sidecars"
-    assert evidence["pictures"] == 2 and evidence["with_sidecar"] == 2
-    assert "all 2 pictures" in evidence["text"]
+    assert evidence["pictures"] == 3 and evidence["with_sidecar"] == 3, (
+        "both `a.txt` and `a.jpg.txt` are caption conventions in the wild"
+    )
+    assert "all 3 pictures" in evidence["text"]
 
 
 def test_a_caption_beside_most_pictures_says_nothing_at_all():
     """`every` picture, not `most`. A signal that cannot state its reason does
     not propose — and 'a caption beside 2 of 3' is not the Set fact."""
     with _tree(
-        {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg"]}
+        {
+            "": [],
+            "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "d.jpg", "d.txt"],
+        }
     ) as root:
         result = FolderStructureRead(root).run()
 
@@ -420,13 +439,16 @@ def test_signals_that_agree_keep_the_match_and_both_reasons():
 def test_a_level_whose_rows_agree_is_answered_with_its_own_count():
     spec = {"": []}
     for name in ("alpha", "beta", "gamma", "delta"):
-        spec[name] = ["a.jpg", "a.txt", "b.jpg", "b.txt"]
+        spec[name] = ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "c.txt"]
     with _tree(spec) as root:
         result = FolderStructureRead(root).run()
 
     proposal = _level(result, 2)["proposal"]
     assert proposal["kind"] == "set"
     assert proposal["evidence"][0]["text"] == "4 of 4 folders read as Set"
+    assert proposal["evidence"][0]["signal"] == "level_vote", (
+        "a claim about the level must not be labelled with a per-folder signal"
+    )
 
 
 # ===========================================================================
@@ -580,7 +602,9 @@ def test_an_unknown_task_id_is_a_404_on_status_and_cancel(owner_env):
 def test_a_read_completes_and_reports_its_result(owner_env):
     owner = owner_env["owner"]
     root = os.path.join(owner_env["tmp"], "library")
-    _make_tree(root, {"": [], "shoot": ["a.jpg", "a.txt"]})
+    _make_tree(
+        root, {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "c.txt"]}
+    )
 
     started = owner.post(_READ, json={"path": root})
     assert started.status_code == 200, started.text
@@ -871,7 +895,7 @@ def test_a_split_level_is_not_decided_by_what_the_folders_are_called():
     def build(sidecar_names, face_names):
         spec = {"": []}
         for name in sidecar_names:
-            spec[name] = ["a.jpg", "a.txt", "b.jpg", "b.txt"]
+            spec[name] = _CAPTIONED
         for name in face_names:
             spec[name] = [f"{i:03d}.jpg" for i in range(MIN_FACE_SAMPLE + 1)]
         return spec
@@ -893,14 +917,14 @@ def test_the_level_vote_share_is_sixty_percent_and_not_a_rounded_half():
     """`round(0.6 * 4)` is 2, so a rule written as 60% would pass at 50%."""
     spec = {"": []}
     for name in ("aa", "bb"):  # 2 of 4 read as Set
-        spec[name] = ["a.jpg", "a.txt"]
+        spec[name] = _CAPTIONED
     for name in ("cc", "dd"):  # …and 2 say nothing at all
-        spec[name] = ["a.jpg", "b.jpg"]
+        spec[name] = ["a.jpg", "b.jpg", "c.jpg"]
     with _tree(spec) as root:
         two_of_four = _level(FolderStructureRead(root).run(), 2)["proposal"]
     assert two_of_four["kind"] is None, f"50% is not 60%: {two_of_four}"
 
-    spec["cc"] = ["a.jpg", "a.txt"]  # now 3 of 4
+    spec["cc"] = _CAPTIONED  # now 3 of 4
     with _tree(spec) as root:
         three_of_four = _level(FolderStructureRead(root).run(), 2)["proposal"]
     assert three_of_four["kind"] == "set", three_of_four
@@ -908,20 +932,75 @@ def test_the_level_vote_share_is_sixty_percent_and_not_a_rounded_half():
 
 
 def test_the_identity_threshold_is_where_it_says_it_is():
-    """One-hot fixtures alone make every value in (0, 1] equivalent. These sit
-    either side of the constant, so moving it turns one of them red."""
-    just_over = [_unit(1)] + [_near(1, SAME_IDENTITY_COSINE + 0.05) for _ in range(3)]
-    just_under = [_unit(1)] + [_near(1, SAME_IDENTITY_COSINE - 0.05) for _ in range(3)]
-    assert _dominant_identity_count(just_over) == 4
-    assert _dominant_identity_count(just_under) == 3, (
+    """Absolute cosines, not ``SAME_IDENTITY_COSINE ± 0.05``.
+
+    A fixture built from the constant slides with it: the first version of this
+    test passed at ``SAME_IDENTITY_COSINE = 0.05`` while its docstring claimed it
+    would go red, because both sides of the comparison moved together. These
+    numbers are fixed, so moving the constant off 0.35 turns one of them red —
+    which is the whole point of pinning the value that decides whether a real
+    folder reads as a Person."""
+    assert SAME_IDENTITY_COSINE == 0.35, (
+        "the vectors below are chosen against 0.35; re-pick them deliberately"
+    )
+    over = [_unit(1)] + [_near(1, 0.40) for _ in range(3)]
+    under = [_unit(1)] + [_near(1, 0.30) for _ in range(3)]
+    assert _dominant_identity_count(over) == 4
+    assert _dominant_identity_count(under) == 3, (
         "faces below the threshold are a different identity"
     )
+
+
+def test_the_face_majority_is_where_it_says_it_is():
+    """14 of 20 is 70% and reads as one person; 13 of 20 is 65% and does not."""
+    assert FACE_MAJORITY == 0.7, "the counts below are chosen against 0.7"
+    with _tree(_faces_spec(40)) as root:
+        at_the_line = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 14 else i + 2)
+        ).run()
+        below = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 13 else i + 2)
+        ).run()
+    assert _rows(at_the_line, 2)["mira"]["proposal"]["kind"] == "person"
+    assert _rows(below, 2)["mira"]["proposal"]["kind"] is None
+
+
+def test_the_tag_shape_needs_repetition_across_several_parents():
+    """All three cardinality constants, each pinned by a tree one step short.
+
+    Without this the heuristic that proposes a whole level as Tag — the one
+    signal that speaks for 149 folders at once — has no test that constrains
+    when it fires."""
+    assert (_TAG_MAX_DISTINCT_NAMES, _TAG_REPEAT_FACTOR, _TAG_MIN_PARENTS) == (
+        12,
+        3,
+        3,
+    ), "the trees below are chosen against these"
+
+    def read(parents, leaves):
+        spec = {"": []}
+        for parent in parents:
+            spec[parent] = []
+            for leaf in leaves:
+                spec[f"{parent}/{leaf}"] = ["a.jpg"]
+        with _tree(spec) as root:
+            return _level(FolderStructureRead(root).run(), 3)["proposal"]["kind"]
+
+    assert read(("p1", "p2", "p3"), ("final", "raw", "selects")) == "tag"
+    assert read(("p1", "p2"), ("final", "raw", "selects")) is None, (
+        "two parents is not 'repeating under many parents'"
+    )
+    # 13 distinct names is past _TAG_MAX_DISTINCT_NAMES, however much they repeat.
+    many = tuple(f"n{i}" for i in range(13))
+    assert read(("p1", "p2", "p3"), many) is None
 
 
 def test_a_sidecar_in_capitals_still_counts():
     """A dataset exported on Windows is the obvious victim of a case-sensitive
     extension match, and it would fail by the Set signal never firing."""
-    with _tree({"": [], "shoot": ["a.jpg", "a.TXT", "b.jpg", "b.Txt"]}) as root:
+    with _tree(
+        {"": [], "shoot": ["a.jpg", "a.TXT", "b.jpg", "b.Txt", "c.jpg", "c.Caption"]}
+    ) as root:
         result = FolderStructureRead(root).run()
     assert _rows(result, 2)["shoot"]["proposal"]["kind"] == "set"
 
@@ -941,10 +1020,95 @@ def test_the_result_says_whether_the_face_signal_ran_at_all():
 def test_the_read_stops_at_its_deadline_and_returns_what_it_found():
     with _tree({"": [], "a": ["x.jpg"], "b": ["y.jpg"]}) as root:
         read = FolderStructureRead(root, deadline_s=-1.0)
-        result = read.run()
+        out_of_time = read.run()
+        complete = FolderStructureRead(root).run()
     assert read.cancelled is True, "an out-of-time read stops like a cancelled one"
-    assert "root" in result
+    # Not `"root" in result` — _build_result emits that key unconditionally, so
+    # that assertion could not fail for any implementation of anything.
+    assert out_of_time["folder_count"] == 0, "it stopped before the first folder"
+    assert complete["folder_count"] == 3, "and the same tree reads fine untimed"
+
+
+def test_the_default_deadline_is_the_documented_one():
+    """Nothing else exercises it: the test above passes its own deadline in, so a
+    typo turning 30 minutes into 30 seconds would ship green."""
+    assert DEFAULT_DEADLINE_S == 30 * 60.0
+
+
+def test_the_level_vote_share_is_the_documented_one():
+    """Pins the number the tie-unreachability argument rests on. At 50 a 2-2
+    split is a tie broken by folder sort order, which is the defect the exact
+    integer comparison exists to prevent."""
+    assert _LEVEL_VOTE_SHARE_PCT == 60
+
+
+def test_a_lone_captioned_picture_is_not_a_set():
+    """`MIN_SIDECAR_PICTURES`, for the reason `MIN_FACE_SAMPLE` exists: "a caption
+    file beside all 1 picture" is not evidence anyone should act on, and a level
+    of such folders would clear the 60% vote and be proposed as Set entire."""
+    assert MIN_SIDECAR_PICTURES == 3
+    with _tree({"": [], "pair": ["a.jpg", "a.txt", "b.jpg", "b.txt"]}) as root:
+        result = FolderStructureRead(root).run()
+    assert _rows(result, 2)["pair"]["proposal"]["kind"] is None
 
 
 def test_the_default_bound_is_the_documented_one():
     assert MAX_FOLDERS == 20_000, "docs/integration_architecture.md §20 states this"
+
+
+def test_the_blocklist_is_re_run_below_the_root_not_only_on_it(monkeypatch):
+    """Validating the path the caller named is a check on ONE STRING.
+
+    `/` names no restricted directory and contains every one of them, so a
+    root-only check walks `/etc`, `/proc` and `/root` and decodes any
+    image-extensioned file it finds there. Measured before this guard: 391 of
+    400 folders came from blocklisted subtrees."""
+    monkeypatch.setattr("pixlstash.services.folder_structure_service.MAX_FOLDERS", 400)
+    result = FolderStructureRead("/").run()
+
+    restricted = [
+        row["relative_path"]
+        for level in result["levels"]
+        for row in level["folders"]
+        if validate_reference_folder_path("/" + row["relative_path"])
+    ]
+    assert restricted == [], (
+        f"the walk entered restricted directories below the root: {restricted[:8]}"
+    )
+    assert result["skipped_folders"]["restricted"] > 0, (
+        "…and it must say it refused them rather than skipping in silence"
+    )
+
+
+def test_a_cancelled_read_still_counts_the_pictures_it_found():
+    """The counts are summed in _build_result, not at the end of the walk.
+
+    A cancel raises from inside the walk loop, so summing there left every row
+    at picture_count 0 beside a real direct_picture_count — a partial map saying
+    the library is empty, on the one path whose justification is that the
+    partial map is showable."""
+    box = {}
+
+    def stop_after_two(stage, processed, total):
+        if stage == "walking" and processed >= 2:
+            box["read"].cancel()
+
+    with _tree({"": [], "a": ["x.jpg", "y.jpg"], "b": ["z.jpg"]}) as root:
+        read = FolderStructureRead(root, progress=stop_after_two)
+        box["read"] = read
+        result = read.run()
+
+    assert read.cancelled is True
+    rows = _rows(result, 2)
+    assert rows["a"]["direct_picture_count"] == 2
+    assert rows["a"]["picture_count"] == 2, (
+        "a row reporting direct pictures and a recursive count of 0 is incoherent"
+    )
+    assert result["root"]["picture_count"] == 2, "and the root sums what was walked"
+
+
+def test_hidden_folders_are_counted_rather_than_dropped_in_silence():
+    with _tree({"": [], "shown": ["a.jpg"], ".cache": ["b.jpg"]}) as root:
+        result = FolderStructureRead(root).run()
+    assert sorted(_rows(result, 2)) == ["shown"]
+    assert result["skipped_folders"]["hidden"] == 1

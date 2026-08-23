@@ -45,6 +45,9 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
+from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_path,
+)
 
 logger = get_logger(__name__)
 
@@ -57,6 +60,13 @@ SAMPLED_PER_FOLDER = 20
 #: 2 of 3" is not evidence anyone should act on, and this signal's contract is
 #: that it either states a reason or says nothing.
 MIN_FACE_SAMPLE = 5
+
+#: Below this many pictures the sidecar signal stays silent. One `a.jpg` beside
+#: one `a.txt` is a caption pair, not a Set — and "a caption file beside all 1
+#: picture" is the same weak evidence `MIN_FACE_SAMPLE` exists to refuse. It
+#: matters at level scope too: a level of one-picture folders would otherwise
+#: clear the 60% vote and be proposed as Set entire.
+MIN_SIDECAR_PICTURES = 3
 
 #: Share of the *sampled* pictures that must carry the same identity for the
 #: folder to read as one person.
@@ -71,8 +81,9 @@ FACE_MAJORITY = 0.7
 SAME_IDENTITY_COSINE = 0.35
 
 #: Wall-clock budget for one whole read. The face signal has a per-batch
-#: timeout, but a per-batch timeout multiplied by 20,000 folders is 69 days, so
-#: the bound that actually holds has to be on the read. Past it the read stops
+#: timeout, but a per-batch timeout multiplied by 20,000 folders is weeks, so
+#: the bound that actually holds has to be on the read: 180 s per batch over
+#: 20,000 folders is 41 days. Past it the read stops
 #: and returns what it found — the same shape a cancel produces.
 DEFAULT_DEADLINE_S = 30 * 60.0
 
@@ -115,7 +126,21 @@ _INFERENCE_MAX_SIDE = 512
 #: I/O + decode threads feeding the (sequential) detection batch.
 _PRELOAD_WORKERS = 4
 
+#: An entity type as the vault stores it -> the `kind` this API speaks. The two
+#: vocabularies differ in exactly one place and that place is deliberate:
+#: `character` is the model name, and the shipped UI says People
+#: (`design/1.11-existing-library/DECISIONS.md`).
 _ENTITY_KIND = {
+    "project": "project",
+    "set": "set",
+    "character": "person",
+    "tag": "tag",
+}
+
+#: The same mapping in prose, for an evidence string. Separate from
+#: `_ENTITY_KIND` because one is a wire value and the other is display text;
+#: they happen to agree today and are not the same idea.
+_ENTITY_KIND_LABEL = {
     "project": "project",
     "set": "set",
     "character": "person",
@@ -194,6 +219,8 @@ class FolderStructureRead:
         self._folders: list[_Folder] = []
         self._truncated = False
         self._unreadable = 0
+        self._skipped_hidden = 0
+        self._skipped_restricted = 0
         self._faces_ran = False
         self._deadline = time.monotonic() + deadline_s
         # key -> entity_type -> the rows of that type sharing the name.
@@ -290,7 +317,30 @@ class FolderStructureRead:
             root, followlinks=False, onerror=on_error
         ):
             self._checkpoint()
-            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            kept = []
+            for name in sorted(dirnames):
+                if name.startswith("."):
+                    # `.pixlstash` sidecars and a vault's own thumbnail cache.
+                    # Counted, because §24's whole argument against `os.walk`'s
+                    # default is that a silently omitted subtree reads as a
+                    # complete map.
+                    self._skipped_hidden += 1
+                    continue
+                child = os.path.join(dirpath, name)
+                if validate_reference_folder_path(os.path.realpath(child)):
+                    # The route validates the ROOT. That is not containment for a
+                    # recursive walk: `POST {"path": "/"}` names no restricted
+                    # directory and then walks every one of them. The blocklist
+                    # has to run per directory or it is a check on one string.
+                    logger.warning(
+                        "Folder-structure read: refusing to descend into a "
+                        "restricted system directory below the root: %s",
+                        name,
+                    )
+                    self._skipped_restricted += 1
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
             if len(self._folders) >= MAX_FOLDERS:
                 # break, not continue: past the bound every further iteration
                 # would scandir a directory whose contents are already discarded.
@@ -318,16 +368,31 @@ class FolderStructureRead:
                 and not f.startswith(".")
             )
             for picture in folder.direct_pictures:
-                stem = os.path.splitext(picture)[0].lower()
-                if any(stem + ext in lowered for ext in _SIDECAR_EXTS):
+                lowered_name = picture.lower()
+                stem = os.path.splitext(lowered_name)[0]
+                # Both conventions: `a.txt` beside `a.jpg`, and `a.jpg.txt`.
+                if any(
+                    stem + ext in lowered or lowered_name + ext in lowered
+                    for ext in _SIDECAR_EXTS
+                ):
                     folder.with_sidecar += 1
             by_path[dirpath] = folder.index
             self._folders.append(folder)
             self._progress("walking", len(self._folders), 0)
 
-        # Recursive picture counts, deepest first so a parent sums finished children.
+    def _total_picture_counts(self) -> None:
+        """Fill every folder's recursive count, deepest first.
+
+        Called from ``_build_result`` and **not** from the end of ``_walk``: a
+        cancel or a deadline raises ``ReadCancelled`` from inside the walk loop,
+        so a version that summed here left every row at ``picture_count: 0``
+        while still reporting a real ``direct_picture_count`` — a partial result
+        that says the library is empty, on the one path whose whole
+        justification is that the partial result is showable.
+        """
+        for folder in self._folders:
+            folder.picture_count = len(folder.direct_pictures)
         for folder in sorted(self._folders, key=lambda f: f.depth, reverse=True):
-            folder.picture_count += len(folder.direct_pictures)
             if folder.parent_index is not None:
                 self._folders[folder.parent_index].picture_count += folder.picture_count
 
@@ -382,6 +447,7 @@ class FolderStructureRead:
     # ── assembling the answer ───────────────────────────────────────────
 
     def _build_result(self) -> dict[str, Any]:
+        self._total_picture_counts()
         levels: dict[int, list[_Folder]] = {}
         for folder in self._folders:
             levels.setdefault(folder.depth, []).append(folder)
@@ -428,6 +494,14 @@ class FolderStructureRead:
             # count of zero is the only way a client can tell "complete" from
             # "complete apart from what I was not allowed to open".
             "unreadable_folders": self._unreadable,
+            # Folders deliberately not walked, as opposed to ones that failed:
+            # dot-folders (a vault's own caches) and anything the blocklist
+            # names. Reported for the same reason `unreadable_folders` is — a
+            # map that omits a subtree must not read as a complete one.
+            "skipped_folders": {
+                "hidden": self._skipped_hidden,
+                "restricted": self._skipped_restricted,
+            },
             # False means the face signal never ran (no inference engine), so no
             # folder could be proposed as a Person. Without it the same tree
             # answers differently depending on whether models had loaded, and
@@ -491,7 +565,7 @@ class FolderStructureRead:
                     {
                         "signal": "name_match",
                         "text": f"matches {copies} existing "
-                        f"{_ENTITY_LABEL[entity_type]}s",
+                        f"{_ENTITY_KIND_LABEL[entity_type]}s",
                     }
                 )
             else:
@@ -503,14 +577,14 @@ class FolderStructureRead:
                 evidence.append(
                     {
                         "signal": "name_match",
-                        "text": f"matches the {_ENTITY_LABEL[entity_type]} "
+                        "text": f"matches the {_ENTITY_KIND_LABEL[entity_type]} "
                         f"{entity_name}",
                     }
                 )
         elif matches:
             # Two kinds of entity share this name. That narrows; it does not answer.
             named = " and ".join(
-                f"an existing {_ENTITY_LABEL[t]}" for t, _, _ in matches
+                f"an existing {_ENTITY_KIND_LABEL[t]}" for t, _, _ in matches
             )
             kinds.extend(_ENTITY_KIND[t] for t, _, _ in matches)
             evidence.append({"signal": "name_match", "text": f"matches {named}"})
@@ -531,7 +605,7 @@ class FolderStructureRead:
                 kinds.append("person")
 
         pictures = len(folder.direct_pictures)
-        if pictures and folder.with_sidecar == pictures:
+        if pictures >= MIN_SIDECAR_PICTURES and folder.with_sidecar == pictures:
             evidence.append(
                 {
                     "signal": "sidecars",
@@ -608,8 +682,35 @@ class FolderStructureRead:
                 # most_common insertion order to depend on. That is the reason
                 # the share is compared exactly rather than rounded: round(0.6*4)
                 # is 2, and a 2-2 split *would* be a tie decided by the alphabet.
-                leaders = [k for k, c in voted.items() if c == best]
-                assert len(leaders) == 1, leaders
+                leaders = sorted(k for k, c in voted.items() if c == best)
+                if len(leaders) > 1:
+                    # Unreachable at 60, and this is not an assert: it runs in
+                    # _build_result, after a read that may have cost half an
+                    # hour, and a lowered share should degrade to "narrowed"
+                    # rather than throw that work away. It is also what an
+                    # `assert` cannot do under `python -O`.
+                    logger.warning(
+                        "Folder-structure read: %d-way tie at %d%% of a level of "
+                        "%d — returning the candidates rather than picking",
+                        len(leaders),
+                        _LEVEL_VOTE_SHARE_PCT,
+                        len(folders),
+                    )
+                    return {
+                        "kind": None,
+                        "candidates": leaders,
+                        "match": None,
+                        "evidence": [
+                            {
+                                "signal": "level_vote",
+                                "text": "{} of {} folders each read as {}".format(
+                                    best,
+                                    len(folders),
+                                    " or ".join(_KIND_LABEL[k] for k in leaders),
+                                ),
+                            }
+                        ],
+                    }
                 kind = leaders[0]
                 return {
                     "kind": kind,
@@ -617,7 +718,12 @@ class FolderStructureRead:
                     "match": None,
                     "evidence": [
                         {
-                            "signal": _LEVEL_VOTE_SIGNAL[kind],
+                            # `level_vote`, not the row signal that produced the
+                            # majority: this is a claim about the level, and
+                            # labelling it `sidecars` would hand a client a
+                            # per-folder filesystem fact it could render an
+                            # affordance off.
+                            "signal": "level_vote",
                             "text": f"{best} of {len(folders)} folders read as "
                             f"{_KIND_LABEL[kind]}",
                         }
@@ -645,27 +751,12 @@ class FolderStructureRead:
         return {"kind": None, "candidates": [], "match": None, "evidence": []}
 
 
-_ENTITY_LABEL = {
-    "project": "project",
-    "set": "set",
-    "character": "person",
-    "tag": "tag",
-}
-
 _KIND_LABEL = {
     "project": "Project",
     "set": "Set",
     "person": "Person",
     "tag": "Tag",
     "folder": "just a folder",
-}
-
-_LEVEL_VOTE_SIGNAL = {
-    "person": "faces",
-    "set": "sidecars",
-    "project": "name_match",
-    "tag": "name_match",
-    "folder": "name_match",
 }
 
 

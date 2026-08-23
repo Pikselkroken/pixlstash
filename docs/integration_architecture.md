@@ -1587,6 +1587,10 @@ indeterminate bar rather than 0%.
   "truncated": false,           // true = the walk hit max_folders and stopped
   "max_folders": 20000,
   "unreadable_folders": 0,      // folders skipped because they could not be read
+  "skipped_folders": {          // folders deliberately not walked
+    "hidden": 0,                //   dot-folders: a vault's own caches
+    "restricted": 0             //   below the root and on the system blocklist
+  },
   "face_signal_ran": true,      // false = no inference engine; nobody is a Person
   "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
 }
@@ -1601,6 +1605,13 @@ whole library*:
   (permissions, a broken mount) and are **absent from `levels` entirely**. A
   read that omits a subtree and presents itself as complete is worse than one
   that refuses.
+- **`skipped_folders`** — folders deliberately not walked, as opposed to ones
+  that failed. `hidden` counts dot-folders (a vault's own caches and sidecar
+  directories); `restricted` counts directories on the system blocklist found
+  *below* the root, because the walk re-checks the blocklist per directory
+  rather than only on the path the caller named. Both are ordinary and neither
+  needs to interrupt the screen, but they are counted rather than dropped in
+  silence, for the same reason `unreadable_folders` is.
 
 A **level**:
 
@@ -1613,7 +1624,10 @@ A **level**:
                                   // count a picture once per ancestor
   "proposal": {
     "kind": null,               // project|set|person|tag|folder|null
-    "candidates": [],           // 2+ kinds when the signals only narrowed it
+    // Names used once each rule Tag OUT and rule nothing in, so this level
+    // comes back narrowed, never empty. `candidates: []` here would mean
+    // something else entirely — see the shape table below.
+    "candidates": ["project", "set", "person"],
     "match": null,
     "evidence": [{"signal": "cardinality",
                   "text": "149 names under 14 parents, used once each, so not labels"}]

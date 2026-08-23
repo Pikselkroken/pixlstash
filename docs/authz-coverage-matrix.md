@@ -195,7 +195,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
-| POST | `/api/v1/folder-structure/read` | local_owner_only |  | §16.3 host FS read: takes a caller-supplied host path and walks it recursively, decoding pictures out of it — `GET /filesystem/browse`'s path-authority class and then some, with the blocklist run on the **realpath** so a symlink cannot hand it a restricted directory; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/folder-structure/read` | local_owner_only |  | §16.3 host FS read: takes a caller-supplied host path and walks it recursively, decoding pictures out of it — `GET /filesystem/browse`'s path-authority class and then some, with the blocklist run on the **realpath** and re-run per directory during the walk, so neither a symlink nor a parent directory can hand it a restricted subtree; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 | GET | `/api/v1/folder-structure/read/status` | local_owner_only |  | §16.3: carries the read's result, which **is** the folder map — polling must not be a lower bar than starting; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 | DELETE | `/api/v1/folder-structure/read` | local_owner_only |  | §16.3: cancels the owner's in-flight read, same tier as the route that starts it; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 

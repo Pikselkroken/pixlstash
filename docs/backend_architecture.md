@@ -5616,11 +5616,28 @@ truncates and sets `truncated`, which the screen must show — a truncated read
 presented as a complete one is worse than a refusal.
 
 `DEFAULT_DEADLINE_S` (30 minutes) bounds the *read*, not a batch. The face
-signal has a per-batch timeout, but a per-batch timeout is the wrong bound on its
-own: 300 s × 20,000 folders is 69 days, and the single read slot would leave the
-feature dead for the process lifetime while reporting `running`. Past the
-deadline the read stops where it is and returns what it has, which is the same
-shape a cancel produces.
+signal has a per-batch timeout — `_FACE_BATCH_TIMEOUT_S`, 180 s — but a per-batch
+timeout is the wrong bound on its own: 180 s × 20,000 folders is **41 days**, and
+the single read slot would leave the feature dead for the process lifetime while
+reporting `running`. Past the deadline the read stops where it is and returns
+what it has, which is the same shape a cancel produces.
+
+**The partial result has to be a usable one**, which is why the recursive
+picture counts are summed in `_build_result` and not at the end of the walk. A
+cancel or a deadline raises from *inside* the walk loop, so a version that summed
+there returned every row at `picture_count: 0` beside a real
+`direct_picture_count` — a partial map saying the library is empty, on the one
+path whose entire justification is that the partial map is showable.
+
+`skipped_folders` counts what the walk deliberately did not enter: dot-folders
+(a vault's own caches) and, separately, directories on the system blocklist found
+*below* the root. **The blocklist is re-checked per directory**, because
+validating only the path the caller named is a check on one string and not
+containment: `POST {"path": "/"}` names no restricted directory and would
+otherwise walk every one of them, decoding image-extensioned files out of
+`/etc`, `/proc` and `/root`. A route that recurses cannot borrow
+`GET /filesystem/browse`'s root-only check, because browse lists one level and
+this does not.
 
 `unreadable_folders` counts what the walk could not open. **`os.walk` swallows
 every `scandir` error by default** — no exception, no return value, the subtree
@@ -5651,9 +5668,11 @@ restricted directory is the difference between one listing and a recursive read
 of `/etc`. `validate_reference_folder_accessible` is the shipped helper that
 already does realpath-then-blocklist, and its comment — *"Canonicalize before
 touching the filesystem"* — is describing exactly this. `filesystem_roots`
-containment is the same as browse's, and note that it is **empty by default**:
-the blocklist on the realpath is the containment that always holds, not the
-roots list.
+containment is the same as browse's, and note that it is **empty by default**,
+so it is not the containment that holds on an unconfigured install. What holds is
+the blocklist — run on the realpath at the root *and* again on every directory
+the walk descends into, which is the pair that makes it a property of the whole
+traversal rather than of one string.
 
 The status route is on `READ_BLOCKED_GET_PATHS` as well, so the documented
 `AUTHZ_GATE_ENFORCING = False` rollback does not hand the folder map to a share

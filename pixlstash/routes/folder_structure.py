@@ -57,7 +57,13 @@ class FolderStructureReadStatusResponse(BaseModel):
     """``queued`` | ``running`` | ``completed`` | ``failed`` | ``cancelled``."""
 
     stage: str
-    """``walking`` | ``sidecars`` | ``faces`` | ``done``."""
+    """``walking`` | ``faces`` | ``done``.
+
+    There is no ``sidecars`` stage — that signal is counted from the walk's own
+    listing. A read with no inference engine never reaches ``faces`` either: it
+    goes straight from ``walking`` to ``done``, so the bar stays indeterminate
+    throughout.
+    """
 
     processed: int
     total: int
@@ -84,6 +90,10 @@ def create_router(server) -> APIRouter:
         ``validate_reference_folder_accessible`` is for, and it is why this
         route is deliberately *stricter* than ``GET /filesystem/browse``: browse
         lists one level, this walks a subtree and reads out of it.
+
+        **This is the root check only.** The walk re-runs the same blocklist on
+        every directory it descends into, because a root-only check is a check on
+        one string: ``/`` names no restricted directory and contains all of them.
         """
         if server.running_in_docker():
             raise HTTPException(
@@ -127,9 +137,15 @@ def create_router(server) -> APIRouter:
         """A ``(images) -> per-image faces`` callable, or ``None`` if no engine.
 
         The face signal runs on the shared GPU queue through the existing
-        ``FaceDetectionTask`` rather than opening its own InsightFace session:
-        one model in memory, and the read queues behind interactive work instead
-        of stalling it for two minutes.
+        ``FaceDetectionTask`` rather than opening its own InsightFace session, so
+        there is one model in memory rather than two.
+
+        **It does not queue politely.** ``FaceDetectionTask.priority`` is
+        ``URGENT`` — "skip ahead of everything" — so every batch of the read
+        jumps the queue ahead of background work. Defensible (the owner is
+        watching a progress bar) but worth knowing rather than assuming, and it
+        is why the read carries a deadline: an URGENT task that cannot finish
+        starves the queue it jumped. See ``backend_architecture.md`` §24.
         """
         from pixlstash.tasks.face_detection_task import FaceDetectionTask
 
@@ -224,7 +240,7 @@ def create_router(server) -> APIRouter:
             state["status"] = "running"
         try:
             result = read.run()
-        except Exception as exc:  # noqa: BLE001 — reported to the caller, not swallowed
+        except BaseException as exc:  # noqa: BLE001 — the slot must never wedge
             logger.error(
                 "Folder-structure read %s failed (%s): %s",
                 task_id,
@@ -236,6 +252,13 @@ def create_router(server) -> APIRouter:
             if state and state["task_id"] == task_id:
                 state["status"] = "failed"
                 state["error"] = f"{type(exc).__name__}: {exc}"
+            # Anything that is not an ordinary Exception is still not this
+            # thread's to swallow — but the slot is marked failed FIRST, or a
+            # KeyboardInterrupt or a MemoryError leaves it "running" forever and
+            # every later read is refused with 409. The deadline cannot help
+            # here: it lives inside run(), which did not return.
+            if not isinstance(exc, Exception):
+                raise
             return
 
         state = server.folder_structure_read
@@ -266,9 +289,14 @@ def create_router(server) -> APIRouter:
         tags=["folders"],
     )
     def folder_structure_read_status(request: Request, task_id: str = Query(...)):
-        state = server.folder_structure_read
-        if not state or state["task_id"] != task_id:
-            raise HTTPException(status_code=404, detail="Task not found")
+        # Snapshot under the lock: a concurrent POST replaces the whole slot, and
+        # reading six fields off `server.folder_structure_read` one at a time can
+        # otherwise serve an evicted read's body under an id that must now 404.
+        with server.folder_structure_lock:
+            state = server.folder_structure_read
+            if not state or state["task_id"] != task_id:
+                raise HTTPException(status_code=404, detail="Task not found")
+            state = dict(state)
         # One load each, in this order: the worker writes `result` before it
         # writes `status`, so reading `status` first is what keeps §20's "result
         # is null until the read has settled" true without a lock on every poll.
@@ -299,15 +327,20 @@ def create_router(server) -> APIRouter:
         tags=["folders"],
     )
     def cancel_folder_structure_read(request: Request, task_id: str = Query(...)):
-        state = server.folder_structure_read
-        if not state or state["task_id"] != task_id:
-            raise HTTPException(status_code=404, detail="Task not found")
+        with server.folder_structure_lock:
+            state = server.folder_structure_read
+            if not state or state["task_id"] != task_id:
+                raise HTTPException(status_code=404, detail="Task not found")
         if state["status"] in ("completed", "failed", "cancelled"):
             # Saying "cancelled" here would be a lie the client cannot check:
             # the read is over and its result stands. Report what it actually is.
             return {"status": state["status"]}
         state["read"].cancel()
         logger.info("Folder-structure read %s cancelled by the owner", task_id)
+        # "cancelled" means the cancel was ACCEPTED, not that the read has
+        # stopped: it stops at its next folder boundary, so `status` legitimately
+        # stays `running` until then and a POST keeps 409-ing meanwhile. §20 says
+        # so, because a client reading this as "already stopped" will race it.
         return {"status": "cancelled"}
 
     return router
