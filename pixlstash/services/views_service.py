@@ -167,12 +167,23 @@ def safe_component(name: str, fallback: str) -> str:
 
 
 def _unique(taken: set[str], candidate: str, suffix: str) -> str:
-    """Return *candidate*, disambiguated with *suffix* when it is already taken."""
+    """Return *candidate*, disambiguated with *suffix* until the name is free.
+
+    It loops rather than suffixing once, because the disambiguated form can
+    itself be taken: an entity genuinely called ``0412 (7).png`` collides with
+    the name picture 7 would be given, and a single pass would hand back a
+    duplicate — an ``EEXIST`` at link time, reported to the owner as if the
+    filesystem had refused the link.
+    """
     if candidate not in taken:
         taken.add(candidate)
         return candidate
     stem, ext = os.path.splitext(candidate)
     disambiguated = f"{stem} ({suffix}){ext}"
+    attempt = 2
+    while disambiguated in taken:
+        disambiguated = f"{stem} ({suffix}-{attempt}){ext}"
+        attempt += 1
     taken.add(disambiguated)
     return disambiguated
 
@@ -245,7 +256,7 @@ def same_root(a: Optional[str], b: Optional[str]) -> bool:
     return resolved[0] == resolved[1]
 
 
-def check_views_root(root: str, vault) -> None:
+def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) -> None:
     """Raise :class:`ViewsError` when *root* must not hold the views tree.
 
     Each refusal is a measured failure rather than a caution:
@@ -291,6 +302,14 @@ def check_views_root(root: str, vault) -> None:
             raise ViewsError(
                 "That folder contains a reference folder. Choose one beside "
                 "your pictures rather than above them."
+            )
+
+    for library_root in other_library_roots:
+        if path_is_within(root, library_root) or path_is_within(library_root, root):
+            raise ViewsError(
+                "That folder overlaps another library you have registered. "
+                "Backups refuse a library containing links, so choose a folder "
+                "outside every library."
             )
 
     marker = _sync_root_marker(root)
@@ -494,7 +513,13 @@ def _prune(directory: str) -> list[str]:
                     continue
             except OSError as exc:
                 logger.info("Views: keeping %s, which did not come away: %s", path, exc)
-                if stat.S_ISDIR(os.lstat(path).st_mode):
+                if not os.path.lexists(path):
+                    # It went away between the walk and the unlink — a viewer
+                    # tidying up, another process, the owner. Nothing is kept,
+                    # and re-``lstat``ing to find that out would raise inside
+                    # this handler and abort the whole publish.
+                    continue
+                if name in dirs:
                     # A directory only survives because something inside it did.
                     # That thing is already named; naming its parent as well
                     # would report one kept file as two.
@@ -552,7 +577,11 @@ def _link_target(mode: str, source: str, view_dir: str) -> str:
 
 
 def publish(
-    vault, root: str, kinds: Iterable[str], collected: dict[str, list[tuple]]
+    vault,
+    root: str,
+    kinds: Iterable[str],
+    collected: dict[str, list[tuple]],
+    other_library_roots: Iterable[str] = (),
 ) -> PublishReport:
     """Rebuild the views tree at *root* from the library, and report what landed.
 
@@ -563,12 +592,14 @@ def publish(
     construction.
     """
     with _PUBLISH_LOCK:
-        return _publish_locked(vault, root, kinds, collected)
+        return _publish_locked(vault, root, kinds, collected, other_library_roots)
 
 
-def _publish_locked(vault, root, kinds, collected) -> PublishReport:
+def _publish_locked(
+    vault, root, kinds, collected, other_library_roots=()
+) -> PublishReport:
     kinds = [kind for kind in KIND_FOLDERS if kind in set(kinds)]
-    check_views_root(root, vault)
+    check_views_root(root, vault, other_library_roots)
     _prepare_root(root)
     report = PublishReport()
 

@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_33_local_6_loopback():
+def test_host_capability_tier_split_is_37_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 39
-    routes carry a locality tier = 33 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 43
+    routes carry a locality tier = 37 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -287,7 +287,28 @@ def test_host_capability_tier_split_is_33_local_6_loopback():
     a caller who may not fetch a preview is not handed a list of them. The
     loopback count is unchanged: both are reads, and neither spawns anything.
 
-    39 = 33 + 6 with the two ``/server-config/views`` routes, PixlStash Views
+    41 = 35 + 6 with the four v1.11 library-lifecycle routes, and they land on
+    this tier for three different reasons rather than one. ``GET
+    /libraries/inspect`` and ``POST /libraries`` are the plain path-authority
+    case: both take a caller-supplied host path through the same
+    ``validate_reference_folder_path`` chokepoint as the folder picker, the
+    first walking it to say what the folder is and the second writing a vault
+    into it and restricting it to the owner. Neither creates a directory —
+    ``POST /filesystem/folders``, already on this tier, is what the picker's
+    ``New folder`` uses — so the authority stays bounded to the one folder the
+    owner named. ``DELETE /libraries/{library_uuid}`` is the ``POST
+    /libraries/active`` argument again and **not** the path one: it takes a
+    registry uuid, removes no file, and is here because every share link
+    pointing at that library stops working, which is authority over other
+    principals' state. ``PATCH /libraries/{library_uuid}`` is the weakest of the
+    four and is here by consistency rather than capability — it writes one hub
+    column and renames nothing on disk — because the Settings pane gates its
+    whole management menu on one ``can_manage`` locality answer, and splitting
+    the rename onto a looser tier would give that pane two rules to explain
+    while buying a remote owner nothing they could act on. The loopback count is
+    unchanged: none of the four spawns anything.
+
+    43 = 37 + 6 with the two ``/server-config/views`` routes, PixlStash Views
     (v1.11 Phase 7): the library's sets, people and projects published as folders
     of **links** to the files the owner already keeps. The PATCH takes a
     caller-supplied host path and writes a folder tree into it, which is the
@@ -322,7 +343,7 @@ def test_host_capability_tier_split_is_33_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 33, sorted(local)
+    assert len(local) == 37, sorted(local)
 
 
 # ===========================================================================

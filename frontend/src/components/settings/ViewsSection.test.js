@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i><slot /></i>" },
@@ -41,6 +44,18 @@ const ON = {
   },
 };
 
+/**
+ * Views sits on the same locality tier as the library controls beside it, so it
+ * reads the pane's shared `can_manage` rather than discovering the same fact
+ * from a failed request.
+ */
+function setLocality({ canManage = true, loaded = true } = {}) {
+  const store = useLibrariesStore();
+  store.canManage = canManage;
+  store.hasLoadedSuccessfully = loaded;
+  return store;
+}
+
 function mountPane() {
   return mount(ViewsSection, {
     props: { open: true },
@@ -64,6 +79,8 @@ function mountPane() {
 
 describe("ViewsSection", () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
+    setLocality();
     getViewsSettings.mockReset();
     setViewsSettings.mockReset();
   });
@@ -129,16 +146,62 @@ describe("ViewsSection", () => {
     expect(wrapper.find(".sub").text()).toBe(ON.views_root);
   });
 
-  it("says the pane belongs on the other machine when the route is refused", async () => {
-    // Views drives the host filesystem, so its routes are local-only. A remote
-    // owner must get that sentence, not a raw permission error.
+  it("says so from the shared can_manage, without a request that would fail", async () => {
+    // The registry already answered the locality question for this whole pane.
+    // Asking the views route as well would only fail the same way, more slowly.
+    setLocality({ canManage: false });
+    getViewsSettings.mockResolvedValue(OFF);
+
+    const wrapper = mountPane();
+    await flushPromises();
+
+    expect(getViewsSettings).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("only available on the machine running");
+    expect(wrapper.findAll("button")).toHaveLength(0);
+  });
+
+  it("still says so if can_manage said yes and the route refused anyway", async () => {
     getViewsSettings.mockRejectedValue({ response: { status: 403 } });
 
     const wrapper = mountPane();
     await flushPromises();
 
-    expect(wrapper.text()).toContain("only be set up from that machine");
+    expect(wrapper.text()).toContain("only available on the machine running");
     expect(wrapper.findAll("button")).toHaveLength(0);
+  });
+
+  it("recovers when a session that was once refused is allowed again", async () => {
+    // Set only on failure and never cleared, `refused` left a pane that had
+    // seen one 403 showing the locality notice for the rest of the session.
+    getViewsSettings.mockRejectedValueOnce({ response: { status: 403 } });
+
+    const wrapper = mountPane();
+    await flushPromises();
+    expect(wrapper.text()).toContain("only available on the machine running");
+
+    getViewsSettings.mockResolvedValue(ON);
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("only available on the machine running");
+    expect(wrapper.text()).toContain("_PixlStash Views");
+  });
+
+  it("reads the settings once can_manage arrives after the pane opened", async () => {
+    // The registry read is in flight when Settings opens, so a pane that only
+    // watched `open` would stay blank for a local owner.
+    setLocality({ canManage: false, loaded: false });
+    getViewsSettings.mockResolvedValue(ON);
+
+    const wrapper = mountPane();
+    await flushPromises();
+    const store = setLocality({ canManage: true });
+    await flushPromises();
+
+    expect(getViewsSettings).toHaveBeenCalled();
+    expect(store.canManage).toBe(true);
+    expect(wrapper.text()).toContain("_PixlStash Views");
   });
 
   it("names the owner's own files that the rebuild refused to delete", async () => {

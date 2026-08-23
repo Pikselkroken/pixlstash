@@ -420,6 +420,80 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 
 ---
 
+### 2.3 The `/libraries` contract (v1.11)
+
+Six routes, and the split between them is a locality split rather than a
+read/write one.
+
+| Route | Tier | Shape |
+|---|---|---|
+| `GET /libraries` | `owner_only` | `{ libraries[], can_manage, in_docker, cli_hint }` |
+| `GET /libraries/inspect?path=` | `local_owner_only` | one verdict (below) |
+| `POST /libraries` | `local_owner_only` | `{ path, name? }` → the library, `201` |
+| `PATCH /libraries/{library_uuid}` | `local_owner_only` | `{ name }` → the library |
+| `DELETE /libraries/{library_uuid}` | `local_owner_only` | `{ status, library, inert_share_links }` |
+| `POST /libraries/active` | `local_owner_only` | `{ uuid }` → the library |
+
+**`can_manage` is the single gate the frontend reads.** The listing is
+`owner_only` so the Settings tab renders for any owner; every management verb is
+`local_owner_only` because four of the five take or write a host path and the
+other two exercise authority over other principals' state. Rather than have each
+control guess, `GET /libraries` answers `can_manage` from the same predicate the
+authz gate applies, and `LibrariesSection` hides the whole management surface —
+the Add button and the per-row `⋯` menu — when it is false. A remote session is
+given a visible reason instead of controls that each fail.
+
+**`inspect` returns one of five verdicts**, and the client branches only on
+`can_add`:
+
+| `verdict` | `can_add` | Means |
+|---|---|---|
+| `attached` | `false` | This exact folder is a registered library (`library` names it) |
+| `overlaps` | `false` | A registered library contains it, or it contains one (`library` names it) |
+| `vault` | `true` | A vault nothing is using — `POST /libraries` attaches it |
+| `pictures` | `true` | Pictures, no vault — `POST /libraries` starts a library over them |
+| `empty` | `true` | Neither — `POST /libraries` starts a fresh one |
+
+`headline` and `detail` are written server-side and rendered verbatim, so the
+sentence naming the library that covers a folder exists once, where the rule
+lives; only the button label is the client's. `picture_count_capped` is `true`
+when the recursive count stopped at its entry cap, so `picture_count` is a floor
+and the copy says "at least".
+
+**The verdict is advisory.** `POST /libraries` re-inspects the path itself and
+answers `409` with the same sentence if the folder became covered in between, so
+a client cannot skip the rule by not asking. It requires the folder to exist
+(`404` otherwise) and creates no directory: the picker makes one with `POST
+/filesystem/folders`, which it already used.
+
+Both path-taking routes answer `400` for a relative path or one resolving into a
+blocklisted system directory (resolved **then** checked, so a symlink cannot
+smuggle one past), and `403` for a path outside `filesystem_roots` when that is
+configured. `POST` also accepts an optional `name`; without one the server uses
+the folder's own, and **the picker sends one** — library names are unique among
+attached libraries, so two folders both called `2024` would otherwise be
+unaddable from the dialog.
+
+**`DELETE` removes no file.** The registry clears the attached flag and keeps
+the row, so the `inert_share_links` it reports stop working rather than being
+revoked, and adding the same folder again revives the row — same uuid, same
+tokens live again. The active library is refused (`409`); switch away first.
+
+`PATCH` and `DELETE` take the **uuid only**, and only of an **attached**
+library. The registry's `get` also accepts a row id and a name, which is right
+for a CLI a person types at; over HTTP the handlers resolve through `by_uuid`,
+because a client left open across a detach and attach would name a different
+library by row id. `by_uuid` does return detached rows — that is how a uuid stays
+meaningful for the tokens stamped with it — so the handlers filter them: a
+library already forgotten is a `404`, not a second `200`.
+
+`DELETE` answers `503` while a library switch is in flight. The other three do
+not: these routes are hub-only and deliberately keep answering when no vault is
+open, which is the state an owner recovers from. Detach is the exception because
+it reads which library is active, and mid-swap that is the one thing moving.
+
+---
+
 
 ## 3. API Client ([apiClient.js](../frontend/src/utils/apiClient.js))
 
@@ -833,8 +907,8 @@ Three contract points the client depends on:
 - **`views_root: null` turns views off**, removing the published tree and leaving
   the folder itself alone.
 - **A refused folder changes nothing.** The 400's `detail` names the reason —
-  inside the library, inside a reference folder, cloud-synced, or a filesystem
-  with no links — and the recorded settings are untouched, so the pane must
+  inside this library or another registered one, inside a reference folder,
+  cloud-synced, or a filesystem with no links — and the recorded settings are untouched, so the pane must
   re-read rather than keep showing the root that was tried. `available_kinds` is
   the server's list, in display order, so the UI can never offer a kind the PATCH
   would drop.

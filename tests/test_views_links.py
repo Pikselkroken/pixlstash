@@ -247,7 +247,21 @@ def test_turning_views_off_never_deletes_a_file_the_owner_put_there(tmp_path, li
 def test_a_symlink_standing_in_for_a_kind_folder_never_steers_the_rebuild_out(
     tmp_path, library
 ):
-    """rmtree fails on a symlinked directory and makedirs then follows it."""
+    """rmtree fails on a symlinked directory and makedirs then follows it.
+
+    Skipped where a *directory* symlink cannot be created at all — Windows
+    without Developer Mode or admin rights. The hazard needs one to exist, so a
+    host that cannot make one is not exposed to it; failing here would report
+    the feature's supported hard-link fallback as a bug.
+    """
+    try:
+        os.symlink(
+            str(tmp_path), str(tmp_path / "symlink-probe"), target_is_directory=True
+        )
+    except OSError as exc:
+        pytest.skip(f"this host cannot create a directory symlink: {exc}")
+    os.remove(tmp_path / "symlink-probe")
+
     image_root, paths = library
     outside = tmp_path / "somewhere-else"
     outside.mkdir()
@@ -255,7 +269,7 @@ def test_a_symlink_standing_in_for_a_kind_folder_never_steers_the_rebuild_out(
     views_root = tmp_path / "views"
     views_root.mkdir()
     (views_root / views_service.MARKER_NAME).write_text("")
-    os.symlink(str(outside), str(views_root / "Sets"))
+    os.symlink(str(outside), str(views_root / "Sets"), target_is_directory=True)
     vault = _FakeVault(image_root, {"sets": [(1, "s", [_picture(1, paths[0])])]})
 
     views_service.publish(vault, str(views_root), ["sets"], vault.collected)
@@ -446,6 +460,70 @@ def test_two_long_names_sharing_a_prefix_still_get_separate_folders(tmp_path, li
     assert len(set(os.listdir(os.path.join(views_root, "Sets")))) == 2
 
 
+def test_a_name_that_already_looks_disambiguated_still_gets_its_own_folder(
+    tmp_path, library
+):
+    """Suffixing once is not enough when the suffixed form is itself taken.
+
+    Two sets called ``s`` and ``s (2)`` collide the moment the first is given
+    picture 2's disambiguator, and a single pass would hand back a duplicate —
+    an ``EEXIST`` at link time, reported to the owner as a filesystem refusal.
+    """
+    image_root, paths = library
+    # The ids are what makes this collide: set 7's disambiguated name is
+    # "s (7)", which set 3 is already literally called.
+    vault = _FakeVault(
+        image_root,
+        {
+            "sets": [
+                (1, "s", [_picture(1, paths[0])]),
+                (3, "s (7)", [_picture(2, paths[1])]),
+                (7, "s", [_picture(3, paths[2])]),
+            ]
+        },
+    )
+    views_root = str(tmp_path / "views")
+
+    report = views_service.publish(vault, views_root, ["sets"], vault.collected)
+
+    published = os.listdir(os.path.join(views_root, "Sets"))
+    assert len(published) == 3, f"two sets shared a folder: {published}"
+    assert report.folders == 3
+    assert report.links == 3
+
+
+def test_a_file_that_vanishes_mid_prune_does_not_abort_the_publish(tmp_path, library):
+    """The prune's error path must not re-``lstat`` a path that has gone."""
+    image_root, paths = library
+    vault = _FakeVault(image_root, {"sets": [(1, "s", [_picture(1, paths[0])])]})
+    views_root = str(tmp_path / "views")
+    views_service.publish(vault, views_root, ["sets"], vault.collected)
+
+    published = os.path.join(views_root, "Sets", "s", "0410.png")
+    assert os.path.lexists(published)
+
+    real_remove = os.remove
+
+    def remove_and_vanish(path, *args, **kwargs):
+        # The race the handler has to survive: the unlink reports a failure and
+        # the entry is gone anyway by the time anything looks again. Re-lstating
+        # it there raised INSIDE the except block and aborted the whole publish.
+        if os.path.basename(path) == "0410.png":
+            real_remove(path)
+            raise OSError(13, "Permission denied")
+        return real_remove(path, *args, **kwargs)
+
+    original = os.remove
+    os.remove = remove_and_vanish
+    try:
+        report = views_service.publish(vault, views_root, ["sets"], vault.collected)
+    finally:
+        os.remove = original
+
+    assert report.links == 1, "the publish aborted instead of carrying on"
+    assert report.kept_by_owner == [], "a vanished entry is not something kept"
+
+
 def test_two_pictures_with_the_same_filename_both_appear(tmp_path):
     root = tmp_path / "library"
     (root / "a").mkdir(parents=True)
@@ -524,6 +602,50 @@ def test_a_views_root_containing_the_library_is_refused(tmp_path, library):
 
     with pytest.raises(views_service.ViewsError, match="contains the library"):
         views_service.check_views_root(os.path.dirname(image_root), vault)
+
+
+def test_a_views_root_inside_another_registered_library_is_refused(tmp_path, library):
+    """v1.11 lets the owner register several libraries from Settings.
+
+    A views tree inside a dormant one breaks that library's backups exactly as
+    it would the active one's, and this vault cannot see the hub registry — so
+    the roots are passed in.
+    """
+    image_root, _paths = library
+    other = tmp_path / "second-library"
+    other.mkdir()
+    vault = _FakeVault(image_root)
+
+    with pytest.raises(views_service.ViewsError, match="overlaps another library"):
+        views_service.check_views_root(
+            str(other / "views"), vault, other_library_roots=[str(other)]
+        )
+
+
+def test_a_views_root_containing_another_registered_library_is_refused(
+    tmp_path, library
+):
+    image_root, _paths = library
+    other = tmp_path / "outer" / "second-library"
+    other.mkdir(parents=True)
+    vault = _FakeVault(image_root)
+
+    with pytest.raises(views_service.ViewsError, match="overlaps another library"):
+        views_service.check_views_root(
+            str(tmp_path / "outer"), vault, other_library_roots=[str(other)]
+        )
+
+
+def test_a_folder_beside_every_registered_library_is_allowed(tmp_path, library):
+    """Over-refusing is its own regression, and the registry lists this vault too."""
+    image_root, _paths = library
+    vault = _FakeVault(image_root)
+
+    views_service.check_views_root(
+        str(tmp_path / "_PixlStash Views"),
+        vault,
+        other_library_roots=[image_root, str(tmp_path / "second-library")],
+    )
 
 
 def test_a_views_root_inside_a_reference_folder_is_refused(tmp_path, library):
@@ -753,6 +875,31 @@ def test_a_refused_folder_never_becomes_the_recorded_one(_env, _seeded, tmp_path
     assert "inside the library" in resp.json()["detail"]
     assert client.get(f"{API}/server-config/views").json()["views_root"] == good
     assert not os.path.exists(inside_library)
+
+
+def test_an_empty_views_root_is_refused_and_never_removes_the_tree(
+    _env, _seeded, tmp_path
+):
+    """`null` turns views off. An empty string is a malformed body, not "off".
+
+    Treating any falsy value as off meant a malformed request removed the
+    published tree with no location check having run at all.
+    """
+    client, _server, _tmp = _env
+    views_root = str(tmp_path / "empty-string-views")
+    client.patch(
+        f"{API}/server-config/views", json={"views_root": views_root, "kinds": ["sets"]}
+    )
+    assert os.path.isdir(os.path.join(views_root, "Sets"))
+
+    resp = client.patch(
+        f"{API}/server-config/views", json={"views_root": "", "kinds": ["sets"]}
+    )
+
+    assert resp.status_code == 400
+    assert "full path" in resp.json()["detail"]
+    assert os.path.isdir(os.path.join(views_root, "Sets")), "the tree was removed"
+    assert client.get(f"{API}/server-config/views").json()["views_root"] == views_root
 
 
 def test_turning_views_off_removes_the_tree_and_keeps_the_pictures(

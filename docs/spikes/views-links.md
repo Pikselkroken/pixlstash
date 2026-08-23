@@ -90,10 +90,12 @@ treating it as a marker refused every path a Dropbox user could pick.
 
 ## Two hazards the spike found that were not on the list
 
-**A views tree inside the library root breaks backups.**
+**A views tree inside a library root breaks that library's backups.**
 `library_backup_service._validate_regular_file` raises `Refusing symlinked
 library payload` on any symlink under the library root, so the owner's backups
-would fail outright. `check_views_root` refuses that location.
+would fail outright. `check_views_root` refuses that location — and, since v1.11 registers several
+libraries from Settings, any *other* registered library's folder too, using the
+roots the hub hands the route.
 
 **A views tree inside a reference folder gets indexed as new pictures.**
 `os.walk` skips symlinked *directories* by default but lists symlinked *files* in

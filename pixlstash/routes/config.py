@@ -1227,7 +1227,12 @@ def create_router(server) -> APIRouter:
         kinds = [kind for kind in views_service.KIND_FOLDERS if kind in set(body.kinds)]
         previous_root, _ = library_settings_service.get_views_config(server.vault.db)
 
-        if not body.views_root:
+        # `null` turns views off; ANY other value goes through the location
+        # checks. An empty or whitespace string is not "off" — treating it as
+        # off made a malformed body remove the published tree without a single
+        # check having run, which is the one shape of this route that can
+        # destroy a tree by accident.
+        if body.views_root is None:
             if previous_root:
                 views_service.remove(previous_root)
             library_settings_service.set_views_config(server.vault.db, None, [])
@@ -1236,9 +1241,22 @@ def create_router(server) -> APIRouter:
         collected = server.vault.db.run_immediate_read_task(
             lambda session: views_service.collect_in_session(session, kinds)
         )
+        # The hub knows every registered library; this vault knows only itself.
+        # Since v1.11 the owner can register several from Settings, and a views
+        # tree inside a dormant one breaks that library's backups exactly as it
+        # would this one's.
+        other_library_roots = [
+            library.path
+            for library in server.library_registry.list_libraries()
+            if library.path
+        ]
         try:
             report = views_service.publish(
-                server.vault, body.views_root, kinds, collected
+                server.vault,
+                body.views_root,
+                kinds,
+                collected,
+                other_library_roots,
             )
         except views_service.ViewsError as exc:
             # The settings are left untouched, so a refused folder never becomes

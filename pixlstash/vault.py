@@ -953,6 +953,11 @@ class Vault:
             if imported_ids:
                 self.notify(EventType.CHANGED_PICTURES, imported_ids)
                 self.notify(EventType.PICTURE_IMPORTED, imported_ids)
+            # A followed move changed file_path on an existing row: the grid has
+            # to refetch it, but nothing was imported, so no PICTURE_IMPORTED.
+            moved_ids = result.get("moved_picture_ids") or []
+            if moved_ids:
+                self.notify(EventType.CHANGED_PICTURES, moved_ids)
             picture_ids = result.get("caption_updated_picture_ids") or []
             if picture_ids:
                 self._queue_changed_tags_notification(picture_ids)

@@ -138,6 +138,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # at all — this frozenset matches literal paths — and stay the recorded
         # follow-up.
         "/api/v1/model-moves",
+        # Walks the server filesystem from a client-supplied path to say what a
+        # folder is, so it is the /filesystem/browse class exactly and belongs
+        # on the same belt: with AUTHZ_GATE_ENFORCING rolled back, a READ token
+        # handed out to view a shared gallery would otherwise probe host layout
+        # a folder at a time.
+        "/api/v1/libraries/inspect",
         # LOCAL_OWNER_ONLY at the gate: it names the host folder this library
         # publishes its Views tree to. Same belt-and-braces as the entries
         # above — AUTHZ_GATE_ENFORCING is a documented one-line rollback, and

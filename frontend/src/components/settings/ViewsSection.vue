@@ -22,6 +22,7 @@ import FolderBrowser from "../editors/FolderBrowser.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
 import SettingsRow from "./SettingsRow.vue";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { getViewsSettings, setViewsSettings } from "../../api/serverConfig";
 import { errorDetail } from "../../utils/apiError";
 
@@ -35,11 +36,30 @@ const KIND_LABELS = {
   projects: "Projects",
 };
 
+// Views is on the same LOCAL_OWNER_ONLY tier as the library-management routes
+// beside it (backend §16.3), so the pane already has the answer: `can_manage`
+// comes back with the registry listing. Reading it rather than discovering the
+// same fact from a 403 keeps this pane speaking with one voice, and spares a
+// remote owner a request that was always going to fail.
+const libraries = useLibrariesStore();
+
 const loading = ref(false);
+/** Set once the settings have been read, so the watcher does not re-fetch. */
+const loaded = ref(false);
 const saving = ref(false);
 const error = ref("");
-/** True when this machine may not drive the host filesystem from here (403). */
-const unavailable = ref(false);
+/** The route refused us even though `can_manage` said yes. Display only. */
+const refused = ref(false);
+/**
+ * The gate: the registry's own answer, which is known before any request. Kept
+ * separate from `refused` on purpose — a gate that also consulted `refused`
+ * could never retry, because clearing `refused` happens inside the fetch the
+ * gate was blocking.
+ */
+const blocked = computed(
+  () => libraries.hasLoadedSuccessfully && !libraries.canManage,
+);
+const unavailable = computed(() => blocked.value || refused.value);
 const browseOpen = ref(false);
 
 const root = ref(null);
@@ -76,20 +96,28 @@ function applySettings(body) {
 
 // Vuetify dialogs stay mounted after the first open, so onMounted would fire
 // only once — fetch on the open transition instead (the house pattern).
+// `unavailable` is watched alongside it because the registry read that answers
+// it is in flight when the pane opens: a pane that only watched `open` would
+// stay blank for a local owner whose `can_manage` landed a moment later.
 watch(
-  () => props.open,
-  async (isOpen) => {
-    if (!isOpen) return;
+  [() => props.open, blocked],
+  async ([isOpen, cannot]) => {
+    if (!isOpen || cannot || loaded.value) return;
     loading.value = true;
     error.value = "";
+    // Cleared per attempt, not only set on failure: a session that was refused
+    // once — a remote owner who then reached the machine, or a policy change —
+    // would otherwise stay stuck showing the locality notice for ever.
+    refused.value = false;
     try {
       applySettings(await getViewsSettings());
+      loaded.value = true;
     } catch (err) {
-      // Views drives this machine's filesystem, so the route is local-only
-      // (backend §16.3). A remote owner gets a 403 and deserves that sentence
-      // rather than a raw permission error on a pane they cannot use.
-      unavailable.value = err?.response?.status === 403;
-      error.value = unavailable.value
+      // The backstop for the locality rule: `can_manage` said yes and the route
+      // refused anyway. A remote owner gets the pane's sentence rather than a
+      // raw permission error on controls they cannot use.
+      refused.value = err?.response?.status === 403;
+      error.value = refused.value
         ? ""
         : errorDetail(err) || err?.message || "Could not read the views settings.";
     } finally {
@@ -138,9 +166,12 @@ const publishedSummary = computed(() => {
       desc="Your sets, people and projects, as folders you can open in your file manager and point other tools at. They are links, not copies: nothing is duplicated, no original moves, and deleting the whole folder loses nothing."
       first
     >
+      <!-- The same locality rule as the library controls above, and
+           deliberately the same wording, because it is the same answer. -->
       <SettingsInfoCard v-if="unavailable">
-        Views writes folders on the machine PixlStash runs on, so it can only be
-        set up from that machine. Open Settings there.
+        Publishing views is only available on the machine running PixlStash, or
+        over your local network or Tailscale, because it writes folders on that
+        machine.
       </SettingsInfoCard>
       <template v-else>
       <SettingsInfoCard>
