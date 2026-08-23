@@ -418,6 +418,69 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
   optimistic local copy of a count only the server can compute, and an undo has
   no local grid op at all.
 
+### 2.3 The `/workflows` contract (v1.11)
+
+The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
+mutators: naming a workflow, running one and forgetting its ghosts are later
+steps, so there is no write half of this contract yet.
+
+| Route | Purpose | Response |
+|---|---|---|
+| `GET /api/v1/workflows` | The whole list, at topology level | `{scan: {pictures, scanned}, workflows: [WorkflowSummary]}` |
+| `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
+| `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
+| `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
+
+Five things the two sides have agreed and neither may drift from:
+
+1. **The list is one row per topology, never per recipe.** ~192 rows against
+   ~617 on the owner's library. The frontend never flattens the variants into
+   the list, and the backend never returns them there.
+2. **Both hashes are 64-character SHA-256 hex, checked and not trusted**, on
+   every route. A malformed one is a 422 naming the parameter.
+
+   A well-formed hash this machine has never filed is a **404 on the two routes
+   that resolve a hub object** (`/variants` and `/recipes/{h}/graph`), because
+   an empty 200 there would read as "this workflow has no variants" rather than
+   "this machine does not have it". It is **200 with an empty list on
+   `/pictures`**, and that is not an inconsistency: that route never opens the
+   hub. It asks the vault which of *its* pictures carry the hash, and "none"
+   is the true and complete answer for a topology this library never used —
+   which is the same answer a topology the hub *does* know gets when its
+   pictures are all in the Scrapheap. Making it 404 would buy a hub round trip
+   per tile strip in order to distinguish two states the caller draws
+   identically.
+3. **`assets` is a SET and `adapter_slots` is a count, and they answer
+   different questions.** A topology row's `assets` are the distinct files its
+   variants name *between them*, de-duplicated server-side; `adapter_slots` is
+   how many adapters **one run** loads. The frontend builds the row's only
+   identifying line from the second, never from the length of the first — the
+   owner's largest family is 159 character LoRAs in one slot, and a descriptor
+   built from the names claims the graph loads all 159 at once. A **variant**
+   carries no `adapter_slots` and needs none: every name on a recipe is a file
+   that run actually loaded, so the client counts them there.
+
+4. **An empty `assets` list is a state, not a missing field.** Forgetting a
+   model's name is a row delete in the hub, so the graph stays and only the
+   ability to say which model it was is gone. The client says the names are not
+   recorded and does **not** claim they were forgotten: nothing in the payload
+   separates that from a graph that names no model at all.
+5. **`runnable` is always `false`, and it is in the payload rather than in a
+   comment.** The stored document has its parameters, seeds and prompts nulled
+   and names its assets by an opaque reference — which is what lets a workflow
+   outlive the pictures it made — so it describes the graph and will not open in
+   ComfyUI. A verbatim export is §B5's and is not shipped; anything offering
+   this as a download says so at the moment of the download.
+
+Every route is `OWNER_ONLY`. That is a decision, not a default: the counts are
+read across every non-deleted picture in the vault, so a scoped token holding
+them would learn the size of the whole library one workflow at a time. There is
+therefore no scoped/narrowed variant of these routes, and adding one means adding
+a narrowing parameter and a policy to check it against.
+
+---
+
+
 ---
 
 

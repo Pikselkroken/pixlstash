@@ -587,6 +587,7 @@ jobs:
           tests/test_workers_api.py
           tests/test_work_planner.py
           tests/test_workflow_library.py
+          tests/test_workflows_api.py
           tests/test_ws_broadcaster.py
 
   # ---------------------------------------------------------------------------
