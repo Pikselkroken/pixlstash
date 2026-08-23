@@ -646,9 +646,33 @@ CREATE TABLE IF NOT EXISTS workflow_picture_ghost (
     pixel_sha        TEXT NOT NULL,
     instance_hash    TEXT NOT NULL,
     structural_hash  TEXT,
+    -- Nullable ON PURPOSE, and it is the one asymmetry here worth explaining.
+    -- The rule §5 states is that a ghost never keeps the PROMPT ALONE, because
+    -- the prompt is the sensitive half and "it is only text" is the argument a
+    -- later optimisation would use to keep it. It is not a rule that a prompt
+    -- must exist: an upscale or img2img graph has no CLIPTextEncode at all, and
+    -- it still hashes, still has a recipe and a seed, and is still worth being
+    -- able to make again. NULL here means the picture never had a prompt, never
+    -- that one was dropped -- nothing between the vault column and this row can
+    -- lose it.
     positive_prompt  TEXT,
     seed             INTEGER,
-    thumbnail        BLOB,
+    -- NOT NULL, because this is the half the rule is actually about. A row with
+    -- no thumbnail would be a retained prompt on its own, which is the exact
+    -- artefact §5 forbids, and it would also destroy the argument that makes
+    -- `covered` a safe default -- that a covered ghost's only marginal exposure
+    -- is a thumbnail of a near-duplicate. The writer refuses to build one; this
+    -- is the same refusal at the storage layer, so a future caller cannot.
+    --
+    -- Tightened in place rather than by a rebuild, because `CREATE TABLE IF NOT
+    -- EXISTS` cannot add a constraint to a table that already exists and this
+    -- one exists nowhere: it was introduced on this same unmerged branch, so
+    -- every install creates it with the constraint on its first open. A
+    -- developer who ran an earlier commit of the branch keeps the nullable
+    -- shape until the hub is recreated, and the writer's own refusal covers
+    -- them. Once this is released the rule from CLAUDE.md applies and any
+    -- further tightening is a rebuild, as `_rebuild_model_with_kind_check` is.
+    thumbnail        BLOB NOT NULL,
     created_at       TEXT NOT NULL,
     PRIMARY KEY (library_uuid, pixel_sha)
 )
