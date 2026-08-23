@@ -14,6 +14,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import { isReadOnly, sessionContext } from "./utils/apiClient";
 import { getInstallId } from "./api/telemetry";
+import { defaultInstallType } from "./utils/telemetryPayload";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
@@ -65,14 +66,14 @@ import { toPx } from "./utils/floatingBottom.js";
 
 // These surfaces are mutually exclusive with the primary grid (or explicitly
 // opened on demand), so keep their heavier feature code out of app startup.
-const DuplicateQueue = defineAsyncComponent(() =>
-  import("./components/views/DuplicateQueue.vue"),
+const DuplicateQueue = defineAsyncComponent(
+  () => import("./components/views/DuplicateQueue.vue"),
 );
-const ModelShelf = defineAsyncComponent(() =>
-  import("./components/views/ModelShelf.vue"),
+const ModelShelf = defineAsyncComponent(
+  () => import("./components/views/ModelShelf.vue"),
 );
-const ReviewSessionsOverlay = defineAsyncComponent(() =>
-  import("./components/views/ReviewSessionsOverlay.vue"),
+const ReviewSessionsOverlay = defineAsyncComponent(
+  () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
 
 // --- Stores ---
@@ -132,7 +133,11 @@ const telemetryConsentOpen = ref(false);
 const telemetryConsentIsUpgrade = ref(false);
 const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
-const installType = ref("pip");
+// Seeded from the marker the server substituted into the document, not from
+// "pip" -- see `defaultInstallType` for why the value held here before
+// `/version` answers is the one that actually gets reported. The fetch below
+// still refreshes it for everything else that reads this ref.
+const installType = ref(defaultInstallType());
 const appVersion = ref("");
 const dockerVariant = ref("gpu");
 const loading = ref(null);
