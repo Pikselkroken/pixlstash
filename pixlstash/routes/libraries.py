@@ -494,6 +494,11 @@ def create_router(server) -> APIRouter:
         request. The uuid is the only identifier that means one library for the
         life of the installation, so it is the only one accepted here.
         """
+        # "uuid", not "id": these routes accept nothing else, so a caller who
+        # sends a row id or a name gets a 404 whose wording should not suggest
+        # the value was looked up and missing (#1096 review). The identical
+        # message in library_switch_service.py says the same for the same
+        # reason and is corrected with it.
         library = server.library_registry.by_uuid(library_uuid)
         # `by_uuid` deliberately returns detached rows — that is how a uuid stays
         # meaningful across a detach for the tokens stamped with it. These routes
@@ -503,7 +508,7 @@ def create_router(server) -> APIRouter:
         # duplicate check only inspects attached rows).
         if library is None or not library.attached:
             raise HTTPException(
-                status_code=404, detail=f"No attached library with id {library_uuid}."
+                status_code=404, detail=f"No attached library with uuid {library_uuid}."
             )
         return library
 

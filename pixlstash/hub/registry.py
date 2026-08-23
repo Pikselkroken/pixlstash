@@ -711,13 +711,20 @@ class LibraryRegistry:
 
         if existing is not None:
             if _fingerprints_match(existing.vault_uuid, fingerprint):
-                return self._revive(existing, cleaned, fingerprint)
+                return self._revive(existing, cleaned, fingerprint, unique_name)
             # Before the UPDATE below, not after. That UPDATE commits, and it
             # renames the detached row's path to something `_find_by_path` can
             # never match again — so a refusal after it would strand that row's
             # uuid and every share token stamped with it, which is exactly what
             # `detach` promises cannot happen.
-            self._refuse_duplicate_name(cleaned)
+            #
+            # Gated on the flag like every other call, or `unique_name=False`
+            # would be a promise this branch quietly breaks: start-up would
+            # still die on a name here (#1096 review). Nothing is stranded by
+            # skipping it — with no name check anywhere in the call there is no
+            # refusal left to land after the commit.
+            if unique_name:
+                self._refuse_duplicate_name(cleaned)
             logger.warning(
                 "A different library now sits at %s (fingerprint %s, expected "
                 "%s). Registering it as new; the detached library keeps its "
@@ -844,15 +851,27 @@ class LibraryRegistry:
                 )
 
     def _revive(
-        self, existing: Library, name: str, fingerprint: Optional[str]
+        self,
+        existing: Library,
+        name: str,
+        fingerprint: Optional[str],
+        unique_name: bool = True,
     ) -> Library:
-        """Re-attach a detached row, keeping its uuid and its tokens."""
+        """Re-attach a detached row, keeping its uuid and its tokens.
+
+        Args:
+            unique_name: As :meth:`_register`'s. Reviving is the branch a
+                start-up registration takes when the folder is provably the same
+                library, so it is on that path too and must honour the flag for
+                the same reason.
+        """
         now = datetime.now(timezone.utc).isoformat()
         with self._hub.transaction() as conn:
             # The row is about to take this name, so it has to clear the same
             # check a fresh registration does: a folder re-attached under a name
             # another library now answers to would break `get` for both.
-            self._refuse_duplicate_name(name, except_id=existing.id, conn=conn)
+            if unique_name:
+                self._refuse_duplicate_name(name, except_id=existing.id, conn=conn)
             conn.execute(
                 "UPDATE library SET attached = 1, detached_at = NULL, "
                 "attached_at = ?, name = ?, vault_uuid = COALESCE(?, vault_uuid) "

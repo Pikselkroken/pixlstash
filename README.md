@@ -113,8 +113,11 @@ away from it first.
 
 Managing libraries is available on the machine running PixlStash, or over your
 local network or Tailscale, because it points the server at folders on that
-machine. A session from further away can list and open libraries but not add or
-remove them, unless `allow_remote_host_ops` is set in server settings.
+machine. A session from further away can **see** the list — the names, and which
+one is open — and nothing more: switching is on that same footing as adding and
+removing, because it reloads every connected client and takes the outgoing
+library's share links offline. It also sees no folder paths. Set
+`allow_remote_host_ops` in server settings to lift all of it at once.
 
 ### The library command line
 

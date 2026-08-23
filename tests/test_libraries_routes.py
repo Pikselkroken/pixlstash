@@ -1201,6 +1201,51 @@ class TestTheNameRuleDoesNotStrandARow:
 
         assert pending.name == "Booted"
 
+    def test_start_up_survives_the_name_on_every_branch_it_can_take(
+        self, server, added_libraries, tmp_path
+    ):
+        """All three, not just the fresh-registration one.
+
+        `_register` reaches its write by one of three routes, and the flag has
+        to hold on each: a fresh row, a revive (the path's detached row is
+        provably the same library), and the path-mismatch branch that frees the
+        path first. The #1096 review caught the third ignoring the flag; the
+        revive had the identical bug one branch above it, on the same start-up
+        path.
+        """
+        registry = server.library_registry
+        added_libraries(_add(_owner(server), tmp_path / "holder", name="Contested"))
+
+        revives = tmp_path / "revives"
+        revives.mkdir()
+        first = registry.register_pending(str(revives), "Contested one")
+        added_libraries({"uuid": first.uuid})
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET attached = 0 WHERE uuid = ?", (first.uuid,)
+            )
+
+        # Revive branch: same path, fingerprints agree (neither carries one).
+        revived = registry.register_pending(str(revives), "Contested")
+        assert revived.uuid == first.uuid, "this must be the revive branch"
+        assert revived.name == "Contested"
+
+        # Path-mismatch branch: a fingerprint the folder does not carry.
+        mismatched = tmp_path / "mismatched"
+        mismatched.mkdir()
+        stale = registry.register_pending(str(mismatched), "Contested two")
+        added_libraries({"uuid": stale.uuid})
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET attached = 0, vault_uuid = ? WHERE uuid = ?",
+                ("fingerprint-that-is-not-there", stale.uuid),
+            )
+
+        fresh = registry.register_pending(str(mismatched), "Contested")
+        added_libraries({"uuid": fresh.uuid})
+        assert fresh.uuid != stale.uuid, "this must be the path-mismatch branch"
+        assert fresh.name == "Contested"
+
 
 class TestCountingMediaFiles:
     def test_the_walk_stops_at_its_cap_and_says_so(self, tmp_path):
