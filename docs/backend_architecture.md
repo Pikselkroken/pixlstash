@@ -3627,10 +3627,30 @@ and updates `file_path` on the existing row instead.
 - **Confirmation stops at the size.** Import de-dup follows a candidate match
   with a full-byte hash of *both* sides; here one side is a file that no longer
   exists, so the stored columns are all there is to compare.
-- **A followed move blanks `thumbnail_width` / `thumbnail_height`.** Thumbnails
-  are keyed `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the stored
-  bitmap is unreachable from the new path; blank dimensions are what
-  `MissingThumbnailFinder` keys on, so the existing sweep regenerates it.
+- **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
+  `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
+  alongside the picture rather than abandoned: nothing sweeps `.ref_thumbs` by
+  anything but a row's *current* `file_path`, so a bitmap left at the old name
+  would never be reachable and never be collected. Only when there is nothing to
+  carry, or the rename fails, are `thumbnail_width` / `thumbnail_height` blanked
+  so `MissingThumbnailFinder` renders a fresh one.
+- **`original_file_name` follows too**, matching the explicit move route
+  (`routes/reference_folders.py`), so a renamed file does not keep downloading
+  under its old name.
+- **Scrapheap rows are never the source of a move.** `fetch_existing` loads
+  `deleted=True` rows deliberately; a hidden soft-deleted row whose file really
+  was deleted would otherwise swallow an unrelated new file of the same content,
+  and the user would get a picture they cannot see instead of a new one. They do
+  still count as unchanged files *blocking* a match, since their file is on disk.
+- **A present file with a NULL `pixel_sha` blocks matching for the whole pass.**
+  The column is nullable and `MissingPixelShaFinder` backfills it, so an
+  un-hashed unchanged file is invisible to the ambiguity count — and it is
+  exactly the file whose existence would have refused the match. NULL there
+  means "unknown", not "no collision".
+- **A followed move emits `CHANGED_PICTURES`** (`moved_picture_ids` in the task
+  result, `Vault._on_task_completed`), and deliberately not `PICTURE_IMPORTED`:
+  `file_path` changed on a row an open grid may already be showing, but nothing
+  was imported.
 - **Scoped to one folder, and to one pass.** The scan covers a single reference
   folder, so a move *between* two folders is a removal in one scan and an
   addition in another with no shared pass to match in. Two races remain open and

@@ -293,10 +293,25 @@ class ReferenceFolderScanTask(BaseTask):
         moved_paths = self._match_moved_paths(
             existing_by_path, new_paths, removed_paths
         )
+        moved_picture_ids: list[int] = []
         if moved_paths:
+            # The thumbnail is stored under sha256(file_path), so the bitmap
+            # follows the file rather than being abandoned at the old name.
+            # Carrying it beats blanking the dimensions and letting
+            # MissingThumbnailFinder regenerate: nothing is re-rendered, no
+            # unreachable file is left behind in .ref_thumbs (the only cleanup
+            # that exists derives its paths from each row's *current*
+            # file_path, so an orphan there is permanent), and the row never
+            # becomes NULL-width, which is what an in-flight
+            # ThumbnailGenerationTask would otherwise be free to overwrite.
+            carried_thumbnails = {
+                old: self._carry_thumbnail(old, new) for old, new in moved_paths.items()
+            }
 
-            def apply_moves(session: Session, pairs: list[tuple[int, str]]) -> None:
-                for pic_id, new_path in pairs:
+            def apply_moves(
+                session: Session, pairs: list[tuple[int, str, bool]]
+            ) -> None:
+                for pic_id, new_path, thumbnail_carried in pairs:
                     pic = session.get(Picture, pic_id)
                     if pic is None:
                         # The row went between the scan's read and this write —
@@ -314,25 +329,34 @@ class ReferenceFolderScanTask(BaseTask):
                         )
                         continue
                     pic.file_path = new_path
-                    # The thumbnail is stored under sha256(file_path), so the
-                    # old bitmap is unreachable at the new path.  Blanking the
-                    # dimensions is what MissingThumbnailFinder keys on, so the
-                    # existing sweep regenerates it; leaving them set points the
-                    # picture at a thumbnail that is not there.
-                    pic.thumbnail_width = None
-                    pic.thumbnail_height = None
+                    # The explicit move route (routes/reference_folders.py) sets
+                    # this from the destination basename, and _build_picture
+                    # initialises it from the path.  Leaving it alone would make
+                    # a renamed file download under its old name.
+                    pic.original_file_name = os.path.basename(new_path)
+                    if not thumbnail_carried:
+                        # No bitmap to carry, so point the sweep at it instead of
+                        # at a thumbnail that is not there.
+                        pic.thumbnail_width = None
+                        pic.thumbnail_height = None
                     session.add(pic)
                 session.commit()
 
-            self._db.run_task(
-                apply_moves,
-                sorted(
-                    (existing_by_path[old].id, new)
-                    for old, new in moved_paths.items()
-                    if existing_by_path[old].id is not None
-                ),
-                priority=DBPriority.LOW,
+            move_pairs = sorted(
+                (
+                    existing_by_path[old].id,
+                    new,
+                    carried_thumbnails.get(old, False),
+                )
+                for old, new in moved_paths.items()
+                if existing_by_path[old].id is not None
             )
+            self._db.run_task(apply_moves, move_pairs, priority=DBPriority.LOW)
+            # A followed move changes file_path (and with it the thumbnail URL
+            # and the download name) on a row an open grid may already be
+            # showing, and nothing else in this task reports it: without this the
+            # grid keeps the old state until the next full reload.
+            moved_picture_ids = [pic_id for pic_id, _, _ in move_pairs]
             logger.info(
                 "Reference folder %s: followed %d moved file(s).",
                 self._folder_path,
@@ -503,6 +527,7 @@ class ReferenceFolderScanTask(BaseTask):
             "caption_updated_count": len(caption_updates),
             "caption_updated_picture_ids": caption_updated_picture_ids,
             "imported_picture_ids": imported_picture_ids,
+            "moved_picture_ids": moved_picture_ids,
         }
 
     def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:
@@ -578,6 +603,46 @@ class ReferenceFolderScanTask(BaseTask):
                 update[path_key] = target
                 update[mtime_key] = new_mtime
 
+    def _carry_thumbnail(self, old_path: str, new_path: str) -> bool:
+        """Move a followed picture's thumbnail bitmap to its new path-derived name.
+
+        Thumbnails live at ``sha256(file_path)`` under ``image_root/.ref_thumbs``
+        (``ImageUtils.get_thumbnail_path``), so a followed move renames the
+        bitmap rather than re-rendering it.  Nothing sweeps that directory by
+        anything but a row's current ``file_path``, so a bitmap left at the old
+        name would never be reachable and never be collected.
+
+        Returns:
+            ``True`` when the new path now has the bitmap, so the caller can keep
+            the stored dimensions.  ``False`` when there was nothing to carry or
+            the rename failed, in which case the caller blanks the dimensions and
+            ``MissingThumbnailFinder`` renders a fresh one.
+        """
+        image_root = self._db.image_root
+        old_thumb = ImageUtils.get_thumbnail_path(image_root, old_path)
+        new_thumb = ImageUtils.get_thumbnail_path(image_root, new_path)
+        if not old_thumb or not new_thumb or old_thumb == new_thumb:
+            return bool(old_thumb and old_thumb == new_thumb)
+        try:
+            if not os.path.exists(old_thumb):
+                return False
+            os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
+            os.replace(old_thumb, new_thumb)
+            return True
+        except OSError as exc:
+            # Not fatal: the picture simply regenerates its thumbnail.  Say so,
+            # because a bitmap stranded at the old name is never collected.
+            logger.warning(
+                "Reference folder %s: could not carry the thumbnail for the move "
+                "%s -> %s (%s); it will be regenerated and %s may be left behind.",
+                self._folder_path,
+                old_path,
+                new_path,
+                exc,
+                old_thumb,
+            )
+            return False
+
     def _match_moved_paths(
         self,
         existing_by_path: dict[str, Picture],
@@ -599,6 +664,11 @@ class ReferenceFolderScanTask(BaseTask):
 
         Only a 1:1 match on ``(pixel_sha, size_bytes)`` counts as a move, and
         only when no unchanged file in the folder shares that key either.
+        Scrapheap rows are never the *source* of a move (a hidden soft-deleted
+        row would otherwise swallow an unrelated new file of the same content)
+        but do count as unchanged files blocking one, since their file is still
+        on disk.  A present file whose ``pixel_sha`` has not been backfilled yet
+        makes the whole folder unmatchable rather than merely uncounted.
         Identical pixels at several paths are genuine copies, and the rows
         behind them can differ in tags, sets and scores — pairing them by guess
         would move one picture's work onto another picture's file, which is the
@@ -632,10 +702,17 @@ class ReferenceFolderScanTask(BaseTask):
         # for exactly this reason.  Here a false pair is worse than the bug
         # being fixed: a lost row is visible, one picture's tags and
         # memberships silently rebound onto another picture's file are not.
+        # Scrapheap rows are not move candidates.  ``fetch_existing`` loads
+        # ``deleted=True`` pictures on purpose, so without this a hidden
+        # scrapheap row whose file really was deleted would swallow an unrelated
+        # new file of the same content: the arrival is taken out of
+        # ``new_paths`` as "a move", and what the user gets is not a new picture
+        # but a soft-deleted one they cannot see.  Leaving them in
+        # ``removed_paths`` keeps the ordinary cleanup path unchanged.
         gone_by_key: dict[tuple[str, int | None], list[str]] = {}
         for path in removed_paths:
             picture = existing_by_path[path]
-            if picture.pixel_sha:
+            if picture.pixel_sha and not picture.deleted:
                 key = (picture.pixel_sha, picture.size_bytes)
                 gone_by_key.setdefault(key, []).append(path)
         if not gone_by_key:
@@ -645,10 +722,37 @@ class ReferenceFolderScanTask(BaseTask):
         # the stable rows cost nothing to count: their hash is already loaded.
         # Without this, deleting A and separately adding an identical C while
         # an identical B sits untouched in the folder reads as a clean 1:1.
-        stable_keys: set[tuple[str, int | None]] = set()
+        #
+        # Scrapheap rows *do* count here, unlike above.  Their file is still on
+        # disk, so it is a real identical file the arrival could be a copy of;
+        # counting it only ever refuses a match, which is the safe direction.
+        stable_counts: dict[tuple[str, int | None], int] = {}
+        unhashed_stable = 0
         for path, picture in existing_by_path.items():
-            if path not in removed_paths and picture.pixel_sha:
-                stable_keys.add((picture.pixel_sha, picture.size_bytes))
+            if path in removed_paths:
+                continue
+            if not picture.pixel_sha:
+                unhashed_stable += 1
+                continue
+            key = (picture.pixel_sha, picture.size_bytes)
+            stable_counts[key] = stable_counts.get(key, 0) + 1
+
+        # ``pixel_sha`` is nullable and MissingPixelShaFinder backfills it in the
+        # background, so a present, unchanged file can be invisible to the count
+        # above.  That is exactly the file whose existence would have refused the
+        # match, so a NULL there is not "no collision", it is "unknown".  Refuse
+        # to follow anything until the backfill has caught up; this scan writes
+        # the hash for every file it imports, so the gap is transient, and the
+        # fallback is the delete-and-re-add that ran before this existed.
+        if unhashed_stable:
+            logger.info(
+                "Reference folder %s: %d unchanged file(s) have no pixel hash "
+                "yet, so a move cannot be told from a copy; re-importing until "
+                "the hash backfill catches up.",
+                self._folder_path,
+                unhashed_stable,
+            )
+            return {}
 
         arrived_by_key: dict[tuple[str, int | None], list[str]] = {}
         for path in sorted(new_paths):
@@ -673,7 +777,8 @@ class ReferenceFolderScanTask(BaseTask):
             candidates = arrived_by_key.get(key, ())
             if not candidates:
                 continue
-            if len(old_paths) == 1 and len(candidates) == 1 and key not in stable_keys:
+            stable = stable_counts.get(key, 0)
+            if len(old_paths) == 1 and len(candidates) == 1 and stable == 0:
                 moved[old_paths[0]] = candidates[0]
             else:
                 logger.info(
@@ -683,7 +788,7 @@ class ReferenceFolderScanTask(BaseTask):
                     self._folder_path,
                     len(old_paths),
                     len(candidates),
-                    1 if key in stable_keys else 0,
+                    stable,
                 )
         return moved
 

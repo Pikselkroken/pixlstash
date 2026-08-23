@@ -13,6 +13,7 @@ work onto another picture's file.
 
 import os
 import tempfile
+import time
 
 import pytest
 from PIL import Image
@@ -29,6 +30,11 @@ from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 # rather than sitting in the long backoff a freshly built per-test vault had.
 # Each of these owns something a test here writes by hand or asserts on:
 _CONFLICTING_FINDERS = (
+    # ThumbnailGenerationTask selects on ``thumbnail_width IS NULL`` and writes
+    # the regenerated bitmap's dimensions back, so it can both repopulate a row
+    # this module expects to stay blank and re-render a bitmap whose absence is
+    # being asserted. Same reasoning as tests/test_inline_rotate.py.
+    TaskType.THUMBNAIL_GENERATION,
     # ReferenceFolderScanFinder scans the same folders these tests scan by hand.
     # A sweep between ``_make_folder`` and ``_run_scan`` imports the files first,
     # and the manual scan then imports them again: duplicate rows for one path,
@@ -59,10 +65,32 @@ def server():
 
 
 def _make_folder(server, folder_dir):
+    """Register a reference folder that the background scanner will leave alone.
+
+    ``ReferenceFolderScanFinder`` selects on ``last_scanned``, not on status: a
+    row with NULL there is due for a scan *immediately*, and every folder in the
+    database is a candidate. So between this insert and the first ``_run_scan``
+    the planner is free to scan the same folder concurrently, and both passes
+    import the same files — the CI gate failed on exactly that, twice, with
+    ``assert 2 == 1`` and ``assert 4 == 2``: every row doubled.
+
+    Stamping ``last_scanned`` now puts the folder outside the finder's rescan
+    interval from the moment it exists, which closes the window by construction
+    rather than by relying on the finder staying detached. That matters because
+    the detachment is done once against the vault the fixture saw, and a vault
+    can be rebuilt underneath it (``library_switch_service`` assigns a freshly
+    built one, with every finder re-attached). The scan task itself re-stamps
+    the column when it completes, so later scans stay outside the interval too.
+    """
     os.makedirs(folder_dir, exist_ok=True)
 
     def _insert(session: Session):
-        folder = ReferenceFolder(folder=folder_dir, label="refs", status="active")
+        folder = ReferenceFolder(
+            folder=folder_dir,
+            label="refs",
+            status="active",
+            last_scanned=time.time(),
+        )
         session.add(folder)
         session.commit()
         session.refresh(folder)
@@ -155,12 +183,16 @@ def test_moved_file_keeps_its_picture(server, tmp_path):
 
     _run_scan(server, folder_id, folder_dir)
     indexed = _pictures(server, folder_dir)
-    assert len(indexed) == 1
+    assert [os.path.basename(p.file_path) for p in indexed] == ["mira_042.png"]
     picture_id = indexed[0].id
+    thumb_width = indexed[0].thumbnail_width
+    assert thumb_width is not None, "the import must have rendered a thumbnail"
     _tag(server, picture_id, "mira")
     _mark(server, picture_id, "keepme")
 
-    moved_to = os.path.join(folder_dir, "Characters", "Mira", "final", "mira_042.png")
+    # Renamed as well as relocated, so the basename genuinely changes: the
+    # download name is taken from it, and the explicit move route resets it too.
+    moved_to = os.path.join(folder_dir, "Characters", "Mira", "final", "final_042.png")
     os.makedirs(os.path.dirname(moved_to), exist_ok=True)
     os.rename(original, moved_to)
 
@@ -172,11 +204,19 @@ def test_moved_file_keeps_its_picture(server, tmp_path):
     assert after[0].id == picture_id
     assert after[0].file_path == moved_to
     assert _tags(server, picture_id) == ["mira"]
-    # The thumbnail lives at sha256(file_path), so the stored bitmap is not
-    # reachable from the new path. Blank dimensions are what the thumbnail
-    # sweep keys on; leaving them set would point the picture at nothing.
-    assert after[0].thumbnail_width is None, (
-        "a followed move must invalidate the thumbnail it just orphaned"
+    # The thumbnail lives at sha256(file_path), so it has to travel with the
+    # file. Nothing sweeps .ref_thumbs by anything but a row's current
+    # file_path, so a bitmap left at the old name would never be collected.
+    image_root = server.vault.db.image_root
+    assert not os.path.exists(ImageUtils.get_thumbnail_path(image_root, original)), (
+        "the bitmap at the old path-derived name would be an unreachable orphan"
+    )
+    assert os.path.exists(ImageUtils.get_thumbnail_path(image_root, moved_to))
+    assert after[0].thumbnail_width == thumb_width, (
+        "the bitmap was carried, so it must not be blanked for re-rendering"
+    )
+    assert after[0].original_file_name == "final_042.png", (
+        "a renamed file must not keep downloading under its old name"
     )
 
 
@@ -194,7 +234,9 @@ def test_deleted_file_is_still_removed(server, tmp_path):
     _make_image(os.path.join(folder_dir, "kept.png"), (200, 100, 50))
 
     _run_scan(server, folder_id, folder_dir)
-    assert len(_pictures(server, folder_dir)) == 2
+    assert sorted(
+        os.path.basename(p.file_path) for p in _pictures(server, folder_dir)
+    ) == ["gone.png", "kept.png"]
 
     os.remove(doomed)
     # Different pixels, so this is not the deleted file arriving elsewhere.
@@ -247,6 +289,80 @@ def test_a_sampled_hash_collision_of_a_different_size_is_not_a_move(server, tmp_
     )
 
 
+def test_a_scrapheap_row_does_not_swallow_an_unrelated_new_file(server, tmp_path):
+    """A soft-deleted row must not claim a new file of the same content.
+
+    ``fetch_existing`` loads ``deleted=True`` rows on purpose, so without the
+    exclusion a hidden scrapheap picture whose file really was deleted pairs
+    with an unrelated arrival: the new path is taken out of ``new_paths`` as a
+    move, and what the user gets is not a new picture but a soft-deleted one
+    they cannot see.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    doomed = _make_image(os.path.join(folder_dir, "binned.png"), (10, 20, 30))
+
+    _run_scan(server, folder_id, folder_dir)
+    indexed = _pictures(server, folder_dir)
+    assert [os.path.basename(p.file_path) for p in indexed] == ["binned.png"]
+
+    def _scrapheap(session: Session):
+        pic = session.get(Picture, indexed[0].id)
+        pic.deleted = True
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_scrapheap)
+
+    # The binned file goes, and an unrelated file of the same content arrives.
+    os.remove(doomed)
+    _make_image(os.path.join(folder_dir, "fresh.png"), (10, 20, 30))
+    _run_scan(server, folder_id, folder_dir)
+
+    live = [p for p in _pictures(server, folder_dir) if not p.deleted]
+    assert [os.path.basename(p.file_path) for p in live] == ["fresh.png"], (
+        "the arrival is its own picture, not a scrapheap row quietly relabelled"
+    )
+
+
+def test_an_unhashed_unchanged_file_blocks_matching(server, tmp_path):
+    """A stable row with no pixel_sha means 'unknown collision', not 'no collision'.
+
+    ``pixel_sha`` is nullable and backfilled in the background, so a present
+    unchanged file can be invisible to the ambiguity count — and it is exactly
+    the file whose existence would have refused the match.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    doomed = _make_image(os.path.join(folder_dir, "a.png"), (10, 20, 30))
+    twin = _make_image(os.path.join(folder_dir, "b.png"), (10, 20, 30))
+
+    _run_scan(server, folder_id, folder_dir)
+    indexed = _pictures(server, folder_dir)
+    assert sorted(os.path.basename(p.file_path) for p in indexed) == ["a.png", "b.png"]
+    doomed_id = next(p.id for p in indexed if p.file_path == doomed)
+    _mark(server, doomed_id, "keepme")
+
+    # The twin loses its hash the way an un-backfilled row would have it.
+    def _blank_sha(session: Session):
+        pic = session.exec(select(Picture).where(Picture.file_path == twin)).one()
+        pic.pixel_sha = None
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_blank_sha)
+
+    os.remove(doomed)
+    _make_image(os.path.join(folder_dir, "c.png"), (10, 20, 30))
+    _run_scan(server, folder_id, folder_dir)
+
+    after = _pictures(server, folder_dir)
+    assert not any(p.description == "keepme" for p in after), (
+        "the unchanged twin is invisible to the count while its hash is NULL, "
+        "so the match cannot be shown to be 1:1 and must not be followed"
+    )
+
+
 def test_an_unchanged_twin_makes_the_match_ambiguous(server, tmp_path):
     """A stable file sharing the key blocks the pairing, not just a new one.
 
@@ -261,7 +377,7 @@ def test_an_unchanged_twin_makes_the_match_ambiguous(server, tmp_path):
 
     _run_scan(server, folder_id, folder_dir)
     indexed = _pictures(server, folder_dir)
-    assert len(indexed) == 2
+    assert sorted(os.path.basename(p.file_path) for p in indexed) == ["a.png", "b.png"]
     doomed_id = next(p.id for p in indexed if p.file_path == doomed)
     _mark(server, doomed_id, "keepme")
 
@@ -287,7 +403,10 @@ def test_ambiguous_pixel_match_is_not_followed(server, tmp_path):
 
     _run_scan(server, folder_id, folder_dir)
     indexed = _pictures(server, folder_dir)
-    assert len(indexed) == 2
+    assert sorted(os.path.basename(p.file_path) for p in indexed) == [
+        "copy_a.png",
+        "copy_b.png",
+    ]
     _mark(server, indexed[0].id, "keepme")
 
     sub_dir = os.path.join(folder_dir, "sub")
