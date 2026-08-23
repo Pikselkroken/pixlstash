@@ -768,18 +768,40 @@ def _rescope(server, token: str, scope: str) -> str:
     scope has no mint path and the row has to be written directly — the row is
     the thing under test. The cache flush matters: the middleware answers from
     the token cache, so without it the request would still see ``READ``.
+
+    **The write is verified, not assumed.** A ``READ`` token answers every
+    refusal these tests assert on — the same 403 and the same
+    ``"Token is read-only"`` body — so an UPDATE that matched no row (a renamed
+    column, a changed prefix length, a token minted against a different hub)
+    would leave all of them passing while testing nothing at all. The row is
+    therefore read back and its scope asserted, which is the one thing that
+    tells "the middleware refused the new scope" from "the new scope was never
+    written".
     """
     prefix = token[:8]
 
     def _set(session: Session):
-        session.exec(
+        result = session.exec(
             update(UserToken)
             .where(UserToken.token_prefix == prefix)
             .values(scope=scope)
         )
         session.commit()
+        rows = session.exec(
+            select(UserToken).where(UserToken.token_prefix == prefix)
+        ).all()
+        return result.rowcount, [row.scope for row in rows]
 
-    server.hub_engine.run_task(_set)
+    rowcount, scopes = server.hub_engine.run_task(_set)
+    assert rowcount == 1, (
+        f"rescoping to {scope!r} matched {rowcount} token rows, not 1 — the "
+        "refusals this token is about to be measured against would be the "
+        "ordinary READ refusals, and would prove nothing"
+    )
+    assert scopes == [scope], (
+        f"the token row reads back as {scopes} rather than [{scope!r}] — the "
+        "scope under test was never written"
+    )
     server.auth._flush_token_cache()
     return token
 
