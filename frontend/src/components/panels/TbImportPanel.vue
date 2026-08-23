@@ -99,7 +99,7 @@
         class="tb-import-file-input"
         type="file"
         multiple
-        accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain"
+        :accept="IMPORT_FILE_ACCEPT"
         @change="onLocalChange"
       />
       <div class="tb-import-actions">

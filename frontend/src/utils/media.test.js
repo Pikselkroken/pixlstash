@@ -7,7 +7,9 @@ import {
   isInternalImageDrag,
   isPictureDrag,
   setInternalDragPayload,
+  isSupportedImportFile,
   FACE_DRAG_MIME,
+  IMPORT_FILE_ACCEPT,
   PICTURE_DRAG_MIME,
 } from './media.js'
 
@@ -196,5 +198,33 @@ describe('displayedAspectRatio', () => {
   it('falls back to square rather than dividing by zero', () => {
     expect(displayedAspectRatio(null)).toBe(1)
     expect(displayedAspectRatio({ width: 0, height: 0 })).toBe(1)
+  })
+})
+
+describe('IMPORT_FILE_ACCEPT', () => {
+  // The empty-library card shipped with `image/*,video/*` and nothing else, so
+  // a zip or a caption file could only be reached through the picker's "All
+  // Files" — an import route the app supports and its own dialog hid. These
+  // assert the offer against the predicate rather than against a copy of the
+  // string, so the two cannot drift apart silently again.
+
+  it('offers every file extension the importer will actually take', () => {
+    const offered = IMPORT_FILE_ACCEPT.split(',')
+      .filter((entry) => entry.startsWith('.'))
+      .map((entry) => entry.slice(1))
+
+    expect(offered.length).toBeGreaterThan(0)
+    for (const ext of offered) {
+      expect(isSupportedImportFile({ name: `sample.${ext}` })).toBe(true)
+    }
+  })
+
+  it('names the two types the media wildcards cannot cover', () => {
+    // `image/*` and `video/*` carry the media list between them; an archive and
+    // a caption file match neither wildcard and have to be named outright.
+    expect(isSupportedImportFile({ name: 'shoot.zip' })).toBe(true)
+    expect(isSupportedImportFile({ name: 'shoot.txt' })).toBe(true)
+    expect(IMPORT_FILE_ACCEPT).toContain('.zip')
+    expect(IMPORT_FILE_ACCEPT).toContain('.txt')
   })
 })

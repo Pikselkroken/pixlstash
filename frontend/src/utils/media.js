@@ -100,6 +100,24 @@ const ARCHIVE_EXTENSIONS = ["zip"];
 
 const CAPTION_EXTENSIONS = ["txt"];
 
+/**
+ * The `accept` for every `<input type="file">` that feeds the picture importer.
+ *
+ * One constant rather than a literal per input, because it has to agree with
+ * `isSupportedImportFile` and there is now more than one place to forget: the
+ * empty-library card shipped with `image/*,video/*` alone, which hid zip and
+ * caption imports behind an "All Files" the picker only offers if you look for
+ * it. `accept` remains advisory — the grid still filters what comes back — so
+ * this decides what the picker *offers*, not what the app will take.
+ *
+ * Both spellings of each non-media type are listed because browsers disagree
+ * about which one they match on: Windows reports a zip as
+ * `application/x-zip-compressed`, and a file with no registered handler
+ * reports no type at all, leaving only the extension.
+ */
+export const IMPORT_FILE_ACCEPT =
+  "image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain";
+
 /** What the model shelf catalogues — `pixlstash/routes/model_files.py`. */
 const MODEL_FILE_EXTENSION = ".safetensors";
 

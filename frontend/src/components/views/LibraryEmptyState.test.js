@@ -13,6 +13,7 @@ vi.mock("vuetify/components", () => ({
 }));
 
 import LibraryEmptyState from "./LibraryEmptyState.vue";
+import { IMPORT_FILE_ACCEPT } from "../../utils/media";
 
 function mountState() {
   return mount(LibraryEmptyState, {
@@ -122,6 +123,16 @@ describe("what the buttons do", () => {
     await input.trigger("change");
 
     expect(wrapper.emitted("add-files")[0][0]).toEqual(files);
+  });
+
+  it("offers the picker everything the importer takes, not just media", async () => {
+    // This shipped as `image/*,video/*`, which is narrower than the app: a zip
+    // and a caption file are both supported imports, and the picker greyed them
+    // out. `accept` is advisory rather than a filter, so the cost of getting it
+    // wrong is not a rejected file — it is a route nobody finds.
+    const input = mountState().find(".library-empty__file-input");
+
+    expect(input.attributes("accept")).toBe(IMPORT_FILE_ACCEPT);
   });
 
   it("clears the input so the same files can be chosen twice", async () => {

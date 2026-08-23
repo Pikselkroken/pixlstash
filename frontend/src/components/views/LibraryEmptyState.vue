@@ -14,6 +14,7 @@ import { ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
+import { IMPORT_FILE_ACCEPT } from "../../utils/media";
 
 const emit = defineEmits(["choose-folder", "add-files", "connect-comfyui"]);
 
@@ -117,7 +118,7 @@ function filesChosen(event) {
         class="library-empty__file-input"
         type="file"
         multiple
-        accept="image/*,video/*"
+        :accept="IMPORT_FILE_ACCEPT"
         tabindex="-1"
         aria-hidden="true"
         @change="filesChosen"
