@@ -277,6 +277,36 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "deleter), so the §16.3 host-capability tiers do not apply."
         ),
     ),
+    ("GET", "/api/v1/server-config/views"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 reads back a host path this library publishes its Views tree "
+            "to, and is the control surface of the PATCH beside it — the tier "
+            "that alone may publish the tree is the tier that may see where it "
+            "went. Sibling of GET /model-moves for that reason; owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/views"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 takes a caller-supplied host path and writes a folder tree of "
+            "links into it, removing and rebuilding the subtrees it owns — the "
+            "POST /model-folders class for the path it accepts and the POST "
+            "/model-moves class for the filesystem it writes. It creates only "
+            "links; the ONLY thing it unlinks is a name that is not the last "
+            "one (a symlink, or a regular file with st_nlink > 1), so no file "
+            "whose sole copy is in the tree can be removed by it — anything "
+            "else is reported as kept_by_owner and left alone. Each destination "
+            "is resolved with resolve_path_within against its kind folder and "
+            "each kind folder against the root, and a symlink standing where a "
+            "kind folder goes is unlinked as a link rather than descended, so "
+            "the rebuild cannot be steered outside the views root. owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",

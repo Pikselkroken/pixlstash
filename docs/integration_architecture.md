@@ -811,6 +811,48 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 - The SPA applies updates **optimistically** to local refs and reconciles on response. Failed updates revert and surface a toast.
 - Hidden tags, sort, columns, theme, watermark settings, smart-score penalised tags, etc. are all part of this object — keep the field names identical on both sides.
 
+### 12.1 PixlStash Views (`/server-config/views`)
+
+Views is **not** part of the user-config object: the folder holds *this library's*
+sets, people and projects, so it lives in `library_settings` and has its own
+topic endpoint, reached through `frontend/src/api/serverConfig.js`.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/server-config/views` | — | `{views_root, kinds, available_kinds}` — `views_root` is `null` when views are off |
+| `PATCH` | `/server-config/views` | `{views_root, kinds}` | the same, plus `last_publish` |
+
+Three contract points the client depends on:
+
+- **Saving is rebuilding, and the re-derive is total.** There is no separate
+  rebuild verb: a PATCH with the current values republishes, which is what the
+  pane's *Rebuild now* sends. Every kind folder is cleared, including the ones
+  *not* in `kinds` — switching a kind off removes its folder rather than leaving
+  it behind full of links nothing will refresh — so `kinds: []` really does leave
+  an empty tree.
+- **`views_root: null` turns views off**, removing the published tree and leaving
+  the folder itself alone.
+- **A refused folder changes nothing.** The 400's `detail` names the reason —
+  inside the library, inside a reference folder, cloud-synced, or a filesystem
+  with no links — and the recorded settings are untouched, so the pane must
+  re-read rather than keep showing the root that was tried. `available_kinds` is
+  the server's list, in display order, so the UI can never offer a kind the PATCH
+  would drop.
+
+`last_publish` is what actually landed, not what was asked for:
+`{link_mode: "symlink"|"hardlink", folders, links, skipped_missing,
+skipped_unlinkable, kept_by_owner}`. Two of those name a partial result and the
+UI must show both, because the alternative is a tree that reads as complete and
+is not:
+
+- `skipped_unlinkable` — view folders where **at least one** picture could not be
+  linked. The folder exists and is incomplete; it is not absent. A hard link
+  cannot span two drives, which is what a library split across disks looks like.
+- `kept_by_owner` — entries the rebuild refused to delete because they were not
+  links: the owner's own files, sitting in a view folder. A rebuild removes only
+  a symlink or a file that has another hard link elsewhere, so a file whose only
+  copy is in a view folder is reported and left alone, never deleted.
+
 ---
 
 ## 13. Error Handling Contract

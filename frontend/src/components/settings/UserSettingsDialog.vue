@@ -5,6 +5,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
+import ViewsSection from "./ViewsSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComputeSection from "./ComputeSection.vue";
@@ -259,6 +260,7 @@ watch(
         aria-labelledby="settings-nav-libraries"
       >
         <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <ViewsSection :open="dialogOpen && settingsTab === 'libraries'" />
       </div>
       <div
         v-if="!isReadOnly"

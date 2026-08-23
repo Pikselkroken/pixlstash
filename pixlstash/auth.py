@@ -138,6 +138,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # at all — this frozenset matches literal paths — and stay the recorded
         # follow-up.
         "/api/v1/model-moves",
+        # LOCAL_OWNER_ONLY at the gate: it names the host folder this library
+        # publishes its Views tree to. Same belt-and-braces as the entries
+        # above — AUTHZ_GATE_ENFORCING is a documented one-line rollback, and
+        # without this entry taking it would hand that path to every share
+        # token.
+        "/api/v1/server-config/views",
     }
 )
 

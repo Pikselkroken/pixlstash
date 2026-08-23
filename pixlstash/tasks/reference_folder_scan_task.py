@@ -33,6 +33,8 @@ from pixlstash.utils.caption_file_utils import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
+from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
 
@@ -173,10 +175,29 @@ class ReferenceFolderScanTask(BaseTask):
         _thumb_suffix = f"_thumb{THUMBNAIL_EXTENSION}"
         other_roots = self._other_resolved_paths
         disk_paths: set[str] = set()
+        views_roots: list[str] = []
         for root, dirs, files in os.walk(resolved, topdown=True):
             # Prune subdirectories that are roots of other reference folders so
             # their files are only indexed by their own scan task.
             dirs[:] = [d for d in dirs if os.path.join(root, d) not in other_roots]
+            # Prune a PixlStash Views tree. Every file under it is a link to a
+            # picture indexed somewhere else already, and os.walk lists a
+            # symlinked *file* in ``files`` -- only symlinked directories are
+            # skipped by default -- so without this each picture would be
+            # indexed a second time under its view path. views_service refuses
+            # to publish inside a reference folder, but a folder can be
+            # registered as one after a tree was published there.
+            #
+            # The root is REMEMBERED, not merely skipped, because "absent from
+            # disk_paths" is what this task hard-deletes a Picture row for --
+            # tags, scores, memberships and all. Pruning alone would turn a
+            # marker file appearing over an indexed folder into a silent
+            # library deletion, which is a far worse failure than the double
+            # indexing this prune exists to prevent.
+            if VIEWS_MARKER_NAME in files:
+                dirs[:] = []
+                views_roots.append(root)
+                continue
             for file_name in files:
                 if file_name.endswith(_thumb_suffix):
                     continue
@@ -250,6 +271,24 @@ class ReferenceFolderScanTask(BaseTask):
             }
             override_path_shas = set()
         removed_paths = set(existing_by_path.keys()) - disk_paths
+        if views_roots:
+            # A path under a pruned views tree was not looked for, so its
+            # absence from disk_paths says nothing about whether the file is
+            # there. Deleting its row would be acting on a question never asked.
+            skipped = {
+                path
+                for path in removed_paths
+                if any(path_is_within(path, views_root) for views_root in views_roots)
+            }
+            if skipped:
+                logger.info(
+                    "Reference folder %s: %d indexed pictures lie under a "
+                    "PixlStash Views tree and were not scanned, so their "
+                    "records are kept rather than removed.",
+                    self._folder_path,
+                    len(skipped),
+                )
+                removed_paths -= skipped
 
         # --- Override the ledger on an explicit re-import ---
         # Clear the permanent-deletion ledger rows for the re-imported paths so a

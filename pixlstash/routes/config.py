@@ -22,6 +22,7 @@ from pixlstash.services import (
     config_service,
     library_settings_service,
     scrapheap_service,
+    views_service,
 )
 from pixlstash.telemetry import mark_install_established
 from pixlstash.utils.atomic_write import write_json_atomic
@@ -1145,6 +1146,113 @@ def create_router(server) -> APIRouter:
             int(days),
             scrapheap_service.read_retention_days(server._server_config),
         )
+
+    class ViewsConfigPatch(BaseModel):
+        model_config = ConfigDict(
+            json_schema_extra={
+                "example": {
+                    "views_root": "/home/me/Pictures/_PixlStash Views",
+                    "kinds": ["people", "sets"],
+                }
+            }
+        )
+
+        views_root: Optional[str] = Field(
+            default=None,
+            description=(
+                "Absolute host path the views tree is published to, or `null` "
+                "to turn views off and remove the tree PixlStash published."
+            ),
+        )
+        kinds: list[str] = Field(
+            default_factory=list,
+            description=(
+                "Which kinds to publish: any subset of `people`, `sets`, "
+                "`projects`. An empty list publishes an empty tree."
+            ),
+        )
+
+    def _views_payload(report: Optional[views_service.PublishReport] = None) -> dict:
+        root, kinds = library_settings_service.get_views_config(server.vault.db)
+        payload = {
+            "status": "success",
+            "views_root": root,
+            "kinds": kinds,
+            "available_kinds": list(views_service.KIND_FOLDERS),
+        }
+        if report is not None:
+            payload["last_publish"] = report.as_dict()
+        return payload
+
+    @router.get(
+        "/server-config/views",
+        summary="Get the PixlStash Views configuration",
+        description=(
+            "Returns where this library publishes its Views tree — sets, people "
+            "and projects as folders of LINKS to the real files — and which "
+            "kinds it publishes. `views_root` is `null` when views are off, "
+            "which is the default: nothing is written until a folder is named."
+        ),
+    )
+    def get_views_config(request: Request):
+        _ensure_secure_when_required(request)
+        return _views_payload()
+
+    @router.patch(
+        "/server-config/views",
+        summary="Set the PixlStash Views configuration and rebuild the tree",
+        description=(
+            "Records the views folder and the published kinds, then rebuilds "
+            "the tree. Sending the current values is how the UI's *Rebuild now* "
+            "works: the rebuild is a full re-derive and costs a fraction of a "
+            "second even for a large library, so there is no incremental path "
+            "and no separate verb.\n\n"
+            "**Nothing is copied and no original moves.** Each file in the tree "
+            "is a link; deleting the whole folder loses no picture. Views are "
+            "*additional* to the folders the owner already keeps.\n\n"
+            "A folder that cannot hold the tree is refused with 400 and the "
+            "reason, rather than half-written: inside the library (backups "
+            "refuse a symlinked payload), inside a reference folder (the scan "
+            "would index every link as a second copy), in a cloud-sync folder "
+            "(the client uploads the file the link points at), or on a "
+            "filesystem with no links at all — exFAT and FAT have neither, and "
+            "on Windows symbolic links need administrator rights or Developer "
+            "Mode. Sending `views_root: null` removes the published tree and "
+            "leaves the folder itself alone."
+        ),
+        responses={400: {"description": "The views folder cannot hold the tree."}},
+    )
+    def patch_views_config(request: Request, body: ViewsConfigPatch):
+        _ensure_secure_when_required(request)
+        kinds = [kind for kind in views_service.KIND_FOLDERS if kind in set(body.kinds)]
+        previous_root, _ = library_settings_service.get_views_config(server.vault.db)
+
+        if not body.views_root:
+            if previous_root:
+                views_service.remove(previous_root)
+            library_settings_service.set_views_config(server.vault.db, None, [])
+            return _views_payload()
+
+        collected = server.vault.db.run_immediate_read_task(
+            lambda session: views_service.collect_in_session(session, kinds)
+        )
+        try:
+            report = views_service.publish(
+                server.vault, body.views_root, kinds, collected
+            )
+        except views_service.ViewsError as exc:
+            # The settings are left untouched, so a refused folder never becomes
+            # the recorded one and the next rebuild does not retry it.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if previous_root and not views_service.same_root(
+            previous_root, body.views_root
+        ):
+            views_service.remove(previous_root)
+        library_settings_service.set_views_config(
+            server.vault.db, body.views_root, kinds
+        )
+        return _views_payload(report)
 
     @router.post(
         "/server-config/open",
