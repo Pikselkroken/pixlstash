@@ -525,8 +525,13 @@ def owner_env():
         from starlette.testclient import TestClient
 
         owner = TestClient(server.api, raise_server_exceptions=True)
+        # The first POST /login on a fresh vault *registers* the owner with
+        # whatever it is sent, so this value is invented here rather than known.
+        # It carries its marker in the value — the prefix travels with it when
+        # the fixture is copied, which a comment beside it would not.
         login = owner.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert login.status_code == 200, login.text
         yield {"server": server, "owner": owner, "tmp": tmp.name}
