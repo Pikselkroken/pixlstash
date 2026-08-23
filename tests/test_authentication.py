@@ -1,5 +1,6 @@
 import logging
 import tempfile
+import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -1041,3 +1042,54 @@ def test_secure_required_rejects_remote_plaintext(server, monkeypatch):
     # https from the same remote client is allowed (it's over TLS).
     remote_https = SimpleNamespace(url=SimpleNamespace(scheme="https"))
     server.auth.ensure_secure_when_required(remote_https)  # no raise
+
+
+def test_login_lockout_response_carries_retry_after(server):
+    """The 429 backoff must tell the client how long to wait.
+
+    Regression for #1097: a custom CORS exception handler rebuilt every
+    HTTPException as a fresh JSONResponse and dropped exc.headers, so
+    Retry-After never reached a client. Only the login 429 and the authz
+    gate's 503 raise HTTPException(headers=...) — the other backoff paths
+    (rate_limiter, restore, library admission) build their response directly
+    and never pass through an exception handler at all.
+
+    The Origin header matters: it is what makes CORSMiddleware stamp the
+    response, and proving Retry-After survives *alongside* the CORS pair is
+    the whole point of deleting the handler that used to overwrite it.
+    """
+    server.auth._login_lockout_until = time.monotonic() + 30
+
+    client = TestClient(server.api)
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "testuser", "password": "testpassword"},
+        headers={"Origin": "http://localhost:5173"},
+    )
+    assert response.status_code == 429
+    # The real backoff, not just any number: the lockout was armed for 30s.
+    assert 28 <= int(response.headers["Retry-After"]) <= 31
+    # CORSMiddleware still answers an allowed origin, Vary included.
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "Origin" in response.headers["vary"]
+
+
+def test_login_lockout_denies_cors_to_a_disallowed_origin(server):
+    """Forwarding exc.headers must not become a way to widen CORS.
+
+    The deleted handler merged a dict of headers into the response; anything
+    that re-adds one has to keep this false, or an error body becomes readable
+    cross-origin with credentials attached.
+    """
+    server.auth._login_lockout_until = time.monotonic() + 30
+
+    client = TestClient(server.api)
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "testuser", "password": "testpassword"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert response.status_code == 429
+    assert response.headers["Retry-After"]
+    assert "access-control-allow-origin" not in response.headers
