@@ -44,9 +44,21 @@ from pixlstash.services.folder_structure_service import (
 )
 from pixlstash.utils.library_layout import Facet, _match_key
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
-from tests.authz_guard import assert_real_route
+from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
+
+# Fail any test in this file that asserts on the SPA catch-all's answer.
+#
+# `test_the_read_writes_nothing` shipped naming `/api/v1/picture-sets`, which
+# matches no route. It passed here — FastAPI's 404 is a JSON body identical
+# before and after, so the comparison held while checking nothing — and it failed
+# in CI, where `frontend/dist` exists, the catch-all answers with `index.html`,
+# and `.json()` raises. A green local run was the bug's cover.
+#
+# The guard only bites where the catch-all is mounted, so `assert_real_route`
+# stays the net on a checkout with no `frontend/dist` built.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 #: A folder the sidecar signal will speak about: every picture captioned, and
 #: enough of them to clear MIN_SIDECAR_PICTURES.
@@ -637,10 +649,20 @@ def test_the_read_writes_nothing(owner_env):
         for dirpath, _dirs, files in os.walk(root)
         for name in files
     }
-    counts_before = {
-        route: owner.get(f"{API}/{route}").json()
-        for route in ("projects", "picture-sets", "characters")
-    }
+    # `picture_sets`, with an underscore. The hyphen spelling matches no route,
+    # and naming a dead one here does not fail — it 404s to a JSON body that is
+    # identical before and after, so the assertion below passes while checking
+    # nothing. In CI the SPA catch-all answers it with index.html instead and
+    # `.json()` raises, which is how this was found. Hence the guard: a renamed
+    # route must fail loudly rather than dissolve into a vacuous comparison.
+    entity_routes = ("projects", "picture_sets", "characters")
+    for route in entity_routes:
+        assert_real_route(owner_env["server"].api, "GET", f"{API}/{route}")
+    counts_before = {}
+    for route in entity_routes:
+        response = owner.get(f"{API}/{route}")
+        assert response.status_code == 200, f"{route}: {response.text}"
+        counts_before[route] = response.json()
 
     started = owner.post(_READ, json={"path": root})
     assert started.status_code == 200, started.text
@@ -654,9 +676,9 @@ def test_the_read_writes_nothing(owner_env):
     }
     assert after == before, "the read moved, renamed or rewrote a file"
     for route, was in counts_before.items():
-        assert owner.get(f"{API}/{route}").json() == was, (
-            f"the read created a {route} row"
-        )
+        response = owner.get(f"{API}/{route}")
+        assert response.status_code == 200, f"{route}: {response.text}"
+        assert response.json() == was, f"the read created a {route} row"
 
 
 def test_a_share_token_is_refused_on_all_three_routes(owner_env):
