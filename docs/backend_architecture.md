@@ -1561,6 +1561,26 @@ never on the read path:
   library's files; never do that. A refused path is reported as unconfirmed, so
   the deletion ledger is corrected to `file_removed=False` and restore can
   still resurrect the row.
+- **The in-place rotate** (`operation_log_service.apply_orientation`, §21.5)
+  contains `Picture.file_path` with `resolve_path_within(image_root, …)` and
+  then reads and writes **the resolved path**, so the value that was checked is
+  the value that is used. Containment here is **strict** rather than
+  `path_is_within` (#1024), and the reason is not the one the function name
+  suggests. A symlink planted inside the library never carried the *write* out
+  of it: `write_orientation` renames a `mkstemp` sibling over the path and
+  `os.replace` replaces a symlink instead of following it. `read_orientation`
+  does follow it, so the lexical check let the outside file's bytes — and, via
+  `_carry_file_identity`, its mode and owner — be copied into the library under
+  the link's name. A read escape reachable through a write sink, which is the
+  hole this closes. A library root that is *itself* a symlink still passes,
+  because both sides are resolved.
+  **The cost is deliberate:** a symlinked **subfolder** inside the library —
+  photos kept on a second disk — is refused too, because realpath cannot tell
+  it from a planted link, and rotate declines those pictures. Pinned in
+  `tests/test_path_containment.py` in all three directions. Do not "fix"
+  `path_is_within` to match: the read paths and the shelf's four sites want the
+  lenient form its docstring promises. If the subfolder case must be allowed
+  again, relax it at this sink.
 - **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
   which only honours a recorded `tags_file`/`description_file` value that is
   exactly the image stem plus a safe suffix, so a fabricated column cannot
@@ -2883,7 +2903,7 @@ The HTTP auth middleware runs only for the `http` ASGI scope, so the WebSocket r
 
 - **Password login** (bcrypt-hashed) → JWT.
 - **API tokens** (`UserToken`) with:
-  - `scope`: `ALL` (full owner) or `READ`
+  - `scope`: `ALL` (full owner) or `READ` — the only two values `create_token` will mint. The middleware also recognises `WRITE`, named in `auth.WRITE_ENABLED_SCOPES` so that the write-enabled resource-scoped shape the `*_SCOPED` policies exist for is granted by declaration; no code path mints one, and any scope outside those three is logged and treated as read-only (§16.2, issue #962).
   - Optional `resource_type` + `resource_id` restricting to one of: picture set, character, project, or single picture — **only on a `READ` token.** An `ALL`+`resource_type` token is refused at mint and rejected fail-closed by the middleware (see §16.2 item 4 / §16.3).
   - Optional flags: `include_attachments`, `include_description`
 - **JWT** carried as `Authorization: Bearer <token>`.
@@ -2900,7 +2920,7 @@ Exact:    /, /login, /logout, /check-session, /version,
 Prefix:   /assets/, /share/, /docs/
 ```
 
-In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
+In addition, every scoped token (any token for which `request.state.token_scope` is populated — i.e. any scope but `ALL`) is blocked from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing, and blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) **unless its scope is named in `auth.WRITE_ENABLED_SCOPES`**. That set is the fail-closed hinge (issue #962): the check used to key on `scope == "READ"`, so any other string — a misconfigured row, a forged one, a scope added later — skipped the write refusal and reached every `*_SCOPED` mutation route, each of which is write-unreachable solely because of it. Write-ness is now granted by declaration, not by omission. `WRITE` is the one member and has no mint path; `create_token` still allowlists `ALL`/`READ`.
 
 **Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
