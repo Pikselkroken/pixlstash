@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_31_local_6_loopback():
+def test_host_capability_tier_split_is_34_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 37
-    routes carry a locality tier = 31 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 40
+    routes carry a locality tier = 34 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -287,6 +287,19 @@ def test_host_capability_tier_split_is_31_local_6_loopback():
     a caller who may not fetch a preview is not handed a list of them. The
     loopback count is unchanged: both are reads, and neither spawns anything.
 
+    40 = 34 + 6 with the folder-structure read's three routes (v1.11 Phase 2):
+    ``POST``, ``GET .../status`` and ``DELETE /folder-structure/read``. The POST
+    is ``GET /filesystem/browse``'s class exactly — it takes a caller-supplied
+    host path and walks it, decoding pictures out of it — and it must not be a
+    second, weaker way to ask what is on the disk. The GET is the deliberate
+    one, for the reason ``GET /model-moves`` is on this tier: what it carries
+    *is* the answer, a map of the owner's folder names, tree shape and picture
+    counts, so polling cannot be a lower bar than starting. The DELETE is the
+    POST's authority from the other end. None of the three writes anything —
+    no row is created, no file is moved — which is why the tier follows the
+    disclosure and the path, not a destructive verb. The loopback count is
+    unchanged: nothing here spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -300,7 +313,7 @@ def test_host_capability_tier_split_is_31_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 31, sorted(local)
+    assert len(local) == 34, sorted(local)
 
 
 # ===========================================================================

@@ -138,6 +138,11 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # at all — this frozenset matches literal paths — and stay the recorded
         # follow-up.
         "/api/v1/model-moves",
+        # The folder-structure read's result IS a map of the owner's folder
+        # names, tree shape and picture counts (v1.11 Phase 2). It is
+        # LOCAL_OWNER_ONLY at the gate; it is here as well for the same
+        # rollback reason as filesystem/browse above.
+        "/api/v1/folder-structure/read/status",
     }
 )
 

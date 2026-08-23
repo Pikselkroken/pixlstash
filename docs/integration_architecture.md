@@ -1428,7 +1428,7 @@ could be a person, a project or a client.
 | `signal` | Reads | Proposes | Scope |
 |---|---|---|---|
 | `cardinality` | how many distinct names a level has, over how many parents | `tag`, or *not* `tag` | one whole level |
-| `sidecars` | a caption `.txt`/`.caption` beside every picture | `set` | one folder |
+| `sidecars` | a caption `.txt`/`.caption` beside every picture (case-insensitive) | `set` | one folder |
 | `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
 | `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
 
@@ -1439,27 +1439,53 @@ rather than hardcoded in the client, and the evidence string says what it was
 (`"one face, 19 of 20"`). The full pass runs later as ordinary background work
 and can only *add* people — it never revises a row the owner has accepted.
 
+A fifth `signal` value, `level_vote`, can appear on a **level** proposal: it
+means the level took its rows' answer as its own, and its `text` says the count
+(`"31 of 149 folders read as Set"`).
+
 ### `POST /api/v1/folder-structure/read`
 
 Body `{"path": "/absolute/path/to/library"}`. Returns `{"task_id": "…"}` and
-starts the read in the background. `local_owner_only`: it takes a caller-supplied
-host path (§16.3 host-capability tier), same chokepoint
-(`validate_reference_folder_path`) and same `filesystem_roots` containment as
-`GET /filesystem/browse`. **400** for a path that fails validation, **404** for a
-path that is not a directory, **409** when a read is already running (there is one
-at a time — the screen only ever shows one), **503** when the task runner or the
-inference engine is unavailable.
+starts the read in the background.
+
+`local_owner_only`: it takes a caller-supplied host path (§16.3 host-capability
+tier). The blocklist (`validate_reference_folder_path`) runs on the
+**realpath**, not on the string the caller sent — deliberately stricter than
+`GET /filesystem/browse`, which checks the raw path only: browse lists one
+level, this walks a subtree and decodes files out of it, so a symlink to a
+restricted directory must not get through. `filesystem_roots` containment is the
+same as browse's, and applies only when the owner has configured roots.
+
+| Status | When |
+|---|---|
+| **400** | not absolute, resolves into a restricted system directory, or unusable as a path |
+| **403** | outside the configured `filesystem_roots`, or Docker mode |
+| **404** | the resolved path is not a directory |
+| **409** | a read is already running — there is one at a time, and the screen only ever shows one |
+
+**Starting a read discards the previous one.** There is a single slot, so once a
+new `POST` succeeds the earlier `task_id` returns 404 from both the status and
+the cancel route. A client holding a completed result should keep it rather than
+expect to re-fetch it.
+
+**No inference engine is not an error.** With no GPU task runner the read still
+runs and the other three signals still answer; only `faces` stays silent, so no
+folder comes back as a Person. The result says which happened
+(`face_signal_ran`) — without that field the same tree answers differently
+depending on whether models had loaded, and neither the client nor the owner
+could tell that from a library with nobody in it.
 
 ### `GET /api/v1/folder-structure/read/status?task_id=…`
 
-Polled per §11's task-id branch. `result` is `null` until `status` is
-`completed`.
+Polled per §11's task-id branch. `result` is `null` until the read has **settled**
+(`completed`, `cancelled` or `failed`); a `failed` read carries `error` and a
+`null` result.
 
 ```jsonc
 {
   "task_id": "0f1c…",
   "status": "running",        // queued | running | completed | failed | cancelled
-  "stage": "faces",           // walking | sidecars | faces | matching | done
+  "stage": "faces",           // walking | faces | done
   "processed": 149,           // folders whose face sample has been read
   "total": 352,               // folders that will get one; 0 until `walking` ends
   "progress": 42.3,           // percent, 0.0 while total is 0
@@ -1468,10 +1494,12 @@ Polled per §11's task-id branch. `result` is `null` until `status` is
 }
 ```
 
-`stage` is what the progress bar names — "the bar names what it is buying". The
-counters only mean folders during `faces`; during `walking` `total` is `0` and
-`processed` counts folders found so far, which is why the client must render
-`walking` as an indeterminate bar rather than 0%.
+`stage` is what the progress bar names — "the bar names what it is buying". There
+are only two working stages: `walking` (the tree is being collected, and the
+sidecar signal is counted from the same listing) and `faces`. The counters only
+mean folders during `faces`; during `walking` `total` is `0` and `processed`
+counts folders found so far, which is why the client must render `walking` as an
+indeterminate bar rather than 0%.
 
 ### The result
 
@@ -1484,13 +1512,21 @@ counters only mean folders during `faces`; during `walking` `total` is `0` and
   "picture_count": 28412,
   "truncated": false,           // true = the walk hit max_folders and stopped
   "max_folders": 20000,
+  "unreadable_folders": 0,      // folders skipped because they could not be read
+  "face_signal_ran": true,      // false = no inference engine; nobody is a Person
   "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
 }
 ```
 
-`truncated: true` means the tree was bigger than the walk's bound and the levels
-describe **a prefix of it**, not the whole thing. Say so on the screen; do not
-present a truncated read as a complete one.
+Two fields the screen must not ignore, because both mean *this map is not the
+whole library*:
+
+- **`truncated: true`** — the tree was bigger than the walk's bound and the
+  levels describe a prefix of it.
+- **`unreadable_folders > 0`** — that many folders could not be opened
+  (permissions, a broken mount) and are **absent from `levels` entirely**. A
+  read that omits a subtree and presents itself as complete is worse than one
+  that refuses.
 
 A **level**:
 
@@ -1498,13 +1534,15 @@ A **level**:
 {
   "depth": 3,                   // 1 = the root folder itself
   "folder_count": 149,
-  "picture_count": 26734,
+  "direct_picture_count": 26734,  // pictures directly in these folders, NOT
+                                  // recursive — summing recursive counts would
+                                  // count a picture once per ancestor
   "proposal": {
     "kind": null,               // project|set|person|tag|folder|null
     "candidates": [],           // 2+ kinds when the signals only narrowed it
     "match": null,
     "evidence": [{"signal": "cardinality",
-                  "text": "149 names under 14 parents, used once each"}]
+                  "text": "149 names under 14 parents, used once each, so not labels"}]
   },
   "folders": [ /* every folder at this depth — see below */ ]
 }
@@ -1520,9 +1558,9 @@ A **folder row**:
 
 ```jsonc
 {
-  "id": "3/12",                 // stable for the life of this read; the handle
+  "id": "3/57",                 // stable for the life of this read; the handle
                                 // every per-row override addresses
-  "parent_id": "2/0",           // null at level 1
+  "parent_id": "2/4",           // null at level 1
   "depth": 3,
   "name": "mira",
   "relative_path": "2024 Shoots/mira",   // POSIX separators, relative to root
@@ -1546,16 +1584,32 @@ A **folder row**:
 absolute path is already in `root.path`; joining is the client's job. This keeps
 a screenshot of the mapping screen from carrying the owner's home directory.
 
-**`id` is positional (`"<depth>/<index>"`) and belongs to one read.** It is not a
-database id — nothing here is in the database yet — and it is not stable across
-two reads of the same folder. Persist an override against `relative_path`, never
-against `id`.
+**`id` is `"<depth>/<walk-index>"` and belongs to one read.** The index is the
+folder's position in the whole walk, **not within its level** — so a level's ids
+are sparse and out of order, and `id`s must be treated as opaque strings rather
+than sorted or indexed on. It is not a database id (nothing here is in the
+database yet) and it is not stable across two reads of the same folder. Persist
+an override against `relative_path`, never against `id`.
 
 `match` is present only for `name_match`, and it is a **lookup, not an
 inference**: `entity_type` is one of `project`, `set`, `character`, `tag`, and
 `id` is that row's real primary key. When `match` is non-null the row's `kind` is
 that entity's kind, and accepting the row should attach to the existing entity
-rather than create a second one with the same name.
+rather than create a second one with the same name. **`tag` is the exception and
+carries `id: null`** — a tag in this vault is a string on a picture, not a row of
+its own (`Tag.tag`), so there is no id to hand back and the name *is* the handle.
+
+Two ways `name_match` declines to hand back a `match`, and both are deliberate:
+
+- **Two entities of the same kind share the name** (`PictureSet.name` is not
+  unique, and a real vault has duplicates on day one). The `kind` is still known
+  and is returned; `match` is `null` and the evidence says
+  `"matches 2 existing sets"`. Returning whichever row the query happened to
+  order first, under a field this section calls a real primary key, would send
+  Phase 3's attach at an arbitrary set.
+- **Two *kinds* of entity share the name** (a project *and* a person both called
+  `Mira`). That is a narrowing, not a match: `kind: null`, `match: null`,
+  `candidates: ["project", "person"]`, with the evidence saying so.
 
 ### Evidence
 
@@ -1575,15 +1629,23 @@ The three ways a proposal comes back, and all three are legitimate:
 | `kind: null`, `candidates` 2+ | signals ruled things out, nothing in | "one of these: …" |
 | `kind: null`, `candidates: []` | nothing had anything to say | "This one is… ▾" |
 
-`kind: "folder"` is a positive answer meaning **"just a folder"** — the name is
-not telling us anything and we are saying so. It is not the same as `null`.
+`kind: "folder"` — **"just a folder"** — is in the enum because the *owner* can
+choose it on the mapping screen and Phase 3 will send it back. **No signal ever
+proposes it**, because no signal can prove that a string means nothing. A row the
+backend had nothing to say about comes back as `kind: null`, not as `"folder"`.
 
 ### `DELETE /api/v1/folder-structure/read?task_id=…`
 
-Cancels a running read. Returns `{"status": "cancelled"}`, or **404** if the
-task-id is unknown. Cancel stays live for the whole two minutes, per the release
-plan's risk table; a cancelled read keeps its partial `result` so the screen can
-still show what was found.
+Asks a running read to stop. Returns `{"status": "cancelled"}`, or **404** if the
+task-id is unknown (including an id evicted by a later read). A read that has
+already settled is **not** cancelled and reports what it actually is —
+`{"status": "completed"}` — rather than claiming a cancel the client cannot check.
+
+Cancel stays live for the whole two minutes, per the release plan's risk table,
+and a cancelled read keeps its partial `result` so the screen can still show what
+was found. It takes effect **at the next folder boundary**, so a cancel issued
+while a folder's face batch is in flight lands when that batch returns rather
+than instantly.
 
 ### Not in this API
 

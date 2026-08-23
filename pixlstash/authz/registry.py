@@ -555,6 +555,19 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 host FS mkdir; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
     ),
+    # ── folder_structure.py (§16.3 host-capability; v1.11 Phase 2) ──────────
+    ("POST", "/api/v1/folder-structure/read"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 host FS read: takes a caller-supplied host path and walks it, sampling pictures off the disk, so it is the same path-authority class as GET /filesystem/browse and must not be a second, weaker way to ask what is on the disk. It writes nothing — no row is created, no file is moved or renamed — but what it RETURNS is a map of the owner's folder names and picture counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/folder-structure/read/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: carries the read's RESULT, which is the folder map itself — the same host information the POST is tiered for, so polling must not be a lower bar than starting; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/folder-structure/read"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: cancels the owner's in-flight read — authority over another principal's operation, on the same tier as the route that starts it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
         "GET",
