@@ -395,7 +395,18 @@ hands the chosen files up **unfiltered**. `ImageGrid.importChosenFiles` drops
 what PixlStash cannot read, against the same `isSupportedImportFile` and under
 the same `import-unsupported-files` notice key the two drop paths use — an OS
 picker's `accept` is advisory, so a button that skipped it would be the one
-import route that took anything silently.
+import route that took anything silently. It normalises with `Array.from`
+before filtering, so a caller handing it an `<input>`'s `FileList` gets an
+import rather than a `TypeError` raised a long way from the mistake.
+
+**`accept` is one constant, `IMPORT_FILE_ACCEPT` in `utils/media.js`, for all
+three import inputs** (this card, `PhotosImportDialog`, `TbImportPanel`). It has
+to agree with `isSupportedImportFile`, and it did not: this card shipped as
+`image/*,video/*`, which greyed out the zip and caption-file imports the app
+supports and left them reachable only through the picker's "All Files". Advisory
+or not, `accept` is what the route *looks like it takes*, so a narrow one hides
+a feature rather than rejecting a file. `media.test.js` asserts the offer
+against the predicate rather than against a copy of the string.
 
 **Three conditions stop it appearing, and two are about not lying:**
 
