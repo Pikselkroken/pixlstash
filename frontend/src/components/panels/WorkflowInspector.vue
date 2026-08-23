@@ -162,14 +162,30 @@
           <!-- Three sentences, not one, because the difference matters: this
                workflow outlived its pictures, we have not read them yet, or we
                tried and could not. Saying "nothing is left" when the request
-               simply failed is the one thing this panel must not do. -->
+               simply failed is the one thing this panel must not do — and
+               saying "reading…" for ever when it already came back empty-handed
+               is how the first version of that fix failed. -->
           <p v-else-if="samplesPending" class="wfins-quiet wfins-note">
             Reading its pictures…
           </p>
-          <p v-else-if="hasPictures" class="wfins-quiet wfins-note">
-            Could not read its pictures just now. The library still has
-            {{ groupedNumber(row.pictures) }} of them.
-          </p>
+          <template v-else-if="samplesFailed">
+            <p class="wfins-quiet wfins-note">
+              Could not read its pictures just now.<template v-if="hasPictures">
+                The library still has {{ groupedNumber(row.pictures) }} of
+                them.</template
+              >
+            </p>
+            <!-- The failure has a way out of it. Without this the only retry is
+                 selecting another workflow and coming back, which nothing on
+                 screen tells anybody. -->
+            <button
+              class="wfins-action"
+              type="button"
+              @click="store.loadSamples(row.topology_hash)"
+            >
+              Try again
+            </button>
+          </template>
           <p v-else class="wfins-quiet wfins-note">
             Nothing this workflow made is still in the library. The workflow
             itself is kept whole.
@@ -244,15 +260,22 @@ const hasPictures = computed(() => Boolean(row.value?.pictures));
 /**
  * Whether the tiles are still on their way.
  *
- * `samples[hash]` being absent means one of two things — not asked yet, or
- * asked and failed — and the tab has a different sentence for each.
+ * A missing `samples[hash]` is NOT enough to answer this: absent means both
+ * "not asked yet" and "asked and failed", and reading it as pending leaves the
+ * panel saying "Reading its pictures…" for ever after one dropped request,
+ * with the sentence written for the failure unreachable. The store records the
+ * failure separately, so the two are told apart here.
  */
-const samplesPending = computed(() =>
-  row.value
-    ? store.isSamplesLoading(row.value.topology_hash) ||
-      !(row.value.topology_hash in store.samples)
-    : false,
+const samplesFailed = computed(() =>
+  row.value ? store.samplesDidFail(row.value.topology_hash) : false,
 );
+
+const samplesPending = computed(() => {
+  if (!row.value) return false;
+  const hash = row.value.topology_hash;
+  if (store.isSamplesLoading(hash)) return true;
+  return !(hash in store.samples) && !samplesFailed.value;
+});
 
 /**
  * The variants, as a magnitude ramp.
