@@ -96,9 +96,9 @@ export const IMPORT_MEDIA_EXTENSIONS = [
   "mkv",
 ];
 
-const ARCHIVE_EXTENSIONS = ["zip"];
+export const ARCHIVE_EXTENSIONS = ["zip"];
 
-const CAPTION_EXTENSIONS = ["txt"];
+export const CAPTION_EXTENSIONS = ["txt"];
 
 /**
  * The `accept` for every `<input type="file">` that feeds the picture importer.

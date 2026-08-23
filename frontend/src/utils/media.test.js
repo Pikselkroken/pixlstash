@@ -8,6 +8,8 @@ import {
   isPictureDrag,
   setInternalDragPayload,
   isSupportedImportFile,
+  ARCHIVE_EXTENSIONS,
+  CAPTION_EXTENSIONS,
   FACE_DRAG_MIME,
   IMPORT_FILE_ACCEPT,
   PICTURE_DRAG_MIME,
@@ -219,12 +221,21 @@ describe('IMPORT_FILE_ACCEPT', () => {
     }
   })
 
-  it('names the two types the media wildcards cannot cover', () => {
-    // `image/*` and `video/*` carry the media list between them; an archive and
-    // a caption file match neither wildcard and have to be named outright.
-    expect(isSupportedImportFile({ name: 'shoot.zip' })).toBe(true)
-    expect(isSupportedImportFile({ name: 'shoot.txt' })).toBe(true)
-    expect(IMPORT_FILE_ACCEPT).toContain('.zip')
-    expect(IMPORT_FILE_ACCEPT).toContain('.txt')
+  it('advertises every type the importer takes, the other direction', () => {
+    // The check above is a subset check: it would stay green if a supported
+    // type were dropped from the offer, which is the drift that actually
+    // matters. So walk the predicate's own lists instead.
+    //
+    // Media is carried by the two wildcards rather than named extension by
+    // extension, so those are asserted outright — removing either would hide
+    // every picture and every video while leaving the subset check green.
+    expect(IMPORT_FILE_ACCEPT).toContain('image/*')
+    expect(IMPORT_FILE_ACCEPT).toContain('video/*')
+
+    // Everything else matches neither wildcard and has to be named.
+    for (const ext of [...ARCHIVE_EXTENSIONS, ...CAPTION_EXTENSIONS]) {
+      expect(isSupportedImportFile({ name: `shoot.${ext}` })).toBe(true)
+      expect(IMPORT_FILE_ACCEPT).toContain(`.${ext}`)
+    }
   })
 })
