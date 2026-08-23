@@ -276,6 +276,55 @@ class ReferenceFolderScanTask(BaseTask):
                 cleared,
             )
 
+        # --- Follow moved files before anything is deleted ---
+        # A file moved inside the folder is one path in ``removed_paths`` and
+        # another in ``new_paths``, same bytes.  Handled in that order it is a
+        # delete plus a re-add: the row goes and with it everything keyed to the
+        # picture id (tags, smart score, faces, likeness pairs, project/set
+        # membership, stack membership, review state).  The pixels survive and
+        # everything PixlStash added does not, so the only safe way to use a
+        # reference folder was to never reorganize it.  Both halves are already
+        # in this same pass, so match them and move the row instead.
+        #
+        # Runs before the removal block by necessity: the delete is what
+        # destroys the row being rescued.
+        moved_paths = self._match_moved_paths(
+            existing_by_path, new_paths, removed_paths
+        )
+        if moved_paths:
+
+            def apply_moves(session: Session, pairs: list[tuple[int, str]]) -> None:
+                for pic_id, new_path in pairs:
+                    pic = session.get(Picture, pic_id)
+                    if pic is not None:
+                        pic.file_path = new_path
+                        session.add(pic)
+                session.commit()
+
+            self._db.run_task(
+                apply_moves,
+                sorted(
+                    (existing_by_path[old].id, new)
+                    for old, new in moved_paths.items()
+                    if existing_by_path[old].id is not None
+                ),
+                priority=DBPriority.LOW,
+            )
+            logger.info(
+                "Reference folder %s: followed %d moved file(s).",
+                self._folder_path,
+                len(moved_paths),
+            )
+            # A moved file is neither removed nor new.  ``existing_by_path`` is
+            # re-keyed as well as narrowed, because the sidecar pass below walks
+            # it by path and would otherwise reconcile at the old location.
+            for old_path, new_path in moved_paths.items():
+                picture = existing_by_path.pop(old_path)
+                picture.file_path = new_path
+                existing_by_path[new_path] = picture
+            removed_paths -= moved_paths.keys()
+            new_paths -= set(moved_paths.values())
+
         # --- Handle removed files ---
         if removed_paths:
             removed_ids = [
@@ -505,6 +554,85 @@ class ReferenceFolderScanTask(BaseTask):
             if new_mtime is not None:
                 update[path_key] = target
                 update[mtime_key] = new_mtime
+
+    def _match_moved_paths(
+        self,
+        existing_by_path: dict[str, Picture],
+        new_paths: set[str],
+        removed_paths: set[str],
+    ) -> dict[str, str]:
+        """Pair vanished indexed paths with new disk paths holding the same pixels.
+
+        Args:
+            existing_by_path: This folder's indexed pictures, keyed by file path.
+            new_paths: Disk paths not yet indexed, after ledger filtering.
+            removed_paths: Indexed paths no longer present on disk.
+
+        Returns:
+            ``{old_path: new_path}`` for each unambiguous move.  Empty when
+            either side is empty, so the expensive case costs nothing: a first
+            scan of a large folder has no removals and never hashes here, and a
+            folder losing files without gaining any never hashes either.
+
+        Only a 1:1 pixel match counts as a move.  Identical pixels at several
+        paths are genuine copies, and the rows behind them can differ in tags,
+        sets and scores — pairing them by guess would move one picture's work
+        onto another picture's file, which is the loss this exists to prevent.
+        Ambiguous groups fall through to the delete-and-re-add path, which is
+        no worse than the behaviour before this existed.
+
+        Scoped to one reference folder, because the scan is: a file moved
+        between two reference folders is a removal in one scan and an addition
+        in another, with no shared pass to match them in.  Since the scan walks
+        the whole tree under the root, moving between subfolders — the case
+        this is for — is within scope.
+        """
+        if not removed_paths or not new_paths:
+            return {}
+
+        # ponytail: os.walk is not atomic, so a file moved mid-walk from an
+        # unvisited directory into a visited one is in neither set and still
+        # reads as a removal.  Deferring deletion by one scan (mark and sweep)
+        # would close it; not worth the state for a race this narrow.
+        gone_by_sha: dict[str, list[str]] = {}
+        for path in removed_paths:
+            pixel_sha = existing_by_path[path].pixel_sha
+            if pixel_sha:
+                gone_by_sha.setdefault(pixel_sha, []).append(path)
+        if not gone_by_sha:
+            return {}
+
+        arrived_by_sha: dict[str, list[str]] = {}
+        for path in sorted(new_paths):
+            try:
+                pixel_sha = ImageUtils.calculate_hash_from_file_path(path)
+            except Exception as exc:
+                # Not fatal: an unhashable file simply cannot be matched, and
+                # _build_picture_chunk reports it again when it tries to import.
+                logger.warning(
+                    "Reference folder scan: failed to hash %s while looking for "
+                    "moved files: %s",
+                    path,
+                    exc,
+                )
+                continue
+            if pixel_sha:
+                arrived_by_sha.setdefault(pixel_sha, []).append(path)
+
+        moved: dict[str, str] = {}
+        for pixel_sha, old_paths in gone_by_sha.items():
+            candidates = arrived_by_sha.get(pixel_sha, ())
+            if len(old_paths) == 1 and len(candidates) == 1:
+                moved[old_paths[0]] = candidates[0]
+            elif candidates:
+                logger.info(
+                    "Reference folder %s: %d vanished and %d new file(s) share "
+                    "one pixel hash; too ambiguous to call a move, re-importing.",
+                    self._folder_path,
+                    len(old_paths),
+                    len(candidates),
+                )
+        return moved
 
     def _build_picture_chunk(
         self,
