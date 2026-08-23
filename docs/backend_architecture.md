@@ -1311,11 +1311,19 @@ declared":
   passes its `engine_override` so an overridden batch is billed for the plugin it
   dispatches to, and `DetectionTask` — which borrows this estimate but always runs
   Florence-2 — names `florence2` explicitly. Two limits worth naming rather than
-  implying: a plugin that returns 0 (the default) or raises still gets the Florence
-  figure, because the host cannot invent a number for a model it knows nothing about —
-  `plugin_template.py` tells authors that an honest overestimate protects them and 0 does
-  not; and `TaggingWorkflow.estimated_vram_mb` still bills its own constants without
-  asking a tag plugin, which is the same gap on the other surface.
+  implying. **First, 0 is ambiguous and the host resolves it against the plugin.**
+  `TaggerPlugin.estimated_vram_mb` documents 0 as "CPU-only" and 0 is also what the
+  base class returns for a plugin that never overrode it, so a 0 on CUDA is read as *no
+  answer* and charged the Florence figure. For a CPU-only plugin that is a harmless
+  over-charge; for a GPU model that returned 0 merely because it was not resident yet it
+  is the under-charge the budget exists to prevent, which is exactly what
+  `JoyCaptionPlugin` used to do — it now bills its full 8 GB footprint until its weights
+  are actually on the CPU. The three docstrings that authors read (`base.py`,
+  `plugin_template.py`, `docs/writing-tagger-plugins.md`) state the ambiguity rather than
+  leaving it to be discovered. Distinguishing "unknown" from "genuinely zero" would need
+  a new sentinel in the published MIT contract, which is a decision for a separate
+  change. **Second**, `TaggingWorkflow.estimated_vram_mb` still bills its own constants
+  without asking a tag plugin, which is the same gap on the other surface.
 - **`generate_descriptions` gets a `stop_event`** on both paths, so a plugin that honours
   it stops between images instead of running the batch out.
 

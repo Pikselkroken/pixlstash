@@ -785,6 +785,12 @@ class JoyCaptionPlugin(TaggerPlugin):
     ) -> int:
         """Estimate peak VRAM for processing *image_count* images.
 
+        A model that is *not yet resident* is charged in full, because the host
+        asks this before it loads and only on a CUDA engine: returning 0 for a
+        cold start would bill nothing for the 8 GB that is about to be
+        allocated, which is the OOM the budget exists to prevent (#967). Only a
+        model already sitting on the CPU costs nothing.
+
         Args:
             image_count: Number of images.
             parameters: Plugin parameters (uses ``precision``).
@@ -792,9 +798,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         Returns:
             Estimated VRAM in MB.
         """
-        if self._service is None or self._service._model_device is None:
-            return 0
-        if str(self._service._model_device) == "cpu":
+        if self._service is not None and str(self._service._model_device) == "cpu":
             return 0
         return _BASE_VRAM_MB + _PER_IMAGE_VRAM_MB * max(1, image_count)
 

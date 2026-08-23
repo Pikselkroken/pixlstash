@@ -285,11 +285,14 @@ class DescriptionWorkflow:
         Returns ``0``, meaning "charge the Florence-2 estimate instead", in two
         different situations. For a plugin that is missing or cannot caption
         that is simply correct: ``generate_batch`` falls back to Florence-2, so
-        Florence is what loads. For a plugin that returns 0 (the base class
-        default) or raises it is a known under-charge — that plugin *does* run
-        — kept because the host cannot invent a figure for a model it knows
-        nothing about, and a plugin that overrides the method gets a real
-        budget (issue #967, and ``plugin_template.py`` tells authors so).
+        Florence is what loads. For a plugin that returns 0 or raises it is
+        a deliberate charge for the wrong model, because that plugin *does*
+        run. 0 is ambiguous at this seam — it is the base class default, and
+        also its documented "CPU-only" value, and the two cannot be told apart
+        — so the fallback is kept for both: the host cannot invent a figure for
+        a model it knows nothing about, and for the CPU-only reading the error
+        is a harmless over-charge. ``TaggerPlugin.estimated_vram_mb`` tells
+        authors to charge for a cold start rather than rely on this (#967).
         """
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 

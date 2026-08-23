@@ -199,10 +199,24 @@ implement them (issue #967 wired both; older guides say they are never called):
 - **`estimated_vram_mb()` is asked before a description batch runs**, when your plugin is
   the active description plugin. (A *tag* plugin is not asked yet — `TaggingWorkflow`
   still bills its own constants.) `image_count` is already capped at your
-  `effective_batch_size(parameters)`. Returning 0 — the default — means "no answer", and
-  the host then charges the Florence-2 figure, which is not your model's: that is exactly
-  the case where it can schedule another model alongside yours and run the card out of
-  memory. An honest overestimate protects you; 0 does not.
+  `effective_batch_size(parameters)`.
+
+  **0 has two meanings and the host has to guess.** `TaggerPlugin.estimated_vram_mb`
+  documents 0 as "CPU-only", and 0 is also what the default returns for a plugin that
+  never overrode the method. On a CUDA engine the host cannot distinguish them, so it
+  reads any 0 as *no answer* and charges the Florence-2 figure instead — around 900 MB
+  for `base`, 2.6 GB for `large-ft`. Which way that hurts depends on which you meant:
+
+  | You return | You meant | What actually happens |
+  |---|---|---|
+  | 0 (no override) | "I haven't thought about it" | Billed the Florence figure. Fine for a small model, badly wrong for a big one. |
+  | 0 (CPU-only model) | "I need no VRAM" | Billed the Florence figure anyway. Harmless over-charge: your batch may wait, it will not break. |
+  | 0 (GPU model, not loaded yet) | "nothing is resident *right now*" | **The dangerous one.** Billed ~1 GB for the several you are about to allocate, and another model is scheduled alongside you. |
+  | a real figure | "this is what I will occupy" | Budgeted correctly. |
+
+  So charge for the **cold start** as well as the warm one — `JoyCaptionPlugin` bills its
+  full 8 GB footprint until its weights are actually sitting on the CPU — and keep 0 for
+  a model that genuinely holds nothing on the card.
 
 ## 5. Inference
 

@@ -338,3 +338,26 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
 
     Vault._maybe_aggressive_unload(fake_vault, {})
     assert captioner.unload_calls == 1
+
+
+def test_joycaption_charges_for_a_cold_start():
+    """The shipped VLM is the case the budget exists for: it used to return 0
+    while its weights were merely not loaded yet, which — now that the host
+    reads 0 as "no answer" — would bill ~1 GB of Florence for the 8 GB it is
+    about to allocate."""
+    from pixlstash.tagger_plugins.joycaption import (
+        _BASE_VRAM_MB,
+        JoyCaptionPlugin,
+    )
+
+    cold = JoyCaptionPlugin()
+    assert cold._service is None, "a plugin before setup() is the case under test"
+    assert cold.estimated_vram_mb(1) >= _BASE_VRAM_MB, (
+        "a cold JoyCaption billed nothing for the model it is about to load"
+    )
+
+    cold.setup(device="cpu")
+    cold._service._model_device = "cpu"
+    assert cold.estimated_vram_mb(1) == 0, (
+        "a model already sitting on the CPU occupies no VRAM"
+    )

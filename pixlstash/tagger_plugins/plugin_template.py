@@ -193,9 +193,18 @@ class MyCaptioner(TaggerPlugin):
 
         The description workflow asks the active plugin before it schedules a
         batch, with *image_count* already capped at your
-        ``effective_batch_size``.  Returning 0 (the default) means "no answer":
-        the host charges the Florence-2 figure instead, which is not your
-        model's, so an honest overestimate protects you better than 0 does.
+        ``effective_batch_size``.
+
+        **Watch the 0.**  The base class documents it as "CPU-only", and it is
+        also what the default returns for a plugin that never overrode this —
+        the host cannot tell those apart, so on a CUDA engine it reads any 0 as
+        "no answer" and charges the Florence-2 figure instead.  For a CPU-only
+        plugin that is a harmless over-charge.  For a GPU model it is not: if
+        you return 0 while your weights are merely *not loaded yet*, you are
+        billed ~1 GB for the several you are about to allocate, and something
+        else gets scheduled alongside you.  Charge for a cold start too —
+        ``JoyCaptionPlugin`` does — and keep 0 for a model that really does
+        hold nothing on the card.
         """
         return 0
 
