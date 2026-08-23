@@ -66,7 +66,9 @@ class ReferenceFolderScanTask(BaseTask):
     New files found on disk are inserted as Picture rows with their absolute
     paths so that PixlStash serves them directly from their original location.
     Files that have been removed from disk since the last scan have their DB
-    records deleted.
+    records deleted, unless the same pixels turned up at a new path in the same
+    pass: that is a move, and the existing record follows the file rather than
+    being replaced by a fresh one.
 
     Phase-2 path validation (resolve mapping → blocklist → isdir/access) is
     performed before any filesystem work.  On failure the folder status is set
