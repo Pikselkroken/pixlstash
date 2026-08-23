@@ -1039,6 +1039,39 @@ def test_an_unwritable_hub_stands_the_workflow_scan_down(store):
     assert finder.find_task() is None
 
 
+def test_a_revisit_never_rewrites_what_the_first_extraction_stored(store):
+    """The upgrade path's data-loss case, and it is not hypothetical.
+
+    Widening the predicate to `workflow_hash_version IS NULL` re-queues every
+    picture a pre-B3 run already extracted. Re-reading the file to rewrite its
+    ComfyUI columns is not a no-op: a file that has since moved, or been
+    stripped of its metadata, would replace real stored models and LoRAs with
+    the "[]" sentinel. The extraction happened once; the revisit adds keys and
+    touches nothing else.
+    """
+
+    def insert(session):
+        picture = Picture(
+            file_path="moved-since/never-existed.png",
+            comfyui_models=json.dumps(["flux1-dev.safetensors"]),
+            comfyui_loras=json.dumps(["example-subject.safetensors"]),
+            comfyui_positive_prompt="what somebody typed",
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    picture_id = store.vault.run_task(insert)
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert json.loads(picture.comfyui_models) == ["flux1-dev.safetensors"]
+    assert json.loads(picture.comfyui_loras) == ["example-subject.safetensors"]
+    assert picture.comfyui_positive_prompt == "what somebody typed"
+    # And it still came away scanned, so it is not handed back again.
+    assert picture.workflow_hash_version == HASH_VERSION
+
+
 def test_a_library_extracted_before_b3_is_re_queued_for_its_workflow(store):
     """The upgrade case: `comfyui_models` is already written, the keys are not."""
     name = write_png(Path(store.image_root), "legacy.png", api=api_graph(TXT2IMG))

@@ -96,7 +96,16 @@ class ComfyUIExtractionTask(BaseTask):
 
         fresh_pictures = self._db.run_immediate_read_task(fetch_fresh, picture_ids)
 
-        # (picture_id, positive_prompt, models_json, loras_json, clear_embedding)
+        # (picture_id, positive_prompt, models_json, loras_json, clear_embedding,
+        #  write_comfyui)
+        #
+        # `write_comfyui` is False for a picture a PRE-B3 run already extracted
+        # and which is back here only for the workflow scan. Widening the
+        # finder's predicate to `workflow_hash_version IS NULL` re-queues every
+        # such picture on a library's first B3 start, and rewriting its ComfyUI
+        # columns from a second read is not a no-op: a file that has since moved
+        # or been stripped replaces real stored models and LoRAs with the "[]"
+        # sentinel. The extraction happened once; the revisit only adds keys.
         updates: list[tuple] = []
         # (picture_id, topology_hash, structural_hash). A picture is absent from
         # this list when it was NOT scanned for a workflow -- no hub attached, or
@@ -115,16 +124,20 @@ class ComfyUIExtractionTask(BaseTask):
                 break
             resolved = ImageUtils.resolve_picture_path(self._image_root, pic.file_path)
 
+            # Already extracted by a pre-B3 run: this visit is for the workflow
+            # keys alone and must leave the ComfyUI columns exactly as they are.
+            write_comfyui = pic.comfyui_models is None
+
             if not resolved or not os.path.exists(resolved):
                 # Write the sentinel so the finder never re-queues this picture.
-                updates.append((pic.id, None, "[]", "[]", False))
+                updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
                 self._record(workflow_updates, pic.id, None)
                 checked += 1
                 continue
 
             if VideoUtils.is_video_file(resolved):
                 # Videos cannot contain ComfyUI metadata; mark as done.
-                updates.append((pic.id, None, "[]", "[]", False))
+                updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
                 self._record(workflow_updates, pic.id, None)
                 checked += 1
                 continue
@@ -135,7 +148,13 @@ class ComfyUIExtractionTask(BaseTask):
             embedded_metadata = None
             try:
                 embedded_metadata = ImageUtils.extract_embedded_metadata(resolved)
-                workflow_info = extract_comfy_workflow_info(embedded_metadata)
+                # Skipped on a revisit: the answer is already in the row, and
+                # this is the expensive half of the parse.
+                workflow_info = (
+                    extract_comfy_workflow_info(embedded_metadata)
+                    if write_comfyui
+                    else None
+                )
                 if workflow_info:
                     positive_prompt = workflow_info.get("positive_prompt") or None
                     models = workflow_info.get("models") or []
@@ -158,7 +177,14 @@ class ComfyUIExtractionTask(BaseTask):
                 found_comfyui += 1
 
             updates.append(
-                (pic.id, positive_prompt, models_json, loras_json, had_comfyui)
+                (
+                    pic.id,
+                    positive_prompt,
+                    models_json,
+                    loras_json,
+                    had_comfyui,
+                    write_comfyui,
+                )
             )
             # Same file read, same parsed chunks: the hub write is the only
             # extra work, and it is a no-op for a graph already filed.
@@ -174,20 +200,28 @@ class ComfyUIExtractionTask(BaseTask):
         )
 
         def persist(session: Session, rows: list[tuple]):
-            for pid, pos_prompt, models_json, loras_json, clear_embedding in rows:
+            for (
+                pid,
+                pos_prompt,
+                models_json,
+                loras_json,
+                clear_embedding,
+                write_comfyui,
+            ) in rows:
                 db_pic = session.get(Picture, pid)
                 if db_pic is None:
                     continue
-                if pos_prompt is not None:
-                    db_pic.comfyui_positive_prompt = pos_prompt
-                # Always write the sentinel ("[]" at minimum) so this picture is
-                # never re-queued by the finder.
-                db_pic.comfyui_models = models_json
-                db_pic.comfyui_loras = loras_json
-                # Clear the existing embedding so TextEmbeddingTask regenerates it
-                # with the newly stored ComfyUI context included.
-                if clear_embedding:
-                    db_pic.text_embedding = None
+                if write_comfyui:
+                    if pos_prompt is not None:
+                        db_pic.comfyui_positive_prompt = pos_prompt
+                    # Always write the sentinel ("[]" at minimum) so this picture
+                    # is never re-queued by the finder.
+                    db_pic.comfyui_models = models_json
+                    db_pic.comfyui_loras = loras_json
+                    # Clear the existing embedding so TextEmbeddingTask
+                    # regenerates it with the newly stored ComfyUI context.
+                    if clear_embedding:
+                        db_pic.text_embedding = None
                 if pid in scanned_workflows:
                     topology, structural = scanned_workflows[pid]
                     db_pic.workflow_topology_hash = topology
