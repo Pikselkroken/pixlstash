@@ -39,6 +39,13 @@ export default [
       ],
       "no-useless-assignment": "warn",
       "vue/no-unused-vars": "warn",
+      // A template that names something `<script setup>` never declared renders
+      // NOTHING for it and warns nowhere: `:accept="IMPORT_FILE_ACCEPT"` with
+      // the import missing produced an <input> with no `accept` at all, so the
+      // picker offered every file on the disk and the markup still read
+      // correctly. An error rather than a warning because the failure is
+      // invisible in review and in the running app alike.
+      "vue/no-undef-properties": "error",
       "vue/no-use-v-if-with-v-for": "warn",
       "vue/multi-word-component-names": "off",
     },

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
+  IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";

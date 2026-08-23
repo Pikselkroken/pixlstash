@@ -161,6 +161,7 @@ import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
+  IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 
 const props = defineProps({
