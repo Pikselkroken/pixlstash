@@ -348,9 +348,72 @@ The core image display engine. Responsibilities:
 - **Segment (object detection)**: the context menu's "Segment" item emits `segment`; `ImageGrid` opens a small dialog for an optional label phrase and `POST`s `/pictures/detect` with the selected ids (empty phrase → dense detection). Progress shows in the task manager; the overlay refreshes on the resulting `changed_pictures` event.
 - Image scoring (guest and authenticated star rating).
 - Drag-and-drop reordering within sets (via `useGridDragDrop`).
-- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
+- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `LibraryEmptyState`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
+
+##### The empty library is a different question from an empty grid
+
+`ImageGrid` has three empty states and they are not variants of one screen.
+A filter that matched nothing and an empty scrap heap keep the card they had —
+"No pictures match the current filters", "Are all your pictures that good?" —
+because those are questions with their own answers.
+
+The third, `totalAllPicturesCount === 0`, is **the first screen of every
+install**, and it gets `LibraryEmptyState.vue`. It used to read *"No pictures in
+the database. Add pictures by dragging them here."* Two things were wrong with
+that. **"Database"** is our word: the owner has pictures, and the thing holding
+them is an implementation detail they were never introduced to. And **dragging
+is one route of three**, offered as though it were the only one — PixlStash can
+also read a folder you already have, in place, moving nothing, and it can
+generate straight into the library. Someone arriving with an organised folder
+tree was being told to take it apart and drag it back in, which is the v1.11
+diagnosis in a single sentence of copy.
+
+So: three routes, folder first, and only that one carries the accent. Ordering
+plus a single primary is the whole of how "none of them is more official than
+the others" is said; two primaries would make it a choice between two official
+answers. The folder route leads because it is the case the release exists for
+and the one that was invisible — reference folders have always worked and were a
+sidebar accessory nobody was pointed at.
+
+**Every route reuses wiring App.vue already had.** `local-import` reaches
+`SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
+(with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
+new signal, for `SideBar.openReferenceFolderEditor`.
+
+**Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
+chooser's other option is an import folder — *"watch for new files and import
+them automatically"* — which copies files in, and the button that reaches it
+promises "Nothing is moved" one screen earlier. Routing through the chooser
+would have the release's headline claim falsified by the very next click, and
+the probe would measure the opposite of what it is for.
+
+The component is presentational: it holds a hidden file input, clears its
+`value` after each `change` so the same files can be chosen twice in a row, and
+hands the chosen files up **unfiltered**. `ImageGrid.importChosenFiles` drops
+what PixlStash cannot read, against the same `isSupportedImportFile` and under
+the same `import-unsupported-files` notice key the two drop paths use — an OS
+picker's `accept` is advisory, so a button that skipped it would be the one
+import route that took anything silently.
+
+**Three conditions stop it appearing, and two are about not lying:**
+
+- `totalAllPicturesCountLoaded` — the count starts at `0` and
+  `fetchAllPicturesCount` swallows its failure, so an unanswered request is
+  indistinguishable from an empty library. Saying "This library is empty" over a
+  backend that did not reply is worse than saying nothing, and this screen says
+  it with three buttons under it.
+- `!isReadOnly` — a share recipient owns nothing here. Two routes open the
+  owner's sidebar dialogs and the third dead-ends in the importer's read-only
+  refusal, and the zero they were handed is the count `GET
+  /characters/{ALL}/summary` refused them, not a fact about the library.
+- the scrap-heap and set-overlap views, which have their own questions.
+
+`ImageGridLibraryEmptyState.test.js` mounts the real grid for all of it. The
+component's own suite passes with the feature disconnected from the app
+entirely — that was measured, not assumed — so the integration file is where
+"does it render" and "does a button reach anything" actually live.
 
 ##### Who owns a card's thumbnail URL
 

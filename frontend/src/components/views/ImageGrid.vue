@@ -501,7 +501,7 @@
         v-if="showLibraryEmptyState"
         @choose-folder="emit('choose-folder')"
         @connect-comfyui="emit('open-settings', 'workflows')"
-        @add-files="(files) => emit('local-import', { files })"
+        @add-files="importChosenFiles"
       />
       <div v-else-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
@@ -1185,6 +1185,7 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import LibraryEmptyState from "./LibraryEmptyState.vue";
+import { isSupportedImportFile } from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -5799,6 +5800,7 @@ const {
 const {
   imagesLoading,
   totalAllPicturesCount,
+  totalAllPicturesCountLoaded,
   totalCurrentCategoryCount,
   gridReady,
   lastFetchError,
@@ -6759,10 +6761,51 @@ const canShowAllPicturesButton = computed(() => {
 // or "the scrap heap is empty". Those are different questions with different
 // answers and keep the card they had; this one is the first screen of an
 // install, and it gets the three routes out.
+//
+// Two guards beyond the count, because the count alone is not the claim:
+//
+//   * `totalAllPicturesCountLoaded` — the count starts at 0 and its fetch
+//     swallows failures, so an unanswered request looks exactly like an empty
+//     library. Saying "This library is empty" over a backend that did not reply
+//     is worse than saying nothing, and this screen says it with three buttons.
+//   * `!isReadOnly` — a share recipient is not the owner of anything here.
+//     Every route out leads somewhere they cannot go (two open the owner's
+//     sidebar dialogs; the importer refuses a read-only token outright), and
+//     the count they get is the one the summary route refused them, not a fact
+//     about the library. They keep the plain card.
+/**
+ * Files chosen through the empty library's "Add files…".
+ *
+ * The same filter and the same notice the two drop paths use
+ * (`useGridDragDrop`, `useWindowFileImport`) — an OS picker's `accept` is
+ * advisory, so a button that skipped this would be the one import route that
+ * accepts anything and says nothing. The project comes from App.vue, which
+ * defaults it to the one being looked at.
+ */
+function importChosenFiles(chosen) {
+  const files = (chosen ?? []).filter((file) => isSupportedImportFile(file));
+  if (!files.length) {
+    noticeStore.warning(
+      "None of those files are a supported image, video or archive.",
+      { key: "import-unsupported-files" },
+    );
+    return;
+  }
+  if (files.length !== chosen.length) {
+    noticeStore.warning(
+      "Some of those files are not a supported image, video or archive, and were skipped.",
+      { key: "import-unsupported-files" },
+    );
+  }
+  emit("local-import", { files });
+}
+
 const showLibraryEmptyState = computed(
   () =>
     showEmptyState.value &&
+    totalAllPicturesCountLoaded.value &&
     totalAllPicturesCount.value === 0 &&
+    !isReadOnly.value &&
     !isScrapheapView.value &&
     !isSetOverlapView.value,
 );

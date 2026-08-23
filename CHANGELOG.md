@@ -1,3 +1,10 @@
+# [1.11.0]
+
+- The first screen of a new library now offers three ways to fill it instead of
+  one, and leads with the one that moves nothing: point PixlStash at a folder
+  you already have and it reads it where it sits. Dropping pictures in and
+  connecting ComfyUI are the other two. It no longer talks about a "database".
+
 # [1.10.1]
 
 - Add missing dependency to docker images

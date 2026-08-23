@@ -1,25 +1,14 @@
 <script setup>
 /**
- * The first screen of every install.
+ * The first screen of every install — see `docs/frontend_architecture.md`
+ * §"The empty library is a different question from an empty grid" for why it
+ * says what it says.
  *
- * It used to read *"No pictures in the database. Add pictures by dragging them
- * here."* Two things were wrong with that. **"Database"** is our word, not the
- * owner's — they have pictures, and the thing holding them is an implementation
- * detail they were never introduced to. And **dragging is one route of three**,
- * offered as though it were the only one: PixlStash can also read a folder you
- * already have, in place, without moving anything, and it can generate straight
- * into the library. Someone who arrived with an organised folder tree was being
- * told to take it apart and drag it back in.
- *
- * So: three routes out, folder first, and none of them presented as the
- * official one. Folder leads because it is the case this release exists for and
- * the one that was invisible — reference folders have always worked and were a
- * sidebar accessory nobody was pointed at.
- *
- * **Only for a genuinely empty library.** A filtered-empty grid and an empty
- * scrap heap are different states with different answers, and they keep the
- * card they had; offering "choose a folder" to someone whose filter matched
- * nothing would be answering a question they did not ask.
+ * In short: three routes out rather than one, folder first and the only
+ * accented one, and not a word about a "database". Presentational — every
+ * route is emitted for the grid to place, including the chosen files, which
+ * are handed up unfiltered because the grid already drops what PixlStash
+ * cannot read for both drop paths.
  */
 import { ref } from "vue";
 import { VIcon } from "vuetify/components";
@@ -39,13 +28,22 @@ function filesChosen(event) {
   // Cleared before the emit, so choosing the same files twice in a row still
   // fires `change` the second time.
   event.target.value = "";
+  // Handed up unfiltered. `accept` is advisory — every OS picker offers "All
+  // Files" — so somebody has to drop what PixlStash cannot read, and that
+  // somebody is the grid, where both drop paths already do it against the same
+  // `isSupportedImportFile` and raise the same notice. A presenter owning a
+  // third copy is how the three drift apart.
   if (files.length) emit("add-files", files);
 }
 </script>
 
 <template>
   <div class="library-empty">
-    <div class="library-empty__card">
+    <!-- Announced, unlike the two empty cards beside it. This one appears
+         asynchronously, at least 350ms after load, and replaces the whole grid
+         on the first screen a new install shows — the one place a screen reader
+         user most needs to be told the view changed under them. -->
+    <div class="library-empty__card" role="status" aria-live="polite">
       <div class="library-empty__illustration" aria-hidden="true">
         <img src="/Empty.png" alt="" />
       </div>
@@ -65,7 +63,9 @@ function filesChosen(event) {
             <v-icon size="19">mdi-folder-outline</v-icon>
           </span>
           <span class="library-empty__text">
-            <span class="library-empty__heading">Use a folder you already have</span>
+            <span class="library-empty__heading"
+              >Use a folder you already have</span
+            >
             <span class="library-empty__detail">
               Point PixlStash at one and it reads it where it sits. Nothing is
               moved.
@@ -143,6 +143,9 @@ function filesChosen(event) {
   flex-direction: column;
   align-items: center;
   gap: var(--space-4);
+  /* Wider than the sibling card's `--notice-max-w` (420px), deliberately: that
+     one holds a sentence, this one holds three option rows with a button each,
+     and at 420px every one of them wraps. */
   width: min(640px, calc(100% - var(--space-7)));
   box-sizing: border-box;
   margin: auto;
@@ -154,9 +157,13 @@ function filesChosen(event) {
   box-shadow: var(--elevation-3);
 }
 
+/* Matches `.empty-state-illustration` in ImageGrid.css. The two cards sit in
+   the same slot in the same view and show the same file, so a filter toggle
+   used to resize the artwork; the cap is what keeps it sane in a card that is
+   wider than that one. */
 .library-empty__illustration {
-  width: 45%;
-  max-width: 220px;
+  width: 90%;
+  max-width: 260px;
   color: rgba(var(--v-theme-on-panel), 0.45);
 }
 
@@ -233,8 +240,11 @@ function filesChosen(event) {
   line-height: var(--leading-snug);
 }
 
-/* Off-screen rather than `display: none`: a hidden input still has to be
-   clickable for `.click()` to open the picker in every browser. */
+/* Off-screen rather than `display: none`: some browsers refuse to open the
+   picker for an input that is not rendered at all. `pointer-events: none` is
+   safe on top of that — a programmatic `.click()` ignores it, and nobody should
+   be able to hit a 1px target by accident. The button above is the real
+   control, and it is a real <button>. */
 .library-empty__file-input {
   position: absolute;
   width: 1px;

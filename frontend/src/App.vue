@@ -316,9 +316,13 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
-/** The empty library's "Choose a folder…" — the sidebar's own add-folder flow. */
-function openAddFolder() {
-  sidebarRef.value?.openAddFolderTypeDialog?.();
+/** The empty library's "Choose a folder…" — a reference folder, read in place.
+ *
+ * Not the add-folder type chooser: its other option is an import folder, which
+ * copies files in, and the button that reaches this promises the opposite.
+ */
+function openAddReferenceFolder() {
+  sidebarRef.value?.openReferenceFolderEditor?.();
 }
 
 // ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
@@ -352,7 +356,17 @@ function openImportDialog() {
 async function handleLocalImport({ files, projectId } = {}) {
   photosDialogOpen.value = false;
   await nextTick();
-  sidebarRef.value?.startLocalImport?.(files, projectId ?? null);
+  // `undefined` means "the caller did not say", and the answer is the project
+  // being looked at — which is what both drop paths pass
+  // (useWindowFileImport.js, useGridDragDrop.js) and what PhotosImportDialog is
+  // handed as its default. Defaulted here rather than at each caller so a
+  // caller that omits it cannot silently land pictures outside the project the
+  // person is standing in. `null` still means "deliberately no project".
+  const target =
+    projectId === undefined
+      ? (sidebarRef.value?.currentProjectId ?? null)
+      : projectId;
+  sidebarRef.value?.startLocalImport?.(files, target);
 }
 
 // undo affordance itself.
@@ -661,7 +675,7 @@ defineExpose({
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
-                @choose-folder="openAddFolder"
+                @choose-folder="openAddReferenceFolder"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
