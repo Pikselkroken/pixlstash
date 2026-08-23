@@ -44,6 +44,7 @@ import numpy as np
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 
 logger = get_logger(__name__)
 
@@ -95,9 +96,13 @@ _LEVEL_VOTE_SHARE_PCT = 60
 #: Kinds a level can narrow to once cardinality has ruled Tag out.
 _NON_TAG_KINDS = ("project", "set", "person")
 
-_IMAGE_EXTS = frozenset(
-    {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
-)
+#: The one copy, shared with the filesystem picker, the reference-folder scanner
+#: and the library picker. A folder the picker calls "1,200 pictures" has to be
+#: the folder this read samples from, or the two screens disagree about the same
+#: tree. Videos are deliberately excluded here — this signal decodes what it
+#: samples and a video frame is not what the face pass is built on — so the
+#: image half is imported rather than `is_supported_media_file`.
+_IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 #: Lower-cased and compared lower-cased: a `.TXT` beside every picture is a
 #: caption file, and a dataset exported on Windows is the obvious victim of
 #: matching this case-sensitively.

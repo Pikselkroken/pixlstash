@@ -99,7 +99,7 @@
         class="tb-import-file-input"
         type="file"
         multiple
-        accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain"
+        :accept="IMPORT_FILE_ACCEPT"
         @change="onLocalChange"
       />
       <div class="tb-import-actions">
@@ -161,6 +161,7 @@ import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
+  IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 
 const props = defineProps({

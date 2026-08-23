@@ -504,7 +504,11 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
+| POST   | /api/v1/libraries                                                             | libraries       | Add a library                                               |
 | POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                   |
+| GET    | /api/v1/libraries/inspect                                                     | libraries       | Ask what a folder is                                        |
+| PATCH  | /api/v1/libraries/{library_uuid}                                              | libraries       | Rename a library                                            |
+| DELETE | /api/v1/libraries/{library_uuid}                                              | libraries       | Stop using a library                                        |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                          |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                       |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
@@ -2933,6 +2937,114 @@ coherence. A recovery failure poisons the handles, enters terminal
 `UNAVAILABLE`, returns 503 before auth, closes sockets, and signals every
 retained listener to exit; it can never republish `READY` around a mixed tuple.
 
+### The library lifecycle over HTTP
+
+`routes/libraries.py` covers the whole registry, not only the two routes the MVP
+shipped. Every verb is a route over `LibraryRegistry`, which already implements
+it and raises a typed, user-facing error for each refusal; the handlers surface
+those errors and re-derive no rule.
+
+| Route | Registry call | Refusals it surfaces |
+|---|---|---|
+| `GET /libraries` | `list_libraries` | — |
+| `GET /libraries/inspect?path=` | `list_libraries`, `overlapping`, `validate_vault_folder` | blocklisted or relative path (400), no such folder (404) |
+| `POST /libraries` | `attach` for a vault, `create` otherwise | already attached / covered / name taken (409), not a vault (400), no such folder (404) |
+| `PATCH /libraries/{library_uuid}` | `rename` | name taken (409), empty name (400) |
+| `DELETE /libraries/{library_uuid}` | `detach` | it is the active library (409) |
+| `POST /libraries/active` | `LibrarySwitchService.switch_to` | unopenable target (409) |
+
+`inspect` is what lets one picker answer "what is this folder?" instead of
+asking the owner to choose a mode first. It returns exactly one of five
+verdicts — `attached`, `overlaps`, `vault`, `pictures`, `empty` — with a
+`headline` and a `detail` written server-side, so the sentence naming the
+library that covers a folder exists once. Three of the five are addable and are
+the same `POST /libraries` with a different consequence; the other two are
+refusals, and `can_add` is the only field a client branches on. The order is
+load-bearing: `attached` and `overlaps` are decided before anything else,
+because a folder already covered by a library is covered whatever else it also
+is, and offering to add a vault nested inside one would leave two libraries
+indexing the same pictures.
+
+**The two routes that take a path resolve it before they validate it.**
+`validate_reference_folder_path` compares against a literal blocklist, so
+checking the string the caller sent lets `~/link-to-etc` through — and `POST
+/libraries` then chmods that folder 0700 and writes a database into it. The
+sibling that gets this right is `validate_reference_folder_accessible`, which
+realpaths first; `_safe_folder` follows it, not `GET /filesystem/browse`'s
+ordering. A relative path is refused explicitly before resolution, because
+`resolve_path` calls `abspath` and would otherwise resolve it against the
+*server's* working directory. `filesystem_roots` is honoured for the same reason
+`POST /filesystem/folders` honours it: an operator who confined the picker did
+not mean "except for the route that can write a vault anywhere".
+
+`POST /libraries` **re-inspects the path itself** rather than trusting the
+picker's answer, so a folder that became covered in between is still refused —
+without walking the tree a second time (`_inspect(count=False)`; only the two
+refusals decided above the count change what it does). It requires the folder to
+exist and creates no directory — `POST /filesystem/folders`, which the picker's
+`New folder` already uses, is where that authority lives — which keeps this
+route's write authority to the one folder the owner named.
+
+`PATCH` and `DELETE` resolve through `by_uuid` and refuse a **detached** row.
+`by_uuid` returns detached rows on purpose — that is how a uuid stays meaningful
+across a detach for the tokens stamped with it — but these routes want the
+attached set, the one `GET /libraries` shows: otherwise a second `DELETE`
+answers 200 for a no-op, and `PATCH` renames a row nobody can see onto the name
+of one they can. The empty branch calls `create`, **not**
+`register_pending`, despite the v1.11 plan's route table naming the latter:
+`register_pending` records a row whose vault does not exist, and the switch
+revalidates the folder and insists on a real vault, so the library the owner
+just added would render as "Not found" and refuse to be opened.
+
+`library_access=HUB_ONLY` on all four new routes: they read and write the
+registry, never the active vault, so they need no library lease. That also
+exempts them from the gate's switch 503, deliberately — the registry has to stay
+answerable when no vault is open, which is the state an owner recovers from by
+attaching or switching. **`DELETE` is the one that cannot take the exemption**
+and refuses in its own handler while a switch is in flight: it reads `is_active`
+to refuse the active library, and mid-swap that flag is moving, so a detach
+landing in the window could forget the library the switch is about to publish.
+
+`library_independent` is a different knob and is left at its safe default
+`False`: it governs the token pin, not the 503, so an ALL token stamped for
+another library is refused here exactly as on a data route. A route is pinned by
+omission as an undeclared one is denied by omission.
+
+**A library name is unique among attached libraries, and the registry now
+enforces it.** `library.uuid` and `library.path` carry unique indexes; `name`
+does not, so the `sqlite3.IntegrityError` that `rename` and `_register` catch
+could never fire for a name, and both documented a `LibraryExistsError` for one
+anyway. That is not cosmetic: `LibraryRegistry.get` refuses a name matching more
+than one row, so every CLI verb that takes a name stops working for both
+libraries the moment the second is registered. `_refuse_duplicate_name` is
+checked in `_register`, `_revive`, `rename` and at the top of `create` (before
+the vault is written, so a refused create leaves no vault behind). It is a check
+rather than a new unique index because a hub written before this could already
+hold a duplicate, and a migration that cannot build its index fails a startup
+instead of a rename.
+
+Two placements in it are load-bearing:
+
+- **In `_register`, before the UPDATE that frees a detached row's path.** That
+  UPDATE rewrites the path to `<path>#detached-<uuid>` and commits; a refusal
+  after it would leave the row at a path `_find_by_path` can never match again,
+  stranding its uuid and every share token stamped with it — precisely what
+  `detach` documents cannot happen.
+- **Inside the transaction that writes.** `HubDatabase.transaction` opens
+  `BEGIN IMMEDIATE`, so a check on the same connection as the write is atomic;
+  the same check on its own connection is check-then-write and two concurrent
+  adds of one name both pass. `create`'s early call is the deliberate exception
+  and is advisory — its job is to fail before a vault is built.
+
+**`register_pending` opts out** (`unique_name=False`). Its caller is start-up:
+`bootstrap._register_first_library` passes the hardcoded `"Library 1"` and does
+not catch `LibraryExistsError`, so refusing there would turn a duplicate label —
+a nuisance — into a server that will not boot. `record_legacy_preparation`
+writes its row directly and is outside the check for the same reason. The rule
+is *verbs a person types a name at refuse; start-up records what it was given*,
+and the ceiling that leaves is the pre-existing one: a hub can still hold a
+duplicate, and `get` by name still refuses both.
+
 `GET /libraries` returns an `active_share_links` count on every library entry.
 It is owner metadata with no host path sensitivity and is available before the
 switch so the confirmation UI can warn how many resource-scoped links will go
@@ -3608,6 +3720,58 @@ All snapshot routes require `auth.require_unscoped_owner` — scoped tokens are 
 Two writers create rows — the scrapheap purge (`routes/pictures/_crud.py::delete_rows`) and the missing-file purge (`tasks/missing_file_purge_task.py`). Both **dedup by `path_sha`**, and on a genuine hard delete they **upgrade** an existing `file_removed=False` row to `True` (they never downgrade `True`→`False`), so a kept path that is later truly purged is recorded truthfully rather than relying solely on restore's ledger-independent missing-file pass.
 
 **Explicit re-import overrides the ledger; a routine sync does not.** The reference-folder scanner (`tasks/reference_folder_scan_task.py`) normally skips any disk path present in the ledger — no fully-automatic re-import of a removed-but-kept file. The override fires **iff** a dedicated one-shot signal is set: `reference_folder.pending_reimport` (migration `0078_add_reference_folder_pending_reimport`, default `False`). That flag is written `True` in exactly one place — the deliberate folder-add endpoint `create_reference_folder` (`routes/reference_folders.py`); **no** routine path (sync-toggle, rename, relocate, mount-recovery, the filesystem watcher, or a periodic re-scan) ever sets it. On an explicit re-import the scanner re-imports files found on disk and **clears** their matching ledger rows so restore can resurface them, then clears `pending_reimport` in the same transaction that completes the scan (one-shot; a mount_error exit leaves it set so the intent survives until a real scan consumes it). This replaces an earlier `last_scanned IS NULL` + no-pictures heuristic that the watcher (it resets `last_scanned`) could spoof — closing the edge where an already-emptied folder whose `last_scanned` was reset would have auto-resurfaced removed-but-kept files. **Invariant:** the override only ever clears rows for paths drawn from `disk_paths` (files actually present on disk), so genuinely-gone content — absent on disk, `file_removed=True` — is never in the disk set, is never cleared, and stays permanently guarded by restore.
+
+**A move inside a reference folder is followed, not re-imported.** A file moved
+within the scanned tree arrives as one path in `removed_paths` and another in
+`new_paths` in the *same* pass. Taken in that order it is a delete plus a
+re-add, which frees the picture id and everything hanging off it — tags, smart
+score, faces, likeness pairs, project/set/stack membership, review state — so
+reorganising a reference folder used to discard everything PixlStash had added
+to it. `_match_moved_paths` pairs the two halves before the removal block runs
+and updates `file_path` on the existing row instead.
+
+- **The key is `(pixel_sha, size_bytes)`, and the match must be 1:1 with no
+  unchanged file sharing that key.** `pixel_sha` alone is not an identity:
+  `ImageUtils.calculate_hash_from_file_path` samples 8 x 8 KiB windows of
+  anything over 128 KiB and does not mix the size into the digest, which is why
+  import de-duplication treats it as a candidate key. A false pair here is worse
+  than the bug being fixed — a lost row is visible, one picture's curation
+  silently rebound onto another picture's file is not — so every ambiguous group
+  logs and falls through to the previous delete-and-re-add.
+- **Confirmation stops at the size.** Import de-dup follows a candidate match
+  with a full-byte hash of *both* sides; here one side is a file that no longer
+  exists, so the stored columns are all there is to compare.
+- **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
+  `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
+  alongside the picture rather than abandoned: nothing sweeps `.ref_thumbs` by
+  anything but a row's *current* `file_path`, so a bitmap left at the old name
+  would never be reachable and never be collected. Only when there is nothing to
+  carry, or the rename fails, are `thumbnail_width` / `thumbnail_height` blanked
+  so `MissingThumbnailFinder` renders a fresh one.
+- **`original_file_name` follows too**, matching the explicit move route
+  (`routes/reference_folders.py`), so a renamed file does not keep downloading
+  under its old name.
+- **Scrapheap rows are never the source of a move.** `fetch_existing` loads
+  `deleted=True` rows deliberately; a hidden soft-deleted row whose file really
+  was deleted would otherwise swallow an unrelated new file of the same content,
+  and the user would get a picture they cannot see instead of a new one. They do
+  still count as unchanged files *blocking* a match, since their file is on disk.
+- **A present file with a NULL `pixel_sha` blocks matching for the whole pass.**
+  The column is nullable and `MissingPixelShaFinder` backfills it, so an
+  un-hashed unchanged file is invisible to the ambiguity count — and it is
+  exactly the file whose existence would have refused the match. NULL there
+  means "unknown", not "no collision".
+- **A followed move emits `CHANGED_PICTURES`** (`moved_picture_ids` in the task
+  result, `Vault._on_task_completed`), and deliberately not `PICTURE_IMPORTED`:
+  `file_path` changed on a row an open grid may already be showing, but nothing
+  was imported.
+- **Scoped to one folder, and to one pass.** The scan covers a single reference
+  folder, so a move *between* two folders is a removal in one scan and an
+  addition in another with no shared pass to match in. Two races remain open and
+  are marked at the helper: `os.walk` is not atomic, and `MissingFilePurgeTask`
+  can delete the row in the up-to-`_RESCAN_INTERVAL_S` window before the
+  rescuing scan runs. Both degrade to the old delete-and-re-add; the second logs
+  a warning when it is observed.
 
 ---
 

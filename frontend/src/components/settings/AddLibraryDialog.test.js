@@ -1,0 +1,333 @@
+// Settings › Libraries › Add a library.
+//
+// The picker's whole job is to ask the folder and then say what adding it would
+// mean, so what is worth pinning is that it renders the SERVER's words for all
+// five verdicts, that the two refusals offer no button, and that an answer for
+// a folder the owner has since navigated away from cannot be acted on.
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
+
+// The real VDialog needs Vuetify's defaults instance; render the slot inline,
+// as LibrariesSection.test.js does.
+vi.mock("vuetify/components", () => ({
+  VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  VCard: { name: "v-card", template: "<div><slot /></div>" },
+  VCardTitle: { name: "v-card-title", template: "<div><slot /></div>" },
+  VCardText: { name: "v-card-text", template: "<div><slot /></div>" },
+  VCardActions: { name: "v-card-actions", template: "<div><slot /></div>" },
+  VBtn: { name: "v-btn", template: "<button><slot /></button>" },
+  VSpacer: { name: "v-spacer", template: "<div />" },
+  VTextField: { name: "v-text-field", template: "<input />" },
+  VCheckbox: { name: "v-checkbox", template: "<input type='checkbox' />" },
+  VProgressCircular: { name: "v-progress-circular", template: "<i />" },
+}));
+
+import AddLibraryDialog from "./AddLibraryDialog.vue";
+import { addLibrary, inspectLibraryPath } from "../../api/libraries";
+
+vi.mock("../../api/libraries", () => ({
+  inspectLibraryPath: vi.fn(),
+  addLibrary: vi.fn(),
+}));
+
+vi.mock("../../api/folders", () => ({
+  browseFilesystem: vi.fn().mockResolvedValue({ path: "/", entries: [] }),
+  createFilesystemFolder: vi.fn(),
+}));
+
+const PICTURES = {
+  verdict: "pictures",
+  path: "/home/me/Pictures/Generations",
+  can_add: true,
+  headline: "28,412 pictures, no library here yet",
+  detail: "Bring them in and name what your folders mean. Nothing is moved.",
+  suggested_name: "Generations",
+  picture_count: 28412,
+  picture_count_capped: false,
+  library: null,
+};
+
+function mountDialog(props = {}) {
+  return mount(AddLibraryDialog, {
+    props: { open: true, ...props },
+    global: {
+      stubs: {
+        // Its own suite covers it; here it is a path source, and mounting it
+        // for real drags in Vuetify components this file has no reason to mock.
+        FolderBrowser: true,
+        AppButton: {
+          props: ["disabled", "loading"],
+          template:
+            '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+        },
+      },
+    },
+  });
+}
+
+async function settle(wrapper) {
+  await nextTick();
+  await nextTick();
+  await nextTick();
+  return wrapper;
+}
+
+async function typePath(wrapper, path) {
+  await wrapper.find(".add-library__field .app-input__field").setValue(path);
+  await wrapper.find(".add-library__field .app-input__field").trigger("blur");
+  return settle(wrapper);
+}
+
+function actionButton(wrapper) {
+  return wrapper
+    .findAll(".add-library__verdict button")
+    .find((button) => button.text().trim().length > 0);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  inspectLibraryPath.mockResolvedValue(structuredClone(PICTURES));
+  addLibrary.mockResolvedValue({ uuid: "uuid-new", name: "Generations" });
+});
+
+describe("asking the folder", () => {
+  it("asks nothing until a path is given", async () => {
+    await settle(mountDialog());
+    expect(inspectLibraryPath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["vault", "A library you already made", "Add it"],
+    ["pictures", "28,412 pictures, no library here yet", "Bring them in"],
+    ["empty", "Empty", "Start it"],
+  ])(
+    "renders the server's words for %s and offers its own verb",
+    async (verdict, headline, label) => {
+      inspectLibraryPath.mockResolvedValue({
+        ...structuredClone(PICTURES),
+        verdict,
+        headline,
+        detail: "whatever the server said",
+      });
+      const wrapper = await typePath(mountDialog(), PICTURES.path);
+
+      expect(wrapper.text()).toContain(headline);
+      expect(wrapper.text()).toContain("whatever the server said");
+      expect(actionButton(wrapper).text().trim()).toBe(label);
+    },
+  );
+
+  it.each([
+    [
+      "overlaps",
+      "Inside a library you already have",
+      '"Generations" covers this folder.',
+    ],
+    [
+      "attached",
+      "Already on the list",
+      'This folder is the library "Client work".',
+    ],
+  ])(
+    "offers no button for %s and shows the reason",
+    async (verdict, headline, detail) => {
+      inspectLibraryPath.mockResolvedValue({
+        ...structuredClone(PICTURES),
+        verdict,
+        can_add: false,
+        headline,
+        detail,
+      });
+      const wrapper = await typePath(
+        mountDialog(),
+        "/home/me/Pictures/Generations/2024",
+      );
+
+      expect(wrapper.text()).toContain(detail);
+      expect(actionButton(wrapper)).toBeFalsy();
+      expect(wrapper.find(".add-library__verdict--warn").exists()).toBe(true);
+    },
+  );
+
+  it("shows the server's message when the folder cannot be read", async () => {
+    inspectLibraryPath.mockRejectedValue({
+      response: {
+        data: { detail: "Path is in a restricted system directory: /etc" },
+      },
+    });
+    const wrapper = await typePath(mountDialog(), "/etc");
+
+    expect(wrapper.find(".add-library__error").text()).toContain(
+      "restricted system directory",
+    );
+    expect(wrapper.find(".add-library__verdict").exists()).toBe(false);
+  });
+});
+
+describe("adding it", () => {
+  it("adds the path the server resolved, not the one that was typed", async () => {
+    // The typed path may be relative to a home directory or carry a trailing
+    // separator; the verdict describes the resolved one, and that is what the
+    // button was offered for.
+    const wrapper = await typePath(mountDialog(), "~/Pictures/Generations/");
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(addLibrary).toHaveBeenCalledWith(
+      "/home/me/Pictures/Generations",
+      "Generations",
+    );
+    expect(wrapper.emitted("added")[0][0]).toEqual({
+      uuid: "uuid-new",
+      name: "Generations",
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("shows the server's refusal and re-asks, so the card agrees with it", async () => {
+    // The server re-inspects, so a folder that became covered between the
+    // verdict and the click is refused there rather than here.
+    addLibrary.mockRejectedValue({
+      response: { data: { detail: '"Generations" covers this folder.' } },
+    });
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    inspectLibraryPath.mockClear();
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(wrapper.find(".add-library__error").text()).toContain(
+      "covers this folder",
+    );
+    expect(inspectLibraryPath).toHaveBeenCalled();
+    expect(wrapper.emitted("added")).toBeFalsy();
+  });
+
+  it("does not silently fail on the first press when blur lands before the click", async () => {
+    // A browser orders mousedown -> blur -> click. `@blur` re-inspects, and
+    // before the no-op guard that cleared the verdict synchronously, so the
+    // click that followed found nothing to add and did nothing — every time,
+    // on the first press, with no message.
+    //
+    // The slow answer is load-bearing. With a mock that settles inside the
+    // blur's own `nextTick` this passes either way, which is exactly how the
+    // bug survived being "covered": the click has to land while the re-ask is
+    // still in flight, as it does in a browser.
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    inspectLibraryPath.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve(structuredClone(PICTURES)), 20),
+        ),
+    );
+
+    await wrapper.find(".add-library__field .app-input__field").trigger("blur");
+    await actionButton(wrapper)?.trigger("click");
+    await settle(wrapper);
+
+    expect(addLibrary).toHaveBeenCalled();
+  });
+
+  it("sends a name the owner typed over the one the folder suggested", async () => {
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+
+    await wrapper
+      .find(".add-library__name .app-input__field")
+      .setValue("2024 client");
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(addLibrary).toHaveBeenCalledWith(PICTURES.path, "2024 client");
+  });
+
+  it("stops overwriting the name once the owner has set one", async () => {
+    // Two folders both called `2024` are only addable because of this: the
+    // second verdict must not put the basename back over what was typed.
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    await wrapper.find(".add-library__name .app-input__field").setValue("Mine");
+
+    inspectLibraryPath.mockResolvedValue({
+      ...structuredClone(PICTURES),
+      path: "/home/me/Pictures/Other",
+      suggested_name: "Other",
+    });
+    await typePath(wrapper, "/home/me/Pictures/Other");
+
+    expect(
+      wrapper.find(".add-library__name .app-input__field").element.value,
+    ).toBe("Mine");
+  });
+
+  it("cannot act on a verdict for a folder the path has moved on from", async () => {
+    // The guard the file header claims and did not test. A slow answer for the
+    // old folder must not arm the button for the new one.
+    let releaseFirst;
+    inspectLibraryPath.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve)),
+    );
+    const wrapper = mountDialog();
+    await settle(wrapper);
+    await typePath(wrapper, "/home/me/Pictures/Slow");
+
+    inspectLibraryPath.mockResolvedValue({
+      ...structuredClone(PICTURES),
+      path: "/home/me/Pictures/Fast",
+    });
+    await typePath(wrapper, "/home/me/Pictures/Fast");
+
+    // The first answer lands last, naming a folder nobody is looking at.
+    releaseFirst({
+      ...structuredClone(PICTURES),
+      path: "/home/me/Pictures/Slow",
+    });
+    await settle(wrapper);
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(addLibrary).toHaveBeenCalledWith(
+      "/home/me/Pictures/Fast",
+      "Generations",
+    );
+  });
+
+  it("clears the previous answer when the dialog is reopened", async () => {
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    expect(wrapper.find(".add-library__verdict").exists()).toBe(true);
+
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await settle(wrapper);
+
+    expect(wrapper.find(".add-library__verdict").exists()).toBe(false);
+  });
+
+  it("does not come back still reading a folder it was closed on", async () => {
+    // Reopening bumps the epoch, which orphans the in-flight request AND its
+    // epoch-guarded `finally` — so the flag has to be cleared by the reset.
+    inspectLibraryPath.mockImplementationOnce(() => new Promise(() => {}));
+    const wrapper = mountDialog();
+    await settle(wrapper);
+    await typePath(wrapper, PICTURES.path);
+    expect(wrapper.text()).toContain("Reading that folder…");
+
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await settle(wrapper);
+
+    expect(wrapper.text()).not.toContain("Reading that folder…");
+  });
+});
+
+describe("in a container", () => {
+  it("offers no Browse and says the path is a container path", async () => {
+    const wrapper = await settle(mountDialog({ inDocker: true }));
+
+    expect(wrapper.find(".add-library__browse").exists()).toBe(false);
+    expect(wrapper.text()).toContain("running in a container");
+  });
+});

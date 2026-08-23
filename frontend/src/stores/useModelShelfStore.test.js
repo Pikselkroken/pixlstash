@@ -1363,10 +1363,7 @@ describe("the thumbnail verb", () => {
     expect(setModelIcon).toHaveBeenCalledWith(1, file);
   });
 
-  it("refuses a multi-row selection instead of marking the first row", async () => {
-    // The bar disables the button, but a UI state is not an invariant — any
-    // other caller would otherwise silently mark whichever row happened to sort
-    // first, which is the surprise this verb can least afford.
+  it("marks every selected model, not just the first", async () => {
     const store = useModelShelfStore();
     store.rows = [
       adapter({ id: 1 }),
@@ -1374,9 +1371,87 @@ describe("the thumbnail verb", () => {
     ];
     store.toggleSelected(1);
     store.toggleSelected(2);
+    const file = new Blob(["x"]);
+
+    expect(await store.setIconOnSelected(file)).toBe(true);
+    expect(setModelIcon).toHaveBeenCalledTimes(2);
+    expect(setModelIcon).toHaveBeenCalledWith(1, file);
+    expect(setModelIcon).toHaveBeenCalledWith(2, file);
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "Set the thumbnail on 2 models.",
+    );
+  });
+
+  it("counts a partial failure rather than claiming the whole selection", async () => {
+    // The receipt is the only record — there is no undo — so a batch that half
+    // landed must not read like one that landed.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    setModelIcon.mockRejectedValueOnce(new Error("nope"));
+
+    expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(true);
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toBe(
+      "Set the thumbnail on 1 model. 1 model could not be written.",
+    );
+  });
+
+  it("reports an error when nothing landed", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    setModelIcon.mockRejectedValue(new Error("nope"));
+
+    expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+
+  it("does nothing without a selection, and says nothing either", async () => {
+    // The notice matters as much as the write: without the guard this falls
+    // through to "none landed" and pushes an error about a set nobody asked
+    // for.
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    const before = useNoticeStore().notices.length;
+    expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
+    expect(setModelIcon).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices).toHaveLength(before);
+  });
+
+  it("marks every model in a ticked run, not just its cover", async () => {
+    // A fully-selected stack is ONE selected row, and its id is the cover's.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1, stack_id: 9, stack_position: 0 }),
+      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+    ];
+    store.selectVisible();
+    expect(store.selectedRows).toHaveLength(1);
+
+    expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(true);
+    expect(setModelIcon.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2, 3]);
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "Set the thumbnail on 3 models.",
+    );
+  });
+
+  it("refuses a selection past the ceiling rather than firing 501 uploads", async () => {
+    const store = useModelShelfStore();
+    store.rows = Array.from({ length: 501 }, (_, i) =>
+      adapter({ id: i + 1, sha256: String(i).padStart(64, "0") }),
+    );
+    store.selectVisible();
 
     expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
     expect(setModelIcon).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).text).toContain("At most 500");
   });
 
   it("does nothing without a file, rather than posting an empty body", async () => {
