@@ -1,0 +1,182 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "2 \u00b7 What we found",
+      "page": "bringing-in",
+      "x": 1260,
+      "y": 0,
+      "w": 1240,
+      "h": 900
+    },
+    {
+      "file": "MapTree.dc.html",
+      "title": "3 \u00b7 Name what your folders are",
+      "page": "bringing-in",
+      "x": 2600,
+      "y": 0,
+      "w": 1440,
+      "h": 860
+    },
+    {
+      "file": "Preview.dc.html",
+      "title": "4 \u00b7 Before anything is written",
+      "page": "bringing-in",
+      "x": 4140,
+      "y": 0,
+      "w": 1300,
+      "h": 1300
+    },
+    {
+      "file": "Storage.dc.html",
+      "title": "How your folders are laid out",
+      "page": "living-in",
+      "x": 0,
+      "y": 0,
+      "w": 1160,
+      "h": 1400
+    },
+    {
+      "file": "Views.dc.html",
+      "title": "PixlStash Views",
+      "page": "living-in",
+      "x": 2600,
+      "y": 0,
+      "w": 1300,
+      "h": 960
+    },
+    {
+      "file": "Insights.dc.html",
+      "title": "About your library",
+      "page": "living-in",
+      "x": 4000,
+      "y": 0,
+      "w": 1240,
+      "h": 1160
+    },
+    {
+      "file": "Libraries.dc.html",
+      "title": "Settings > Libraries: attach and detach",
+      "page": "living-in",
+      "x": 5340,
+      "y": 0,
+      "w": 900,
+      "h": 1780
+    },
+    {
+      "file": "Moves.dc.html",
+      "title": "When you move things yourself",
+      "page": "living-in",
+      "x": 1260,
+      "y": 0,
+      "w": 1240,
+      "h": 1420
+    },
+    {
+      "file": "Welcome.dc.html",
+      "page": "bringing-in",
+      "title": "1 \u00b7 First run",
+      "x": 0,
+      "y": 0,
+      "w": 1160,
+      "h": 1520
+    },
+    {
+      "file": "Empty.dc.html",
+      "page": "bringing-in",
+      "title": "1a \u00b7 A new library, before anything is in it",
+      "x": 0,
+      "y": 1700,
+      "w": 1160,
+      "h": 900
+    }
+  ],
+  "annotations": [
+    {
+      "id": "pass-one",
+      "page": "bringing-in",
+      "x": 640,
+      "y": -300,
+      "w": 600,
+      "text": "Loop pass 1. Static mockups: the drag interaction gets built and operated by keyboard in pass 2.\n\nDIRECTION A IS PICKED. The pattern-formula alternative is dropped and recorded in DECISIONS.md; the deciding argument is that two folders at the same depth can legitimately mean two different things, and only the tree can say so per row.\n\nEvery figure and folder name is PLACEHOLDER, except the membership counts behind the single-valued argument, which were measured on the owner's four real libraries. The protocol's fixture pack replaces the rest before this is state-complete."
+    },
+    {
+      "id": "what-is-derivable",
+      "page": "bringing-in",
+      "x": 1260,
+      "y": -300,
+      "w": 600,
+      "text": "The screen is pre-filled, and NOTHING in it is a guess at a folder name. That was the review's concern and this is the answer to it: no LLM ships with PixlStash, so a name is a string. What can be computed locally is:\n\nCARDINALITY \u2014 four names repeating under 118 of 149 parents is a facet, not a thing. Fills Tag. Costs nothing.\n\nFILES BESIDE THE PICTURES \u2014 a caption .txt next to every image is a training set. Fills Set. Costs nothing.\n\nFACES \u2014 one identity across a folder's pictures is a person. Fills Person. This one costs real time, and SAMPLING is what makes it affordable: 20 pictures per folder, not 28,412. Two minutes rather than an hour, and the full pass later can only add.\n\nNAME MATCHES AN EXISTING ENTITY \u2014 a lookup, not an inference.\n\nWhat none of them can do is call level 2. Cardinality rules out Tag, so those 14 are things rather than labels, and the screen offers exactly the two candidates left. Narrowed, not guessed, and the last step is the user's."
+    },
+    {
+      "id": "vocabulary",
+      "page": "bringing-in",
+      "x": 2600,
+      "y": -300,
+      "w": 560,
+      "text": "One colour and one drawn icon per entity, reused on every artboard: Project teal, Set amber, Person magenta, Tag olive, Just-a-folder grey. All four are existing roles in the kit rather than new colours.\n\nPerson, not Character \u2014 the shipped UI says People and Person; character is the internal model name only.\n\n\"Just a folder\" replaced \"Leave alone\", which read as though the FILES would be untouched. Every option leaves the files untouched. What this one says is that the name is not telling us anything.\n\nThe number on each chip is its keyboard key. Letters collide (Project and Person both want P), so digits until someone finds better."
+    },
+    {
+      "id": "living",
+      "page": "living-in",
+      "x": 0,
+      "y": -270,
+      "w": 640,
+      "text": "THE RULE, settled after the many-to-many problem nearly sank this: a picture moves only when its folder STOPS BEING TRUE. Not whenever something about it changes.\n\nAdd a second project or a second person and nothing moves, because the folder it is in is still correct. Remove the one its folder is named after and it moves, because otherwise the folder lies. Rename a project and the FOLDER is renamed, not 18,000 files moved.\n\nThree things fall out rather than being designed in. Importing a library moves NOTHING, because the assignments came from the folders and are true the moment they are written. Multiplicity stops mattering, because nothing is ever re-derived. And a folder outside the layout contradicts nothing, so it never moves, which makes dragging a picture somewhere of your own a permanent override that needs no setting.\n\nMANAGED LIBRARIES ARE GONE as a concept. A PixlStash folder is just this, starting empty, on a default of Project / Person or Set. Today's flat libraries need no migration: files at a library root match no layout, contradict nothing, and stay put.\n\nThe honest cost: the tree is never wrong but it drifts from what you would have picked. Hence \"Move to match\" as an offered action.\n\nForced to build: renaming an entity renames its folder, and the check is debounced or a remove-then-add becomes two moves via the fallback."
+    },
+    {
+      "id": "external-moves",
+      "page": "living-in",
+      "x": 1260,
+      "y": 850,
+      "w": 620,
+      "text": "THE MIRROR RULE, and the answer to \"maybe it will have to be a popup\": no, and never per file. PixlStash changes an assignment only when your move makes it untrue.\n\nThe one judgement call is when a move is ambiguous. Moving OUT of a project's folder cannot distinguish \"left the project\" from \"refiled the picture\", because a folder holds a picture once and a project can share it. Resolved on the owner's real data: 91-100% of assigned pictures have exactly one project or set, so a move is unambiguous for almost all of them and is applied. The few with several are listed and left alone until asked.\n\nShape is the house rule from the 1.9 sweep: batch, propose, act-then-report. A screen on next start, a sidebar strip a few seconds after the moves stop while running.\n\nHARD REQUIREMENT: PixlStash must record its own moves, or its writes return through the watcher as user intent and the two flip each other forever."
+    },
+    {
+      "id": "consent",
+      "page": "bringing-in",
+      "x": 2880,
+      "y": -270,
+      "w": 600,
+      "text": "The last screen of the import states the rule in both directions, because it is the moment the owner agrees to let PixlStash keep the folders.\n\nThe line that matters most is underneath: importing your library moves nothing at all. For somebody handing over a tree they curated by hand over years, that is the whole pitch, and under this rule it is simply true rather than a promise."
+    },
+    {
+      "id": "first-run",
+      "page": "bringing-in",
+      "x": 0,
+      "y": -300,
+      "w": 620,
+      "text": "TWO OPTIONS AT FIRST RUN, AND THEY ARE FRAMING RATHER THAN MECHANISM. Both lead to the same folder picker; the folder decides what actually happens. Option 2 goes straight into artboards 2-4.\n\nThe rule the bottom of the artboard pins down: ask for an empty library, point at a folder that is not empty, and there are exactly TWO ways forward. Bring them in, or pick a different folder. \"Start empty in here anyway\" is not offered, because a library that ignores the pictures in its own folder is a trap: the next scan finds them, new pictures get filed in among them, and two ideas of one folder is one too many.\n\nThe options exist for comprehension, not to fork the code. A bare folder picker gives a new user no hint that pointing at an existing library is supported at all, and that discoverability failure is the leak this whole release is aimed at.\n\nTELEMETRY IS NOT REDESIGNED HERE. TelemetryConsentDialog already asks on first startup, with three exclusive options, a live payload preview, a never-sent list, and consent recorded however the user leaves. It is reproduced on the artboard only to fix the ORDER: the question first, then the folder.\n\nWhich also corrects an earlier read of the 5 opted-in installs. The prompt is not missing, so the number is explained by something else: installs predating it, headless and Docker installs that never load the SPA, or people choosing one of the first two options. Worth finding out which before anyone touches this dialog, because it is good and the low number is not evidence against it."
+    },
+    {
+      "id": "empty-landing",
+      "page": "bringing-in",
+      "x": 0,
+      "y": 1080,
+      "w": 620,
+      "text": "1a is the other branch's ending, and it is the screen that started all of this. Today it reads \"No pictures in the database. Add pictures by dragging them here.\" on the first run of every install: the word database on the first screen, and one route in, the one that suits a curated library least.\n\nThree routes now, none of them presented as the official one, and the folder route first. It also states where new pictures will be filed, so the layout is never a surprise discovered later in Settings."
+    },
+    {
+      "id": "libraries",
+      "page": "living-in",
+      "x": 5340,
+      "y": -300,
+      "w": 620,
+      "text": "DRAWN AS THE DIALOG IT ACTUALLY LIVES IN. The first pass drew this as a full-width page; it is a section of UserSettingsDialog, 820px wide with a nav rail beside it, which is why the list is compact rows rather than a table.\n\nTHE ONLY REAL GAP IN THE RELEASE, and it is thinner than it looks. The hub registry already has attach(), register_pending() for a folder whose vault does not exist yet, detach() that clears a flag rather than deleting the row so share links survive, overlap detection, and typed errors for every refusal. What is missing is HTTP routes over it: today routes/libraries.py has GET /libraries and POST /libraries/active and nothing else.\n\nFour routes: GET /libraries/inspect?path= (new, and the one that makes \"the folder answers the question\" work), POST /libraries, DELETE /libraries/{id}, and /filesystem/browse which already exists.\n\nThe two refusals at the top are the registry's own errors made visible. The overlap one matters most: two libraries indexing the same pictures would each move them by their own layout, and neither would be wrong."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "bringing-in"
+  },
+  "pages": [
+    {
+      "id": "bringing-in",
+      "name": "Bringing it in"
+    },
+    {
+      "id": "living-in",
+      "name": "Living in it"
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+<div class="app">
+  <div class="titlebar">
+    <span class="wordmark">PixlStash</span>
+    <span class="spacer"></span>
+    <span class="version">first run</span>
+  </div>
+  <div class="app-body">
+    <div class="main">
+      <div class="scroll pad">
+
+        <h2 class="t">Where should your pictures live?</h2>
+        <p class="sub">A library is a folder on your disk. PixlStash keeps its index inside that
+          folder, so the whole thing is one thing you can copy, back up or move.</p>
+
+        <div class="grid2" style="margin-top:var(--space-6);gap:var(--space-5)">
+
+          <label class="opt opt--on" style="flex-direction:column;gap:var(--space-4);padding:var(--space-6)">
+            <span class="mark ent ent--project" style="width:36px;height:36px;border-radius:var(--radius-md);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </span>
+            <span>
+              <h4 style="font-size:var(--text-lg)">I already have a folder of pictures</h4>
+              <p style="margin-top:var(--space-2)">Point PixlStash at it. Every file stays exactly
+                where it is, and the folder names you already use become the organisation.</p>
+            </span>
+            <span class="chip chip--quiet">nothing is moved, copied or renamed</span>
+          </label>
+
+          <label class="opt" style="flex-direction:column;gap:var(--space-4);padding:var(--space-6)">
+            <span class="mark ent ent--set" style="width:36px;height:36px;border-radius:var(--radius-md);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            </span>
+            <span>
+              <h4 style="font-size:var(--text-lg)">Start a new library</h4>
+              <p style="margin-top:var(--space-2)">An empty folder for PixlStash to fill. Bring
+                pictures in whenever you like, or generate straight into it.</p>
+            </span>
+            <span class="chip chip--quiet">you can add the folder you already have later</span>
+          </label>
+
+        </div>
+
+        <div class="rowf" style="gap:var(--space-3);margin-top:var(--space-6)">
+          <button class="btn btn--commit">Choose a folder&hellip;</button>
+        </div>
+
+        <div class="card card--quiet" style="margin-top:var(--space-6);border-style:dashed">
+          <div class="lbl">Before this, unchanged: the telemetry question that already ships</div>
+          <p class="sub" style="margin:0 0 var(--space-5)">
+            <span class="mono">TelemetryConsentDialog</span> already asks this once, on first
+            startup, and records that it asked however you leave it. It is not redrawn here and it
+            does not need to be. It is on this artboard only so the order is written down: the
+            question comes first, then the folder.
+          </p>
+
+          <div class="panel" style="padding:var(--space-5);max-width:640px">
+            <h3 class="t" style="font-size:var(--text-md)">What may PixlStash send?</h3>
+            <p class="sub" style="margin-top:var(--space-2);font-size:var(--text-xs)">
+              PixlStash can check pixlstash.dev once a day for a new version. Several past releases
+              fixed critical security bugs, so I&rsquo;d suggest leaving this on. You could also help
+              PixlStash improve by sending a random number alongside it.
+            </p>
+            <div class="grid3" style="margin-top:var(--space-5);gap:var(--space-3)">
+              <div class="opt" style="flex-direction:column;gap:var(--space-2);padding:var(--space-4)">
+                <h4 style="font-size:var(--text-sm)">No check</h4>
+                <p style="font-size:var(--text-xs)">Nothing leaves your machine. You&rsquo;ll need to
+                  watch for security releases yourself.</p>
+              </div>
+              <div class="opt" style="flex-direction:column;gap:var(--space-2);padding:var(--space-4)">
+                <h4 style="font-size:var(--text-sm)">Check for updates</h4>
+                <p style="font-size:var(--text-xs)">Sends your version and platform. Nothing else.</p>
+              </div>
+              <div class="opt opt--on" style="flex-direction:column;gap:var(--space-2);padding:var(--space-4)">
+                <h4 style="font-size:var(--text-sm)">Check + random ID</h4>
+                <p style="font-size:var(--text-xs)">Adds a random number, so I can tell ten people
+                  using PixlStash once from one person using it ten times.</p>
+              </div>
+            </div>
+            <p class="sub" style="margin-top:var(--space-4);font-size:var(--text-xs)">
+              <b style="color:var(--text)">Never sent:</b> your images &middot; your tags, captions
+              or filenames &middot; your prompts
+            </p>
+          </div>
+        </div>
+
+        <div class="card card--quiet" style="margin-top:var(--space-6);border-style:dashed">
+          <div class="lbl">If you asked for an empty library and the folder is not empty</div>
+          <div class="ins-field">
+            <div class="rowf" style="gap:var(--space-4);align-items:flex-start">
+              <span class="mark ent ent--project" style="width:30px;height:30px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e);flex-shrink:0">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              </span>
+              <div style="flex:1">
+                <div style="font-size:var(--text-sm)">You said <b>start a new library</b>, but there
+                  are <span class="num">28,412</span> pictures in
+                  <span class="mono">~/Pictures/Generations</span>.</div>
+                <div class="muted" style="font-size:var(--text-xs);margin-top:var(--space-2)">
+                  Bring them in and PixlStash reads your folder names as the organisation, without
+                  moving anything. Or point it somewhere else.
+                </div>
+              </div>
+              <div class="stack" style="gap:var(--space-2);flex-shrink:0">
+                <button class="btn btn--accent" style="height:28px;font-size:var(--text-xs)">Bring them in</button>
+                <button class="btn btn--outline" style="height:28px;font-size:var(--text-xs)">Pick a different folder</button>
+              </div>
+            </div>
+          </div>
+          <div class="note" style="margin-top:var(--space-4)">
+            There is no third answer, and &ldquo;start empty in here anyway&rdquo; is not one. A
+            library that ignores the 28,412 pictures sitting in its own folder is a trap: the next
+            scan finds them, new pictures get filed in among them, and two ideas of one folder is one
+            too many. Which button was pressed a screen earlier does not get to cause that.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>

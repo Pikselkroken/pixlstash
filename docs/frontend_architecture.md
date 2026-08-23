@@ -593,7 +593,46 @@ asserted in `UserSettingsDialog.test.js`.
 `LibrariesSection` reads the shared registry
 store, shows host paths and deployment-specific CLI commands only when the
 server supplied them, and always offers the public documentation link as the
-remote-safe fallback. The switch confirmation is the global
+remote-safe fallback.
+
+It owns the whole lifecycle from v1.11: `+ Add a library…`, and a per-row `⋯`
+menu holding `Open this library`, `Rename…` and `Stop using this…`. **The active
+library's menu has no `Stop using this…`** — the registry refuses detaching it,
+so the item could only ever fail, and switching away first is what the other
+rows' `Switch` buttons are for. **A remote session gets no menu and no Add
+button at all**, because every verb behind them is `LOCAL_OWNER_ONLY`; the
+visible note under the list says so, rather than four items that each fail.
+Renaming stays open on a name the server refused, with the server's reason — it
+names the library already holding that name, which is the one thing that tells
+the owner what to type instead.
+
+`AddLibraryDialog.vue` is the picker: one path field, `Browse…` (reusing
+`FolderBrowser`, including its `New folder`, since `POST /libraries` creates no
+directory), and one card rendering the `GET /libraries/inspect` verdict. Every
+word in that card is the server's `headline` and `detail`; the component decides
+only the icon, the border and whether there is a button, branching on `can_add`
+and nothing else. It adds the path the **server resolved**, not the one typed,
+and an inspection still on the wire when the path changes is discarded by epoch.
+A refusal from `POST /libraries` — the server re-inspects, so a folder that
+became covered since the verdict is refused there — re-asks and then shows the
+message, so the card and the error agree.
+
+A `Call it` field sits inside the addable card, prefilled from the verdict's
+`suggested_name` and left alone once the owner edits it. It is not decoration:
+library names are unique among attached libraries, so without it two folders
+both named `2024` are unaddable from this dialog and the owner is sent to the
+command line — the thing the feature removes.
+
+**`inspect` is a no-op for the path it last answered, and that is what makes the
+button work.** A browser orders `mousedown → blur → click`; `@blur` re-inspects,
+and without the guard it cleared the verdict synchronously, so the click that
+followed found `canAdd` false and did nothing at all — a button that silently
+failed on its first press, every time. `AddLibraryDialog.test.js` reproduces it
+with a *slow* inspect mock on purpose: with one that settles inside the blur's
+own `nextTick` the test passes either way, which is how such a bug survives
+being "covered".
+
+The switch confirmation is the global
 `ConfirmDialog.vue` host for `useConfirm`: it focuses the primary action, handles
 Enter/Escape through `AppDialog`, restores invoking focus on cancel, and names
 outgoing live share links before any switch request is sent. After acceptance,
