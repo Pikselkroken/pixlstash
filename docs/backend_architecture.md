@@ -2885,28 +2885,28 @@ this record and needs its own independent adversarial sign-off.
 
 `utils/library_layout.py` is the model of **where a picture belongs and whether
 it still belongs there**. Model only: no move engine, no file writes, no UI —
-see Phase 4b for those.
+see Phase 4b for those. The rule it implements, and its case table, are in
+`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
+detail, so this section is the map rather than a second copy of it.
 
 A `Layout` is an ordered list of segments, one folder level each. A segment
 holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
 picture has a value for wins; a segment nothing fills is **skipped rather than
 left as an empty folder**, which keeps the tree two deep instead of five. A new
-library starts on `DEFAULT_LAYOUT`, `Project / Person or Set`.
-
-Two pure functions:
+library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
 
 | Function | Answers |
 |---|---|
-| `render(facets, layout)` | The folder path the picture should have, relative to the library root. A picture nothing files goes to `layout.unfiled` (`_Inbox`), never the root. |
-| `is_true(path, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. |
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `_Inbox` — never the library root, which is where an unmigrated flat library lives. |
+| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. |
 
 The release rests on `is_true`, and on one property of it: **a path that does
 not parse against the layout can never be false.** A file at the library root
 matches no segment, so an existing flat library needs no migration; a file the
-owner dragged into `_unsorted` contradicts nothing, so it stays there
+owner dragged into a folder of their own contradicts nothing, so it stays there
 permanently and the override needs no setting.
 
-Three things follow from how it is written:
+The three properties a reader is most likely to get wrong:
 
 - **Truth is membership, not equality with `render`.** The folder `Mira/` says
   "this is a Mira picture" and stays true while Mira is one of the picture's
@@ -2916,19 +2916,19 @@ Three things follow from how it is written:
   separates *this folder names a project the picture is no longer in* (false, it
   moves) from *this folder names nothing PixlStash knows* (unparseable, it never
   moves). Deleting an entity takes its name out of the language and freezes the
-  folders named after it; a caller that wants those judged one last time passes
-  the name it is deleting in `known_names`.
-- **Skipping is not re-validated, and neither is anything below the layout.** A
-  set-only picture filed one level deep stays there when it gains a project
-  (nothing is ever re-derived), and `2024 Shoots/Mira/2026-08/` is judged on its
-  first two components only — the third is the owner's own.
+  folders named after it.
+- **Reading stops at the first component the vocabulary cannot read**, and it is
+  not positional. Everything from that component down is the owner's own, so
+  `2024 Shoots/Mira/2026-08` is judged on its first two components while
+  `Holiday/2024 Shoots` is judged on none of them.
 
-Where a component could be read as more than one facet, any reading that is
-still true wins. This decides whether a file moves, so it errs towards leaving
-it alone. Entity names are written down through `folder_name()`, which is the
-chokepoint that stops a name like `Mira/2024` from inventing a folder level or
-escaping the root, and comparison is case-folded and NFC-normalised because
-Windows and macOS are case-insensitive and macOS decomposes accents.
+Every name reaching a path goes through `folder_name()` — including
+`Layout.unfiled`, which is validated against it on construction because it is
+the one field a settings screen will let a user type and it reaches `render`'s
+output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
+`A_B`), which is the collision the filesystem would force anyway; comparison is
+additionally case-folded and NFC-normalised for Windows and macOS. Every
+ambiguity here resolves towards *not* moving a file.
 
 `tests/test_library_layout.py` covers it, unparseable-path cases first.
 
