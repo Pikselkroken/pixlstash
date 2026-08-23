@@ -297,6 +297,42 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "the whole route being denied. Returns no per-object data."
         ),
     ),
+    # The lifecycle verbs (v1.11 "Your existing library", plan §Phase 1). All
+    # four are HUB_ONLY: they read and write the registry, never the active
+    # vault, so they need no library lease.
+    #
+    # HUB_ONLY also exempts them from the switch's 503, and that is deliberate
+    # rather than incidental: the registry has to stay answerable when there is
+    # no open vault, which is the state an owner recovers from by attaching or
+    # switching. `DELETE` is the one that cannot take the exemption — it reads
+    # `is_active`, and mid-swap that flag is moving — so its handler refuses
+    # while a switch is in flight, in its own words.
+    #
+    # `library_independent` is a different knob and is left at its safe default
+    # False: it governs the token PIN, not the 503, so an ALL token stamped for
+    # another library is refused here exactly as it is on a data route. A route
+    # is pinned by omission as an undeclared one is denied by omission, and none
+    # of these four needs the exemption `GET /libraries` needs.
+    ("GET", "/api/v1/libraries/inspect"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 takes a caller-supplied host path and walks it to say what the folder is — the same host-filesystem read authority as GET /filesystem/browse, through the same validate_reference_folder_path chokepoint; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/libraries"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 takes a caller-supplied host path and, for a folder with no vault, writes a SQLite database into it and restricts the folder to the owner (0700) — write authority inside a host folder, alongside POST /filesystem/folders which is already on this tier. It creates no directory: the folder must already exist, which is what keeps its authority to one named folder. Attaching moves, renames and copies nothing, and never reads the incoming vault's user/user_token rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PATCH", "/api/v1/libraries/{library_uuid}"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 tier by consistency, not by capability: renaming writes one hub column, takes no host path and renames nothing on disk. It sits with its siblings because the Settings pane gates the whole management menu on the same can_manage locality answer, and a looser tier here would give that pane two rules to explain while buying no reachability the owner does not already have",
+    ),
+    ("DELETE", "/api/v1/libraries/{library_uuid}"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 tier for the POST /libraries/active reason rather than the path-authority one: it takes a registry uuid, never a host path, and removes no file — it clears the attached flag and keeps the row. What it exercises is authority over other principals' state, because every share link pointing at that library stops working until the folder is added again. The active library is refused by the registry; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/libraries/active"): RoutePolicy(
         _LOCAL,
         library_independent=True,
