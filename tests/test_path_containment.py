@@ -306,7 +306,7 @@ def _add_picture(server, file_path: str, reference_folder_id=None) -> int:
 
 
 def _rotate_in_session(
-    server, picture_id: int, orientation: int, image_root: str = None
+    server, picture_id: int, orientation: int, image_root: str | None = None
 ) -> bool:
     def _do(session):
         turned = apply_orientation(
