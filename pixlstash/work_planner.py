@@ -130,6 +130,10 @@ class WorkPlanner:
             TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
             ),
+            # Re-registered with a hub in `vault.py` when this vault was opened
+            # through a hub registration, so it can also file workflows; without
+            # one it keeps its pre-B3 predicate. Same reason GFS_SNAPSHOT and
+            # CHECKPOINT_HASH are registered there rather than here.
             TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
                 database=database,
                 image_root=image_root or "",

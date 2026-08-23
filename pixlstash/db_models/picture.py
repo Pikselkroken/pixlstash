@@ -271,6 +271,33 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("comfyui_loras", String, default=None, nullable=True),
     )
+    # The two workflow-library keys (``services/workflow_hash.py``), stored as
+    # plain text because the rows they name live in the HUB: content-addressed,
+    # so there is no foreign key across the database boundary and a hash the
+    # attached hub has never seen is reported as unknown rather than as an error.
+    workflow_topology_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "workflow_topology_hash", String, default=None, nullable=True, index=True
+        ),
+    )
+    workflow_structural_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "workflow_structural_hash", String, default=None, nullable=True, index=True
+        ),
+    )
+    # The scanned-marker, and the re-hash selector when the rule changes.
+    # NULL means never scanned; set means scanned, with BOTH hashes NULL when
+    # the picture carried no executable graph -- which is the ordinary case for
+    # roughly a third of a real library, so without this third state the
+    # backfill re-reads that third on every run, forever. Same convention as
+    # `comfyui_models` above, but a magic string is the wrong sentinel for a
+    # hash column.
+    workflow_hash_version: Optional[str] = Field(
+        default=None,
+        sa_column=Column("workflow_hash_version", String, default=None, nullable=True),
+    )
     project_id: Optional[int] = Field(
         default=None, foreign_key="project.id", index=True
     )
@@ -483,6 +510,17 @@ class Picture(SQLModel, table=True):
             "deleted",
             "id",
             sqlite_where=text("orientation IS NULL"),
+        ),
+        # MissingComfyUIExtractionFinder: workflow_hash_version IS NULL AND
+        # deleted IS 0. Same idle-probe shape and the same column order for the
+        # same reason -- the planner sweeps this finder several times a second
+        # on a library where it matches nothing.
+        Index(
+            "ix_picture_workflow_unscanned",
+            "workflow_hash_version",
+            "deleted",
+            "id",
+            sqlite_where=text("workflow_hash_version IS NULL"),
         ),
     )
 
