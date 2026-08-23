@@ -110,6 +110,8 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   /** `topology_hash -> picture ids`, for the inspector's tiles. */
   const samples = reactive({});
   const samplesLoading = ref(new Set());
+  /** Workflows whose tile ids were asked for and did not come back. */
+  const samplesFailed = ref(new Set());
 
   // A stamp, not a boolean: an in-flight fetch that resolves after a session
   // reset must not write its rows into the new session's store.
@@ -258,11 +260,19 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   /**
    * The inspector's tiles for one workflow, fetched once.
    *
-   * **A failure is not cached.** Writing an empty array on the error path made
-   * the guard above permanent for the session, so one dropped request meant the
-   * rail said "nothing this workflow made is still in the library" — the one
-   * thing it must not say wrongly — until a session reset. The key is left
-   * unset instead, so opening the workflow again asks again.
+   * **A failure is recorded, not cached as an answer, and those are different
+   * things.** Writing an empty array on the error path made the "already have
+   * them" guard permanent, so one dropped request meant the rail said "nothing
+   * this workflow made is still in the library" — the one thing it must not say
+   * wrongly — until a session reset. Leaving the key simply unset fixed that
+   * and broke the other half: absent then meant BOTH "not asked yet" and
+   * "asked and failed", so the panel showed "Reading its pictures…" for ever
+   * and the sentence written for the failure could never render.
+   *
+   * So there are three states and three places to read them from: in
+   * ``samplesLoading`` is in flight, a key in ``samples`` is the answer, and a
+   * hash in ``samplesFailed`` is a request that came back empty-handed. A
+   * retry clears the third and asks again.
    */
   async function loadSamples(topologyHash, limit = 6) {
     if (samples[topologyHash] || samplesLoading.value.has(topologyHash)) return;
@@ -270,6 +280,13 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     const busy = new Set(samplesLoading.value);
     busy.add(topologyHash);
     samplesLoading.value = busy;
+    // Cleared as the attempt starts, not as it ends: a retry must not render
+    // as failed while it is in flight.
+    if (samplesFailed.value.has(topologyHash)) {
+      const cleared = new Set(samplesFailed.value);
+      cleared.delete(topologyHash);
+      samplesFailed.value = cleared;
+    }
     try {
       const ids = await listWorkflowPictures(topologyHash, limit);
       if (mine === epoch) samples[topologyHash] = ids;
@@ -278,6 +295,11 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
       // them, which is a different sentence from "there are none", and the
       // console carries the reason.
       console.warn("[workflows] could not read sample pictures", err);
+      if (mine === epoch) {
+        const failed = new Set(samplesFailed.value);
+        failed.add(topologyHash);
+        samplesFailed.value = failed;
+      }
     } finally {
       const done = new Set(samplesLoading.value);
       done.delete(topologyHash);
@@ -287,6 +309,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
 
   function isSamplesLoading(topologyHash) {
     return samplesLoading.value.has(topologyHash);
+  }
+
+  function samplesDidFail(topologyHash) {
+    return samplesFailed.value.has(topologyHash);
   }
 
   function resetForSession() {
@@ -300,6 +326,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     openHashes.value = new Set();
     variantsLoading.value = new Set();
     samplesLoading.value = new Set();
+    samplesFailed.value = new Set();
     for (const key of Object.keys(variants)) delete variants[key];
     for (const key of Object.keys(samples)) delete samples[key];
   }
@@ -332,6 +359,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     toggleOpen,
     isVariantsLoading,
     isSamplesLoading,
+    samplesDidFail,
     loadSamples,
     resetForSession,
   };

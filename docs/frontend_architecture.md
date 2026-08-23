@@ -3761,7 +3761,18 @@ would keep asking for numbers nobody is looking at. The tab strip names the
 **subject** — `Workflow`, where `Model` and `Pictures` sit — and the second tab
 is always the way out to the pictures, which is what stops the rail being
 terminal. It dims rather than disappearing when a workflow has outlived
-everything it made, so the panel keeps its shape. A tile opens the picture
+everything it made, so the panel keeps its shape.
+
+**Its tiles have three states and the store records all three separately**, because
+two bugs have now lived in that one branch. A failed fetch used to be cached as
+an empty array, so the rail said "nothing this workflow made is still in the
+library" — the one thing it must not say wrongly — until a session reset; leaving
+the key unset instead fixed that and broke the other half, since absent then
+meant both *not asked yet* and *asked and failed*, and the panel said "Reading
+its pictures…" for ever with the failure's own sentence unreachable. So:
+`samplesLoading` is in flight, a key in `samples` is the answer, and
+`samplesFailed` is a request that came back empty-handed and offers a retry.
+`WorkflowInspector.test.js` pins all three. A tile opens the picture
 through `?overlay=<id>` on the library route, which is the shipped way a
 reloaded lightbox restores itself rather than a second route into the viewer.
 
