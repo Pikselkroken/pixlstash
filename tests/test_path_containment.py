@@ -305,10 +305,15 @@ def _add_picture(server, file_path: str, reference_folder_id=None) -> int:
     return server.vault.db.run_task(_do)
 
 
-def _rotate_in_session(server, picture_id: int, orientation: int) -> bool:
+def _rotate_in_session(
+    server, picture_id: int, orientation: int, image_root: str | None = None
+) -> bool:
     def _do(session):
         turned = apply_orientation(
-            session, picture_id, orientation, image_root=server.vault.image_root
+            session,
+            picture_id,
+            orientation,
+            image_root=image_root or server.vault.image_root,
         )
         session.commit()
         return turned
@@ -369,3 +374,97 @@ def test_rotate_refuses_a_reference_folder_file_at_the_sink(server, tmp_path):
 
     assert _rotate_in_session(server, picture_id, 6) is False
     assert read_orientation(external) == 1
+
+
+def _cleanup(*paths) -> None:
+    """Undo what a test left in the module-scoped vault: `clean_db` wipes rows,
+    not files, and a symlink pointing out of the library must not outlive its
+    test."""
+    for path in paths:
+        if not os.path.lexists(path):
+            continue
+        # Windows removes a directory symlink with rmdir; POSIX with unlink.
+        if os.name == "nt" and os.path.islink(path) and os.path.isdir(path):
+            os.rmdir(path)
+        else:
+            os.unlink(path)
+
+
+def test_rotate_accepts_a_library_root_reached_through_a_symlink(server, tmp_path):
+    """Over-blocking guard for the strict check, not a demonstration of it.
+
+    `path_is_within` already accepted an aliased root, so this passes either
+    way; it is here so that a future tightening cannot refuse every library
+    whose folder is reached through a symlink without a test going red.
+    """
+    linked_root = tmp_path / "linked-root"
+    try:
+        linked_root.symlink_to(server.vault.image_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+    in_root = os.path.join(server.vault.image_root, "aliased.png")
+    _write_png(in_root)
+    picture_id = _add_picture(server, "aliased.png")
+    try:
+        assert _rotate_in_session(server, picture_id, 6, image_root=str(linked_root))
+        assert read_orientation(in_root) == 6
+    finally:
+        _cleanup(in_root)
+
+
+def test_rotate_refuses_a_symlink_inside_the_root_that_points_outside(server, tmp_path):
+    """The topology `path_is_within` accepts on purpose and a write sink cannot.
+
+    The harm is a read escape, not a write one: `os.replace` replaces a symlink
+    rather than following it, so the outside file is never rewritten — but
+    `read_orientation` follows it, and the rotate then lands a copy of that
+    file's bytes inside the library under the link's name, carrying its mode and
+    owner across. Asserting the link is still a link is what fails on the
+    lexical check; the byte assertion holds either way and is kept as the
+    statement of what must never become true.
+    """
+    victim = tmp_path / "outside" / "theirs.png"
+    _write_png(str(victim))
+    untouched = victim.read_bytes()
+
+    link = os.path.join(server.vault.image_root, "looks-in-root.png")
+    try:
+        os.symlink(str(victim), link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    picture_id = _add_picture(server, "looks-in-root.png")
+
+    try:
+        turned = _rotate_in_session(server, picture_id, 6)
+        assert os.path.islink(link), "the outside file was read into the library"
+        assert victim.read_bytes() == untouched
+        assert turned is False
+    finally:
+        _cleanup(link)
+
+
+def test_rotate_declines_a_symlinked_subfolder_inside_the_root(server, tmp_path):
+    """The deliberate cost of the strict check, pinned so it is not a surprise.
+
+    Realpath containment cannot tell a planted link from photos legitimately
+    kept on a second disk, so both are refused. Rotate declines the picture and
+    logs why; nothing else about it changes. If this ever has to be relaxed,
+    relax it here and not in `path_is_within`.
+    """
+    elsewhere = tmp_path / "second-disk"
+    elsewhere.mkdir()
+    _write_png(str(elsewhere / "beach.png"))
+
+    linked_sub = os.path.join(server.vault.image_root, "2024")
+    try:
+        os.symlink(str(elsewhere), linked_sub, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    picture_id = _add_picture(server, os.path.join("2024", "beach.png"))
+
+    try:
+        assert _rotate_in_session(server, picture_id, 6) is False
+        assert read_orientation(str(elsewhere / "beach.png")) == 1
+    finally:
+        _cleanup(linked_sub)

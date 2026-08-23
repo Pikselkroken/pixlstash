@@ -1574,6 +1574,26 @@ never on the read path:
   library's files; never do that. A refused path is reported as unconfirmed, so
   the deletion ledger is corrected to `file_removed=False` and restore can
   still resurrect the row.
+- **The in-place rotate** (`operation_log_service.apply_orientation`, §21.5)
+  contains `Picture.file_path` with `resolve_path_within(image_root, …)` and
+  then reads and writes **the resolved path**, so the value that was checked is
+  the value that is used. Containment here is **strict** rather than
+  `path_is_within` (#1024), and the reason is not the one the function name
+  suggests. A symlink planted inside the library never carried the *write* out
+  of it: `write_orientation` renames a `mkstemp` sibling over the path and
+  `os.replace` replaces a symlink instead of following it. `read_orientation`
+  does follow it, so the lexical check let the outside file's bytes — and, via
+  `_carry_file_identity`, its mode and owner — be copied into the library under
+  the link's name. A read escape reachable through a write sink, which is the
+  hole this closes. A library root that is *itself* a symlink still passes,
+  because both sides are resolved.
+  **The cost is deliberate:** a symlinked **subfolder** inside the library —
+  photos kept on a second disk — is refused too, because realpath cannot tell
+  it from a planted link, and rotate declines those pictures. Pinned in
+  `tests/test_path_containment.py` in all three directions. Do not "fix"
+  `path_is_within` to match: the read paths and the shelf's four sites want the
+  lenient form its docstring promises. If the subfolder case must be allowed
+  again, relax it at this sink.
 - **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
   which only honours a recorded `tags_file`/`description_file` value that is
   exactly the image stem plus a safe suffix, so a fabricated column cannot
