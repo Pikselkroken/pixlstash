@@ -11,8 +11,8 @@ here -- an instance carries what a person wrote, and the hub-side instance
 table is Phase 2 work that moved to v1.12.
 
 ``workflow_hash_version`` is the scanned-marker: NULL means never scanned, and
-a set value means scanned with both hashes NULL when the picture carried no
-executable graph. It is also the re-hash selector when the rule changes, since
+a set value means scanned with all three ``workflow_*_hash`` columns NULL when
+the picture carried no executable graph. It is also the re-hash selector when the rule changes, since
 ``WHERE workflow_hash_version = 'v1'`` names exactly the affected rows -- though
 re-queueing them runs them back through the whole extraction task, which also
 NULLs ``text_embedding`` on every picture carrying ComfyUI data. The column

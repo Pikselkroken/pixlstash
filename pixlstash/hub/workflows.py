@@ -41,10 +41,11 @@ logger = get_logger(__name__)
 class WorkflowKeys:
     """What a vault records to point at a hub-side workflow.
 
-    Both hashes are content addresses. A vault stores them as plain text and
-    resolves them against whatever hub is attached, so a library that moves
-    machines still finds its recipes if that machine has them, and reports them
-    as unknown if it does not.
+    ``topology_hash`` and ``structural_hash`` are the two HUB-side content
+    addresses. A vault stores them as plain text and resolves them against
+    whatever hub is attached, so a library that moves machines still finds its
+    recipes if that machine has them, and reports them as unknown if it does
+    not.
 
     ``instance_hash`` is the third tier and is **vault-only**. It is returned
     from here because it falls out of the same reduction and re-walking the
@@ -78,8 +79,10 @@ def _canonical_document(document: dict) -> str:
 def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
     """File one API-format graph, returning the keys a vault should store.
 
-    Both tiers are computed from the same reduction, so the topology row and
-    the recipe row can never disagree about which graph they describe.
+    All three tiers are computed from the same reduction, so the topology row
+    and the recipe row can never disagree about which graph they describe, and
+    the instance key the caller stores in the vault describes that same graph.
+    Only the first two are written here; see :class:`WorkflowKeys`.
 
     Raises:
         pixlstash.services.workflow_hash.WorkflowGraphError: The graph holds

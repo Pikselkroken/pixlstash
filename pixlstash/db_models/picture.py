@@ -299,8 +299,9 @@ class Picture(SQLModel, table=True):
         ),
     )
     # The scanned-marker, and the re-hash selector when the rule changes.
-    # NULL means never scanned; set means scanned, with BOTH hashes NULL when
-    # the picture carried no executable graph -- which is the ordinary case for
+    # NULL means never scanned; set means scanned, with ALL THREE
+    # `workflow_*_hash` columns above NULL when the picture carried no
+    # executable graph -- which is the ordinary case for
     # roughly a third of a real library, so without this third state the
     # backfill re-reads that third on every run, forever. Same convention as
     # `comfyui_models` above, but a magic string is the wrong sentinel for a
