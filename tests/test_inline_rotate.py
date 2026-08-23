@@ -869,22 +869,19 @@ def _forge_write_token(server, set_id):
     resource-scoped token has no mint path through the API today — the shape is
     nonetheless fully honoured downstream, and it is the principal this route's
     ``PICTURE_SCOPED`` declaration exists for. The auth middleware builds a
-    ``TokenScope`` for **every** non-``ALL`` scope and only blocks non-GET for
-    ``scope == "READ"``, and ``enforce_picture_scope`` reads
+    ``TokenScope`` for **every** non-``ALL`` scope and admits a non-GET only for
+    a scope in ``auth.WRITE_ENABLED_SCOPES``, and ``enforce_picture_scope`` reads
     ``resource_type``/``resource_id`` and never ``scope`` — so this row exercises
     exactly the "write-enabled, and does the grant reach the picture" path the
     gate is being asked to decide. Forged rather than minted for the same reason
     ``tests/test_snapshots_auth.py`` forges: the row is the thing under test.
 
-    **These tests encode a fail-open that ought to be closed, and a future fix
-    will turn them red.** ``auth.py``'s middleware refuses a non-GET only when
-    ``scope == "READ"``, so an unrecognised scope string — like this forged
-    ``"WRITE"`` — skips the write refusal rather than being denied by default.
-    That is what lets this row through, and it is a pre-existing property of 43
-    already-``*_SCOPED`` mutation routes (``DELETE /pictures`` among them), not
-    of rotate. When someone allowlists known scopes and fails closed, this test
-    goes red — and the right response is to grant ``"WRITE"`` write-ness
-    deliberately, NOT to conclude the hardening broke rotate.
+    **The write-ness is now declared rather than accidental (issue #962).** The
+    middleware used to refuse a non-GET only when ``scope == "READ"``, so this
+    forged ``"WRITE"`` reached the route by skipping a comparison rather than by
+    satisfying one. It now keys on ``auth.WRITE_ENABLED_SCOPES``, which names
+    ``"WRITE"`` for exactly this shape; an unrecognised scope is refused. So
+    this row still writes, and it does so because something says it may.
     """
     token_value = secrets.token_urlsafe(32)
 
