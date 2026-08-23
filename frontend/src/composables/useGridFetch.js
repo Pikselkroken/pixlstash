@@ -129,6 +129,12 @@ export function useGridFetch(
   const imagesLoading = ref(false);
   const imagesError = ref(null);
   const totalAllPicturesCount = ref(0);
+  // Whether the count above is an ANSWER or still the initial zero. The catch
+  // below swallows a failure and leaves the ref at 0, which reads as "the
+  // library is empty" — true for a fresh install and false for a share session
+  // the summary route refuses, a backend restart, or any timeout. Anything that
+  // acts on emptiness has to know which zero it is looking at.
+  const totalAllPicturesCountLoaded = ref(false);
   const totalCurrentCategoryCount = ref(0);
   const gridReady = ref(false);
   const gridLoadEpoch = ref(0);
@@ -1460,6 +1466,7 @@ export function useGridFetch(
         userPrefsStore.applyTagFilter ? { apply_tag_filter: true } : undefined,
       );
       totalAllPicturesCount.value = Number(data.image_count) || 0;
+      totalAllPicturesCountLoaded.value = true;
     } catch (e) {
       console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
     }
@@ -1551,6 +1558,7 @@ export function useGridFetch(
     imagesLoading,
     imagesError,
     totalAllPicturesCount,
+    totalAllPicturesCountLoaded,
     totalCurrentCategoryCount,
     gridReady,
     gridLoadEpoch,
