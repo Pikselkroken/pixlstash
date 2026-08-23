@@ -408,7 +408,9 @@ export async function runScheduledSlice(db, date = today(), limits = {}) {
   if (!run) return { phase: "idle", date };
 
   if (run.phase === "scan") {
-    const state = deserializeAccumulator(run.accumulator);
+    // An empty cursor means no row has been folded in yet: the accumulator is
+    // still the one persisted before the scan began, in the same transaction.
+    const state = deserializeAccumulator(run.accumulator, run.cursor === "");
     let cursor = run.cursor;
     let scanned = 0;
     for (let pageNumber = 0; pageNumber < scanPagesPerSlice; pageNumber++) {

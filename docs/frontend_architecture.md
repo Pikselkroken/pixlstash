@@ -2940,8 +2940,9 @@ and at the pointer with them.
 - **The verbs are ICONS with their words in the tooltip and in the menu.** Nine
   labelled buttons was a sentence to re-read on every selection. Tests address
   them by `data-verb`, not by label text.
-- **The two single-item verbs ride along disabled** past one selection rather
-  than disappearing, so the row of buttons never reflows under the pointer.
+- **Rename, the one single-item verb, rides along disabled** past one selection
+  rather than disappearing, so the row of buttons never reflows under the
+  pointer. Set thumbnail used to sit beside it and is now bulk.
 - **Right-click follows the file-manager rule**: right-clicking a row that is
   not selected selects it and acts on it alone; right-clicking one that IS
   selected leaves the selection alone, so a menu opened on any of forty selected
@@ -3212,13 +3213,37 @@ group, and the shelf already treats "not set" as a value rather than an absence.
 The mark is `aria-hidden`: the row's accessible name already says which model it
 is, and a mark announcing "FL" would be the same fact twice, less usefully.
 
-**Set is single-row, clear is bulk.** An icon answers "which one is this?", so
-giving forty rows one mark would remove the only thing telling them apart — Set
-thumbnail is gated to a selection of one, shown-and-disabled like Rename. Clear
-appears only when something in the selection has one. Setting or clearing a
-single row prompts for nothing (both are reconstructable by doing them again); a
-**bulk** clear is not and confirms, the same test the bulk base-model overwrite
-falls on.
+**Both set and clear are bulk.** Set was originally gated to a selection of one,
+on the argument that giving forty rows one mark removes the only thing telling
+them apart; in practice the owner's common case is the opposite — a base model's
+whole family of adapters wearing its logo — and the shelf is where a selection is
+made. So the verb takes whatever is selected. Clear appears only when something
+in the selection has one.
+
+`setIconOnSelected` posts the same bytes once per **model** rather than calling a
+bulk route: the icon store is content-addressed, so N identical uploads collapse
+to one file on disk, and this reuses the single write path all three ways of
+choosing an icon already share (`POST /models/{id}/icon`). It addresses
+`selectedModelIds`, not `selectedRows` — a fully ticked run is one row wearing
+the cover's id, and iterating rows would mark the cover and skip the other
+eleven versions. Set and clear have to agree about what a selection is.
+
+Because the route is per-model, no server cap can see the gesture, so the client
+carries both bounds: `MAX_MODELS_PER_ICON_SET` (500, the clear route's figure)
+refuses the write outright, and the uploads go out six at a time. A wider
+fan-out only queues behind the browser's ~6 sockets per origin while still
+burning the client's own 60 s timeout, which would report as failed writes the
+server had committed. The receipt counts, and names the model only when the
+selection was one — which of a partly failed batch landed is not known
+client-side, so the ids go to `console.warn` beside their reasons.
+
+Setting or clearing a single row prompts for nothing (both are reconstructable
+by doing them again). A **bulk** clear is not reconstructable and confirms, the
+same test the bulk base-model overwrite falls on — and so does a bulk set **over
+rows that already have a mark**: the images survive in the shared store, but
+which model wore which is recorded nowhere else. The prompt is counted on those
+rows only (a selection of forty bare rows loses nothing) and is asked *before*
+the picker opens, so nobody is made to choose a picture and then defend it.
 
 **The verb is `Set Thumbnail…`, and the field is still `icon`.** The vocabulary
 change (workflow plan §3 S3) aligns the user-facing verb with the word the code

@@ -54,6 +54,51 @@ function anyBitInRange(bits, lo, hi) {
 }
 
 /**
+ * Count the set bits in the inclusive day-ago range [lo, hi].
+ *
+ * @param {bigint} bits Bitmap relative to the install's last_seen.
+ * @param {number} lo Low day-ago bound.
+ * @param {number} hi High day-ago bound.
+ * @returns {number}
+ */
+function countBitsInRange(bits, lo, hi) {
+  const from = Math.max(0, lo);
+  const to = Math.min(ACTIVITY_BITS - 1, hi);
+  let count = 0;
+  for (let b = from; b <= to; b++) {
+    if (((bits >> BigInt(b)) & 1n) === 1n) count += 1;
+  }
+  return count;
+}
+
+/**
+ * How many days this install pinged inside the active window ending `today`.
+ *
+ * This is the ID-bearing check-in COUNT, the numerator that pairs with the
+ * check-in denominator Cloudflare zone analytics supplies. The Worker never
+ * sees ID-less check-ins and so cannot compute coverage itself, but it does see
+ * every ID-bearing one and already knows its install type.
+ *
+ * The bitmap is relative to last_seen, so a window expressed in days before
+ * *today* has to be shifted by the gap between the two before it can be read.
+ *
+ * One caveat for the consumer: a bit is a ping *day*, so two pings on the same
+ * UTC day count once here and twice in a raw request count. The client throttles
+ * to one check per day, so this is a floor on requests rather than an identity.
+ *
+ * @param {{last_seen: string, activity: bigint|number|string}} row
+ * @param {string} today UTC aggregation date, YYYY-MM-DD.
+ * @returns {number}
+ */
+export function checkinsInActiveWindow(row, today) {
+  // Clamp a negative gap to 0. A last_seen in the future is clock skew, and
+  // widening the window for it would count bits from before the window opened.
+  const gap = Math.max(0, daysBetween(row.last_seen, today));
+  if (gap > ACTIVE_WINDOW_DAYS) return 0;
+  return countBitsInRange(decodeActivity(row.activity) & MASK, 0, ACTIVE_WINDOW_DAYS - gap);
+}
+
+/**
  * Was an install active during week N of its own life?
  *
  * Life-week N covers days first_seen+7N .. first_seen+7N+6. The bitmap is
@@ -119,20 +164,17 @@ export function hasResurrected(activity) {
   return false;
 }
 
-/**
- * Build the day's publishable aggregate.
- *
- * @param {Array<{install_id: string, first_seen: string, last_seen: string,
- *   activity: bigint|number|string, has_resurrected: number,
- *   is_new_install: number, install_type: string}>} rows
- * @param {string} today UTC date, YYYY-MM-DD.
- * @returns {object} JSON-safe aggregate. Contains counts and percentages only:
- *   no ids, no dates finer than a week, nothing per-install.
- */
+function emptyBuckets() {
+  return { docker: 0, pip: 0, electron: 0, other: 0 };
+}
+
 export function createAccumulator() {
   return {
     active: 0,
-    byType: { docker: 0, pip: 0, electron: 0, other: 0 },
+    byType: emptyBuckets(),
+    // Check-in counts, not distinct installs: this is a numerator for a
+    // check-in denominator, and mixing the two units is the bug it fixes.
+    checkinsByType: emptyBuckets(),
     newLast7d: 0,
     resurrectionEligible: 0,
     resurrected: 0,
@@ -146,6 +188,7 @@ export function serializeAccumulator(state) {
   return JSON.stringify({
     active: state.active,
     byType: state.byType,
+    checkinsByType: state.checkinsByType,
     newLast7d: state.newLast7d,
     resurrectionEligible: state.resurrectionEligible,
     resurrected: state.resurrected,
@@ -153,10 +196,33 @@ export function serializeAccumulator(state) {
   });
 }
 
-/** Restore an accumulator written by serializeAccumulator. */
-export function deserializeAccumulator(serialized) {
+/**
+ * Restore an accumulator written by serializeAccumulator.
+ *
+ * @param {string} serialized Checkpointed accumulator JSON.
+ * @param {boolean} pristine True when the checkpoint has folded in no rows yet,
+ *   i.e. its run still has an empty cursor. It decides what a checkpoint
+ *   written before `checkinsByType` existed means: nothing was lost if nothing
+ *   was scanned, so the day stays countable rather than being nulled for the
+ *   whole scan. runScheduledSlice persists an initial accumulator before it
+ *   reads a single row, so a crash or a redeploy in that gap is exactly the
+ *   reachable case.
+ * @returns {object}
+ */
+export function deserializeAccumulator(serialized, pristine = false) {
   const value = JSON.parse(serialized);
-  return { ...value, cohorts: new Map(value.cohorts ?? []) };
+  return {
+    ...createAccumulator(),
+    ...value,
+    // A partial pre-field checkpoint has already folded in rows whose check-ins
+    // were never counted, so this day's total can no longer be completed. Null,
+    // not the partial count: the snapshot is immutable and never backfilled, so
+    // a confident wrong number here would be permanent. Same reasoning as
+    // resurrection_rate below -- "cannot say" and "zero" must not look alike.
+    // Null is sticky through the rest of the scan.
+    checkinsByType: value.checkinsByType ?? (pristine ? emptyBuckets() : null),
+    cohorts: new Map(value.cohorts ?? []),
+  };
 }
 
 /**
@@ -173,10 +239,15 @@ export function deserializeAccumulator(serialized) {
 export function accumulateRow(state, row, today) {
   if (daysBetween(row.last_seen, today) <= ACTIVE_WINDOW_DAYS) {
     state.active += 1;
-    if (state.byType[row.install_type] === undefined) {
-      state.byType[row.install_type] = 0;
-    }
+    state.byType[row.install_type] ??= 0;
     state.byType[row.install_type] += 1;
+    // Null means a legacy resume already lost part of this day; see
+    // deserializeAccumulator. Independent default because a checkpoint can
+    // carry a bucket in byType that the restored map has never seen.
+    if (state.checkinsByType) {
+      state.checkinsByType[row.install_type] ??= 0;
+      state.checkinsByType[row.install_type] += checkinsInActiveWindow(row, today);
+    }
   }
 
   if (daysBetween(row.first_seen, today) >= RESURRECTION_GAP_DAYS) {
@@ -240,6 +311,10 @@ export function finalizeAggregate(state, today) {
     date: today,
     active_installs: state.active,
     active_installs_by_type: state.byType,
+    // Same window and same buckets as active_installs_by_type, but check-ins
+    // rather than installs. Aggregate counts only; no identifier leaves here.
+    // Null when a legacy checkpoint made the day uncountable.
+    id_bearing_checkins_by_type: state.checkinsByType,
     new_installs_last_7d: state.newLast7d,
     // Null rather than 0 when there is nothing to divide by: a rate of "0%"
     // and "we cannot say yet" are different claims and must not look alike.
