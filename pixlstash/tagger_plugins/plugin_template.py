@@ -172,11 +172,13 @@ class MyCaptioner(TaggerPlugin):
     def unload(self) -> None:
         """Release the model.
 
-        Abstract, so you must implement it — but be aware that nothing
-        currently calls it on a third-party plugin: the idle-unload path
-        knows the built-in services by name and does not walk the plugin
-        registry.  A model you load here stays resident for the life of the
-        process.  Manage it yourself if that matters.
+        Called by the host when the user turns *Keep models in memory* off
+        and every worker has gone idle.  That makes a mid-batch unload
+        unlikely rather than impossible, so serialise it against your own load
+        — the built-in services hold one lock across both — rather than
+        freeing memory another thread is still writing into.  It is only
+        called when ``is_loaded()`` is true, and a failure here is logged and
+        contained rather than stopping the other plugins being released.
         """
         self._model = None
 
@@ -189,10 +191,11 @@ class MyCaptioner(TaggerPlugin):
     ) -> int:
         """Estimated VRAM for a batch, in MB.
 
-        Nothing calls this on a third-party plugin yet — the description
-        workflow charges the budget for Florence-2 only — so overriding it
-        is forward-looking rather than protective.  Keep your own footprint
-        modest; another model may be scheduled alongside yours regardless.
+        The description workflow asks the active plugin before it schedules a
+        batch, with *image_count* already capped at your
+        ``effective_batch_size``.  Returning 0 (the default) means "no answer":
+        the host charges the Florence-2 figure instead, which is not your
+        model's, so an honest overestimate protects you better than 0 does.
         """
         return 0
 

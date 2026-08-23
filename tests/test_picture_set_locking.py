@@ -1111,7 +1111,7 @@ def test_description_regeneration_skips_locked_pic():
             def generate_batch(self, pictures, engine_override=None, stop_event=None):
                 return {p.id: "regenerated-caption" for p in pictures}
 
-            def estimate_vram_mb(self, n):
+            def estimate_vram_mb(self, n, plugin_name=None):
                 return 0
 
         pics = [

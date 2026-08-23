@@ -80,7 +80,7 @@ class _CancelledMidBatchWorkflow:
         self.stop_event = stop_event
         return {first.id: "captioned-before-the-cancel"}
 
-    def estimate_vram_mb(self, image_count):
+    def estimate_vram_mb(self, image_count, plugin_name=None):
         return 0
 
 
@@ -172,7 +172,7 @@ def test_a_genuine_failure_still_clears_the_description():
         def generate_batch(self, pictures, engine_override=None, stop_event=None):
             return {}
 
-        def estimate_vram_mb(self, image_count):
+        def estimate_vram_mb(self, image_count, plugin_name=None):
             return 0
 
     pics = [types.SimpleNamespace(id=failed, description=None)]
