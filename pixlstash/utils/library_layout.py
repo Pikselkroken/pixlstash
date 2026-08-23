@@ -201,12 +201,19 @@ def render(facets: FacetValues, layout: Layout) -> str:
 
 
 def _components(folder: str) -> tuple[str, ...]:
-    """Split a relative folder path into components, either separator."""
-    return tuple(
-        part
-        for part in folder.replace("\\", "/").split("/")
-        if part and part not in (".", "..")
-    )
+    """Split a relative folder path into components, either separator.
+
+    A path carrying ``.`` or ``..`` is refused whole rather than tidied up.
+    Dropping the ``..`` from ``2024 Shoots/../Mira`` would fabricate a project
+    level the path does not have and could return ``False`` — a move — for a
+    picture that is only ever in ``Mira``. An unnormalised path is a caller
+    mistake, and the safe reading of one is the same as any path the layout
+    cannot read: no components, and never false.
+    """
+    parts = folder.replace("\\", "/").split("/")
+    if any(part in (".", "..") for part in parts):
+        return ()
+    return tuple(part for part in parts if part)
 
 
 def is_true(
@@ -248,8 +255,9 @@ def is_true(
     """
     components = _components(folder)
     if not components:
-        # The library root. It matches no segment, so it contradicts nothing —
-        # this is why an existing flat library needs no migration.
+        # The library root, or a path this cannot read at all. It matches no
+        # segment, so it contradicts nothing — this is why an existing flat
+        # library needs no migration.
         return True
 
     if len(components) == 1 and _match_key(components[0]) == _match_key(layout.unfiled):

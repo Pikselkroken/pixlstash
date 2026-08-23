@@ -63,6 +63,23 @@ def test_an_unreadable_path_stays_true_even_with_nothing_to_file_it_by():
     assert is_true("_unsorted", facets(), DEFAULT_LAYOUT, KNOWN) is True
 
 
+@pytest.mark.parametrize(
+    "folder",
+    ["2024 Shoots/../Mira", "./2024 Shoots/Mira", "2024 Shoots/Mira/..", ".."],
+)
+def test_an_unnormalised_path_is_refused_whole_rather_than_tidied_up(folder):
+    """Dropping the ``..`` would fabricate a level the path does not have.
+
+    ``2024 Shoots/../Mira`` is a picture in ``Mira`` and nothing else; reading a
+    project level out of it would return false — a move — for a picture that
+    never left one.
+    """
+    picture = facets(projects=["Client Nordvik"], people=["Mira"])
+    assert is_true(folder, picture, DEFAULT_LAYOUT, KNOWN) is True
+    # The same path without the traversal is read, and is false.
+    assert is_true("2024 Shoots/Mira", picture, DEFAULT_LAYOUT, KNOWN) is False
+
+
 # --- render -----------------------------------------------------------------
 
 
