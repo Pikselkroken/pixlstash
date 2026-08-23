@@ -395,7 +395,30 @@ hands the chosen files up **unfiltered**. `ImageGrid.importChosenFiles` drops
 what PixlStash cannot read, against the same `isSupportedImportFile` and under
 the same `import-unsupported-files` notice key the two drop paths use — an OS
 picker's `accept` is advisory, so a button that skipped it would be the one
-import route that took anything silently.
+import route that took anything silently. It normalises with `Array.from`
+before filtering, so a caller handing it an `<input>`'s `FileList` gets an
+import rather than a `TypeError` raised a long way from the mistake.
+
+**`accept` is one constant, `IMPORT_FILE_ACCEPT` in `utils/media.js`, for all
+three import inputs** (this card, `PhotosImportDialog`, `TbImportPanel`). It has
+to agree with `isSupportedImportFile`, and it did not: this card shipped as
+`image/*,video/*`, which greyed out the zip and caption-file imports the app
+supports and left them reachable only through the picker's "All Files". Advisory
+or not, `accept` is what the route *looks like it takes*, so a narrow one hides
+a feature rather than rejecting a file. `media.test.js` asserts the offer
+against the predicate in **both** directions — every named extension is one the
+importer takes, and every type the importer takes is named or covered by a
+wildcard — because a subset check alone stays green when a supported type is
+dropped from the offer, which is the drift that matters.
+
+**A `:accept` bound to a name the `<script setup>` never imported renders no
+`accept` at all**, so the picker silently offers every file on the disk while
+the markup still reads correctly. This shipped in review: two of the three
+inputs were pointed at the shared constant without importing it. Two guards now
+close it — `vue/no-undef-properties` is an **error** in `eslint.config.js`
+(repo-wide, for every undeclared name a template references, not just this one),
+and `TbImportPanel.test.js` asserts the *rendered* attribute rather than the
+binding.
 
 **Three conditions stop it appearing, and two are about not lying:**
 

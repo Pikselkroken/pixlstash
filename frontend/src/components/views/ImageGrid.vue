@@ -6773,6 +6773,16 @@ const canShowAllPicturesButton = computed(() => {
 //     sidebar dialogs; the importer refuses a read-only token outright), and
 //     the count they get is the one the summary route refused them, not a fact
 //     about the library. They keep the plain card.
+const showLibraryEmptyState = computed(
+  () =>
+    showEmptyState.value &&
+    totalAllPicturesCountLoaded.value &&
+    totalAllPicturesCount.value === 0 &&
+    !isReadOnly.value &&
+    !isScrapheapView.value &&
+    !isSetOverlapView.value,
+);
+
 /**
  * Files chosen through the empty library's "Add files…".
  *
@@ -6783,7 +6793,13 @@ const canShowAllPicturesButton = computed(() => {
  * defaults it to the one being looked at.
  */
 function importChosenFiles(chosen) {
-  const files = (chosen ?? []).filter((file) => isSupportedImportFile(file));
+  // `Array.from` rather than a bare `.filter`: the one caller emits a real
+  // Array today, but the natural thing to hand a function named this is the
+  // `FileList` off an `<input>`, which has no `.filter` and would throw here
+  // rather than anywhere near the mistake. It also gives `offered` a length to
+  // compare against below, so nothing reads the argument twice.
+  const offered = Array.from(chosen ?? []);
+  const files = offered.filter((file) => isSupportedImportFile(file));
   if (!files.length) {
     noticeStore.warning(
       "None of those files are a supported image, video or archive.",
@@ -6791,7 +6807,7 @@ function importChosenFiles(chosen) {
     );
     return;
   }
-  if (files.length !== chosen.length) {
+  if (files.length !== offered.length) {
     noticeStore.warning(
       "Some of those files are not a supported image, video or archive, and were skipped.",
       { key: "import-unsupported-files" },
@@ -6799,16 +6815,6 @@ function importChosenFiles(chosen) {
   }
   emit("local-import", { files });
 }
-
-const showLibraryEmptyState = computed(
-  () =>
-    showEmptyState.value &&
-    totalAllPicturesCountLoaded.value &&
-    totalAllPicturesCount.value === 0 &&
-    !isReadOnly.value &&
-    !isScrapheapView.value &&
-    !isSetOverlapView.value,
-);
 
 const emptyStateTitle = computed(() => {
   if (isSetOverlapView.value) {
