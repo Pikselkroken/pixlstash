@@ -20,23 +20,41 @@ because a rule shipped without them was found broken by measurement:
 import copy
 import json
 import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
+from sqlmodel import delete as sqlmodel_delete
 
+from pixlstash.db_models import Picture
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
+    assets_for_recipe,
+    forget_asset_names,
     get_document,
     record_api_graph,
     recipes_for_topology,
 )
 from pixlstash.services.workflow_hash import (
+    HASH_VERSION,
     MissingSubgraphDefinitionError,
+    asset_reference,
+    assets_from_reduction,
+    instance_hash,
     WorkflowGraphError,
+    reduce_api_graph,
     reduce_ui_graph,
     structural_document,
     structural_hash,
     topology_hash,
     ui_topology_hash,
+)
+from pixlstash.services.workflow_library_service import topology_picture_counts
+from pixlstash.tasks.comfyui_extraction_task import ComfyUIExtractionTask
+from pixlstash.tasks.missing_comfyui_extraction_finder import (
+    MissingComfyUIExtractionFinder,
 )
 
 # One ordinary txt2img graph, held once in a format-neutral shape so the API
@@ -413,10 +431,13 @@ def test_an_asset_filename_containing_a_space_is_still_an_asset():
     """
     spaced = api_graph(edited(TXT2IMG, 1, ckpt_name="Some Model v2.safetensors"))
     assert structural_hash(spaced) != structural_hash(api_graph(TXT2IMG))
-    assert (
-        structural_document(spaced)["1"]["inputs"]["ckpt_name"]
-        == "some model v2.safetensors"
+    # Kept as an asset -- but the DOCUMENT names it by reference, so what is
+    # asserted here is that the normalized name reached the asset list.
+    assert structural_document(spaced)["1"]["inputs"]["ckpt_name"] == asset_reference(
+        "some model v2.safetensors"
     )
+    assets = assets_from_reduction(reduce_api_graph(spaced))
+    assert ("ckpt_name", "some model v2.safetensors") in assets
 
 
 def test_a_malformed_node_is_refused_rather_than_keyed():
@@ -440,10 +461,16 @@ def test_structural_document_is_prompt_free_and_scrubs_credentials():
     assert "lighthouse" not in rendered
     assert "example-not-a-real-key" not in rendered
     assert "api_key" not in document["7"]["inputs"]
-    # The graph itself survives intact: classes, edges and the model filename.
-    assert document["1"]["inputs"]["ckpt_name"] == "sd_xl_base_1.0.safetensors"
+    # The graph itself survives intact: classes and edges.
     assert document["5"]["inputs"]["positive"] == ["2", 0]
     assert document["5"]["inputs"]["seed"] is None
+    # The model is named by REFERENCE, never by name. A model filename is
+    # bucket TA and survives the nulling, and on a real shelf it names a person
+    # -- so the readable form lives only in `workflow_recipe_asset`.
+    assert document["1"]["inputs"]["ckpt_name"] == asset_reference(
+        "sd_xl_base_1.0.safetensors"
+    )
+    assert "sd_xl_base_1.0.safetensors" not in rendered
 
 
 def test_an_unkeyable_graph_is_refused_rather_than_hashed():
@@ -624,6 +651,16 @@ def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
 
 WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_graph")
 
+# Every workflow table including the asset child, deepest first. Separate from
+# WORKFLOW_TABLES above because that one is asserted on one-row-per-recipe
+# counts and a recipe names several assets.
+WORKFLOW_WIPE_ORDER = (
+    "workflow_recipe_asset",
+    "workflow_recipe_graph",
+    "workflow_recipe",
+    "workflow_topology",
+)
+
 
 @pytest.fixture
 def hub(tmp_path):
@@ -705,12 +742,13 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
     assert row["node_count"] == len(TXT2IMG)
 
 
-def test_the_stored_document_holds_no_prompt(hub):
-    """Library plan §5: a recipe is prompt-free by construction.
+def test_the_stored_document_holds_neither_prompt_nor_model_name(hub):
+    """Library plan §5, and the half of it the first draft of this file missed.
 
-    That is what makes "forget the pictures" a narrow act — purge the instances
-    and the ghosts, keep the recipe — rather than something a purge would have
-    to reach in and rewrite.
+    Prompt-free was never the whole guarantee: bucket TA survives the nulling
+    by design, and TA is model filenames, which on a real shelf name people. So
+    the document names its assets by reference and `workflow_recipe_asset` is
+    the only home of the readable form.
     """
     keys = record_api_graph(hub, api_graph(TXT2IMG))
     stored = hub.fetchone(
@@ -718,10 +756,65 @@ def test_the_stored_document_holds_no_prompt(hub):
         (keys.structural_hash,),
     )["document"]
     assert "lighthouse" not in stored
-    assert "sd_xl_base_1.0.safetensors" in stored
+    assert "sd_xl_base_1.0.safetensors" not in stored
+    assert asset_reference("sd_xl_base_1.0.safetensors") in stored
     assert get_document(hub, keys.structural_hash) == structural_document(
         api_graph(TXT2IMG)
     )
+    # And the name is recoverable, from the one place that holds it.
+    assert ("ckpt_name", "sd_xl_base_1.0.safetensors") in {
+        (row["widget_name"], row["normalized_filename"])
+        for row in assets_for_recipe(hub, keys.structural_hash)
+    }
+
+
+def test_forgetting_a_model_name_rewrites_no_stored_graph(hub):
+    """The property the whole indirection exists for.
+
+    Destroying a model's readable name is a row delete. The document is not
+    touched, so its `document_sha256` stays valid and no migration is owed --
+    which is what made this worth doing BEFORE any backfill populated the
+    table rather than after.
+    """
+    keys = record_api_graph(hub, api_graph(TXT2IMG))
+    before = hub.fetchone(
+        "SELECT document, document_sha256 FROM workflow_recipe_graph "
+        "WHERE structural_hash = ?",
+        (keys.structural_hash,),
+    )
+
+    removed = forget_asset_names(hub, "sd_xl_base_1.0.safetensors")
+
+    assert removed == 1
+    assert assets_for_recipe(hub, keys.structural_hash) == []
+    after = hub.fetchone(
+        "SELECT document, document_sha256 FROM workflow_recipe_graph "
+        "WHERE structural_hash = ?",
+        (keys.structural_hash,),
+    )
+    assert after["document"] == before["document"]
+    assert after["document_sha256"] == before["document_sha256"]
+    # The graph still says a model went there, and no longer says which.
+    assert asset_reference("sd_xl_base_1.0.safetensors") in after["document"]
+
+
+def test_an_asset_row_is_written_per_distinct_file(hub):
+    """Two LoRA loaders naming different files are two rows, not one.
+
+    The key is the triple, so one widget name carrying two files does not
+    collapse -- which is why it is not `(structural_hash, widget_name)`.
+    """
+    spec = TXT2IMG + [
+        (20, "LoraLoader", [("model", 1, 0)], {"lora_name": "one.safetensors"}),
+        (21, "LoraLoader", [("model", 20, 0)], {"lora_name": "two.safetensors"}),
+    ]
+    keys = record_api_graph(hub, api_graph(spec))
+    names = {
+        (row["widget_name"], row["normalized_filename"])
+        for row in assets_for_recipe(hub, keys.structural_hash)
+    }
+    assert ("lora_name", "one.safetensors") in names
+    assert ("lora_name", "two.safetensors") in names
 
 
 def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
@@ -792,3 +885,445 @@ def test_a_recipe_cannot_name_a_topology_that_does_not_exist(hub):
                 "hash_version, node_count, first_seen_at) "
                 "VALUES ('r', 'nosuchtopology', 'v1', 1, 'now')"
             )
+
+
+# ---------------------------------------------------------------------------
+# The instance tier — a picture column, never a hub table
+# ---------------------------------------------------------------------------
+
+
+def test_a_seed_change_keeps_the_instance():
+    """A generation is an instance plus a seed, so the seed is bucket V.
+
+    Keep the seed in this key and every picture is its own instance and the
+    tier answers nothing at all.
+    """
+    assert instance_hash(api_graph(edited(TXT2IMG, 5, seed=999))) == instance_hash(
+        api_graph(TXT2IMG)
+    )
+
+
+def test_a_prompt_edit_forks_the_instance_but_not_the_recipe():
+    """The one thing that separates this tier from the one above it."""
+    edit = api_graph(edited(TXT2IMG, 2, text="a lighthouse at dawn"))
+    assert structural_hash(edit) == structural_hash(api_graph(TXT2IMG))
+    assert instance_hash(edit) != instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_parameter_change_forks_the_instance_but_not_the_recipe():
+    edit = api_graph(edited(TXT2IMG, 5, steps=35))
+    assert structural_hash(edit) == structural_hash(api_graph(TXT2IMG))
+    assert instance_hash(edit) != instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_model_swap_forks_the_instance_too():
+    """The tiers nest: a different recipe cannot be the same instance."""
+    edit = api_graph(edited(TXT2IMG, 1, ckpt_name="dreamshaper_8.safetensors"))
+    assert instance_hash(edit) != instance_hash(api_graph(TXT2IMG))
+
+
+def test_the_instance_key_is_order_invariant_like_the_two_above_it():
+    """Why this is a graph_key rather than a JSON blob of parameters.
+
+    The spec words the tier as "structural hash plus canonical JSON of all P
+    values", and a JSON of parameters has to key them by node id. Node ids are
+    the one thing this module refuses to read: keying on them is the superseded
+    rule that re-keyed 12 of 40 real workflows when only the serialisation
+    order moved. Renaming every node must not move this key either.
+    """
+    assert instance_hash(api_graph(TXT2IMG, prefix="900")) == instance_hash(
+        api_graph(TXT2IMG)
+    )
+    reshuffled = dict(reversed(list(api_graph(TXT2IMG).items())))
+    assert instance_hash(reshuffled) == instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_credential_widget_reaches_no_tier_including_the_instance():
+    """Dropped before bucketing, so it is absent from all three keys."""
+    dirty = api_graph(edited(TXT2IMG, 7, api_key="example-not-a-real-key"))
+    assert instance_hash(dirty) == instance_hash(api_graph(TXT2IMG))
+
+
+def test_no_hub_table_stores_an_instance(hub):
+    """Phase 2 creep, guarded rather than remembered.
+
+    "Add an instance hash" reads like an invitation to build `recipe_instance`,
+    and that table moved to v1.12 with the rest of the AI-toolkit work. The
+    hash is a value on a picture; v1.11 stores no instance ROW anywhere.
+    """
+    record_api_graph(hub, api_graph(TXT2IMG))
+    tables = {
+        row[0]
+        for row in hub.fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert not [name for name in tables if "instance" in name.lower()]
+
+
+# ---------------------------------------------------------------------------
+# B3 — ingest writes to the hub, and the rows outlive their pictures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def store(tmp_path_factory):
+    """One vault and one hub for the whole section.
+
+    Module-scoped because standing a ``VaultDatabase`` up runs every migration,
+    which costs far more than any assertion below. Each test wipes what it wrote
+    (``reset``), so the shared environment cannot leak state between them.
+    """
+    from pixlstash.database import VaultDatabase
+
+    root = tmp_path_factory.mktemp("workflow_b3")
+    images = root / "images"
+    images.mkdir()
+    vault = VaultDatabase(str(root / "vault.db"))
+    hub_db = HubDatabase(str(root / "hub.db"))
+    try:
+        yield SimpleNamespace(vault=vault, hub=hub_db, image_root=str(images))
+    finally:
+        hub_db.close()
+        vault.close()
+
+
+@pytest.fixture(autouse=True)
+def reset(request):
+    """Empty both databases between tests in this section only."""
+    yield
+    if "store" not in request.fixturenames:
+        return
+    shared = request.getfixturevalue("store")
+    shared.vault.run_task(lambda session: _wipe_pictures(session))
+    with shared.hub.transaction() as conn:
+        # Children first: every table here references the one above it.
+        for table in WORKFLOW_WIPE_ORDER:
+            conn.execute(f"DELETE FROM {table}")
+
+
+def _wipe_pictures(session):
+    session.exec(sqlmodel_delete(Picture))
+    session.commit()
+
+
+def write_png(directory, name, api=None):
+    """A real PNG, carrying an API graph in its ``prompt`` chunk when given one."""
+    info = PngInfo()
+    if api is not None:
+        info.add_text("prompt", json.dumps(api))
+    path = directory / name
+    Image.new("RGB", (4, 4), "black").save(path, pnginfo=info)
+    return name
+
+
+def add_picture(store, file_path, *, deleted=False):
+    def insert(session):
+        picture = Picture(file_path=file_path, deleted=deleted)
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return store.vault.run_task(insert)
+
+
+def read_picture(store, picture_id):
+    return store.vault.run_immediate_read_task(
+        lambda session: session.get(Picture, picture_id)
+    )
+
+
+def run_extraction(store, picture_ids, *, hub=True, on_hub_failure=None):
+    task = ComfyUIExtractionTask(
+        database=store.vault,
+        image_root=store.image_root,
+        pictures=[SimpleNamespace(id=pid) for pid in picture_ids],
+        hub=store.hub if hub else None,
+        on_hub_failure=on_hub_failure,
+    )
+    return task._run_task()
+
+
+def unwritable_hub():
+    """A hub whose every write raises, the way a read-only file would."""
+    return SimpleNamespace(
+        transaction=lambda: (_ for _ in ()).throw(sqlite3.OperationalError("disk I/O"))
+    )
+
+
+def test_ingest_files_the_workflow_and_stamps_the_picture(store):
+    """One file read does both jobs: the ComfyUI fields and the library keys."""
+    name = write_png(Path(store.image_root), "keyed.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    result = run_extraction(store, [picture_id])
+
+    assert result["found_workflow"] == 1
+    picture = read_picture(store, picture_id)
+    assert picture.workflow_hash_version == HASH_VERSION
+    assert picture.workflow_topology_hash == topology_hash(api_graph(TXT2IMG))
+    assert picture.workflow_structural_hash == structural_hash(api_graph(TXT2IMG))
+    assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
+    # The hub holds the graph the vault is now pointing at.
+    assert get_document(store.hub, picture.workflow_structural_hash) is not None
+
+
+def test_every_return_path_reports_the_same_keys(store):
+    """A caller reading `found_workflow` must not depend on which path ran.
+
+    `_run_task` returns from three places -- no pictures, nothing to persist,
+    and the ordinary end -- and an early exit that omits a key is a KeyError in
+    whatever reads the result later.
+    """
+    name = write_png(Path(store.image_root), "keys.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    populated = run_extraction(store, [picture_id])
+    empty = run_extraction(store, [])
+
+    assert (
+        set(empty) == set(populated) == {"checked", "found_comfyui", "found_workflow"}
+    )
+
+
+def test_a_picture_with_no_graph_is_marked_scanned_rather_than_re_read(store):
+    """Absence is the ordinary case, and must not cost a second read."""
+    name = write_png(Path(store.image_root), "bare.png")
+    picture_id = add_picture(store, name)
+
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert picture.workflow_hash_version == HASH_VERSION
+    assert picture.workflow_topology_hash is None
+    assert picture.workflow_structural_hash is None
+    assert picture.workflow_instance_hash is None
+    # Nothing was filed, because there was nothing to file.
+    assert store.hub.fetchone("SELECT COUNT(*) AS n FROM workflow_recipe")["n"] == 0
+
+
+def test_a_missing_file_is_marked_scanned(store):
+    """Otherwise the widened predicate hands the same broken row back forever."""
+    picture_id = add_picture(store, "gone.png")
+
+    run_extraction(store, [picture_id])
+
+    assert read_picture(store, picture_id).workflow_hash_version == HASH_VERSION
+
+
+def test_without_a_hub_nothing_claims_the_picture_was_scanned(store):
+    """A vault opened by the CLI must not mark a scan it could not perform."""
+    name = write_png(Path(store.image_root), "nohub.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    run_extraction(store, [picture_id], hub=False)
+
+    picture = read_picture(store, picture_id)
+    assert picture.comfyui_models is not None
+    assert picture.workflow_hash_version is None
+
+
+def test_a_hub_that_cannot_be_written_leaves_the_picture_unscanned(store):
+    """A transient failure must not be recorded as "this picture has no graph"."""
+    name = write_png(Path(store.image_root), "unwritable.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    task = ComfyUIExtractionTask(
+        database=store.vault,
+        image_root=store.image_root,
+        pictures=[SimpleNamespace(id=picture_id)],
+        hub=unwritable_hub(),
+    )
+    task._run_task()
+
+    assert read_picture(store, picture_id).workflow_hash_version is None
+    # The ComfyUI half still landed, so the pre-B3 predicate drains normally.
+    assert read_picture(store, picture_id).comfyui_models is not None
+
+
+def new_finder(store, *, hub=True):
+    return MissingComfyUIExtractionFinder(
+        database=store.vault,
+        image_root=store.image_root,
+        hub=store.hub if hub else None,
+    )
+
+
+def test_the_finder_stops_handing_back_a_scanned_picture(store):
+    """The whole point of the third state, asserted on the query that reads it.
+
+    **A second finder, deliberately.** ``_filter_and_claim`` marks a picture as
+    handed out and only ``on_task_complete`` releases it, so re-asking the SAME
+    finder returns None whether or not the column was ever written -- the
+    assertion would pass with the whole persist removed. A fresh finder has an
+    empty claim set, so the only thing that can silence it is the row.
+    """
+    name = write_png(Path(store.image_root), "finder.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    assert new_finder(store).find_task() is not None
+    run_extraction(store, [picture_id])
+    assert new_finder(store).find_task() is None
+
+
+def test_an_unwritable_hub_stands_the_workflow_scan_down(store):
+    """Bounded, rather than re-reading the whole library on every cycle.
+
+    Left unmarked and still matched, these pictures would be re-opened,
+    re-decoded and re-parsed on every planning sweep for as long as the hub
+    stayed broken. The finder narrows back to its pre-B3 predicate instead,
+    which the ComfyUI half has already satisfied, so the sweep drains and goes
+    quiet exactly as it did before this task learned to hash.
+    """
+    name = write_png(Path(store.image_root), "standdown.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    finder = new_finder(store)
+    assert finder.find_task() is not None
+
+    task = ComfyUIExtractionTask(
+        database=store.vault,
+        image_root=store.image_root,
+        pictures=[SimpleNamespace(id=picture_id)],
+        hub=unwritable_hub(),
+        on_hub_failure=finder.stand_down,
+    )
+    task._run_task()
+
+    assert read_picture(store, picture_id).workflow_hash_version is None
+    # Same finder AND a fresh one: the claim set is not what is doing this.
+    finder.on_task_complete(task, None)
+    assert finder.find_task() is None
+
+
+def test_a_revisit_never_rewrites_what_the_first_extraction_stored(store):
+    """The upgrade path's data-loss case, and it is not hypothetical.
+
+    Widening the predicate to `workflow_hash_version IS NULL` re-queues every
+    picture a pre-B3 run already extracted. Re-reading the file to rewrite its
+    ComfyUI columns is not a no-op: a file that has since moved, or been
+    stripped of its metadata, would replace real stored models and LoRAs with
+    the "[]" sentinel. The extraction happened once; the revisit adds keys and
+    touches nothing else.
+    """
+
+    def insert(session):
+        picture = Picture(
+            file_path="moved-since/never-existed.png",
+            comfyui_models=json.dumps(["flux1-dev.safetensors"]),
+            comfyui_loras=json.dumps(["example-subject.safetensors"]),
+            comfyui_positive_prompt="what somebody typed",
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    picture_id = store.vault.run_task(insert)
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert json.loads(picture.comfyui_models) == ["flux1-dev.safetensors"]
+    assert json.loads(picture.comfyui_loras) == ["example-subject.safetensors"]
+    assert picture.comfyui_positive_prompt == "what somebody typed"
+    # And it still came away scanned, so it is not handed back again.
+    assert picture.workflow_hash_version == HASH_VERSION
+
+
+def test_a_library_extracted_before_b3_is_re_queued_for_its_workflow(store):
+    """The upgrade case: `comfyui_models` is already written, the keys are not."""
+    name = write_png(Path(store.image_root), "legacy.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id], hub=False)
+    assert read_picture(store, picture_id).comfyui_models is not None
+
+    assert new_finder(store).find_task() is not None
+
+
+def test_hub_rows_outlive_the_pictures_they_came_from(store):
+    """The point of the whole feature, and the reason B3 exists at all.
+
+    Without this, dehydrating a stack would delete the graph its own rehydrate
+    promise depends on. The rows are content-addressed with no foreign key into
+    the vault, so a hard delete of every picture must leave all three tables
+    intact.
+    """
+    name = write_png(Path(store.image_root), "outlives.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    structural = read_picture(store, picture_id).workflow_structural_hash
+
+    def soft_then_hard_delete(session):
+        picture = session.get(Picture, picture_id)
+        # The Scrapheap first, which is what every user-facing delete does.
+        picture.deleted = True
+        session.commit()
+        # Then the destruction `purge_scrapheap_pictures` ends at: the row goes.
+        session.delete(session.get(Picture, picture_id))
+        session.commit()
+
+    store.vault.run_task(soft_then_hard_delete)
+
+    assert read_picture(store, picture_id) is None
+    for table in WORKFLOW_TABLES:
+        assert store.hub.fetchone(f"SELECT COUNT(*) AS n FROM {table}")["n"] == 1
+    assert get_document(store.hub, structural) is not None
+
+
+def test_two_pictures_share_an_instance_exactly_when_they_share_the_value(store):
+    """What "Covered only" tests, asserted end to end through ingest.
+
+    Same graph, different seed: one instance. Same graph, different prompt: two.
+    """
+    same = write_png(Path(store.image_root), "roll-a.png", api=api_graph(TXT2IMG))
+    reroll = write_png(
+        Path(store.image_root), "roll-b.png", api=api_graph(edited(TXT2IMG, 5, seed=7))
+    )
+    other = write_png(
+        Path(store.image_root),
+        "roll-c.png",
+        api=api_graph(edited(TXT2IMG, 2, text="a lighthouse at dawn")),
+    )
+    ids = [add_picture(store, n) for n in (same, reroll, other)]
+    run_extraction(store, ids)
+
+    a, b, c = (read_picture(store, pid) for pid in ids)
+    assert a.workflow_instance_hash == b.workflow_instance_hash
+    assert a.workflow_instance_hash != c.workflow_instance_hash
+    # All three are still one recipe, which is the tier boundary.
+    assert (
+        a.workflow_structural_hash
+        == b.workflow_structural_hash
+        == c.workflow_structural_hash
+    )
+
+
+def test_counts_exclude_soft_deleted_pictures(store):
+    """A workflow whose every picture is in the Scrapheap reads as none kept."""
+    trimmed = api_graph(TXT2IMG)
+    del trimmed["7"]
+    kept = write_png(Path(store.image_root), "kept.png", api=api_graph(TXT2IMG))
+    binned = write_png(Path(store.image_root), "binned.png", api=api_graph(TXT2IMG))
+    other = write_png(Path(store.image_root), "other.png", api=trimmed)
+    ids = [add_picture(store, name) for name in (kept, binned, other)]
+    run_extraction(store, ids)
+
+    def soft_delete(session):
+        session.get(Picture, ids[1]).deleted = True
+        session.commit()
+
+    store.vault.run_task(soft_delete)
+
+    counts = store.vault.run_immediate_read_task(topology_picture_counts)
+    kept_topology = topology_hash(api_graph(TXT2IMG))
+    other_topology = topology_hash(trimmed)
+    assert kept_topology != other_topology
+    assert counts[kept_topology] == 1
+    assert counts[other_topology] == 1
+
+    def soft_delete_the_rest(session):
+        session.get(Picture, ids[0]).deleted = True
+        session.commit()
+
+    store.vault.run_task(soft_delete_the_rest)
+
+    # Absent entirely, not present with a zero.
+    assert topology_hash(api_graph(TXT2IMG)) not in store.vault.run_immediate_read_task(
+        topology_picture_counts
+    )

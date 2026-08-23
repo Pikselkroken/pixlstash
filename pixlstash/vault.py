@@ -292,6 +292,24 @@ class Vault:
             self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
                 MissingCheckpointHashFinder(hub=registered_hub)
             )
+            # And the workflow library's store is the hub too, so the ComfyUI
+            # extraction can file a picture's graph where it outlives the
+            # picture (§B3). Replaces the hubless finder work_finders() built:
+            # that one still extracts ComfyUI metadata, on the pre-B3
+            # `comfyui_models IS NULL` predicate -- it is only the WORKFLOW scan
+            # it cannot do, because without a hub there is nowhere to file a
+            # graph.
+            from pixlstash.tasks.missing_comfyui_extraction_finder import (
+                MissingComfyUIExtractionFinder,
+            )
+
+            self._planner_work_finders[TaskType.COMFYUI_EXTRACTION] = (
+                MissingComfyUIExtractionFinder(
+                    database=self.db,
+                    image_root=self.image_root,
+                    hub=registered_hub,
+                )
+            )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,

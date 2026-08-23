@@ -180,11 +180,18 @@ class ReducedNode:
     pairs for the structural tier, where *value* is the topology-asset value or
     ``None`` for anything bucketed P or V. The name survives the nulling
     deliberately: which widgets a node has is part of its shape.
+
+    ``instance_widgets`` is the same list one tier finer: the parameters
+    themselves, with only the **volatile** bucket nulled. A seed is V, not P
+    ("a generation is an instance plus a seed"), so it is absent here and two
+    re-rolls of one prompt share an instance. Carried on the same node rather
+    than reduced separately, because the walk is the expensive part.
     """
 
     class_type: str
     widgets: tuple[tuple[str, Optional[str]], ...]
     inputs: tuple[tuple[str, str, int], ...]
+    instance_widgets: tuple[tuple[str, Any], ...] = ()
 
 
 def _digest(payload: Any) -> str:
@@ -245,6 +252,41 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     return None
 
 
+def instance_widget_value(name: str, value: Any) -> Any:
+    """Return what the instance form keeps for this widget, or ``None``.
+
+    The instance tier is the recipe plus **one set of parameters, including the
+    prompt**, so this keeps everything the structural form nulls -- steps, cfg,
+    sampler, dimensions, the text somebody wrote -- and drops only bucket V.
+
+    V is what makes one *generation* rather than one instance: a seed, and the
+    output path a file happens to land at. Null them and two re-rolls of the
+    same prompt share an instance, which is the equivalence "Covered only" is
+    asking about. Keep them and every picture is its own instance and the tier
+    answers nothing.
+
+    Credential-named widgets never reach here at all: :func:`reduce_api_graph`
+    drops them before bucketing, so they are absent from this key as well as
+    from the stored document.
+    """
+    if _SEED_RE.search(name) or name == "filename_prefix":
+        return None
+    if _OUTPUT_PATH_RE.match(name):
+        return None
+    return value
+
+
+def asset_reference(normalized_filename: str) -> str:
+    """The stable, unreadable token a stored document names an asset by.
+
+    Content-derived, so two recipes using one model name it identically and a
+    document rebuilt from the same graph is byte-identical. Deliberately NOT
+    the name: :func:`document_from_reduction` explains why the readable form
+    lives only in ``workflow_recipe_asset``.
+    """
+    return "asset:" + hashlib.sha256(normalized_filename.encode("utf-8")).hexdigest()
+
+
 def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
     """Reduce an API-format ``prompt`` graph to keyable nodes, once.
 
@@ -279,6 +321,7 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
                 "non-empty string"
             )
         widgets: list[tuple[str, Optional[str]]] = []
+        instance_widgets: list[tuple[str, Any]] = []
         inputs: list[tuple[str, str, int]] = []
         raw_inputs = node.get("inputs")
         if raw_inputs is None:
@@ -305,10 +348,15 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
                 )
             else:
                 widgets.append((name, structural_widget_value(name, value)))
+                instance_widgets.append((name, instance_widget_value(name, value)))
         nodes[str(node_id)] = ReducedNode(
             class_type=class_type,
             widgets=tuple(sorted(widgets)),
             inputs=tuple(sorted(inputs)),
+            # Sorted on the NAME alone. Input names are unique within a node so
+            # the values are never compared, and a raw parameter value can be a
+            # dict, which does not order.
+            instance_widgets=tuple(sorted(instance_widgets, key=lambda kv: kv[0])),
         )
     if not nodes:
         raise WorkflowGraphError("API graph holds no node carrying a class_type")
@@ -324,6 +372,24 @@ def drop_widgets(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
     """
     return {
         node_id: ReducedNode(node.class_type, (), node.inputs)
+        for node_id, node in nodes.items()
+    }
+
+
+def promote_instance_widgets(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
+    """The instance tier: the same graph keyed on its parameters as well.
+
+    The spec words this tier as "structural hash plus canonical JSON of all P
+    values". It is rendered here as one more reduction through the *same*
+    :func:`graph_key` instead, and deliberately: a flat JSON of parameters has
+    to key them by node id, and node ids are the one thing this module refuses
+    to read -- keying by them is exactly the superseded rule that re-keyed 12 of
+    40 real workflows when nothing but the serialisation order moved. Riding the
+    WL-labelled descriptor keeps the tier order-invariant like the two above it,
+    and the equivalence classes are the ones the spec asks for.
+    """
+    return {
+        node_id: ReducedNode(node.class_type, node.instance_widgets, node.inputs)
         for node_id, node in nodes.items()
     }
 
@@ -369,6 +435,10 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
             ],
             sort_keys=True,
             separators=(",", ":"),
+            # The instance tier puts RAW parameter values through here; every
+            # one comes from JSON so this never fires, and it is the difference
+            # between a key and a crash if a caller ever hands us one that does.
+            default=str,
         )
         for node in nodes.values()
     )
@@ -397,14 +467,61 @@ def topology_hash(api_graph: dict) -> str:
     return graph_key(drop_widgets(reduce_api_graph(api_graph)))
 
 
+def instance_hash(api_graph: dict) -> str:
+    """The instance key: the recipe plus one set of parameters, seed excluded.
+
+    **This is a PICTURE column, not a hub table.** Two pictures share an
+    instance exactly when they share this value, which is all "Covered only"
+    needs; storing instances hub-side is AI-toolkit Phase 2 and belongs to
+    v1.12. Nothing in v1.11 writes an instance row anywhere.
+    """
+    return graph_key(promote_instance_widgets(reduce_api_graph(api_graph)))
+
+
+def assets_from_reduction(nodes: dict[str, ReducedNode]) -> list[tuple[str, str]]:
+    """Every ``(widget_name, normalized_filename)`` the recipe names.
+
+    The readable half of what the stored document refers to by
+    :func:`asset_reference`, and the substrate the model-companions plan's
+    Workflow sets are built on. Deduplicated and ordered, so re-filing one
+    graph writes the identical row set.
+    """
+    return sorted(
+        {
+            (name, value)
+            for node in nodes.values()
+            for name, value in node.widgets
+            if value is not None
+        }
+    )
+
+
 def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
     """Render a reduced graph back as the document that gets stored.
 
     This is what makes the library plan's §5 deletion boundary true rather than
     aspirational. A recipe is *prompt-free by construction*, so "forget the
-    pictures" can purge instances and ghosts and leave the recipe standing
-    without rewriting a single stored graph. Node titles go the same way:
-    ``_meta`` is bucket V, and a title is something a person wrote.
+    pictures" can purge instances and ghosts and leave the recipe standing.
+    Node titles go the same way: ``_meta`` is bucket V, and a title is
+    something a person wrote.
+
+    **Prompt-free was never the whole of it, and the earlier wording here said
+    it was.** Bucket TA survives the nulling by design, and TA is model and
+    image filenames -- which on a real shelf name people (a character LoRA is
+    named after its subject) and state content. So this document carries an
+    :func:`asset_reference` in place of every asset value, and
+    ``workflow_recipe_asset`` is the only home of the readable name. Forgetting
+    a model name is then a row delete: **no stored graph is ever rewritten and
+    ``document_sha256`` stays valid**, which is the property the old docstring
+    claimed and did not have.
+
+    The substitution is uniform, including the PixlStash loaders'
+    ``*_sha256`` values, which name nobody. One rule -- *the document holds
+    references, never asset values* -- cannot be got half right by the next
+    reader, where "filenames but not digests" invites exactly that.
+
+    Neither hash moves: :func:`structural_hash` and :func:`topology_hash` key
+    :func:`reduce_api_graph`, not this rendering.
 
     It is rendered from the reduction rather than from the graph so that the
     document and the hash can never disagree about what was kept.
@@ -413,7 +530,10 @@ def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
         raise WorkflowGraphError("cannot render an empty graph")
     document: dict[str, Any] = {}
     for node_id, node in nodes.items():
-        inputs: dict[str, Any] = {name: value for name, value in node.widgets}
+        inputs: dict[str, Any] = {
+            name: (asset_reference(value) if value is not None else None)
+            for name, value in node.widgets
+        }
         inputs.update({name: [source, slot] for name, source, slot in node.inputs})
         document[node_id] = {"class_type": node.class_type, "inputs": inputs}
     return document

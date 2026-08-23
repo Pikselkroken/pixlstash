@@ -510,10 +510,13 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # ``workflow_recipe_graph`` holds the graph itself, in exactly that nulled form.
 #
-# The instance tier is deliberately absent. It is what holds the prompt and
-# every parameter, it is written by ingest, and ingest is a later step; adding
-# an unwritten table now would only fix its shape before anything has had to
-# use it. Its location is not in question — §4 puts the whole family here.
+# The instance tier is deliberately absent HERE, and that is not an oversight
+# now that ingest computes an instance hash. The hash is a value on a picture
+# (``picture.workflow_instance_hash``): two pictures share an instance exactly
+# when they share it, which is the whole of what v1.11 asks of the tier. A
+# hub-side ``recipe_instance`` table is AI-toolkit Phase 2 and moved to v1.12
+# with the rest of it, so nothing in this release stores an instance ROW
+# anywhere. Its location is not in question — §4 puts the whole family here.
 
 _V2_WORKFLOW_TOPOLOGY = """
 CREATE TABLE IF NOT EXISTS workflow_topology (
@@ -568,18 +571,51 @@ CREATE TABLE IF NOT EXISTS workflow_recipe_graph (
 )
 """
 
+# The readable half of a recipe's assets, split out of the document so it can
+# be DESTROYED without touching the document.
+#
+# ``workflow_recipe_graph.document`` names every asset by an opaque
+# ``asset_reference`` (``services/workflow_hash.py``), so this table is the only
+# place a model filename is legible. That is what makes "forget this model's
+# name" a row delete rather than a rewrite of every stored graph plus a
+# ``document_sha256`` migration -- and a model filename is worth being able to
+# destroy, because on a real shelf a character LoRA is named after its subject.
+#
+# A recipe can name the same widget twice with different files (two
+# ``LoraLoader`` nodes, two ``lora_name`` values), so the key is the triple, not
+# the pair. ``normalized_filename`` is exactly rule 5's form -- lowercase
+# basename, extension kept -- which is also what the recipe hashed, so a lookup
+# from a shelf entry needs no second normalisation.
+#
+# Deleting a row leaves the document intact and its reference unresolvable,
+# which is the intended end state: the graph still says "a model went here",
+# and no longer says which.
+_V2_WORKFLOW_RECIPE_ASSET = """
+CREATE TABLE IF NOT EXISTS workflow_recipe_asset (
+    structural_hash     TEXT NOT NULL REFERENCES workflow_recipe(structural_hash),
+    widget_name         TEXT NOT NULL,
+    normalized_filename TEXT NOT NULL,
+    PRIMARY KEY (structural_hash, widget_name, normalized_filename)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" — the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
     "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_topology "
     "ON workflow_recipe(topology_hash)",
+    # "Which recipes use this model" — the model-companions plan's Workflow
+    # sets, and the lookup a shelf row does to say what it is used by.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_asset_filename "
+    "ON workflow_recipe_asset(normalized_filename)",
 )
 
 _V2_WORKFLOW_TABLES = (
-    # Ordered by reference: recipe points at topology, graph at recipe.
+    # Ordered by reference: recipe points at topology, graph and asset at recipe.
     _V2_WORKFLOW_TOPOLOGY,
     _V2_WORKFLOW_RECIPE,
     _V2_WORKFLOW_RECIPE_GRAPH,
+    _V2_WORKFLOW_RECIPE_ASSET,
     *_V2_WORKFLOW_INDEXES,
 )
 
