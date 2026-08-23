@@ -95,15 +95,32 @@ python -m pixlstash.app --server-config "C:\path\to\server-config.json"
 PixlStash can register several independent image libraries and keep one open at
 a time. Pictures, tags, scores, snapshots, guest sessions, and guest scores stay
 with their library; your owner account and preferences stay with the
-installation. Switch from **Settings → Libraries**. API tokens and share links
-are pinned to the library where they were created: they become inactive while a
-different library is open and work again when you switch back.
+installation. API tokens and share links are pinned to the library where they
+were created: they become inactive while a different library is open and work
+again when you switch back.
+
+**Settings → Libraries** does all of it: add a library, rename one, switch
+between them, and stop using one. **Add a library…** takes a single folder and
+works out what it is — a library you already made is added as it is, with its
+tags, scores and people; a folder of pictures is brought in as it stands; an
+empty folder starts a fresh library. Nothing in that folder is moved, renamed
+or copied.
+
+**Stop using this** removes no file. PixlStash forgets the library, everything
+inside the folder stays where it is, and adding the folder again brings back its
+tags and its share links. The library you have open cannot be forgotten — switch
+away from it first.
+
+Managing libraries is available on the machine running PixlStash, or over your
+local network or Tailscale, because it points the server at folders on that
+machine. A session from further away can list and open libraries but not add or
+remove them, unless `allow_remote_host_ops` is set in server settings.
 
 ### The library command line
 
-Adding and removing libraries is a command-line operation in this release,
-because it points PixlStash at folders on your machine. **Settings → Libraries**
-shows the exact command for your installation, with a copy button.
+The same things can be done from a terminal, which is what a script or a cron
+job wants. **Settings → Libraries** shows the exact command for your
+installation, with a copy button.
 
 Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
 **with the same environment active that the server runs in** (activate the venv,

@@ -32,32 +32,17 @@ from pixlstash.utils.caption_file_utils import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
-
-_SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".bmp",
-        ".heic",
-        ".heif",
-        ".avif",
-    }
-)
 
 _BUILD_CHUNK_SIZE = 128
 _MAX_BUILD_WORKERS = 8
 
 
 def _is_supported_file(file_path: str) -> bool:
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in _SUPPORTED_IMAGE_EXTS:
-        return True
-    return VideoUtils.is_video_file(file_path)
+    return is_supported_media_file(file_path)
 
 
 class ReferenceFolderScanTask(BaseTask):
