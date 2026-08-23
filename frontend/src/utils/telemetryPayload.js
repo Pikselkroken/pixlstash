@@ -22,7 +22,7 @@ const TELEMETRY_HOST = "https://t.pixlstash.dev";
  * not told the truth.
  *
  * @param {string} version Running app version, e.g. "1.9.0".
- * @param {string} installType One of docker, pip, electron, other.
+ * @param {string} installType One of docker, pip, electron, other, dev.
  * @returns {{method: string, url: string}}
  */
 /** Token left in `index.html` when nothing substituted it (Vite dev server). */
