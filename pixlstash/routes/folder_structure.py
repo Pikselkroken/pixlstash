@@ -27,6 +27,7 @@ from pixlstash.services.folder_structure_service import (
     FolderStructureRead,
     load_existing_entities,
 )
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -76,6 +77,22 @@ class FolderStructureReadCancelResponse(BaseModel):
     status: str
 
 
+def _within(root: str, resolved: str) -> bool:
+    """Whether *resolved* is contained in *root*, strictly.
+
+    ``resolve_path_within`` rather than a ``startswith`` on two realpaths: it is
+    the shared helper, it realpaths both sides, and it compares with
+    ``os.path.commonpath`` instead of a string prefix. #1024 moved the codebase
+    onto it for exactly this class of check; a second hand-rolled containment
+    here would be the thing that review is trying to stop.
+    """
+    try:
+        resolve_path_within(root, resolved)
+    except ValueError:
+        return False
+    return True
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -111,13 +128,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=error)
 
         roots = [
-            os.path.realpath(r)
+            r
             for r in (server._server_config.get("filesystem_roots") or [])
             if isinstance(r, str) and r
         ]
-        if roots and not any(
-            resolved == root or resolved.startswith(root + os.sep) for root in roots
-        ):
+        if roots and not any(_within(root, resolved) for root in roots):
             raise HTTPException(
                 status_code=403,
                 detail="Path is not within any configured filesystem root.",

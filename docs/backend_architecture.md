@@ -1405,6 +1405,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
@@ -1575,6 +1576,26 @@ never on the read path:
   library's files; never do that. A refused path is reported as unconfirmed, so
   the deletion ledger is corrected to `file_removed=False` and restore can
   still resurrect the row.
+- **The in-place rotate** (`operation_log_service.apply_orientation`, §21.5)
+  contains `Picture.file_path` with `resolve_path_within(image_root, …)` and
+  then reads and writes **the resolved path**, so the value that was checked is
+  the value that is used. Containment here is **strict** rather than
+  `path_is_within` (#1024), and the reason is not the one the function name
+  suggests. A symlink planted inside the library never carried the *write* out
+  of it: `write_orientation` renames a `mkstemp` sibling over the path and
+  `os.replace` replaces a symlink instead of following it. `read_orientation`
+  does follow it, so the lexical check let the outside file's bytes — and, via
+  `_carry_file_identity`, its mode and owner — be copied into the library under
+  the link's name. A read escape reachable through a write sink, which is the
+  hole this closes. A library root that is *itself* a symlink still passes,
+  because both sides are resolved.
+  **The cost is deliberate:** a symlinked **subfolder** inside the library —
+  photos kept on a second disk — is refused too, because realpath cannot tell
+  it from a planted link, and rotate declines those pictures. Pinned in
+  `tests/test_path_containment.py` in all three directions. Do not "fix"
+  `path_is_within` to match: the read paths and the shelf's four sites want the
+  lenient form its docstring promises. If the subfolder case must be allowed
+  again, relax it at this sink.
 - **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
   which only honours a recorded `tags_file`/`description_file` value that is
   exactly the image stem plus a safe suffix, so a fabricated column cannot
@@ -1650,6 +1671,108 @@ the sentence above as covering them.
   InsightFace branch runs the *same* guard on the same input, through the shared
   `_validated_destination`, and contains every pack relpath with
   `resolve_path_within` against both roots before it removes a source tree.
+
+### PixlStash Views: the library as folders of links (v1.11 Phase 7)
+
+`pixlstash/services/views_service.py` publishes the library's sets, people and
+projects as a folder tree whose every file is a **link** to the picture where the
+owner already keeps it. Nothing is copied, no original is moved, and deleting the
+whole tree loses nothing — a picture in three projects appears in three view
+folders and its one real file never moves. **Views are additional to the owner's
+tree, never a replacement for it.** Off by default: `LibrarySettings.views_root`
+is NULL until the owner names a folder, and nothing is written until then.
+
+Two routes, both `LOCAL_OWNER_ONLY` (§16.3): `GET /server-config/views` reports
+the folder and kinds, `PATCH /server-config/views` records them and rebuilds.
+Saving *is* rebuilding — a full re-derive of 50,000 links measures 0.46 s to
+create and 0.34 s to remove, so an incremental path would be a correctness risk
+bought for nothing, and "Rebuild now" is the same PATCH with the current values.
+The settings are per **library** rather than per user (`library_settings`,
+migration `0107`), because the tree holds *this* library's people and sets and
+two libraries publishing into one folder would overwrite each other.
+
+**The location decides everything, and it is validated before a byte is
+written.** The spike behind this is `docs/spikes/views-links.md`; the measured
+facts that shape the code:
+
+- Link support belongs to the **view root's** filesystem, not the library's. A
+  symlink is a stored path and crosses devices happily (measured ext4 → a
+  separate NVMe), so a library on a NAS or an external drive is fine as long as
+  the tree lands somewhere with links.
+- **exFAT and VFAT have neither** symlinks nor hard links (`EPERM` on both,
+  measured on freshly formatted volumes). A hard link is therefore *not* the
+  fallback for the external-drive case.
+- A hard link never crosses a device (`EXDEV`, measured against three real
+  drives) and keeps a deleted original's bytes alive under the views folder. It
+  is used only same-device, only when symlinks are unavailable — the
+  Windows-without-Developer-Mode case.
+- Windows symlink creation needs `SeCreateSymbolicLinkPrivilege`. `probe_link_support`
+  **asks** the chosen directory by attempting one link rather than predicting it,
+  and `tests/test_views_links.py::test_this_filesystem_offers_a_link_mode` is
+  that probe running under the gate, so the Windows shards report the real answer
+  on every run.
+
+`check_views_root` refuses four locations by name rather than half-writing a
+tree, and each refusal is a measured failure:
+
+| Refused location | Why |
+|---|---|
+| Inside the library root | `library_backup_service._validate_regular_file` raises `Refusing symlinked library payload`, so backups would fail outright |
+| Overlapping any **other registered** library | The same failure in a library that is not open. Since v1.11 the owner registers several from Settings, so the active `image_root` is no longer the whole answer; the roots come from the hub registry via the route, because this vault cannot see them |
+| Inside a reference folder | `os.walk` lists symlinked *files* (only symlinked *directories* are skipped), so the scan would index every link as a second copy of the picture |
+| Containing the library or a reference folder | The same two problems from the other side |
+| A cloud-sync folder | The client follows a link and uploads the file's content, duplicating the library into the owner's quota. **A precaution, not a measurement** — no sync client was available to the spike, and the refusal exists so the answer never has to be known. Detected by the client's in-tree marker (`.dropbox.cache`, `.tmp.driveupload`, …) or the sync folder's name, and the ancestor walk stops **below** `$HOME`: `~/.dropbox` is the client's *config*, not a sync root, and treating it as one refused every path a Dropbox user could pick |
+
+`reference_folder_scan_task` additionally prunes any directory carrying the
+`.pixlstash-views` marker, because a folder can be registered as a reference
+folder *after* a tree was published inside it. **It remembers the pruned roots
+rather than merely skipping them**, and subtracts them from `removed_paths`:
+"absent from `disk_paths`" is what that task **hard-deletes** a `Picture` row
+for — tags, scores and memberships with it — so pruning alone would have turned a
+marker file appearing over an indexed folder into a silent library deletion, a
+far worse failure than the double-indexing the prune exists to prevent.
+
+**The rebuild deletes links, never last copies.** `shutil.rmtree` is not
+link-aware — it removes a regular file as happily as a symlink — so a rebuild
+built on it would destroy anything the owner dropped into a view folder, which is
+precisely the gesture every line of this feature's copy invites. `_prune`
+therefore decides per entry, on an exact test rather than a heuristic: a symlink
+goes (it is a path), a regular file with `st_nlink > 1` goes (another name for
+those bytes exists, which is what a hard link into the library is), and
+**anything else stays** and is reported to the owner as `kept_by_owner`. A
+directory is `rmdir`-ed bottom-up, so it survives exactly when something inside
+it did. Nothing descends a symlinked directory: a symlink standing where a kind
+folder goes is removed *as a link*, which is what stops one planted in the views
+root from steering the whole rebuild out of it.
+
+**The `.pixlstash-views` marker is the second guard, and it is about adoption
+rather than deletion.** The service writes it when it claims a folder and refuses
+a folder that already has content and no marker, so a views root aimed at
+somebody's pictures folder is never adopted in the first place. `remove()` runs
+the same prune and **keeps the marker whenever anything survived** — dropping it
+over a partial removal would hand every remaining link to the next
+reference-folder scan as a new picture. It never removes the root the owner
+chose.
+
+Every destination path is built with `resolve_path_within` against its kind
+folder, and the kind folder itself against the root; names are reduced to one
+path component, truncated to 80 characters (a component over `NAME_MAX` is
+`ENAMETOOLONG`, and a views path clears Windows' `MAX_PATH` sooner than that) and
+disambiguated by row id, because two characters really can be called the same
+thing.
+
+**A rebuild clears every kind folder, not only the requested ones.** Publishing
+`people` after publishing `people,sets` must not leave `Sets/` behind full of
+links nothing will refresh, and that is also what makes an empty `kinds` mean an
+empty tree. The probe runs *before* the prune, so a folder that turns out not to
+hold links does not cost the owner the tree they already had.
+
+Symlinks are stored **relative** when the view root and the file share a device,
+so a library and its views survive being moved together, and absolute otherwise —
+across drive letters a relative path is impossible. A link that cannot be made is
+counted and its folder named in the publish report rather than failing the whole
+run, which is what a library split across two disks looks like when only hard
+links are available.
 
 ### The shelf's five verbs (shelf plan F3)
 
@@ -2885,6 +3008,57 @@ this record and needs its own independent adversarial sign-off.
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
+### The library layout (v1.11 Phase 4a)
+
+`utils/library_layout.py` is the model of **where a picture belongs and whether
+it still belongs there**. Model only: no move engine, no file writes, no UI —
+see Phase 4b for those. The rule it implements, and its case table, are in
+`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
+detail, so this section is the map rather than a second copy of it.
+
+A `Layout` is an ordered list of segments, one folder level each. A segment
+holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
+picture has a value for wins; a segment nothing fills is **skipped rather than
+left as an empty folder**, which keeps the tree two deep instead of five. A new
+library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
+
+| Function | Answers |
+|---|---|
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `_Inbox` — never the library root, which is where an unmigrated flat library lives. |
+| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
+
+The release rests on `is_true`, and on one property of it: **a path that does
+not parse against the layout can never be false.** A file at the library root
+matches no segment, so an existing flat library needs no migration; a file the
+owner dragged into a folder of their own contradicts nothing, so it stays there
+permanently and the override needs no setting.
+
+The three properties a reader is most likely to get wrong:
+
+- **Truth is membership, not equality with `render`.** The folder `Mira/` says
+  "this is a Mira picture" and stays true while Mira is one of the picture's
+  people, whoever `render` would pick today. That is what makes adding a second
+  project or person move nothing.
+- **`known_names` is not optional.** Only the library's whole vocabulary
+  separates *this folder names a project the picture is no longer in* (false, it
+  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
+  moves). Deleting an entity takes its name out of the language and freezes the
+  folders named after it.
+- **Reading stops at the first component the vocabulary cannot read**, and it is
+  not positional. Everything from that component down is the owner's own, so
+  `2024 Shoots/Mira/2026-08` is judged on its first two components while
+  `Holiday/2024 Shoots` is judged on none of them.
+
+Every name reaching a path goes through `folder_name()` — including
+`Layout.unfiled`, which is validated against it on construction because it is
+the one field a settings screen will let a user type and it reaches `render`'s
+output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
+`A_B`), which is the collision the filesystem would force anyway; comparison is
+additionally case-folded and NFC-normalised for Windows and macOS. Every
+ambiguity here resolves towards *not* moving a file.
+
+`tests/test_library_layout.py` covers it, unparseable-path cases first.
+
 ---
 
 ## 14. Server Lifecycle
@@ -3157,7 +3331,7 @@ The HTTP auth middleware runs only for the `http` ASGI scope, so the WebSocket r
 
 - **Password login** (bcrypt-hashed) → JWT.
 - **API tokens** (`UserToken`) with:
-  - `scope`: `ALL` (full owner) or `READ`
+  - `scope`: `ALL` (full owner) or `READ` — the only two values `create_token` will mint. The middleware also recognises `WRITE`, named in `auth.WRITE_ENABLED_SCOPES` so that the write-enabled resource-scoped shape the `*_SCOPED` policies exist for is granted by declaration; no code path mints one, and any scope outside those three is logged and treated as read-only (§16.2, issue #962).
   - Optional `resource_type` + `resource_id` restricting to one of: picture set, character, project, or single picture — **only on a `READ` token.** An `ALL`+`resource_type` token is refused at mint and rejected fail-closed by the middleware (see §16.2 item 4 / §16.3).
   - Optional flags: `include_attachments`, `include_description`
 - **JWT** carried as `Authorization: Bearer <token>`.
@@ -3174,7 +3348,7 @@ Exact:    /, /login, /logout, /check-session, /version,
 Prefix:   /assets/, /share/, /docs/
 ```
 
-In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
+In addition, every scoped token (any token for which `request.state.token_scope` is populated — i.e. any scope but `ALL`) is blocked from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing, and blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) **unless its scope is named in `auth.WRITE_ENABLED_SCOPES`**. That set is the fail-closed hinge (issue #962): the check used to key on `scope == "READ"`, so any other string — a misconfigured row, a forged one, a scope added later — skipped the write refusal and reached every `*_SCOPED` mutation route, each of which is write-unreachable solely because of it. Write-ness is now granted by declaration, not by omission. `WRITE` is the one member and has no mint path; `create_token` still allowlists `ALL`/`READ`.
 
 **Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
@@ -3345,6 +3519,8 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
 
   - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-23 (v1.11 Phase 7, PixlStash Views) — the locality total is now `43 = 37 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` after merging the library-lifecycle block, not carried forward: those four routes and these two landed independently, so the figure this paragraph would have named alone (`39 = 33 + 6`) was never true of a merged tree. `GET` and `PATCH /api/v1/server-config/views` publish the library's sets, people and projects as folders of **links** to the files the owner already keeps. The PATCH is the **third** route on this tier for both reasons at once: it takes a caller-supplied host path like `POST /model-folders`, and it writes a folder tree into it like `POST /model-moves`. It is here for the authority and **not** for destruction — it creates only links, and the one thing it unlinks is a name that is not the last one: a symlink, or a regular file with `st_nlink > 1`. `shutil.rmtree` is deliberately not used, because it is not link-aware and would delete a file the owner had dropped into a view folder; anything that is not a link is reported back as `kept_by_owner` and left standing. A folder that already has content and no `.pixlstash-views` marker is refused rather than adopted, so a views root aimed at somebody's pictures folder never becomes one in the first place. Every destination is built with `resolve_path_within` against its kind folder and each kind folder against the root, and a symlink standing where a kind folder goes is unlinked *as a link* rather than descended, so neither a vault-supplied name nor a planted symlink can take the rebuild outside the views root; and five location classes are refused outright before a byte is written — inside the library, inside **any other registered** library (the same broken backup in one that is not open), inside a reference folder (the scan lists symlinked *files*, so every link would be indexed as a second copy), the containing cases of each, and a cloud-sync folder (the client uploads what the link points at). **The GET is the control-surface argument that put `GET /model-moves` here rather than one tier down**: it names the host folder the tree went to, and the tier that alone may publish it is the tier that may see where it landed. It is also on `READ_BLOCKED_GET_PATHS`, so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand that path back to every share token. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_37_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -5594,7 +5770,24 @@ on the mapping screen and Phase 3 sends it back. **No signal proposes it**, and
 no code path here emits it, because no signal can prove a negative about a
 string. A row the backend had nothing to say about is `kind: null`.
 
+The other four kinds are `Facet` (`pixlstash/utils/library_layout.py`, Phase 4a)
+and are read out of that enum rather than written again, so a facet renamed for
+the layout cannot leave this read proposing a word the layout no longer places.
+`tests/test_folder_structure_read.py::test_the_read_speaks_the_layout_s_facet_vocabulary`
+fails the build on the drift, which is the only way anyone would notice: the
+symptom otherwise is a picture that quietly fails to move, one release later.
+
 ### Folding a name
+
+**There are two name folds in v1.11 and they disagree on purpose.**
+`library_layout._match_key` (Phase 4a) is NFC + casefold: accents and separators
+survive, so `José` and `Jose` are two folders. It has to be exact, because it
+decides whether a picture **moves**. `normalise_name` here folds accents and
+separator runs as well, because it only decides what to **propose** on a screen
+the owner then confirms — a wrong guess costs one dropdown, a missed one costs a
+lookup they wanted. They are not a duplicated helper waiting to be reconciled:
+merging them would either start moving files on a fuzzy match, or stop the read
+recognising `2024_Shoots` as the project the owner already has.
 
 `normalise_name` is Unicode-aware, and that is a correctness requirement rather
 than a nicety. An ASCII-only character class does not merely *miss* a Cyrillic or

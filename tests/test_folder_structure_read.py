@@ -22,13 +22,18 @@ from pixlstash.server import Server
 from pixlstash.services.folder_structure_service import (
     DEFAULT_DEADLINE_S,
     FolderStructureRead,
+    JUST_A_FOLDER,
+    KINDS,
     MAX_FOLDERS,
     MIN_FACE_SAMPLE,
-    FACE_MAJORITY,
+    FACE_MAJORITY_PCT,
     MIN_SIDECAR_PICTURES,
     SAME_IDENTITY_COSINE,
     SAMPLED_PER_FOLDER,
+    _ENTITY_KIND,
     _LEVEL_VOTE_SHARE_PCT,
+    _clears_share,
+    _NON_TAG_KINDS,
     _TAG_MAX_DISTINCT_NAMES,
     _TAG_MIN_PARENTS,
     _TAG_REPEAT_FACTOR,
@@ -37,6 +42,7 @@ from pixlstash.services.folder_structure_service import (
     load_existing_entities,
     normalise_name,
 )
+from pixlstash.utils.library_layout import Facet, _match_key
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 from tests.authz_guard import assert_real_route
 
@@ -953,7 +959,7 @@ def test_the_identity_threshold_is_where_it_says_it_is():
 
 def test_the_face_majority_is_where_it_says_it_is():
     """14 of 20 is 70% and reads as one person; 13 of 20 is 65% and does not."""
-    assert FACE_MAJORITY == 0.7, "the counts below are chosen against 0.7"
+    assert FACE_MAJORITY_PCT == 70, "the counts below are chosen against 70"
     with _tree(_faces_spec(40)) as root:
         at_the_line = FolderStructureRead(
             root, detect_faces=_detector_from_identity(lambda i: 1 if i < 14 else i + 2)
@@ -1112,3 +1118,103 @@ def test_hidden_folders_are_counted_rather_than_dropped_in_silence():
         result = FolderStructureRead(root).run()
     assert sorted(_rows(result, 2)) == ["shown"]
     assert result["skipped_folders"]["hidden"] == 1
+
+
+def test_the_read_speaks_the_layout_s_facet_vocabulary():
+    """Phase 2 proposes what a level is; Phase 4's layout is built out of the
+    same words. If they drift, the mapping screen offers a `kind` the layout
+    cannot place, and nothing else would notice until a picture failed to move.
+
+    `folder` is the one extra and is deliberately not a Facet: "just a folder"
+    is the *absence* of a facet, and no signal ever proposes it."""
+    assert set(KINDS) == {f.value for f in Facet} | {JUST_A_FOLDER}
+    assert JUST_A_FOLDER not in {f.value for f in Facet}
+    assert set(_ENTITY_KIND.values()) <= set(KINDS)
+    assert set(_NON_TAG_KINDS) == {f.value for f in Facet} - {Facet.TAG.value}
+
+
+def test_no_signal_ever_proposes_just_a_folder():
+    """Both documents say so, and it is the one `kind` the backend cannot
+    justify: no signal can prove a string means nothing."""
+    spec = {"": []}
+    for name in ("alpha", "beta", "gamma"):
+        spec[name] = _CAPTIONED
+    spec["delta"] = ["a.jpg", "b.jpg", "c.jpg"]
+    with _tree(spec) as root:
+        result = FolderStructureRead(
+            root,
+            detect_faces=_detector_from_identity(lambda i: 1),
+            existing_entities=[("project", 1, "alpha"), ("tag", None, "beta")],
+        ).run()
+
+    proposed = [
+        row["proposal"]["kind"]
+        for level in result["levels"]
+        for row in level["folders"]
+    ] + [level["proposal"]["kind"] for level in result["levels"]]
+    assert JUST_A_FOLDER not in proposed, proposed
+
+
+def test_the_two_name_normalisers_disagree_on_purpose():
+    """`normalise_name` proposes; `library_layout._match_key` decides whether a
+    picture moves. Folding accents is right for the first and wrong for the
+    second, so this pins the difference rather than leaving it looking like a
+    duplicated helper somebody should reconcile."""
+    assert normalise_name("José") == normalise_name("Jose")
+    assert _match_key("José") != _match_key("Jose"), (
+        "the layout must keep them apart — it decides moves, not proposals"
+    )
+    # And the separator half, which is the other direction of the same split.
+    assert normalise_name("2024_Shoots") == normalise_name("2024 Shoots")
+    assert _match_key("2024_Shoots") != _match_key("2024 Shoots")
+
+
+def test_a_share_threshold_is_a_floor_and_never_rounds_down_to_below_itself():
+    """Review comment on #1110, and the same defect the level vote had.
+
+    `round(0.7 * 6) == 4`, so a float rule spelled `round(share * whole)` lets
+    4 of 6 — 66.7% — clear a seventy-percent threshold. `round(0.6 * 4) == 2`
+    lets a 50% plurality clear a sixty-percent one. Both go through
+    `_clears_share` now, so this pins the property for whichever threshold is
+    written next."""
+    assert _clears_share(4, 6, 70) is False, "4 of 6 is 66.7%, not 70%"
+    assert _clears_share(5, 6, 70) is True
+    assert _clears_share(2, 4, 60) is False, "2 of 4 is 50%, not 60%"
+    assert _clears_share(3, 4, 60) is True
+    # Exactly on the line clears it; a floor includes its own value.
+    assert _clears_share(14, 20, 70) is True
+    assert _clears_share(13, 20, 70) is False
+    assert _clears_share(0, 0, 70) is False, "nothing sampled is not a majority"
+
+
+def test_a_six_picture_folder_needs_five_faces_not_four():
+    """The rounding bug end to end, on the smallest sample that exhibits it."""
+    spec = {"": [], "mira": [f"{i:03d}.jpg" for i in range(6)]}
+    with _tree(spec) as root:
+        four = FolderStructureRead(
+            root,
+            detect_faces=_detector_from_identity(lambda i: 1 if i < 4 else i + 2),
+        ).run()
+        five = FolderStructureRead(
+            root,
+            detect_faces=_detector_from_identity(lambda i: 1 if i < 5 else i + 2),
+        ).run()
+    assert _rows(four, 2)["mira"]["proposal"]["kind"] is None, (
+        "4 of 6 is 66.7% and must not clear a 70% rule"
+    )
+    assert _rows(five, 2)["mira"]["proposal"]["kind"] == "person"
+
+
+def test_a_read_rooted_at_a_filesystem_root_still_has_a_name(monkeypatch):
+    """Review comment on #1110: `os.path.basename("/")` is the empty string, so
+    the root row reached the mapping screen with no name to refer to it by."""
+    monkeypatch.setattr("pixlstash.services.folder_structure_service.MAX_FOLDERS", 3)
+    result = FolderStructureRead("/").run()
+    assert result["root"]["name"] == "/"
+    assert _level(result, 1)["folders"][0]["name"] == "/"
+
+    # …and an ordinary folder is unaffected, trailing separator or not.
+    with _tree({"": [], "a": []}) as root:
+        assert FolderStructureRead(root + os.sep).run()["root"]["name"] == (
+            "Generations"
+        )

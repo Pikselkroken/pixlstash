@@ -81,6 +81,16 @@ AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 # database and therefore cannot cross a whole-file restore cutover.
 RESTORE_ADMISSION_PREFIXES: tuple[str, ...] = (*AUTH_API_PREFIXES, "/share/")
 
+# Token scopes that permit a mutating request. The middleware fails **closed**
+# against this set: any other scope — including one nobody recognises — is
+# treated as read-only, so a scope value is admitted by declaration rather than
+# by omission. ``ALL`` is absent on purpose: ``request.state.token_scope`` is
+# populated only for non-ALL scopes, so an owner token never reaches the check.
+# ``WRITE`` has no mint path (``create_token`` allowlists ``ALL``/``READ``); it
+# is named here so the shape the ``*_SCOPED`` route policies exist for keeps its
+# write-ness deliberately rather than by the old ``!= "READ"`` accident.
+WRITE_ENABLED_SCOPES: frozenset[str] = frozenset({"WRITE"})
+
 # POST paths that are semantically read-only (large request bodies preclude GET).
 # These are exempted from the "block non-GET for READ tokens" check.
 READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
@@ -144,6 +154,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # handed out to view a shared gallery would otherwise probe host layout
         # a folder at a time.
         "/api/v1/libraries/inspect",
+        # LOCAL_OWNER_ONLY at the gate: it names the host folder this library
+        # publishes its Views tree to. Same belt-and-braces as the entries
+        # above — AUTHZ_GATE_ENFORCING is a documented one-line rollback, and
+        # without this entry taking it would hand that path to every share
+        # token.
+        "/api/v1/server-config/views",
         # The folder-structure read's result IS a map of the owner's folder
         # names, tree shape and picture counts (v1.11 Phase 2). It is
         # LOCAL_OWNER_ONLY at the gate; it is here as well for the same
@@ -2559,18 +2575,39 @@ class AuthService:
                         headers=headers,
                     )
 
-            # Block write operations for READ-scoped tokens.
+            # Block write operations for every token that is not explicitly
+            # write-enabled. Fail closed: an unrecognised scope is read-only.
             # Paths in READ_SAFE_POST_PATHS use POST for body size but are semantically read-only.
             token_scope = getattr(request.state, "token_scope", None)
-            if token_scope is not None and token_scope.scope == "READ":
-                if (
-                    request.method not in ("GET", "HEAD", "OPTIONS")
-                    and request.url.path not in READ_SAFE_POST_PATHS
-                ):
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": "Token is read-only"},
+            if token_scope is not None:
+                if token_scope.scope != "READ":
+                    # ``READ`` is the only scope ``create_token`` will mint that
+                    # reaches here, so anything else is a misconfigured row or a
+                    # forgery. Logged **before** the write-enabled test, not
+                    # inside its else-branch: a forged ``WRITE`` is the one such
+                    # row that actually writes, and it would otherwise be the
+                    # only one to pass through silently.
+                    self._logger.warning(
+                        "Token %s carries an unmintable scope %r (write-enabled: "
+                        "%s) for %s %s",
+                        getattr(request.state, "token_public_id", None),
+                        token_scope.scope,
+                        token_scope.scope in WRITE_ENABLED_SCOPES,
+                        request.method,
+                        request.url.path,
                     )
+                if token_scope.scope not in WRITE_ENABLED_SCOPES:
+                    if (
+                        request.method not in ("GET", "HEAD", "OPTIONS")
+                        and request.url.path not in READ_SAFE_POST_PATHS
+                    ):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Token is read-only"},
+                        )
+                # Filesystem and user-settings reads are barred to every scoped
+                # token, write-enabled or not: the restriction is about what a
+                # narrow credential may *see*, not about what it may change.
                 if (
                     request.method == "GET"
                     and request.url.path in READ_BLOCKED_GET_PATHS

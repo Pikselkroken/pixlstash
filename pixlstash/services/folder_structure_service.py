@@ -44,6 +44,7 @@ import numpy as np
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
@@ -69,8 +70,12 @@ MIN_FACE_SAMPLE = 5
 MIN_SIDECAR_PICTURES = 3
 
 #: Share of the *sampled* pictures that must carry the same identity for the
-#: folder to read as one person.
-FACE_MAJORITY = 0.7
+#: folder to read as one person. A whole percent compared with integer
+#: arithmetic, for the reason `_LEVEL_VOTE_SHARE_PCT` is: `round(0.7 * 6)` is
+#: `4`, so a float rule written as seventy percent passes at **66.7%** on a
+#: six-picture sample. Rounding decides in the wrong direction for a threshold
+#: — the whole job of one is to be a floor.
+FACE_MAJORITY_PCT = 70
 
 # ponytail: one cosine threshold and a medoid vote, not a clustering library.
 # InsightFace ArcFace embeddings are L2-normalised, so this is a plain dot
@@ -104,8 +109,19 @@ _TAG_MIN_PARENTS = 3
 #: 2, which would quietly make this a fifty-percent rule on a level of four.
 _LEVEL_VOTE_SHARE_PCT = 60
 
+#: "Just a folder" — the owner's answer on the mapping screen, meaning the name
+#: is not telling us anything. Deliberately NOT a `Facet`: it is the *absence*
+#: of one, which is why it cannot come out of that enum. No signal proposes it.
+JUST_A_FOLDER = "folder"
+
+#: Every `kind` this API can return: the layout's four facets plus
+#: `JUST_A_FOLDER`. Sourced from `Facet` rather than spelled again, so Phase 4
+#: renaming a facet breaks this loudly instead of leaving the read proposing a
+#: word the layout no longer knows.
+KINDS = tuple(f.value for f in Facet) + (JUST_A_FOLDER,)
+
 #: Kinds a level can narrow to once cardinality has ruled Tag out.
-_NON_TAG_KINDS = ("project", "set", "person")
+_NON_TAG_KINDS = (Facet.PROJECT.value, Facet.SET.value, Facet.PERSON.value)
 
 #: The one copy, shared with the filesystem picker, the reference-folder scanner
 #: and the library picker. A folder the picker calls "1,200 pictures" has to be
@@ -131,10 +147,10 @@ _PRELOAD_WORKERS = 4
 #: `character` is the model name, and the shipped UI says People
 #: (`design/1.11-existing-library/DECISIONS.md`).
 _ENTITY_KIND = {
-    "project": "project",
-    "set": "set",
-    "character": "person",
-    "tag": "tag",
+    "project": Facet.PROJECT.value,
+    "set": Facet.SET.value,
+    "character": Facet.PERSON.value,
+    "tag": Facet.TAG.value,
 }
 
 #: The same mapping in prose, for an evidence string. Separate from
@@ -160,6 +176,15 @@ def normalise_name(name: str) -> str:
     a match, it folds every Cyrillic, CJK, Greek or Hebrew name to the *same*
     empty string, at which point a level of fifteen distinct people reads as one
     repeated name and the cardinality signal confidently proposes Tag.
+
+    **Deliberately looser than ``library_layout._match_key``, and the asymmetry
+    is the point.** That one is NFC + casefold: accents and separators survive,
+    so ``José`` and ``Jose`` stay two folders. It has to be exact, because it
+    decides whether a picture *moves*. This one only decides what to *propose*
+    on a screen the owner then confirms, where a wrong guess costs one dropdown
+    and a missed one costs a lookup they wanted. They are not a duplicated
+    helper to merge: merging them would either start moving files on a fuzzy
+    match or stop the read recognising ``2024_Shoots``.
     """
     decomposed = unicodedata.normalize("NFKD", name.lower())
     stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
@@ -354,7 +379,7 @@ class FolderStructureRead:
             folder = _Folder(
                 depth=depth,
                 index=len(self._folders),
-                name=os.path.basename(root) if not rel else os.path.basename(dirpath),
+                name=(_display_name(root) if not rel else os.path.basename(dirpath)),
                 abs_path=dirpath,
                 rel_path=rel,
                 parent_index=by_path.get(parent_path) if rel else None,
@@ -482,7 +507,7 @@ class FolderStructureRead:
         return {
             "root": {
                 "path": self._root,
-                "name": root.name if root else os.path.basename(self._root),
+                "name": root.name if root else _display_name(self._root),
                 "picture_count": root.picture_count if root else 0,
             },
             "sampled_per_folder": SAMPLED_PER_FOLDER,
@@ -589,8 +614,8 @@ class FolderStructureRead:
             kinds.extend(_ENTITY_KIND[t] for t, _, _ in matches)
             evidence.append({"signal": "name_match", "text": f"matches {named}"})
 
-        if folder.face_sampled and folder.face_matched >= max(
-            1, round(FACE_MAJORITY * folder.face_sampled)
+        if folder.face_sampled and _clears_share(
+            folder.face_matched, folder.face_sampled, FACE_MAJORITY_PCT
         ):
             evidence.insert(
                 0,
@@ -676,7 +701,7 @@ class FolderStructureRead:
             best = max(voted.values())
             # Integer arithmetic, not round(): round(0.6 * 4) is 2, which would
             # let a 50% plurality through a rule written as sixty percent.
-            if best >= 2 and best * 100 >= _LEVEL_VOTE_SHARE_PCT * len(folders):
+            if best >= 2 and _clears_share(best, len(folders), _LEVEL_VOTE_SHARE_PCT):
                 # At or above 60% at most one kind can qualify (two would need
                 # 120% of the level), so there is no tie to break here and no
                 # most_common insertion order to depend on. That is the reason
@@ -752,11 +777,11 @@ class FolderStructureRead:
 
 
 _KIND_LABEL = {
-    "project": "Project",
-    "set": "Set",
-    "person": "Person",
-    "tag": "Tag",
-    "folder": "just a folder",
+    Facet.PROJECT.value: "Project",
+    Facet.SET.value: "Set",
+    Facet.PERSON.value: "Person",
+    Facet.TAG.value: "Tag",
+    JUST_A_FOLDER: "just a folder",
 }
 
 
@@ -790,6 +815,29 @@ def load_existing_entities(db) -> list[tuple[str, Optional[int], str]]:
         return rows
 
     return db.run_immediate_read_task(fetch)
+
+
+def _display_name(path: str) -> str:
+    r"""A non-empty name for a folder row.
+
+    ``os.path.basename`` is empty for a filesystem root — ``/`` on POSIX, ``C:\``
+    on Windows — so the root row of a read rooted there would reach the mapping
+    screen with a blank name and no way to refer to it. Fall back to the path,
+    which is the only name such a folder has.
+    """
+    return os.path.basename(path.rstrip(os.sep) or path) or path
+
+
+def _clears_share(part: int, whole: int, share_pct: int) -> bool:
+    """Whether *part* is at least *share_pct* of *whole*, without rounding.
+
+    Both thresholds in this module go through here. `round(share * whole)` is
+    the tempting spelling and it is wrong in the direction that matters: it
+    rounds a threshold **down**, so `round(0.7 * 6) == 4` lets 66.7% clear a
+    seventy-percent rule and `round(0.6 * 4) == 2` lets a 50% plurality clear a
+    sixty-percent one. A floor that sometimes is not one is not a floor.
+    """
+    return part >= 1 and part * 100 >= share_pct * whole
 
 
 def _evenly_spaced(items: list[str], count: int) -> list[str]:

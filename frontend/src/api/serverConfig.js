@@ -99,3 +99,44 @@ export async function getScrapheapRetentionImpact(days) {
     params: { days },
   }));
 }
+
+/** The PixlStash Views topic of the server config (GET + PATCH). */
+const VIEWS_URL = "/server-config/views";
+
+/**
+ * Read where this library publishes its PixlStash Views tree, and which kinds.
+ *
+ * @returns {Promise<Object>} the response body:
+ *   - `views_root`: the host folder, or `null` when views are off
+ *   - `kinds`: the published subset of `available_kinds`
+ *   - `available_kinds`: every kind this server can publish, in display order
+ */
+export async function getViewsSettings() {
+  return unwrap(apiClient.get(VIEWS_URL));
+}
+
+/**
+ * Save the views folder and kinds, and rebuild the tree.
+ *
+ * Saving IS rebuilding: the tree is a full re-derive and costs a fraction of a
+ * second, so sending the current values is how "Rebuild now" works and there is
+ * no separate verb. Pass `root = null` to turn views off, which removes the
+ * published tree and leaves the folder itself alone.
+ *
+ * Rejects with a 400 whose detail names the reason when the folder cannot hold
+ * the tree — inside the library, inside a reference folder, cloud-synced, or on
+ * a filesystem with no links. The settings are left untouched in that case, so
+ * a refused folder never becomes the recorded one.
+ *
+ * @param {string|null} root - absolute host path, or `null` to turn views off.
+ * @param {string[]} kinds - subset of `available_kinds`.
+ * @returns {Promise<Object>} the updated settings, plus `last_publish` on a
+ *   successful publish: `{link_mode, folders, links, skipped_missing,
+ *   skipped_unlinkable}`.
+ */
+export async function setViewsSettings(root, kinds) {
+  return unwrap(apiClient.patch(VIEWS_URL, {
+    views_root: root,
+    kinds,
+  }));
+}
