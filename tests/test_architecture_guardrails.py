@@ -2574,7 +2574,11 @@ def test_dockerfiles_install_every_runtime_dependency():
             # package name is not an installed package.
             tokens = shlex.split(command, comments=True)
             install_at = next(
-                (i for i in range(len(tokens) - 1) if tokens[i : i + 2] == ["pip", "install"]),
+                (
+                    i
+                    for i in range(len(tokens) - 1)
+                    if tokens[i : i + 2] == ["pip", "install"]
+                ),
                 None,
             )
             if install_at is None:
@@ -2591,7 +2595,9 @@ def test_dockerfiles_install_every_runtime_dependency():
 
     missing = []
     for filename in ("Dockerfile", "Dockerfile.gpu", "Dockerfile.demo"):
-        packages = installed_packages((REPO_ROOT / filename).read_text(encoding="utf-8"))
+        packages = installed_packages(
+            (REPO_ROOT / filename).read_text(encoding="utf-8")
+        )
         missing += [
             f"{filename}: {name}"
             for name in sorted(names)

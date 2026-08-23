@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_35_local_6_loopback():
+def test_host_capability_tier_split_is_37_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 41
-    routes carry a locality tier = 35 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 43
+    routes carry a locality tier = 37 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -308,6 +308,28 @@ def test_host_capability_tier_split_is_35_local_6_loopback():
     while buying a remote owner nothing they could act on. The loopback count is
     unchanged: none of the four spawns anything.
 
+    43 = 37 + 6 with the two ``/server-config/views`` routes, PixlStash Views
+    (v1.11 Phase 7): the library's sets, people and projects published as folders
+    of **links** to the files the owner already keeps. The PATCH takes a
+    caller-supplied host path and writes a folder tree into it, which is the
+    ``POST /model-folders`` class for what it accepts and the ``POST
+    /model-moves`` class for the filesystem it drives — so it is the third route
+    here for both reasons at once. It is on this tier for the authority and not
+    for the destruction: it creates only links, and the one thing it unlinks is
+    a name that is not the last one — a symlink, or a regular file with
+    ``st_nlink > 1``. ``shutil.rmtree`` is deliberately not used, because it is
+    not link-aware and would delete a file the owner had dropped into a view
+    folder; anything that is not a link is reported back as ``kept_by_owner``
+    and left standing. A folder that already holds content and carries no
+    ``.pixlstash-views`` marker is refused rather than adopted, so a views root
+    aimed at a folder of real pictures never becomes one. The GET is the control surface argument that put ``GET
+    /model-moves`` here rather than one tier down: it names the host folder the
+    tree went to, and the tier that alone may publish it is the tier that may see
+    where it landed. It is also on ``READ_BLOCKED_GET_PATHS``, so the documented
+    ``AUTHZ_GATE_ENFORCING = False`` rollback does not hand that path back to
+    every share token. The loopback count is unchanged: neither route spawns
+    anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -321,7 +343,7 @@ def test_host_capability_tier_split_is_35_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 35, sorted(local)
+    assert len(local) == 37, sorted(local)
 
 
 # ===========================================================================
