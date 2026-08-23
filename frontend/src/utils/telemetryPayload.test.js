@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   buildInstallPingRequest,
   buildPayloadForChoice,
   buildPayloadLegend,
   buildVersionCheckRequest,
+  defaultInstallType,
 } from "./telemetryPayload";
 
 const CONTEXT = {
@@ -120,5 +121,40 @@ describe("buildPayloadLegend", () => {
       installType: "docker",
     });
     expect(legend.map((entry) => entry.term)).toEqual(["2.0.1", "docker"]);
+  });
+});
+
+describe("defaultInstallType", () => {
+  const META = 'meta[name="pixlstash-install-type"]';
+  const setMeta = (content) => {
+    document.querySelector(META)?.remove();
+    const el = document.createElement("meta");
+    el.setAttribute("name", "pixlstash-install-type");
+    el.setAttribute("content", content);
+    document.head.appendChild(el);
+  };
+
+  afterEach(() => document.querySelector(META)?.remove());
+
+  // Regression guard. This value is what the version check reports, because it
+  // fires from TitleBar's onMounted before App.vue's GET /version resolves and
+  // stamps its 24h throttle before the request. Assuming "pip" emptied the
+  // `electron` bucket when 1.10.1 shipped and every desktop user restarted, and
+  // had been undercounting docker the same way all along.
+  it.each(["docker", "electron", "other", "dev"])(
+    "reports the %s the server substituted in",
+    (installType) => {
+      setMeta(installType);
+      expect(defaultInstallType()).toBe(installType);
+    },
+  );
+
+  it("ignores the placeholder the dev server leaves behind", () => {
+    setMeta("__PIXLSTASH_INSTALL_TYPE__");
+    expect(defaultInstallType()).toBe("pip");
+  });
+
+  it("falls back to pip when the document carries no marker at all", () => {
+    expect(defaultInstallType()).toBe("pip");
   });
 });

@@ -22,9 +22,52 @@ const TELEMETRY_HOST = "https://t.pixlstash.dev";
  * not told the truth.
  *
  * @param {string} version Running app version, e.g. "1.9.0".
- * @param {string} installType One of docker, pip, electron, other.
+ * @param {string} installType One of docker, pip, electron, other, dev.
  * @returns {{method: string, url: string}}
  */
+/** Token left in `index.html` when nothing substituted it (Vite dev server). */
+const INSTALL_TYPE_PLACEHOLDER = "__PIXLSTASH_INSTALL_TYPE__";
+
+/**
+ * The install type to assume before `GET /version` has answered.
+ *
+ * This is not cosmetic. The version check fires from `TitleBar`'s `onMounted`,
+ * and Vue mounts children before parents, so it runs before `App.vue`'s own
+ * `onMounted` has started the `/version` fetch. `checkForUpdatesNow` also
+ * stamps its 24h throttle before the request, so whatever is assumed here is
+ * what gets reported, and a wrong guess is not corrected until the next
+ * interval tick -- i.e. only if the app stays running. Assuming "pip"
+ * unconditionally filed every restarted desktop and Docker install under
+ * `pip`.
+ *
+ * The server substitutes `Server.detect_install_type()` into the
+ * `pixlstash-install-type` meta tag when it hands out the document, which
+ * covers every channel at once: docker, the `other` the Windows installer
+ * declares, the `dev` a development machine declares, and electron -- the
+ * desktop shell only ever reaches this SPA through `loadURL` against its own
+ * backend, and that backend is started with `PIXLSTASH_INSTALL_TYPE=electron`.
+ * (The `index.html` bundled in the shell is the splash screen, which never
+ * mounts this app.) So there is no second detection path here on purpose.
+ *
+ * Passed through unvalidated: the backend already constrains it to
+ * `Server.INSTALL_TYPES`, and re-listing the buckets here would add a sixth
+ * copy of a list that `tests/test_install_type_buckets.py` exists to keep in
+ * sync. Only the un-substituted placeholder is rejected, which is the Vite dev
+ * server, where "pip" is the historical answer and a real dev machine is
+ * declared through `PIXLSTASH_TELEMETRY_DEV` anyway.
+ *
+ * @returns {string} The install type to report on the first version check.
+ */
+export function defaultInstallType() {
+  const injected =
+    typeof document !== "undefined"
+      ? document
+          .querySelector('meta[name="pixlstash-install-type"]')
+          ?.getAttribute("content")
+      : null;
+  return injected && injected !== INSTALL_TYPE_PLACEHOLDER ? injected : "pip";
+}
+
 export function buildVersionCheckRequest(version, installType) {
   return {
     method: "GET",
@@ -117,11 +160,13 @@ export function buildPayloadLegend(variant, context) {
     legend.push(
       {
         term: "install_id",
-        meaning: "random and replaceable; not derived from you or your computer",
+        meaning:
+          "random and replaceable; not derived from you or your computer",
       },
       {
         term: "is_new_install",
-        meaning: "whether telemetry began on a fresh install or was enabled later",
+        meaning:
+          "whether telemetry began on a fresh install or was enabled later",
       },
       { term: "install_type", meaning: "the same install method shown above" },
     );
