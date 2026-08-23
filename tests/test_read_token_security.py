@@ -761,6 +761,108 @@ class TestAllScopeResourceTokenRejected(_SharedPictureLibrary):
         )
 
 
+def _rescope(server, token: str, scope: str) -> str:
+    """Force *token*'s hub row to *scope* and return the token unchanged.
+
+    ``create_token`` allowlists ``ALL``/``READ``, so a token carrying any other
+    scope has no mint path and the row has to be written directly — the row is
+    the thing under test. The cache flush matters: the middleware answers from
+    the token cache, so without it the request would still see ``READ``.
+
+    **The write is verified, not assumed.** A ``READ`` token answers every
+    refusal these tests assert on — the same 403 and the same
+    ``"Token is read-only"`` body — so an UPDATE that matched no row (a renamed
+    column, a changed prefix length, a token minted against a different hub)
+    would leave all of them passing while testing nothing at all. The row is
+    therefore read back and its scope asserted, which is the one thing that
+    tells "the middleware refused the new scope" from "the new scope was never
+    written".
+    """
+    prefix = token[:8]
+
+    def _set(session: Session):
+        result = session.exec(
+            update(UserToken)
+            .where(UserToken.token_prefix == prefix)
+            .values(scope=scope)
+        )
+        session.commit()
+        rows = session.exec(
+            select(UserToken).where(UserToken.token_prefix == prefix)
+        ).all()
+        return result.rowcount, [row.scope for row in rows]
+
+    rowcount, scopes = server.hub_engine.run_task(_set)
+    assert rowcount == 1, (
+        f"rescoping to {scope!r} matched {rowcount} token rows, not 1 — the "
+        "refusals this token is about to be measured against would be the "
+        "ordinary READ refusals, and would prove nothing"
+    )
+    assert scopes == [scope], (
+        f"the token row reads back as {scopes} rather than [{scope!r}] — the "
+        "scope under test was never written"
+    )
+    server.auth._flush_token_cache()
+    return token
+
+
+class TestUnknownScopeFailsClosed(_SharedPictureLibrary):
+    """A scope the product does not recognise must be treated as read-only.
+
+    The middleware used to refuse a write only for ``scope == "READ"``, so any
+    other string — a misconfigured row, a forged one, a scope added in a later
+    commit — skipped the refusal and reached every ``*_SCOPED`` mutation route,
+    each of which is write-unreachable *solely* because of that comparison. It
+    now keys on an explicit set of write-enabled scopes instead (issue #962).
+    """
+
+    def test_an_unknown_scope_cannot_write(self, library_env):
+        token = _rescope(library_env.server, library_env.read_token, "BOGUS")
+
+        # Positive control: the credential is live and reads what it is entitled
+        # to, so the refusal below is a scope decision and not a dead token.
+        assert _prove_token_reads(library_env.server, token) == set(
+            library_env.picture_ids
+        )
+
+        r = TestClient(library_env.server.api).delete(
+            f"{API}/pictures/{library_env.picture_ids[0]}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403, (
+            f"an unrecognised scope must not reach a mutation route, got {r.status_code}: {r.text}"
+        )
+        assert r.json()["detail"] == "Token is read-only"
+        _assert_pictures_intact(
+            library_env.owner_client, library_env.picture_ids, library_env.scores
+        )
+
+    def test_an_unknown_scope_cannot_read_the_blocked_get_paths(self, library_env):
+        token = _rescope(library_env.server, library_env.read_token, "BOGUS")
+        r = TestClient(library_env.server.api).get(
+            f"{API}/filesystem/browse",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403, (
+            f"the filesystem belt must hold for every scoped token, got {r.status_code}: {r.text}"
+        )
+        # The gate declares this path LOCAL_OWNER_ONLY and would answer 403 as
+        # well, so the body is what proves the middleware belt is the refuser —
+        # which is the half this change hoisted out of the ``READ`` branch.
+        assert r.json()["detail"] == "Token is read-only"
+
+    def test_a_read_safe_post_path_still_works_for_a_read_token(self, library_env):
+        """Over-blocking is its own regression: the allowlist must still open."""
+        r = TestClient(library_env.server.api).post(
+            f"{API}/pictures/thumbnails",
+            headers={"Authorization": f"Bearer {library_env.read_token}"},
+            json={"picture_ids": library_env.picture_ids},
+        )
+        assert r.status_code == 200, (
+            f"READ_SAFE_POST_PATHS must stay reachable for a READ token: {r.text}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 1. READ token must not perform write operations
 # ---------------------------------------------------------------------------
@@ -1317,6 +1419,51 @@ class TestResourceScopedReadTokenIsolation:
         assert r.status_code == 200, (
             "the project the refusal above was measured against is not "
             f"readable by the owner either: {r.status_code} {r.text}"
+        )
+
+    def test_project_attachments_honour_the_grant_for_any_scope(self, env):
+        """The attachment opt-in is a property of the grant, not of ``READ``.
+
+        Both directions, and both scopes. ``list_attachments`` used to skip its
+        refusal unless the scope was literally ``READ``, so a scope that was not
+        READ read the attachments regardless of its own ``include_attachments``
+        flag — item 3 of issue #962's blocking preconditions. The 200 leg is what
+        stops the fix from being over-blocking: a grant that *does* carry the
+        flag must still open.
+        """
+        client = TestClient(env.server.api)
+        without = _mint_read_token(
+            env.owner_client,
+            "project token, attachments withheld",
+            resource_type="project",
+            resource_id=env.project,
+            include_attachments=False,
+        )
+        path = f"{API}/projects/{env.project}/attachments"
+
+        # Positive control: the owner can read the endpoint the refusals below
+        # are measured against, so a 403 is a scope decision and not a dead path.
+        assert env.owner_client.get(path).status_code == 200
+
+        for scope in ("READ", "WRITE"):
+            token = _rescope(env.server, without, scope)
+            r = client.get(path, headers={"Authorization": f"Bearer {token}"})
+            assert r.status_code == 403, (
+                f"a {scope}-scoped grant without include_attachments reached "
+                f"project attachments: {r.status_code} {r.text}"
+            )
+
+        _reset_owner_credentials(env.server, env.owner_client)
+        with_attachments = _mint_read_token(
+            env.owner_client,
+            "project token, attachments granted",
+            resource_type="project",
+            resource_id=env.project,
+            include_attachments=True,
+        )
+        r = client.get(path, headers={"Authorization": f"Bearer {with_attachments}"})
+        assert r.status_code == 200, (
+            f"a grant that carries include_attachments must still open: {r.text}"
         )
 
     def test_export_cannot_include_out_of_scope_pictures(self, env):

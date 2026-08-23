@@ -3156,7 +3156,7 @@ The HTTP auth middleware runs only for the `http` ASGI scope, so the WebSocket r
 
 - **Password login** (bcrypt-hashed) → JWT.
 - **API tokens** (`UserToken`) with:
-  - `scope`: `ALL` (full owner) or `READ`
+  - `scope`: `ALL` (full owner) or `READ` — the only two values `create_token` will mint. The middleware also recognises `WRITE`, named in `auth.WRITE_ENABLED_SCOPES` so that the write-enabled resource-scoped shape the `*_SCOPED` policies exist for is granted by declaration; no code path mints one, and any scope outside those three is logged and treated as read-only (§16.2, issue #962).
   - Optional `resource_type` + `resource_id` restricting to one of: picture set, character, project, or single picture — **only on a `READ` token.** An `ALL`+`resource_type` token is refused at mint and rejected fail-closed by the middleware (see §16.2 item 4 / §16.3).
   - Optional flags: `include_attachments`, `include_description`
 - **JWT** carried as `Authorization: Bearer <token>`.
@@ -3173,7 +3173,7 @@ Exact:    /, /login, /logout, /check-session, /version,
 Prefix:   /assets/, /share/, /docs/
 ```
 
-In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
+In addition, every scoped token (any token for which `request.state.token_scope` is populated — i.e. any scope but `ALL`) is blocked from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing, and blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) **unless its scope is named in `auth.WRITE_ENABLED_SCOPES`**. That set is the fail-closed hinge (issue #962): the check used to key on `scope == "READ"`, so any other string — a misconfigured row, a forged one, a scope added later — skipped the write refusal and reached every `*_SCOPED` mutation route, each of which is write-unreachable solely because of it. Write-ness is now granted by declaration, not by omission. `WRITE` is the one member and has no mint path; `create_token` still allowlists `ALL`/`READ`.
 
 **Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
