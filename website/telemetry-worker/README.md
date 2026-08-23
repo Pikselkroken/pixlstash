@@ -132,6 +132,23 @@ missing cells, not a month to be reconstructed later.
 Desktop and pip installs ping when someone runs them, so a weekend-only user
 misses an exact day-7 check and would read as churned.
 
+**ID-bearing check-ins per type** (`id_bearing_checkins_by_type`) is the
+numerator for the MAU coverage ratio computed in `pixlstash-metrics`. The
+denominator there is *all* version check-ins from Cloudflare zone analytics,
+which this Worker never sees — it only ever receives the ID-bearing ones. It
+does, however, know each one's install type, so it publishes the split and the
+metrics side does the division per bucket instead of pooling.
+
+It is derived from the activity bitmap, over the same rolling window and the
+same buckets as `active_installs_by_type`, so no request is logged and no new
+column is stored. Two consequences for the consumer:
+
+- These are check-in **counts**, not distinct installs. Dividing them by a
+  distinct-install denominator is a unit error.
+- A bit is a ping *day*. Two pings on one UTC day count once here and twice in a
+  raw request count, so this is a floor on requests. The client throttles to one
+  check per day (`pixlstash/telemetry/sender.py`), so in practice they agree.
+
 **Resurrection rate** is the metric that answers pause-versus-churn directly: a
 silence of 14 days or more that a later ping closes. `first_seen`/`last_seen`
 alone give a decay curve and cannot distinguish the two. Once observed, that

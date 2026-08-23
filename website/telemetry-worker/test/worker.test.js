@@ -27,8 +27,12 @@ import {
 } from "../src/activity.js";
 import {
   buildAggregate,
+  checkinsInActiveWindow,
+  createAccumulator,
+  deserializeAccumulator,
   hasResurrected,
   activeInLifeWeek,
+  ACTIVE_WINDOW_DAYS,
   MIN_COHORT,
 } from "../src/aggregate.js";
 import { D1Stub, allowAll, denyAll, pingRequest } from "./d1-stub.js";
@@ -296,6 +300,51 @@ describe("buildAggregate", () => {
     ];
 
     assert.equal(buildAggregate(rows, "2026-07-20").resurrection_rate, 100);
+  });
+
+  it("counts ID-bearing check-ins per type, not distinct installs", () => {
+    const rows = [
+      // Pinged on three days inside the window.
+      { ...cohortRows(1, "2026-06-01", "2026-07-20", encodeActivity(0b1011n))[0] },
+      // One electron install, one ping.
+      {
+        ...cohortRows(1, "2026-07-20", "2026-07-20", encodeActivity(1n))[0],
+        install_type: "electron",
+      },
+    ];
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.deepEqual(agg.active_installs_by_type, {
+      docker: 0,
+      pip: 1,
+      electron: 1,
+      other: 0,
+    });
+    assert.deepEqual(agg.id_bearing_checkins_by_type, {
+      docker: 0,
+      pip: 3,
+      electron: 1,
+      other: 0,
+    });
+  });
+
+  it("keeps dev in its own check-in bucket", () => {
+    const rows = cohortRows(1, "2026-07-19", "2026-07-20", encodeActivity(0b11n)).map(
+      (r) => ({ ...r, install_type: "dev" }),
+    );
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.equal(agg.id_bearing_checkins_by_type.dev, 2);
+    assert.equal(agg.active_installs_by_type.dev, 1);
+  });
+
+  it("excludes check-ins from installs that fell out of the active window", () => {
+    const stale = cohortRows(1, "2026-01-01", "2026-02-01", encodeActivity(0b111n));
+    const agg = buildAggregate(stale, "2026-07-20");
+    assert.deepEqual(agg.id_bearing_checkins_by_type, {
+      docker: 0,
+      pip: 0,
+      electron: 0,
+      other: 0,
+    });
   });
 
   it("publishes no identifiers", () => {
@@ -726,5 +775,45 @@ describe("scheduled", () => {
     await worker.scheduled({}, e);
     await worker.scheduled({}, e);
     assert.equal(e.DB.snapshots.size, 1);
+  });
+});
+
+describe("checkinsInActiveWindow", () => {
+  const row = (lastSeen, bits) => ({
+    last_seen: lastSeen,
+    activity: encodeActivity(bits),
+  });
+
+  it("shifts the window by the gap between last_seen and today", () => {
+    // Bits 0 and 1 are two days before last_seen, which is itself
+    // ACTIVE_WINDOW_DAYS - 1 days before today: both still inside the window.
+    const lastSeen = "2026-06-23"; // 27 days before 2026-07-20
+    assert.equal(daysBetween(lastSeen, "2026-07-20"), ACTIVE_WINDOW_DAYS - 1);
+    assert.equal(checkinsInActiveWindow(row(lastSeen, 0b11n), "2026-07-20"), 2);
+  });
+
+  it("drops the bits that fall out of the far edge of the window", () => {
+    // last_seen sits exactly on the window edge, so only bit 0 is inside it.
+    const lastSeen = "2026-06-22"; // ACTIVE_WINDOW_DAYS days before
+    assert.equal(daysBetween(lastSeen, "2026-07-20"), ACTIVE_WINDOW_DAYS);
+    assert.equal(checkinsInActiveWindow(row(lastSeen, 0b111n), "2026-07-20"), 1);
+  });
+
+  it("counts nothing once the install is past the window", () => {
+    assert.equal(checkinsInActiveWindow(row("2026-06-21", 0b111n), "2026-07-20"), 0);
+  });
+
+  it("restores a checkpoint written before the field existed", () => {
+    const legacy = JSON.stringify({
+      active: 4,
+      byType: { docker: 0, pip: 4, electron: 0, other: 0, dev: 1 },
+      newLast7d: 0,
+      resurrectionEligible: 0,
+      resurrected: 0,
+      cohorts: [],
+    });
+    const state = deserializeAccumulator(legacy);
+    assert.deepEqual(state.checkinsByType, createAccumulator().checkinsByType);
+    assert.equal(state.active, 4);
   });
 });
