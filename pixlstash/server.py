@@ -118,6 +118,7 @@ from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
+from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -1625,6 +1626,15 @@ class Server(
             create_snapshots_router(self),
             prefix=API_V1_PREFIX,
             tags=["snapshots"],
+            dependencies=gate,
+        )
+        # The workflow library's read side (implementation plan §F1/§F2). No
+        # router-level ``tags=``: the module declares ``tags=["workflows"]``
+        # itself, and FastAPI concatenates the two into a duplicated tag that
+        # reaches OpenAPI and the generated route table.
+        self.api.include_router(
+            create_workflows_router(self),
+            prefix=API_V1_PREFIX,
             dependencies=gate,
         )
         # Public share endpoint — no API prefix; auth is embedded in the URL token.

@@ -1423,6 +1423,22 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete tagger artifact; DELETE blocked for READ tokens; owner only",
     ),
+    # ── workflows.py (workflow implementation plan §F1/§F2, the library view) ─
+    # OWNER_ONLY throughout, and it is a decision rather than a default. The
+    # list's picture counts are `topology_activity`, which reads every
+    # non-deleted picture in the vault and groups them: a picture-, set- or
+    # project-scoped token holding it would learn the size of the whole library,
+    # one workflow at a time, which is the whole-library disclosure class §16
+    # exists for. The ids route is the same disclosure in a narrower shape --
+    # picture ids the caller's scope may not contain -- and the two hub reads
+    # beside them return the model filenames a graph names, which on a real
+    # shelf name people. Nothing here is a host path or a host capability, so
+    # none of it climbs to the §16.3 tier; nothing here mutates either, so there
+    # is no write side to declare yet.
+    ("GET", "/api/v1/workflows"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{topology_hash}/variants"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{topology_hash}/pictures"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
     # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
     # Conditionally mounted, but ALWAYS declared: the gate resolves declarations
     # against the routes actually mounted at startup, so an undeclared

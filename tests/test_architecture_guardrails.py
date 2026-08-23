@@ -154,6 +154,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
         "pixlstash/services/tag_suggestion_service.py",  # vault-injection pattern; review-queue writeback
         "pixlstash/services/tagger_run_service.py",  # vault-injection pattern; tagger run history upsert
+        "pixlstash/services/workflow_library_service.py",  # vault-injection pattern; read-only wrappers around the session-level workflow counts
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
         "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch

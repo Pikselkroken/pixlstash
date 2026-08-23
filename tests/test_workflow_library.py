@@ -51,7 +51,7 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
-from pixlstash.services.workflow_library_service import topology_picture_counts
+from pixlstash.services.workflow_library_service import topology_activity
 from pixlstash.tasks.comfyui_extraction_task import ComfyUIExtractionTask
 from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
@@ -1310,12 +1310,12 @@ def test_counts_exclude_soft_deleted_pictures(store):
 
     store.vault.run_task(soft_delete)
 
-    counts = store.vault.run_immediate_read_task(topology_picture_counts)
+    counts = store.vault.run_immediate_read_task(topology_activity)
     kept_topology = topology_hash(api_graph(TXT2IMG))
     other_topology = topology_hash(trimmed)
     assert kept_topology != other_topology
-    assert counts[kept_topology] == 1
-    assert counts[other_topology] == 1
+    assert counts[kept_topology].pictures == 1
+    assert counts[other_topology].pictures == 1
 
     def soft_delete_the_rest(session):
         session.get(Picture, ids[0]).deleted = True
@@ -1325,5 +1325,5 @@ def test_counts_exclude_soft_deleted_pictures(store):
 
     # Absent entirely, not present with a zero.
     assert topology_hash(api_graph(TXT2IMG)) not in store.vault.run_immediate_read_task(
-        topology_picture_counts
+        topology_activity
     )

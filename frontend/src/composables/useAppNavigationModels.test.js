@@ -159,6 +159,34 @@ describe("the model shelf and a READ session", () => {
     wrapper.unmount();
   });
 
+  // The workflow library is the same shape of refusal on the same watcher, so
+  // it is pinned in the same file rather than in one of its own: every
+  // /workflows route is owner-only, so a READ session must neither mount the
+  // view nor be left sitting on the URL.
+  it("does not show the workflow library to a READ session that lands on /workflows", () => {
+    sessionContext.value = SCOPED_READ;
+    nav.route.name = "workflows";
+    nav.route.query = { token: SHARE_TOKEN };
+    const { wrapper, api } = mountNav();
+
+    expect(api.isWorkflowsView.value).toBe(false);
+    expect(nav.replace).toHaveBeenCalledWith(BOUNCE_TARGET);
+
+    wrapper.unmount();
+  });
+
+  it("still shows the owner the workflow library", () => {
+    // The positive control for the route beside it: a guard reading
+    // `isReadOnly` inverted would pass the refusal above and fail here.
+    nav.route.name = "workflows";
+    const { wrapper, api } = mountNav();
+
+    expect(api.isWorkflowsView.value).toBe(true);
+    expect(nav.replace).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
   // The positive control: over-blocking is its own regression, and a guard that
   // reads `isReadOnly` inverted would still pass every assertion above.
   it("still shows the owner both of the shelf's routes", async () => {

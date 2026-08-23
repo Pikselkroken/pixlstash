@@ -65,14 +65,24 @@ import { toPx } from "./utils/floatingBottom.js";
 
 // These surfaces are mutually exclusive with the primary grid (or explicitly
 // opened on demand), so keep their heavier feature code out of app startup.
-const DuplicateQueue = defineAsyncComponent(() =>
-  import("./components/views/DuplicateQueue.vue"),
+const DuplicateQueue = defineAsyncComponent(
+  () => import("./components/views/DuplicateQueue.vue"),
 );
-const ModelShelf = defineAsyncComponent(() =>
-  import("./components/views/ModelShelf.vue"),
+const ModelShelf = defineAsyncComponent(
+  () => import("./components/views/ModelShelf.vue"),
 );
-const ReviewSessionsOverlay = defineAsyncComponent(() =>
-  import("./components/views/ReviewSessionsOverlay.vue"),
+const ReviewSessionsOverlay = defineAsyncComponent(
+  () => import("./components/views/ReviewSessionsOverlay.vue"),
+);
+const WorkflowShelf = defineAsyncComponent(
+  () => import("./components/views/WorkflowShelf.vue"),
+);
+// The workflow library's right rail. Async like the view it belongs to, and a
+// component of its own rather than a branch inside StatsSidebar: that panel
+// fetches on watchers, so a hidden-but-mounted copy would keep asking for
+// numbers nobody is looking at.
+const WorkflowInspector = defineAsyncComponent(
+  () => import("./components/panels/WorkflowInspector.vue"),
 );
 
 // --- Stores ---
@@ -147,7 +157,9 @@ const error = ref(null);
 const {
   isDuplicatesView,
   isModelsView,
+  isWorkflowsView,
   handleSelectModels,
+  handleSelectWorkflows,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -549,6 +561,7 @@ defineExpose({
             @select-character="handleSelectCharacter"
             @select-duplicates="handleSelectDuplicates"
             @select-models="handleSelectModels"
+            @select-workflows="handleSelectWorkflows"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
@@ -624,6 +637,11 @@ defineExpose({
                 v-else-if="isModelsView"
                 @open-settings="openSettingsDialog"
               />
+              <!-- The workflow library lists graphs the hub knows about rather
+                   than pictures in this library, so like the shelf it replaces
+                   the grid instead of floating over it, and the grid stays
+                   unmounted while it is open. -->
+              <WorkflowShelf v-else-if="isWorkflowsView" />
               <ImageGrid
                 v-else
                 ref="gridContainer"
@@ -664,7 +682,11 @@ defineExpose({
         <!-- Peer of the left sidebar, NOT nested in the grid column: both rails
              then span the full height of `.file-manager` and nothing stacked in
              the main area can push one rail down without the other. -->
-        <StatsSidebar ref="statsSidebarRef" />
+        <!-- One rail, four uses (implementation plan §F2). On the workflow
+             library it carries the selected workflow; everywhere else it is the
+             statistics panel it has always been. -->
+        <WorkflowInspector v-if="isWorkflowsView" />
+        <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
