@@ -1,0 +1,243 @@
+<div style="padding:var(--space-6);display:flex;flex-direction:column;gap:var(--space-7);
+     background:var(--bg);min-height:100%">
+
+  <!-- ── The dialog, Libraries selected ─────────────────────────────────── -->
+  <div>
+    <div class="lbl">Settings &rsaquo; Libraries</div>
+    <div class="panel" style="width:820px;overflow:hidden">
+
+      <div class="rowf" style="gap:var(--space-3);padding:var(--space-4) var(--space-5);
+           border-bottom:1px solid var(--divider)">
+        <span style="font-size:var(--text-lg);font-weight:var(--weight-semibold)">Settings</span>
+        <span class="version">v1.11.0</span>
+        <span class="spacer"></span>
+        <button class="btn" style="height:26px;font-size:var(--text-xs)">Log out</button>
+        <button class="btn" style="height:26px;font-size:var(--text-xs)">&times;</button>
+      </div>
+
+      <div style="display:flex;min-height:430px">
+
+        <nav style="width:186px;flex-shrink:0;padding:var(--space-3);
+             border-right:1px solid var(--divider);background:var(--chrome)">
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Appearance</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Models</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Smart Score &amp; Filters</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Workflows</span></div>
+          <div class="row on"><span class="lead">&#9634;</span><span class="label">Libraries</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Scrapheap</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Snapshots</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Privacy</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Compute</span></div>
+          <div class="row"><span class="lead">&#9634;</span><span class="label">Account</span></div>
+        </nav>
+
+        <div style="flex:1;min-width:0;padding:var(--space-5)">
+          <div class="rowf" style="gap:var(--space-3);margin-bottom:var(--space-5)">
+            <span style="font-size:var(--text-md);font-weight:var(--weight-semibold);flex:1">Libraries</span>
+            <button class="btn btn--accent" style="height:28px;font-size:var(--text-xs)">
+              + Add a library&hellip;
+            </button>
+          </div>
+
+          <div class="stack" style="gap:var(--space-3)">
+
+            <div class="ins-field" style="border-color:var(--accent);background:var(--hover-wash)">
+              <div class="rowf" style="gap:var(--space-4)">
+                <span class="mosaic" style="width:38px;height:38px"><span></span><span></span><span></span><span></span></span>
+                <div style="flex:1;min-width:0">
+                  <div class="rowf" style="gap:var(--space-3)">
+                    <span style="font-size:var(--text-sm);font-weight:var(--weight-medium)">Generations</span>
+                    <span class="chip" style="height:20px;font-size:var(--text-2xs)">open</span>
+                  </div>
+                  <div class="mono muted" style="margin-top:2px">~/Pictures/Generations</div>
+                  <div class="muted" style="font-size:var(--text-2xs);margin-top:2px">
+                    <span class="num">28,412</span> pictures &middot;
+                    <span class="mono">Project / Person or Set</span>
+                  </div>
+                </div>
+                <button class="btn" style="height:26px;font-size:var(--text-xs)">&ctdot;</button>
+              </div>
+            </div>
+
+            <div class="ins-field">
+              <div class="rowf" style="gap:var(--space-4)">
+                <span class="mosaic" style="width:38px;height:38px"><span></span><span></span><span></span><span></span></span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:var(--text-sm);font-weight:var(--weight-medium)">Client work</div>
+                  <div class="mono muted" style="margin-top:2px">~/PixlStash/client-work</div>
+                  <div class="muted" style="font-size:var(--text-2xs);margin-top:2px">
+                    <span class="num">4,109</span> pictures &middot;
+                    <span style="color:var(--accent)">flat, no layout chosen</span>
+                  </div>
+                </div>
+                <button class="btn btn--outline" style="height:26px;font-size:var(--text-xs)">Open</button>
+                <button class="btn" style="height:26px;font-size:var(--text-xs)">&ctdot;</button>
+              </div>
+            </div>
+
+            <div class="ins-field" style="opacity:.65">
+              <div class="rowf" style="gap:var(--space-4)">
+                <span class="mosaic" style="width:38px;height:38px;opacity:.4"><span></span><span></span><span></span><span></span></span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:var(--text-sm);font-weight:var(--weight-medium)">Archive 2022</div>
+                  <div class="mono muted" style="margin-top:2px">/mnt/photos-nas/2022</div>
+                  <div style="font-size:var(--text-2xs);margin-top:2px;color:var(--warning)">
+                    drive not mounted
+                  </div>
+                </div>
+                <button class="btn" style="height:26px;font-size:var(--text-xs)">&ctdot;</button>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="rowf" style="gap:var(--space-3);margin-top:var(--space-5);
+               padding-top:var(--space-4);border-top:1px solid var(--divider)">
+            <span class="muted" style="font-size:var(--text-xs);flex:1">
+              The same four things from a terminal
+            </span>
+            <button class="btn" style="height:24px;font-size:var(--text-2xs)">Show commands &#9662;</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── The row menu, and detach ────────────────────────────────────────── -->
+  <div class="rowf" style="gap:var(--space-6);align-items:flex-start">
+
+    <div>
+      <div class="lbl">The &ctdot; on a row</div>
+      <div class="panel" style="width:230px;padding:var(--space-2)">
+        <div class="row"><span class="lead">&rsaquo;</span><span class="label">Open this library</span></div>
+        <div class="row"><span class="lead">&rsaquo;</span><span class="label">Rename&hellip;</span></div>
+        <div class="row"><span class="lead">&rsaquo;</span><span class="label">Choose a layout&hellip;</span></div>
+        <div class="row"><span class="lead">&rsaquo;</span><span class="label">Show in file manager</span></div>
+        <div class="row" style="border-top:1px solid var(--divider);margin-top:var(--space-2);padding-top:var(--space-3)">
+          <span class="lead">&rsaquo;</span><span class="label">Stop using this&hellip;</span>
+        </div>
+      </div>
+      <div class="note" style="margin-top:var(--space-3);max-width:230px">
+        No delete. Nothing in this dialog can remove a picture or a folder.
+      </div>
+    </div>
+
+    <div>
+      <div class="lbl">Stop using it</div>
+      <div class="panel" style="width:440px;padding:var(--space-5)">
+        <h3 class="t" style="font-size:var(--text-md)">Stop using &ldquo;Archive 2022&rdquo;?</h3>
+        <p class="sub" style="margin-top:var(--space-3);font-size:var(--text-sm)">PixlStash forgets
+          it. Every picture and folder inside
+          <span class="mono">/mnt/photos-nas/2022</span> stays exactly where it is.</p>
+        <div class="note" style="margin-top:var(--space-4)">
+          Its tags, scores and people live in that folder too, in
+          <span class="mono">.pixlstash/</span>. Add the folder again later and they come back, and
+          so do any share links pointing at it, which are inert until then.
+        </div>
+        <div class="rowf" style="gap:var(--space-3);margin-top:var(--space-5)">
+          <button class="btn btn--outline">Forget it</button>
+          <button class="btn">Cancel</button>
+        </div>
+      </div>
+      <div class="note" style="margin-top:var(--space-3);max-width:440px">
+        The open library has no <b>Stop using this</b> &mdash; switch away first. That refusal is the
+        registry's, not the dialog's.
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Add a library ───────────────────────────────────────────────────── -->
+  <div>
+    <div class="lbl">+ Add a library &mdash; one picker, and the folder answers</div>
+    <div class="panel" style="width:820px;padding:var(--space-5)">
+
+      <div class="rowf" style="gap:var(--space-3);margin-bottom:var(--space-4)">
+        <span class="ins-field mono" style="flex:1;padding:var(--space-3) var(--space-4)">
+          ~/Pictures/Generations
+        </span>
+        <button class="btn btn--outline">Browse&hellip;</button>
+        <button class="btn btn--outline">New folder</button>
+      </div>
+
+      <div class="stack" style="gap:var(--space-3)">
+
+        <div class="ins-field">
+          <div class="rowf" style="gap:var(--space-4)">
+            <span style="color:var(--success)">&check;</span>
+            <div style="flex:1">
+              <div style="font-size:var(--text-sm)"><b>28,412 pictures, no library here yet</b></div>
+              <div class="muted" style="font-size:var(--text-xs);margin-top:2px">
+                Bring them in and name what your folders mean. Nothing is moved.
+              </div>
+            </div>
+            <button class="btn btn--accent" style="height:28px;font-size:var(--text-xs)">Bring them in</button>
+          </div>
+        </div>
+
+        <div class="ins-field">
+          <div class="rowf" style="gap:var(--space-4)">
+            <span style="color:var(--success)">&check;</span>
+            <div style="flex:1">
+              <div style="font-size:var(--text-sm)"><b>A library you already made</b></div>
+              <div class="muted" style="font-size:var(--text-xs);margin-top:2px">
+                4,109 pictures, last opened in March. Added as it is.
+              </div>
+            </div>
+            <button class="btn btn--accent" style="height:28px;font-size:var(--text-xs)">Add it</button>
+          </div>
+        </div>
+
+        <div class="ins-field">
+          <div class="rowf" style="gap:var(--space-4)">
+            <span style="color:var(--success)">&check;</span>
+            <div style="flex:1">
+              <div style="font-size:var(--text-sm)"><b>Empty</b></div>
+              <div class="muted" style="font-size:var(--text-xs);margin-top:2px">
+                A fresh library on <span class="mono">Project / Person or Set</span>.
+              </div>
+            </div>
+            <button class="btn btn--accent" style="height:28px;font-size:var(--text-xs)">Start it</button>
+          </div>
+        </div>
+
+        <div class="ins-field" style="border-color:var(--warning)">
+          <div class="rowf" style="gap:var(--space-4)">
+            <span style="color:var(--warning)">!</span>
+            <div style="flex:1">
+              <div style="font-size:var(--text-sm)"><b>Inside a library you already have</b></div>
+              <div class="muted" style="font-size:var(--text-xs);margin-top:2px">
+                <span class="mono">Generations</span> covers this folder. Two libraries indexing the
+                same pictures would each move them by their own layout, and neither would be wrong.
+              </div>
+            </div>
+            <button class="btn btn--outline" style="height:28px;font-size:var(--text-xs)">Open that one</button>
+          </div>
+        </div>
+
+        <div class="ins-field" style="border-color:var(--warning)">
+          <div class="rowf" style="gap:var(--space-4)">
+            <span style="color:var(--warning)">!</span>
+            <div style="flex:1">
+              <div style="font-size:var(--text-sm)"><b>Already on the list</b></div>
+              <div class="muted" style="font-size:var(--text-xs);margin-top:2px">
+                Added in March as <b style="color:var(--text)">Client work</b>. Nothing to add.
+              </div>
+            </div>
+            <button class="btn btn--outline" style="height:28px;font-size:var(--text-xs)">Switch to it</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="note" style="margin-top:var(--space-5)">
+        Five outcomes, one picker, no mode to choose first. Three of them are the same
+        <b>Add</b> with a different consequence, and the other two are the registry refusing for
+        reasons it can already name.
+      </div>
+
+    </div>
+  </div>
+
+</div>

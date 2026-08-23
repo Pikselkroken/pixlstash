@@ -1,0 +1,134 @@
+    /* ---- What this bundle adds on top of the kit -------------------------
+       Two things only: the ENTITY VOCABULARY (one colour and one icon per
+       Project / Set / Character / Tag, so the four are never confused at a
+       glance) and the MAPPING SURFACES, which have no counterpart in the
+       shipped app. Everything else above is the design system as it ships. */
+
+    /* Entity colours are drawn from the kit's existing roles, not invented:
+       project=tertiary, set=accent, character=secondary, tag=primary. */
+    .ent{--e:var(--text-muted)}
+    .ent--project{--e:#46707a}
+    .ent--set{--e:#c47a1e}
+    .ent--character{--e:#bb3566}
+    .ent--tag{--e:#567309}
+    .ent--ignore{--e:rgba(242,229,218,.35)}
+
+    /* The draggable entity chip. Grip + mark + label + what already exists. */
+    .echip{display:flex;align-items:center;gap:var(--space-3);width:100%;
+      padding:var(--space-3);border-radius:var(--radius-md);
+      background:var(--input-bg);border:1px solid var(--border);
+      border-left:3px solid var(--e);cursor:grab;font-size:var(--text-sm)}
+    .echip .grip{display:grid;grid-template-columns:2px 2px;gap:2px;flex-shrink:0;opacity:.45}
+    .echip .grip i{width:2px;height:2px;background:var(--text);border-radius:50%;display:block}
+    .echip .mark{width:26px;height:26px;border-radius:var(--radius-sm);flex-shrink:0;
+      display:inline-flex;align-items:center;justify-content:center;
+      background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e)}
+    .echip .name{flex:1;font-weight:var(--weight-medium)}
+    .echip .have{font-size:var(--text-2xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
+    .echip--drag{box-shadow:var(--elevation-4);border-color:var(--e);cursor:grabbing;
+      transform:rotate(-1.5deg);background:var(--panel)}
+
+    /* The same vocabulary at label size, for anywhere an assignment is shown. */
+    .etag{display:inline-flex;align-items:center;gap:var(--space-2);
+      padding:1px var(--space-2) 1px var(--space-1);border-radius:var(--radius-sm);
+      background:color-mix(in srgb,var(--e) 18%,transparent);color:var(--e);
+      font-size:var(--text-2xs);font-weight:var(--weight-semibold);
+      text-transform:uppercase;letter-spacing:var(--tracking-label)}
+    .etag .mark{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+
+    /* Drop targets. Idle is a dashed ghost; armed is the entity's own colour. */
+    .drop{border:1px dashed var(--border);border-radius:var(--radius-sm);
+      color:var(--text-muted);font-size:var(--text-xs);
+      padding:var(--space-2) var(--space-3);background:transparent}
+    .drop--armed{border-style:solid;border-color:var(--e);color:var(--e);
+      background:color-mix(in srgb,var(--e) 12%,transparent);font-weight:var(--weight-medium)}
+    .drop--set{border-style:solid;border-color:transparent;
+      background:color-mix(in srgb,var(--e) 18%,transparent);color:var(--e);
+      font-weight:var(--weight-semibold)}
+
+    /* A path pattern, the unit Direction B assigns against. */
+    .pattern{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;
+      font-family:var(--font-mono);font-size:var(--text-sm)}
+    .pattern .sep{color:var(--text-muted)}
+    .pattern .lit{color:var(--text-muted)}
+    .pattern .seg{display:inline-flex;flex-direction:column;gap:var(--space-1)}
+
+    /* The tree Direction A assigns against. */
+    .tree{font-size:var(--text-sm)}
+    .tnode{display:flex;align-items:center;gap:var(--space-3);min-height:30px;
+      padding:0 var(--space-3);border-radius:var(--radius-sm)}
+    .tnode:hover{background:var(--hover-wash)}
+    .tnode .tname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tnode .tcount{font-size:var(--text-xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
+    .tdepth{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);
+      border-top:1px solid var(--divider);font-size:var(--text-2xs);
+      text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-muted)}
+
+    /* Cards, tiles and the stat row, used across most artboards. */
+    .card{background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--radius-lg);padding:var(--space-5)}
+    .card--quiet{background:transparent}
+    .lbl{font-size:var(--text-2xs);font-weight:var(--weight-semibold);text-transform:uppercase;
+      letter-spacing:var(--tracking-label);color:var(--text-muted);margin-bottom:var(--space-3)}
+    .stat{background:var(--input-bg);border:1px solid var(--border);
+      border-radius:var(--radius-md);padding:var(--space-4)}
+    .stat .v{font-size:var(--text-xl);font-variant-numeric:tabular-nums;line-height:1.2}
+    .stat .k{font-size:var(--text-xs);color:var(--text-muted);margin-top:var(--space-1)}
+    .mosaic{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;
+      width:56px;height:56px;border-radius:var(--radius-sm);overflow:hidden;flex-shrink:0}
+    .mosaic span{display:block;background:#3a3f46}
+    .portrait{width:56px;height:56px;border-radius:var(--radius-pill);background:#3a3f46;flex-shrink:0}
+    .ecard{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);
+      background:var(--input-bg);border:1px solid var(--border);
+      border-left:3px solid var(--e);border-radius:var(--radius-md)}
+    .ecard .en{font-size:var(--text-sm);font-weight:var(--weight-medium)}
+    .ecard .ec{font-size:var(--text-xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
+
+    /* A radio card, for the two storage choices and the three library doors. */
+    .opt{display:flex;gap:var(--space-4);padding:var(--space-5);border-radius:var(--radius-md);
+      border:1px solid var(--border);background:var(--input-bg);cursor:pointer}
+    .opt--on{border-color:var(--accent);background:var(--hover-wash)}
+    .radio{width:16px;height:16px;border-radius:50%;border:1px solid var(--border);
+      flex-shrink:0;margin-top:2px}
+    .opt--on .radio{border:5px solid var(--accent);background:var(--bg)}
+    .opt h4{margin:0 0 var(--space-1);font-size:var(--text-base);font-weight:var(--weight-semibold)}
+    .opt p{margin:0;font-size:var(--text-sm);color:var(--text-muted)}
+
+    /* A finding, with the feature that answers it. */
+    .find{display:flex;gap:var(--space-4);padding:var(--space-4) var(--space-5);
+      border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface)}
+    .find .body{flex:1;min-width:0}
+    .find h4{margin:0 0 var(--space-2);font-size:var(--text-base);font-weight:var(--weight-semibold)}
+    .find p{margin:0;font-size:var(--text-sm);color:var(--text-muted);line-height:1.5}
+
+    .mono{font-family:var(--font-mono);font-size:var(--text-xs)}
+    .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-4)}
+    .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4)}
+    .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--space-3)}
+    .stack{display:flex;flex-direction:column}
+    .rowf{display:flex;align-items:center}
+    .pad{padding:var(--space-6) var(--space-7)}
+    h2.t{margin:0;font-size:var(--text-xl);font-weight:var(--weight-semibold)}
+    h3.t{margin:0;font-size:var(--text-lg);font-weight:var(--weight-semibold)}
+    p.sub{margin:var(--space-2) 0 0;color:var(--text-muted);font-size:var(--text-sm);
+      line-height:1.5;max-width:72ch}
+
+    /* A level band is a disclosure: levels open to show every folder in them,
+       because two folders at the same depth can legitimately mean two
+       different things and the only way to say so is per row. */
+    .tdepth .chev{width:14px;display:inline-flex;justify-content:center;font-size:11px;opacity:.7}
+    .tfilter{height:24px;min-width:200px;padding:0 var(--space-3);border-radius:var(--radius-sm);
+      background:var(--input-bg);border:1px solid var(--border);color:var(--text-muted);
+      font-size:var(--text-xs);display:inline-flex;align-items:center;gap:var(--space-2)}
+    .tmore{display:flex;align-items:center;gap:var(--space-3);min-height:28px;
+      font-size:var(--text-xs);color:var(--text-muted);padding-left:var(--space-3)}
+
+    /* An action that is not available yet because a calculation is still running.
+       Distinct from a refusal: it says what it is waiting for and how long. */
+    .btn--busy{opacity:.6;cursor:default;background:var(--input-bg);
+      border:1px solid var(--border);color:var(--text-muted)}
+    .spin{transform-origin:center;animation:spin 1.1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .worked{display:flex;align-items:center;gap:var(--space-3);font-size:var(--text-sm);
+      padding:var(--space-2) 0}
+    .worked .tick{width:16px;flex-shrink:0;text-align:center}

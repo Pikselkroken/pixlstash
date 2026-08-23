@@ -1,0 +1,88 @@
+<div class="app">
+  <div class="titlebar">
+    <span class="wordmark">PixlStash</span>
+    <span class="spacer"></span>
+    <span class="version">new-work</span>
+  </div>
+  <div class="app-body">
+
+    <div class="sidebar">
+      <div class="sec">Library<span class="sp"></span></div>
+      <div class="side-scroll">
+        <div class="row on"><span class="lead"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span><span class="label">All pictures</span><span class="count">0</span></div>
+        <div class="sec">Projects<span class="sp"></span><span class="act">+</span></div>
+        <div class="row muted"><span class="label" style="font-size:var(--text-xs)">none yet</span></div>
+        <div class="sec">People<span class="sp"></span><span class="act">+</span></div>
+        <div class="row muted"><span class="label" style="font-size:var(--text-xs)">none yet</span></div>
+        <div class="sec">Folders<span class="sp"></span><span class="act">+</span></div>
+        <div class="row muted"><span class="label" style="font-size:var(--text-xs)">none yet</span></div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="toolbar">
+        <span class="tb-title">All pictures</span>
+        <span class="tb-sub">0</span>
+      </div>
+      <div class="scroll" style="display:flex;align-items:center;justify-content:center;padding:var(--space-7)">
+        <div style="max-width:640px;width:100%;text-align:center">
+
+          <div class="mosaic" style="width:88px;height:88px;margin:0 auto var(--space-6);opacity:.35">
+            <span></span><span></span><span></span><span></span>
+          </div>
+
+          <h2 class="t">This library is empty</h2>
+          <p class="sub" style="margin:var(--space-3) auto 0;max-width:46ch">
+            <span class="mono">~/Pictures/new-work</span> is yours. Three ways to put something in
+            it, and none of them is more official than the others.
+          </p>
+
+          <div class="stack" style="gap:var(--space-3);margin-top:var(--space-6);text-align:left">
+
+            <div class="opt opt--on" style="align-items:center;gap:var(--space-5)">
+              <span class="mark ent ent--project" style="width:34px;height:34px;border-radius:var(--radius-md);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e);flex-shrink:0">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              </span>
+              <span style="flex:1">
+                <h4>Use a folder you already have</h4>
+                <p>Point PixlStash at one and it reads your folder names as the organisation. Nothing
+                  is moved.</p>
+              </span>
+              <button class="btn btn--accent">Choose a folder&hellip;</button>
+            </div>
+
+            <div class="opt" style="align-items:center;gap:var(--space-5)">
+              <span class="mark ent ent--set" style="width:34px;height:34px;border-radius:var(--radius-md);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e);flex-shrink:0">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+              </span>
+              <span style="flex:1">
+                <h4>Drop pictures in</h4>
+                <p>Drag them anywhere on this window, or add a folder for PixlStash to watch.</p>
+              </span>
+              <button class="btn btn--outline">Add files&hellip;</button>
+            </div>
+
+            <div class="opt" style="align-items:center;gap:var(--space-5)">
+              <span class="mark ent ent--character" style="width:34px;height:34px;border-radius:var(--radius-md);display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--e) 22%,transparent);color:var(--e);flex-shrink:0">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/><circle cx="12" cy="12" r="9"/></svg>
+              </span>
+              <span style="flex:1">
+                <h4>Connect ComfyUI</h4>
+                <p>Generate straight into this library, with the settings and workflow kept on every
+                  picture.</p>
+              </span>
+              <button class="btn btn--outline">Connect&hellip;</button>
+            </div>
+
+          </div>
+
+          <p class="sub" style="margin:var(--space-6) auto 0;max-width:52ch;font-size:var(--text-xs)">
+            New pictures will be filed under
+            <span class="mono">Project / Person or Set</span>. Change that in Settings whenever.
+          </p>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
