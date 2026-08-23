@@ -913,6 +913,24 @@ def test_ingest_files_the_workflow_and_stamps_the_picture(store):
     assert get_document(store.hub, picture.workflow_structural_hash) is not None
 
 
+def test_every_return_path_reports_the_same_keys(store):
+    """A caller reading `found_workflow` must not depend on which path ran.
+
+    `_run_task` returns from three places -- no pictures, nothing to persist,
+    and the ordinary end -- and an early exit that omits a key is a KeyError in
+    whatever reads the result later.
+    """
+    name = write_png(Path(store.image_root), "keys.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+
+    populated = run_extraction(store, [picture_id])
+    empty = run_extraction(store, [])
+
+    assert (
+        set(empty) == set(populated) == {"checked", "found_comfyui", "found_workflow"}
+    )
+
+
 def test_a_picture_with_no_graph_is_marked_scanned_rather_than_re_read(store):
     """Absence is the ordinary case, and must not cost a second read."""
     name = write_png(Path(store.image_root), "bare.png")

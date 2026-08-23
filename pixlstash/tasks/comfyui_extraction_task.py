@@ -77,7 +77,7 @@ class ComfyUIExtractionTask(BaseTask):
 
     def _run_task(self):
         if not self._pictures:
-            return {"checked": 0, "found_comfyui": 0}
+            return {"checked": 0, "found_comfyui": 0, "found_workflow": 0}
 
         picture_ids = [pic.id for pic in self._pictures]
 

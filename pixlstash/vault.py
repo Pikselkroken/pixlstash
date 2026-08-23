@@ -295,8 +295,10 @@ class Vault:
             # And the workflow library's store is the hub too, so the ComfyUI
             # extraction can file a picture's graph where it outlives the
             # picture (§B3). Replaces the hubless finder work_finders() built:
-            # without a hub there is nowhere to file a workflow, so that one
-            # keeps the pre-B3 predicate and scans for nothing.
+            # that one still extracts ComfyUI metadata, on the pre-B3
+            # `comfyui_models IS NULL` predicate -- it is only the WORKFLOW scan
+            # it cannot do, because without a hub there is nowhere to file a
+            # graph.
             from pixlstash.tasks.missing_comfyui_extraction_finder import (
                 MissingComfyUIExtractionFinder,
             )
