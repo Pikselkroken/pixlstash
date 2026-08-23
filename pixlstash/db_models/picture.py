@@ -287,6 +287,17 @@ class Picture(SQLModel, table=True):
             "workflow_structural_hash", String, default=None, nullable=True, index=True
         ),
     )
+    # The third tier: that recipe with ONE set of parameters, the prompt
+    # included and the seed excluded (a generation is an instance plus a seed).
+    # Two pictures share an instance exactly when they share this value, which
+    # is what "Covered only" asks. Vault-only on purpose -- an instance carries
+    # the prompt, and a hub-side instance table is Phase 2 work in v1.12.
+    workflow_instance_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "workflow_instance_hash", String, default=None, nullable=True, index=True
+        ),
+    )
     # The scanned-marker, and the re-hash selector when the rule changes.
     # NULL means never scanned; set means scanned, with BOTH hashes NULL when
     # the picture carried no executable graph -- which is the ordinary case for

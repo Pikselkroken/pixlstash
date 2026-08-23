@@ -1,9 +1,14 @@
 """Add the workflow-library keys to ``picture``.
 
-Three columns beside the existing ``comfyui_*`` ones, per the workflow
+Four columns beside the existing ``comfyui_*`` ones, per the workflow
 implementation plan §B3. The relationship is 1:1 with no extra attributes and
 ``picture`` already carries ``pixel_sha``, ``perceptual_hash`` and
 ``metadata_hash``, so hash columns belong here rather than in a side table.
+
+``workflow_instance_hash`` is the third tier: the recipe with one set of
+parameters, the prompt included and the seed excluded. It lives here and only
+here -- an instance carries what a person wrote, and the hub-side instance
+table is Phase 2 work that moved to v1.12.
 
 ``workflow_hash_version`` is the scanned-marker: NULL means never scanned, and
 a set value means scanned with both hashes NULL when the picture carried no
@@ -13,9 +18,10 @@ re-queueing them runs them back through the whole extraction task, which also
 NULLs ``text_embedding`` on every picture carrying ComfyUI data. The column
 selects; it does not make the re-hash cheap.
 
-Both hashes are indexed. The library view's counts are a ``GROUP BY
-workflow_topology_hash`` and "pictures made with this workflow" is a lookup on
-the structural one.
+All three hashes are indexed. The library view's counts are a ``GROUP BY
+workflow_topology_hash``, "pictures made with this workflow" is a lookup on the
+structural one, and "which pictures share this instance" is a lookup on the
+third.
 
 A third, partial index serves the finder's idle probe
 (``workflow_hash_version IS NULL AND deleted IS 0 ORDER BY id``), in the column
@@ -47,12 +53,14 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 _COLUMNS = (
     "workflow_topology_hash",
     "workflow_structural_hash",
+    "workflow_instance_hash",
     "workflow_hash_version",
 )
 
 _INDEXES = (
     ("ix_picture_workflow_topology_hash", ["workflow_topology_hash"], None),
     ("ix_picture_workflow_structural_hash", ["workflow_structural_hash"], None),
+    ("ix_picture_workflow_instance_hash", ["workflow_instance_hash"], None),
     (
         "ix_picture_workflow_unscanned",
         ["workflow_hash_version", "deleted", "id"],

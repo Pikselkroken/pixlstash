@@ -1567,7 +1567,16 @@ _PICTURE_METADATA_FIELDS = {
     "width",
     # (B3) The workflow-library keys. Opaque content-addressed digests plus the
     # literal rule version ("v1"): no membership, no ownership, no host or path
-    # information. The recipe they name is prompt-free by construction (library
+    # information.
+    #
+    # `workflow_instance_hash` is the one that needed thinking about, because
+    # the instance tier DOES cover the prompt. It is a digest, so it discloses
+    # no text -- and the same payload already carries
+    # `comfyui_positive_prompt` in the clear, so a holder who can read this can
+    # read the prompt itself and has no use for a confirmable digest of it.
+    # Narrowing the prompt column is the live question (§16.3), not this.
+    #
+    # The recipe they name is prompt-free by construction (library
     # plan §5 -- bucket P is nulled before hashing), so no prompt or caption is
     # in there. They are a correlation key -- two pictures sharing one hash
     # share a workflow -- but only across pictures the token can already see,
@@ -1583,6 +1592,7 @@ _PICTURE_METADATA_FIELDS = {
     # that exposure -- it is `comfyui_models` that would have to be narrowed,
     # and §16.3 already has it open as the host-information question.
     "workflow_hash_version",
+    "workflow_instance_hash",
     "workflow_structural_hash",
     "workflow_topology_hash",
 }

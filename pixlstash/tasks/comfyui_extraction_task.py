@@ -107,7 +107,7 @@ class ComfyUIExtractionTask(BaseTask):
         # or been stripped replaces real stored models and LoRAs with the "[]"
         # sentinel. The extraction happened once; the revisit only adds keys.
         updates: list[tuple] = []
-        # (picture_id, topology_hash, structural_hash). A picture is absent from
+        # (picture_id, topology_hash, structural_hash, instance_hash). Absent from
         # this list when it was NOT scanned for a workflow -- no hub attached, or
         # a hub write that failed -- so `workflow_hash_version IS NULL` keeps
         # meaning "never scanned" and the finder hands it back later.
@@ -194,10 +194,10 @@ class ComfyUIExtractionTask(BaseTask):
         if not updates:
             return {"checked": 0, "found_comfyui": 0, "found_workflow": 0}
 
-        scanned_workflows = dict(
-            (pid, (topology, structural))
-            for pid, topology, structural in workflow_updates
-        )
+        scanned_workflows = {
+            pid: (topology, structural, instance)
+            for pid, topology, structural, instance in workflow_updates
+        }
 
         def persist(session: Session, rows: list[tuple]):
             for (
@@ -223,17 +223,20 @@ class ComfyUIExtractionTask(BaseTask):
                     if clear_embedding:
                         db_pic.text_embedding = None
                 if pid in scanned_workflows:
-                    topology, structural = scanned_workflows[pid]
+                    topology, structural, instance = scanned_workflows[pid]
                     db_pic.workflow_topology_hash = topology
                     db_pic.workflow_structural_hash = structural
-                    # Set last: it is the marker that the other two are final.
+                    db_pic.workflow_instance_hash = instance
+                    # Set last: it is the marker that the other three are final.
                     db_pic.workflow_hash_version = HASH_VERSION
                 session.add(db_pic)
             session.commit()
 
         self._db.run_task(persist, updates, priority=DBPriority.LOW)
         found_workflow = sum(
-            1 for topology, _structural in scanned_workflows.values() if topology
+            1
+            for topology, _structural, _instance in scanned_workflows.values()
+            if topology
         )
         logger.debug(
             "ComfyUIExtractionTask: checked=%s, found_comfyui=%s, found_workflow=%s",
@@ -258,8 +261,8 @@ class ComfyUIExtractionTask(BaseTask):
         written is neither, so the picture is left unmarked -- "this could not
         be filed" and "this picture has no workflow" must never be the same row.
 
-        Appends ``(picture_id, topology_hash, structural_hash)`` when the
-        picture was scanned, and appends nothing when it was not.
+        Appends ``(picture_id, topology_hash, structural_hash, instance_hash)``
+        when the picture was scanned, and appends nothing when it was not.
 
         Args:
             workflow_updates: Accumulator for the batch's persist step.
@@ -275,7 +278,7 @@ class ComfyUIExtractionTask(BaseTask):
                 # No executable `prompt` chunk: an imported JPEG, an A1111 PNG,
                 # or a file whose metadata was stripped. Normal, not a failure,
                 # and roughly a third of a real library.
-                workflow_updates.append((picture_id, None, None))
+                workflow_updates.append((picture_id, None, None, None))
                 return
             keys = record_api_graph(self._hub, api_graph)
         except WorkflowGraphError as exc:
@@ -291,12 +294,19 @@ class ComfyUIExtractionTask(BaseTask):
                 picture_id,
                 exc,
             )
-            workflow_updates.append((picture_id, None, None))
+            workflow_updates.append((picture_id, None, None, None))
             return
         except Exception as exc:
             self._stand_down(picture_id, exc)
             return
-        workflow_updates.append((picture_id, keys.topology_hash, keys.structural_hash))
+        workflow_updates.append(
+            (
+                picture_id,
+                keys.topology_hash,
+                keys.structural_hash,
+                keys.instance_hash,
+            )
+        )
 
     def _stand_down(self, picture_id: int, exc: Exception) -> None:
         """Give up on the workflow scan for the rest of this process.
