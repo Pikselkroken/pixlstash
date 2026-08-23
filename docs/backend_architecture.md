@@ -407,6 +407,8 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 | GET | `/server-config/scrapheap-retention` | Scrapheap auto-purge window (`scrapheap_retention_days`, `scrapheap_retention_reduced_at`, `scrapheap_retention_choices`, `scrapheap_retention_grace_days`). `null` days = Never, and that is the **shipped default** |
 | PATCH | `/server-config/scrapheap-retention` | Set the window (30/60/90/120 or `null` = Never). The ONLY writer of `scrapheap_retention_days`, which is why an absent key reliably means "never chosen". Persists to `server-config.json`; stamps `scrapheap_retention_reduced_at` only on a *reduction* (turning auto-purge on counts as one). Purges nothing synchronously. |
 | GET | `/server-config/scrapheap-retention/impact` | Preview a retention reduction: `would_purge_count` (excludes protected + locked; evaluated at the grace floor so it never understates) + `first_purge_at`. Pure read — applies nothing, stamps nothing, purges nothing. `0` when `days` is not lower than the current window |
+| GET | `/server-config/ghost-retention` | Which picture ghosts a purge may keep (`workflow_ghost_retention`, `workflow_ghost_retention_choices`). `covered` is the shipped default |
+| PATCH | `/server-config/ghost-retention` | Set the position (`off` / `covered` / `on`). Persists to `server-config.json` and takes effect on the next purge. Destroys nothing synchronously — clearing ghosts that are ALREADY held is the separately confirmed Privacy purge |
 
 ### `reference_folders.py`, `import_folders.py`, `filesystem.py`
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
@@ -2694,7 +2696,9 @@ feature.** Every user-facing deletion — the Scrapheap, `purge_scrapheap_pictur
 `MissingFilePurgeFinder` — ends at a soft delete or at the `picture` row going
 away, and neither can reach `workflow_topology`, `workflow_recipe` or
 `workflow_recipe_graph`: they are in a different database and the reference runs
-the other way, as a content address rather than a foreign key. Without that,
+the other way, as a content address rather than a foreign key. **`workflow_picture_ghost`
+is the one hub table that does NOT survive a purge**, because it is the one that
+holds identifying content rather than identity — see the next subsection. Without that,
 dehydrating a stack would destroy the graph its own rehydrate promise depends
 on. `tests/test_workflow_library.py::test_hub_rows_outlive_the_pictures_they_came_from`
 is the assertion, and it takes a picture through both steps — soft delete, then
@@ -2704,6 +2708,156 @@ the row destroyed — rather than only the second.
 `services/workflow_library_service.py` is the one place that query lives, for
 that reason: a workflow whose every picture sits in the Scrapheap has to read as
 "none kept", and counting the scrapheap in would make it read as live.
+
+#### Picture ghosts, and the purge that reaches them (v1.11, B4)
+
+A **ghost** is the thumbnail **and** the prompt of a picture that has been
+permanently destroyed, kept because something else finds it useful — the
+dehydrated stack member that promised it could be made again. Library plan §5
+insists the word always means both halves: they are equally sensitive, and they
+are created, retained and destroyed together, so no later optimisation may keep
+"just the prompt" on the grounds that it is only text. `workflow_picture_ghost`
+is shaped for that, and `hub/workflows.PictureGhost` carries them as one value.
+
+It is keyed on `(library_uuid, pixel_sha)`. The `pixel_sha` half identifies the
+picture: the vault row is gone by the time a ghost exists and SQLite reuses its
+id on the next import, so nothing else does. **The `library_uuid` half is not a
+detail.** Unlike every other table here a ghost is not content-addressed
+identity, it is retained content, and whether it may be retained is a fact about
+one library — the cover that justifies it is a picture in that library's vault,
+and only one vault is live at a time, so a purge cannot see any other's. A
+hub-global key would let library A's purge cascade away a ghost library B still
+has cover for: silent loss, in the opposite direction from the one this feature
+is careful about. Every hub query here is scoped to one library.
+`structural_hash` is a plain column and **not** a foreign key: a ghost can
+outlive a recipe that was never filed (an unwritable hub, or a graph the hash
+layer refused), and a reference that could abort the write would trade a privacy
+record for referential tidiness.
+
+**A ghost with no thumbnail is not written at all.** Thumbnails are generated
+lazily, so a picture destroyed before its own thumbnail existed reaches the write
+with only a prompt — and keeping the prompt alone retains the more sensitive half
+on its own *and* destroys the argument that makes `covered` a safe default, which
+is that the thumbnail is the only marginal exposure. `_prepare_ghosts` refuses it
+and logs why.
+
+**Retention is a three-position setting, `workflow_ghost_retention`, default
+`covered`** (`services/workflow_ghost_service.py`, settled with the owner
+2026-08-23):
+
+| | Behaviour |
+|---|---|
+| `off` | No ghosts. Nothing destroyed can be made again. |
+| `covered` *(default)* | Keep a ghost only where a **surviving** picture already carries the same `workflow_instance_hash`. |
+| `on` | Keep every ghost. |
+
+`covered` is the default because of the safe class it names: collapsing a stack
+to its cover leaves the cover in the library, and a member that differs from it
+only by seed carries a prompt **byte-identical to one the library already
+holds**. Retaining it adds no readable information; the seed is a number. The
+eligibility bar is the *instance* hash and not the structural one, because
+`CLIPTextEncode.text` is bucket P and is nulled before the structural hash is
+computed — two members sharing a structural hash can carry completely different
+prompts. The residue is honest rather than zero: the thumbnail does depict a
+variant that was deleted, so this is a reduction in exposure, not its
+elimination.
+
+**The covered-ghost cascade is load-bearing, not a refinement.** A ghost kept
+under `covered` is safe *because* a covering picture survives. Destroy the last
+picture carrying that instance hash and every ghost leaning on it stops being
+covered — retroactively, with nothing on screen to say so. So every purge
+re-evaluates the instance hashes it just destroyed and destroys the ghosts that
+have lost their cover (`destroy_ghosts_for_instances`). Because `covered` is the
+default, this is the normal path and not an edge case.
+
+**A soft-deleted picture is not cover.** `surviving_instance_hashes_in_session`
+requires `deleted IS FALSE`: a scrapheaped picture exists and can be restored,
+but it is sitting in the destruction queue, and reading it as cover would keep a
+ghost alive on the strength of a picture that is itself on its way out. Same
+reasoning as the workflow counts above.
+
+**The reach is a step inside `purge_scrapheap_pictures`, never a sibling of it.**
+`services/scrapheap_service.py` owns everything that permanently destroys a
+soft-deleted picture and says so; `deleted_file_log` lives in the vault while
+ghosts live in the hub, so a purge that did not cross would leave a destroyed
+picture's thumbnail and prompt behind — a privacy defect, not a missing feature.
+The order is fixed by what each step needs:
+
+1. **Inside** the single DB submission, **before** the `DELETE`:
+   `collect_ghost_candidates_in_session` reads the prompt, the hashes and the
+   path off rows that are about to stop existing.
+2. Still inside it, **after** the `DELETE` has committed:
+   `surviving_instance_hashes_in_session`, or a picture being destroyed would
+   count as its own cover.
+3. **Outside** the DB thread, before the files are removed:
+   `apply_purge_to_hub` writes the consented ghosts and runs the cascade. A
+   retained ghost copies its thumbnail off disk, and the seed is re-read from the
+   file's embedded graph, which is the only place it exists (the instance hash
+   excludes the seed by design — a generation is an instance *plus* a seed) and
+   the only thing distinguishing a covered ghost from the picture covering it.
+   Both reads happen only for ghosts actually being retained, and the write is
+   chunked so a purge of a whole scrapheap never holds every retained thumbnail
+   in memory at once.
+
+**One race is narrowed rather than closed, and it is written down rather than
+claimed away.** Step 3 does file I/O off the DB worker thread, so an unknown
+amount of wall-clock separates step 2's coverage answer from the write that acts
+on it — long enough for another writer to destroy the very picture that was the
+cover. The vault and the hub are separate databases with no transaction spanning
+them, so this cannot be closed outright. Instead coverage is re-read as late as
+it can be and **intersected** with step 2's answer: a hash that lost its cover in
+between is dropped and cascaded, and one that gained cover is simply not written
+this time round. Both directions fail toward retaining less.
+
+**Both reads are chunked or scoped, because the plan can be the whole
+scrapheap.** The candidate read goes through `scope_id_subquery` — the same
+helper, on the same id list, that `still_scrapheaped_ids_in_session` uses two
+lines later — and the coverage read is chunked. A raw `.in_()` in either place
+would raise `too many SQL variables` *inside* the purge submission and destroy
+nothing, which would be a regression rather than a new-feature limit.
+
+**Bounded on purpose.** A purge re-evaluates the instance hashes it touched, not
+the whole hub. Library-wide re-evaluation is Settings › Privacy's own purge,
+which the plan gates heavily precisely because it is unbounded and cannot be
+undone.
+
+**`MissingFilePurgeTask` runs the cascade too**, because it is the one other path
+that removes a picture row for good. It can never *write* a ghost — the file it
+is purging has already vanished from disk, so there is no thumbnail to keep — but
+it can remove the last picture covering an instance hash, and a ghost that
+quietly stops being covered is exactly the decay §5 forbids. `off` clears the
+touched hashes there too, so a user who said "keep nothing" is not tidied up by
+one hard-delete path and not the other. `cascade_uncovered_ghosts` is that step,
+and `on` never cascades from either path.
+
+**The counts are reported, not only logged.** `ScrapheapPurgeOutcome` carries
+`ghosts_kept` and `ghosts_cascaded` and `DELETE /pictures/scrapheap` returns
+them, because the plan's stated failure mode for the cascade is "nothing on
+screen says it happened".
+
+**Forgetting reaches every derived copy, and here it does so structurally.** A
+prompt lives in `picture.comfyui_positive_prompt` *and*, in vector form, in
+`picture.text_embedding` — the extraction task clears the embedding when it
+stores the prompt so `TextEmbeddingTask` regenerates it with that context. Both
+are columns of the row the purge deletes, so a picture whose ghost is refused
+leaves neither behind, and nothing in the hub holds an embedding, so destroying a
+ghost is a row delete with no derived copy to chase.
+
+An unrecognised `workflow_ghost_retention` resolves to `off`, which is the
+**opposite** direction from `scrapheap_retention_days` and deliberately so. There
+a config we cannot parse must not license a deletion; here it must not license
+keeping a thumbnail and a prompt for a picture the user destroyed. Both fall to
+the position that holds less of the user's data.
+
+**Model ghosts are the other half of §5 and are already shipped.** The readable
+filename of a model no longer on the shelf survives inside
+`workflow_recipe_asset`, and `forget_asset_names` destroys it as a row delete
+with no stored graph rewritten. A picture purge does not reach them: a model
+ghost is created by removing a model from the shelf and has no relationship to
+any one picture. The structural hash is a digest computed *from* the filenames
+rather than containing them, so a workflow whose names have been forgotten still
+groups, dedupes and matches a dropped copy, and simply displays as "3 models,
+names forgotten".
 
 #### Engine and connection settings
 

@@ -50,6 +50,7 @@ from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreR
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
+from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
@@ -87,6 +88,7 @@ class Vault:
         insightface_model_pack: str = "buffalo_l",
         scrapheap_retention_days: Optional[int] = DEFAULT_RETENTION_DAYS,
         scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
+        ghost_retention: str = DEFAULT_GHOST_RETENTION,
     ):
         """
         Initialize a Vault instance.
@@ -185,6 +187,14 @@ class Vault:
         self._scrapheap_retention_reduced_at: Optional[datetime.datetime] = (
             scrapheap_retention_reduced_at
         )
+        # The hub this vault was opened through, and which library it is, or
+        # None for both (the CLI tools, most tests). The purge needs them:
+        # ghosts live in the hub, ``deleted_file_log`` does not reach across,
+        # and a ghost is scoped to the library whose vault holds its cover
+        # (§B4).
+        self._hub = registered_hub
+        self._library_uuid: Optional[str] = getattr(registered_library, "uuid", None)
+        self._ghost_retention: str = ghost_retention
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -285,6 +295,26 @@ class Vault:
         # CLI tools, most tests — has no hub to reach), and harmless in the
         # multi-library case because only one vault is live at a time.
         if registered_hub is not None:
+            # The missing-file purge is the one OTHER path that removes a
+            # picture row for good, so it has to be able to run the
+            # covered-ghost cascade (§B4). It can never write a ghost — the file
+            # it purges is already gone — but it can destroy the last picture
+            # covering an instance hash, and a ghost that quietly stops being
+            # covered is the decay library plan §5 forbids. The retention
+            # position is read through a callable because it is saved at runtime
+            # and this finder outlives the save.
+            from pixlstash.tasks.missing_file_purge_finder import (
+                MissingFilePurgeFinder,
+            )
+
+            self._planner_work_finders[TaskType.MISSING_FILE_PURGE] = (
+                MissingFilePurgeFinder(
+                    database=self.db,
+                    hub=registered_hub,
+                    library_uuid=self._library_uuid,
+                    ghost_retention_source=lambda: self._ghost_retention,
+                )
+            )
             from pixlstash.tasks.missing_checkpoint_hash_finder import (
                 MissingCheckpointHashFinder,
             )
@@ -684,6 +714,31 @@ class Vault:
             None if retention_days is None else int(retention_days)
         )
         self._scrapheap_retention_reduced_at = reduced_at
+
+    @property
+    def hub(self):
+        """The hub database this vault was opened through, or None."""
+        return self._hub
+
+    @property
+    def library_uuid(self) -> Optional[str]:
+        """Which library this vault is, in the hub's registry, or None."""
+        return self._library_uuid
+
+    def set_ghost_retention(self, retention: str) -> None:
+        """Set the picture-ghost retention position at runtime.
+
+        Takes effect on the next purge. It never destroys anything
+        synchronously: turning the setting down is a statement about what future
+        purges may keep, and clearing what is ALREADY kept is Settings ›
+        Privacy's own purge (§F10), which is separately confirmed.
+        """
+        self._ghost_retention = retention
+
+    @property
+    def ghost_retention(self) -> str:
+        """Which picture ghosts a purge may keep: off / covered / on."""
+        return self._ghost_retention
 
     @property
     def scrapheap_retention_days(self) -> Optional[int]:

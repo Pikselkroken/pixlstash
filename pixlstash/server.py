@@ -44,7 +44,11 @@ from pixlstash.openapi_custom import (
 from pixlstash.ssl_setup import SslSetupMixin
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
-from pixlstash.services import library_settings_service, scrapheap_service
+from pixlstash.services import (
+    library_settings_service,
+    scrapheap_service,
+    workflow_ghost_service,
+)
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
@@ -872,6 +876,9 @@ class Server(
                 self._server_config
             ),
             scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
+                self._server_config
+            ),
+            ghost_retention=workflow_ghost_service.read_ghost_retention(
                 self._server_config
             ),
         )

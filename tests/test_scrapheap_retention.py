@@ -37,7 +37,7 @@ from pixlstash.db_models import (
     User,
 )
 from pixlstash.server import Server
-from pixlstash.services import scrapheap_service
+from pixlstash.services import scrapheap_service, workflow_ghost_service
 from pixlstash.tasks import (
     scrapheap_retention_purge_finder as scrapheap_retention_purge_finder_module,
 )
@@ -2022,7 +2022,7 @@ def test_missing_file_purge_task_skips_unreachable_locations(server, tmp_path):
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 0}, result
+    assert result == {"purged": 0, "ghosts_cascaded": 0}, result
     assert _get_picture(server, pic_id) is not None, (
         "a picture on an unmounted volume must not be reaped as missing"
     )
@@ -2045,7 +2045,9 @@ def test_missing_file_purge_task_still_reaps_a_genuinely_deleted_file(server, tm
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 1}, result
+    # ``ghosts_cascaded`` is the §B4 covered-ghost cascade. This vault has no
+    # hub, so there is no ghost store to reach and the count is 0 by structure.
+    assert result == {"purged": 1, "ghosts_cascaded": 0}, result
     assert _get_picture(server, pic_id) is None
     assert _ledger_flags_for(server, path) == [True]
 
@@ -3056,3 +3058,81 @@ def test_listing_exposes_retention_fields_in_the_grid_projection(server, tmp_pat
     rows = {row["id"]: row for row in resp.json()}
     assert "purge_at" in rows[pic_id]
     assert rows[pic_id]["auto_purge_exempt"] is False
+
+
+# ── Ghost retention: the OTHER purge-policy setting (§B4) ────────────────────
+#
+# It lives here rather than in a module of its own because this server is
+# already warm and is the one that owns the purge, and because the two settings
+# are read the same way and fail in OPPOSITE directions on a config we cannot
+# parse. Asserting that side by side is what keeps the asymmetry deliberate.
+
+
+def test_ghost_retention_defaults_to_covered_only(server):
+    """A fresh install keeps a ghost only where a surviving picture covers it."""
+    resp = _client(server).get("/server-config/ghost-retention")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["workflow_ghost_retention"] == "covered"
+    assert body["workflow_ghost_retention_choices"] == ["off", "covered", "on"]
+
+
+def test_saving_a_ghost_position_reaches_the_vault_and_destroys_nothing(
+    server, tmp_path
+):
+    """The save is a statement about FUTURE purges, never a purge itself."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "ghostrefs"), "ghost-save.png", allow_delete=True
+    )
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    try:
+        for position in ("off", "on", "covered"):
+            resp = client.patch(
+                "/server-config/ghost-retention",
+                json={"workflow_ghost_retention": position},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["workflow_ghost_retention"] == position
+            assert server.vault.ghost_retention == position
+        assert _get_picture(server, pic_id) is not None
+        assert os.path.isfile(path)
+        assert _ledger_flags_for(server, path) == []
+    finally:
+        client.patch(
+            "/server-config/ghost-retention",
+            json={"workflow_ghost_retention": "covered"},
+        )
+
+
+def test_an_unknown_ghost_position_is_refused_rather_than_stored(server):
+    """422, not a silent fall-through to the default.
+
+    The reader's fail-safe (an unparseable stored value means keep NOTHING) is
+    the last line of defence, not the first: a value that reaches the endpoint
+    is rejected before it can be written.
+    """
+    client = _client(server)
+    before = client.get("/server-config/ghost-retention").json()
+    resp = client.patch(
+        "/server-config/ghost-retention", json={"workflow_ghost_retention": "sometimes"}
+    )
+    assert resp.status_code == 422, resp.text
+    assert client.get("/server-config/ghost-retention").json() == before
+
+
+def test_the_two_purge_settings_fail_in_opposite_directions():
+    """An unreadable config falls to whichever position holds LESS data.
+
+    For the retention window that is "Never" — do not license a deletion. For
+    ghosts it is "off" — do not license keeping a destroyed picture's thumbnail
+    and prompt. The two look inconsistent side by side and are not, so the pair
+    is asserted together rather than each in its own file.
+    """
+    assert scrapheap_service.read_retention_days({"scrapheap_retention_days": "?"}) is (
+        None
+    )
+    assert (
+        workflow_ghost_service.read_ghost_retention({"workflow_ghost_retention": "?"})
+        == workflow_ghost_service.GHOST_RETENTION_OFF
+    )
