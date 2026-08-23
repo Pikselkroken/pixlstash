@@ -3225,20 +3225,114 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
 });
 
 describe("the thumbnail verb", () => {
-  it("offers Set thumbnail for one model and refuses it for two", async () => {
+  it("marks every selected model with the one picture", async () => {
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "c".repeat(64),
+    });
     const wrapper = await mountShelf([
       adapter({ id: 1 }),
       adapter({ id: 2, sha256: "b".repeat(64) }),
     ]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
-    await wrapper.vm.$nextTick();
-    const setIcon = () => wrapper.find('[data-verb="set-icon"]');
-    expect(setIcon().attributes("disabled")).toBeUndefined();
-
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
-    expect(setIcon().attributes("disabled")).toBeDefined();
+
+    await wrapper
+      .findComponent({ name: "PicturePicker" })
+      .vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // One read of the picture, one write per model: the icon store is
+    // content-addressed, so the repeated bytes collapse to one file.
+    expect(getPictureThumbnailBlob).toHaveBeenCalledTimes(1);
+    expect(setModelIcon).toHaveBeenCalledWith(1, bytes);
+    expect(setModelIcon).toHaveBeenCalledWith(2, bytes);
+  });
+
+  it("asks before a bulk set overwrites marks, and opens nothing on no", async () => {
+    // The images survive in the content-addressed store, but which model wore
+    // which does not — the same test the bulk clear falls on.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, icon_sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    // `useConfirm` has no host mounted and falls back to `window.confirm`,
+    // which shows the MESSAGE and nothing else — so the counts have to be
+    // there, not in the title the fallback throws away.
+    expect(confirmSpy.mock.calls[0][0]).toContain("All 2 selected models");
+    expect(confirmSpy.mock.calls[0][0]).toContain("the 1 that already");
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      false,
+    );
+
+    // And the other direction: saying yes opens the picker. Over-blocking is
+    // its own regression.
+    confirmSpy.mockReturnValue(true);
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      true,
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("does not ask when the selection has no marks to overwrite", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      true,
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("marks every model in a ticked run, not just its cover", async () => {
+    // A fully-selected stack is ONE row whose id is the cover's. Iterating
+    // rows would silently skip the other two.
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "e".repeat(64),
+    });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 9, stack_position: 0 }),
+      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+    ]);
+    const store = useModelShelfStore();
+    store.selectVisible();
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+
+    await wrapper
+      .findComponent({ name: "PicturePicker" })
+      .vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(setModelIcon.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2, 3]);
   });
 
   it("offers Clear thumbnail only when something has one", async () => {

@@ -10,11 +10,18 @@ icon store and a hash in the column". So the client fetches or renders the bytes
 and posts them here; there is no second path that resolves a picture id
 server-side, which is also what keeps the vault out of a hub table.
 
-**No confirmation on set, or on clearing one row.** Both are reconstructable by
+**No confirmation on a single-row set or clear.** Both are reconstructable by
 doing them again, and the shelf's rule is to confirm only where the prior state
 cannot be reconstructed. A **bulk** clear over a selection is not
 reconstructable and falls on the same side of that test as the bulk base-model
-overwrite, so the client confirms it — the route itself stays a plain mutation.
+overwrite, and so does a bulk set over rows that already have a mark; the client
+confirms both — the routes themselves stay plain mutations.
+
+**A bulk set is N calls to this route**, one per model, because the store is
+content-addressed and the same bytes collapse to one file however many times
+they are posted. The client caps and windows that fan-out
+(`MAX_MODELS_PER_ICON_SET`, `useModelShelfStore.js`); this route sees only
+single-model writes and cannot see the gesture.
 
 Authorization: all three are ``OWNER_ONLY``. The store lives beside the hub and
 is written and read by PixlStash alone, so no route here takes, walks or serves
@@ -39,7 +46,9 @@ from pixlstash.services.model_icons import (
 logger = get_logger(__name__)
 
 # Ceiling on one clear. Mirrors the shelf's other bulk verbs rather than
-# inventing a number: a selection is what a person made, not a script.
+# inventing a number: a selection is what a person made, not a script. The
+# client's bulk *set* uses the same figure, enforced there rather than here
+# because a set is N single-model calls this route cannot correlate.
 MAX_MODELS_PER_CLEAR = 500
 
 
