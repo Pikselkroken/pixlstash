@@ -27,6 +27,7 @@
 17. [Integration Pitfalls](#17-integration-pitfalls)
 18. [Integration Diagrams](#18-integration-diagrams)
 19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
+20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
 
 ---
 
@@ -1395,6 +1396,204 @@ There is **no deletion route** anywhere in v1.9. A stack is a grouping row plus 
 cover pointer; dropping it restores the flat grid exactly. Any UI copy implying
 files are removed would be wrong.
 
+## 20. Folder-Structure Read API (v1.11, Phase 2)
+
+The two-minute pass behind the mapping screen (`MapTree`). It reads a folder tree
+on disk and proposes **what each level is** — Project, Set, Person, Tag, or just a
+folder. Backend design is `docs/backend_architecture.md` §24; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 2.
+
+**Three rules the client must hold to.**
+
+1. **It reads. It never writes.** No `Picture`, `Project`, `PictureSet`,
+   `Character` or `Tag` row is created, and no file is opened for writing, moved
+   or renamed. The result is a proposal the owner edits on the mapping screen and
+   Phase 3 commits — or does not.
+2. **A proposal without evidence does not exist.** Every `kind` a row carries
+   comes with the `evidence` that produced it. A signal that cannot state its
+   reason returns nothing rather than a guess, so `kind: null` with
+   `evidence: []` is the normal answer for an ordinary folder name and must
+   render as *"This one is…"*, never as a low-confidence pick.
+3. **Narrowed is not decided.** Where the signals only rule things *out*, the row
+   comes back with `kind: null` and two or more `candidates`. The UI offers those
+   ("one of these: Project, Set") and the owner picks. Collapsing `candidates`
+   to `candidates[0]` would invent a decision the backend deliberately refused to
+   make.
+
+### The four signals
+
+All deterministic, all local, **no LLM** — a folder name is a string and `Mira`
+could be a person, a project or a client.
+
+| `signal` | Reads | Proposes | Scope |
+|---|---|---|---|
+| `cardinality` | how many distinct names a level has, over how many parents | `tag`, or *not* `tag` | one whole level |
+| `sidecars` | a caption `.txt`/`.caption` beside every picture | `set` | one folder |
+| `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
+| `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
+
+`faces` is the only expensive one and the only sampled one:
+**`sampled_per_folder` pictures per folder, never the whole folder**, which is
+what makes this two minutes rather than an hour. The number is in the response
+rather than hardcoded in the client, and the evidence string says what it was
+(`"one face, 19 of 20"`). The full pass runs later as ordinary background work
+and can only *add* people — it never revises a row the owner has accepted.
+
+### `POST /api/v1/folder-structure/read`
+
+Body `{"path": "/absolute/path/to/library"}`. Returns `{"task_id": "…"}` and
+starts the read in the background. `local_owner_only`: it takes a caller-supplied
+host path (§16.3 host-capability tier), same chokepoint
+(`validate_reference_folder_path`) and same `filesystem_roots` containment as
+`GET /filesystem/browse`. **400** for a path that fails validation, **404** for a
+path that is not a directory, **409** when a read is already running (there is one
+at a time — the screen only ever shows one), **503** when the task runner or the
+inference engine is unavailable.
+
+### `GET /api/v1/folder-structure/read/status?task_id=…`
+
+Polled per §11's task-id branch. `result` is `null` until `status` is
+`completed`.
+
+```jsonc
+{
+  "task_id": "0f1c…",
+  "status": "running",        // queued | running | completed | failed | cancelled
+  "stage": "faces",           // walking | sidecars | faces | matching | done
+  "processed": 149,           // folders whose face sample has been read
+  "total": 352,               // folders that will get one; 0 until `walking` ends
+  "progress": 42.3,           // percent, 0.0 while total is 0
+  "error": null,              // set only when status is "failed"
+  "result": null
+}
+```
+
+`stage` is what the progress bar names — "the bar names what it is buying". The
+counters only mean folders during `faces`; during `walking` `total` is `0` and
+`processed` counts folders found so far, which is why the client must render
+`walking` as an indeterminate bar rather than 0%.
+
+### The result
+
+```jsonc
+{
+  "root": {"path": "/home/me/Generations", "name": "Generations",
+           "picture_count": 28412},
+  "sampled_per_folder": 20,
+  "folder_count": 352,
+  "picture_count": 28412,
+  "truncated": false,           // true = the walk hit max_folders and stopped
+  "max_folders": 20000,
+  "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
+}
+```
+
+`truncated: true` means the tree was bigger than the walk's bound and the levels
+describe **a prefix of it**, not the whole thing. Say so on the screen; do not
+present a truncated read as a complete one.
+
+A **level**:
+
+```jsonc
+{
+  "depth": 3,                   // 1 = the root folder itself
+  "folder_count": 149,
+  "picture_count": 26734,
+  "proposal": {
+    "kind": null,               // project|set|person|tag|folder|null
+    "candidates": [],           // 2+ kinds when the signals only narrowed it
+    "match": null,
+    "evidence": [{"signal": "cardinality",
+                  "text": "149 names under 14 parents, used once each"}]
+  },
+  "folders": [ /* every folder at this depth — see below */ ]
+}
+```
+
+A level's `proposal` is the read *of the level as a whole*, which is what the
+level header shows and what the digit keys 1–4/0 assign. It is the only place
+`cardinality` can speak, because cardinality is a property of a level and not of
+a folder. Level 1 is always the single root folder and never carries a
+cardinality reading.
+
+A **folder row**:
+
+```jsonc
+{
+  "id": "3/12",                 // stable for the life of this read; the handle
+                                // every per-row override addresses
+  "parent_id": "2/0",           // null at level 1
+  "depth": 3,
+  "name": "mira",
+  "relative_path": "2024 Shoots/mira",   // POSIX separators, relative to root
+  "picture_count": 2914,        // recursive, this folder and everything under it
+  "direct_picture_count": 118,  // files directly in it — what `faces` sampled from
+  "child_count": 3,
+  "proposal": {
+    "kind": "person",
+    "candidates": [],
+    "match": {"entity_type": "character", "id": 41, "name": "Mira"},
+    "evidence": [
+      {"signal": "faces", "text": "one face, 19 of 20",
+       "sampled": 20, "matched": 19},
+      {"signal": "name_match", "text": "matches the person Mira"}
+    ]
+  }
+}
+```
+
+**`relative_path`, never an absolute one.** The rows are for a screen, and the
+absolute path is already in `root.path`; joining is the client's job. This keeps
+a screenshot of the mapping screen from carrying the owner's home directory.
+
+**`id` is positional (`"<depth>/<index>"`) and belongs to one read.** It is not a
+database id — nothing here is in the database yet — and it is not stable across
+two reads of the same folder. Persist an override against `relative_path`, never
+against `id`.
+
+`match` is present only for `name_match`, and it is a **lookup, not an
+inference**: `entity_type` is one of `project`, `set`, `character`, `tag`, and
+`id` is that row's real primary key. When `match` is non-null the row's `kind` is
+that entity's kind, and accepting the row should attach to the existing entity
+rather than create a second one with the same name.
+
+### Evidence
+
+`evidence` is an ordered list, strongest signal first, and every entry carries a
+`signal` (the table above) and a display-ready `text`. Entries may carry extra
+per-signal numbers — `sampled`/`matched` for `faces`, `pictures`/`with_sidecar`
+for `sidecars`, `names`/`parents` for `cardinality` — and the client is free to
+ignore them and render `text`. **`text` is the contract; the numbers are a
+convenience.** New signals add new `signal` values, so treat an unrecognised one
+as "render the text, offer no special affordance" rather than an error.
+
+The three ways a proposal comes back, and all three are legitimate:
+
+| Shape | Means | Screen |
+|---|---|---|
+| `kind` set, `evidence` non-empty | a signal answered | the row is filled, with its reason under it |
+| `kind: null`, `candidates` 2+ | signals ruled things out, nothing in | "one of these: …" |
+| `kind: null`, `candidates: []` | nothing had anything to say | "This one is… ▾" |
+
+`kind: "folder"` is a positive answer meaning **"just a folder"** — the name is
+not telling us anything and we are saying so. It is not the same as `null`.
+
+### `DELETE /api/v1/folder-structure/read?task_id=…`
+
+Cancels a running read. Returns `{"status": "cancelled"}`, or **404** if the
+task-id is unknown. Cancel stays live for the whole two minutes, per the release
+plan's risk table; a cancelled read keeps its partial `result` so the screen can
+still show what was found.
+
+### Not in this API
+
+- **No commit.** Nothing here writes. The accept path is Phase 3.
+- **No per-row re-read.** A single read answers the whole tree; there is no
+  "re-run faces on this one folder" route.
+- **No language reading of folder names.** Explicitly out (release plan §5): no
+  LLM ships with PixlStash, and `name_match` is a string comparison against rows
+  the vault already has, not a semantic one.
+
 ---
 
-*Last updated: 2026-07-29. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+*Last updated: 2026-08-23. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
