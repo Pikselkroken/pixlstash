@@ -132,6 +132,41 @@ missing cells, not a month to be reconstructed later.
 Desktop and pip installs ping when someone runs them, so a weekend-only user
 misses an exact day-7 check and would read as churned.
 
+**ID-bearing check-ins per type** (`id_bearing_checkins_by_type`) is the
+numerator for the MAU coverage ratio computed in `pixlstash-metrics`. The
+denominator there is *all* version check-ins from Cloudflare zone analytics,
+which this Worker never sees — it only ever receives the ID-bearing ones. It
+does, however, know each one's install type, so it publishes the split and the
+metrics side does the division per bucket instead of pooling.
+
+It is derived from the activity bitmap, over the same rolling window and the
+same buckets as `active_installs_by_type`, so no request is logged and no new
+column is stored. Two consequences for the consumer:
+
+- These are check-in **counts**, not distinct installs. Dividing them by a
+  distinct-install denominator is a unit error.
+- A bit is a ping *day*. Two pings on one UTC day count once here and twice in a
+  raw request count, so this is a floor on requests. The client throttles to one
+  check per day (`pixlstash/telemetry/sender.py`), so in practice they agree.
+- It is a **rolling total republished every day**, not a daily figure. The
+  window is `ACTIVE_WINDOW_DAYS` days *plus the snapshot date itself* — 29 days
+  inclusive — because it is deliberately the same window as
+  `active_installs_by_type`, whose predicate is
+  `daysBetween(last_seen, today) <= ACTIVE_WINDOW_DAYS`. Pairing a numerator
+  and a denominator taken over different spans is the error this field exists
+  to remove, so the two are kept identical rather than rounded to a tidy 28.
+  Consecutive snapshots overlap by 28 of those 29 days, so they must never be
+  summed or plotted as a time series — read one snapshot, and divide it by the
+  *same* 29 days of zone-analytics check-ins. A rolling total was chosen over a
+  per-day count because a missed cron then costs accuracy rather than a
+  permanently absent day, which suits a Worker whose slices can be delayed. The
+  cost is that it cannot be decomposed back into days.
+- `null` rather than an object when a scan resumed from a checkpoint that was
+  written before this field existed *and had already folded in rows*: their
+  check-ins are unrecoverable and the snapshot is never backfilled, so the day
+  is reported as uncountable rather than as a confident undercount. A pre-field
+  checkpoint that had scanned nothing yet lost nothing, and still counts.
+
 **Resurrection rate** is the metric that answers pause-versus-churn directly: a
 silence of 14 days or more that a later ping closes. `first_seen`/`last_seen`
 alone give a decay curve and cannot distinguish the two. Once observed, that
