@@ -78,6 +78,44 @@ class LayoutPatch(BaseModel):
     )
 
 
+class PictureLayoutResponse(BaseModel):
+    """What `GET /pictures/{id}/layout` answers.
+
+    Declared rather than returned as a bare dict so the Scalar reference renders
+    a body instead of `null` — `tests/test_openapi_response_schemas.py` guards
+    that for every 2xx JSON response, and it is the reason this model exists.
+
+    Every field but `status` is nullable, and all three go null together for a
+    picture that is not in a root with a layout. That is a 200, not a 404: the
+    picture exists and there is simply nothing to say about its folder.
+    """
+
+    status: str = "success"
+    layout: Optional[str] = Field(
+        default=None,
+        description=(
+            "The layout of the root this picture is in, as `project/person,set`, "
+            "or null when it is not in a root that has one."
+        ),
+    )
+    current_folder: Optional[str] = Field(
+        default=None,
+        description=(
+            'The folder the picture is in, relative to its root. `""` is the '
+            "root itself; null when the picture is not in a laid-out root."
+        ),
+    )
+    suggested_folder: Optional[str] = Field(
+        default=None,
+        description=(
+            "The **Move to match** offer, or null when there is nothing to "
+            "offer — no layout, an off-layout folder of the owner's own, or a "
+            "picture already where the layout would put it. An offer is never "
+            "a correction: the folder it is in has not stopped being true."
+        ),
+    )
+
+
 class MoveToMatchRequest(BaseModel):
     picture_ids: list[int] = Field(description="The pictures to move.")
 
@@ -204,6 +242,7 @@ def register_picture_routes(router: APIRouter, server) -> None:
             "the tree is not wrong, it is only not always what the owner would "
             "have picked."
         ),
+        response_model=PictureLayoutResponse,
     )
     def get_picture_layout(id: int, request: Request):
         entry = picture_layout(server.vault, id)
@@ -213,13 +252,12 @@ def register_picture_routes(router: APIRouter, server) -> None:
             # no layout is an honest "nothing to say".
             if not picture_exists(server.vault, id):
                 raise HTTPException(status_code=404, detail="Picture not found")
-            return {
-                "status": "success",
-                "layout": None,
-                "current_folder": None,
-                "suggested_folder": None,
-            }
-        return {"status": "success", **entry}
+            return PictureLayoutResponse()
+        return PictureLayoutResponse(
+            layout=entry["layout"],
+            current_folder=entry["current_folder"],
+            suggested_folder=entry["suggested_folder"],
+        )
 
     @router.post(
         "/pictures/layout/move-to-match",
