@@ -35,6 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
 24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
+25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
 
 ---
 
@@ -3484,7 +3485,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 - [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
 - [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
 - [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
-- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it. Writes nothing (§24).
+- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§25).
 
 **Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`, so they do not themselves verify that the caller is *unscoped*. A plain `ALL` token leaves `token_scope = None` (the middleware builds a `TokenScope` only for non-`ALL` tokens — the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)) and is treated as owner-equivalent here, which is correct: `ALL == owner` (below). The danger *used* to be that an `ALL`+`resource_type` token **masqueraded** as that plain-owner shape — it also left `token_scope = None` — letting a nominally "restricted" token drive filesystem authority. That vector (the §16.2 item 4 footgun, applied to owner-only operations rather than picture-scoped reads) is now **closed**: `create_token` refuses to mint it and the middleware fail-closed-rejects any already-existing row before these handlers run. The correct *explicit* gate for this class is still `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py); moving to it (below) is still wanted as defense in depth, but it is no longer closing an open hole.
 
@@ -5956,8 +5957,144 @@ would aim Phase 3's attach at an arbitrary set, confidently, with evidence. Two
 different *kinds* sharing a name is the other case and is already a narrowing:
 `candidates`, no `kind`.
 
+## 25. The folder-structure commit (v1.11 Phase 3)
+
+`pixlstash/services/folder_structure_commit_service.py`, exposed by the
+`/folder-structure/commit` routes added to `pixlstash/routes/folder_structure.py`.
+Wire contract `docs/integration_architecture.md` §22; release plan
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24's read only ever
+proposes; this is the one module anything from the mapping screen writes.
+
+### Reuse, not a second walker
+
+The commit does not walk the filesystem a second time. §24 already measured
+that cost and the release plan's whole argument for the two-minute read is that
+it is paid *once*. Instead the accepted root is registered as an ordinary
+`ReferenceFolder`, and the existing, already-shipped `ReferenceFolderScanTask`
+does the only filesystem *read* left: indexing every file into a `Picture`
+row, in place, exactly as it does for any other reference folder.
+`register_reference_folder` is deliberately **not** the same function as
+`routes.reference_folders.create_reference_folder` — it is a smaller,
+one-directional insert kept separate because the two entry points validate
+different things upstream (that route re-derives accessibility from a
+caller-supplied path and checks conflicts against every other registered
+folder, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has
+no UI for; this one starts from a path a settled read already walked) — and
+because their **conflict answers differ**. `create_reference_folder` 409s
+outright on an existing path. `register_reference_folder`'s `fetch_or_create`
+is narrower: it reuses an existing row **only** when that row has never
+completed a scan (`last_scanned is None`) — the shape of a commit that
+registered the folder and then crashed before the first scan finished, safe to
+resume because nothing has been indexed under it yet that a fresh wait could
+miss. A row that **has** completed a scan — an unrelated pre-existing
+reference folder, or an earlier commit of this same path from a since-cancelled
+read run again — is refused with a `CommitError` rather than silently reused,
+because reusing it would apply this mapping to whatever happens to be indexed
+under it already, not to what the read the owner just accepted actually found.
+"Cancel and organise later" during `Main` or `MapTree` therefore leaves
+nothing committed and nothing registered at all — there is no reference folder
+row yet at that point for a resumed commit to collide with — and the narrow
+crash-recovery case above is the only path re-use is safe.
+
+`wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
+the field the model's own docstring names as "unix timestamp of the last
+**completed** scan pass" — not a picture count, because a count can plateau
+mid-batch for reasons that have nothing to do with completion. It has a
+30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24's read has a
+deadline: a stuck scan must fail the commit rather than hang the screen
+forever.
+
+### A read commits once, enforced
+
+`apply_mapping` is not idempotent, and cannot cheaply be made so: it walks
+every picture currently under the reference folder and unconditionally
+creates the accepted `Project`/`Character`/`PictureSet` rows and
+`PictureProjectMember`/`pending_character_id`/`PictureSetMember`/`Tag` writes
+for each one, on every call. Running it twice over the same read would create
+duplicate entities and duplicate membership/tag rows — not a data-loss bug,
+but a data-*doubling* one, and a quiet one, since neither the entities nor the
+memberships carry a uniqueness constraint that would surface it as an error.
+
+So the route, not this module, owns the one-shot guarantee: `server.folder_
+structure_read`'s slot gains a `committed` flag, set **the instant a commit
+starts** — inside the same lock acquisition that checks it, so two requests
+racing the same `task_id` cannot both pass — rather than once the commit
+*finishes*. A commit already running must refuse a second `POST` against its
+own read exactly as a completed one does; the difference between "running"
+and "done" is not a difference in whether a second commit may start, only in
+what the client is told. Checked and set separately from — and nested inside
+— the single global "a commit is already running" reservation, so a `POST`
+that loses to an *unrelated* read's in-flight commit is refused before it
+spends the read's one commit on a 409 it never got to act on.
+
+### Person is `pending_character_id`, not a fabricated Face
+
+A folder accepted as Person has no detected face to attach to — the read's own
+`faces` signal is sampled at 20 pictures and never claims to have looked at the
+rest, and a folder-derived assignment is the owner's decision, not a detection.
+The commit does **not** invent a `Face` row with no bounding box to represent
+it. It sets `Picture.pending_character_id`, the same field
+`routes.characters_faces.assign_face_to_character` already sets when a
+picture-id assignment arrives before face extraction has run
+(`pixlstash/db_models/picture.py`'s own docstring: *"cleared, and the best face
+assigned, when `FaceExtractionTask` completes for the picture"*). Every picture
+this commit indexes is brand new, so this is *always* the deferred path, never
+the immediate one — the existing background pipeline reconciles the assignment
+against a real detected face once extraction runs, on its own schedule, with no
+new code here to do it.
+
+### Nearest-ancestor-wins, tags are not exclusive
+
+A picture is filed under the **closest** accepted Project, Person or Set above
+it — first-match-wins walking from the picture's folder up to the root,
+mirroring `library_layout`'s segment resolution — because the common shape is
+one kind per level and a nested override should shadow, not stack. Tag is the
+one exception: **every** accepted Tag ancestor along the path applies, because
+a picture can legitimately carry more than one label (`final` under `raw` under
+a shoot folder is two tags, not the nearer one winning). `_resolve_folder`
+computes this once per distinct folder, not once per picture, since the
+`ReferenceFolderScanTask`-created rows already state which folder each is in
+via their own `file_path` — no second read of `FolderStructureRead`'s
+internal `_folders` list, which §24 already documents as dropped once the
+proposal document is built.
+
+### Entity identity is (kind, name), not (kind, relative_path)
+
+Two folders accepted as the same kind with the same name — `Mira` appearing
+under two different parents, or a folder whose owner picked the same
+`name_match` twice — resolve to the **one** row, not two. That is
+`library_layout.folder_name`'s own reasoning read in reverse: on-disk folder
+naming already collapses two spellings that differ only in punctuation to one
+path component, so this module collapses two *paths* that name the same thing
+back to one entity, for the same reason — a picture in either folder should
+read as true of the same Project, Person or Set. `project_cache` /
+`character_cache` / `set_cache` key on `match_id` when the owner supplied one
+and on the folder's own name otherwise, scoped to the one commit — a
+name that happens to collide with something created by an *earlier* commit is
+not merged, only within-batch repeats are.
+
+`Project.name` carries a real unique constraint; `Character.name` and
+`PictureSet.name` do not (§24's own note on `name_match`'s ambiguity is why —
+a real vault has duplicate set names on day one). A newly-created Project whose
+name collides with an existing one the owner did not explicitly `match_id`
+would raise on `session.flush()`, surfacing as a failed commit rather than a
+silent skip — that is deliberate: **it reads as the owner asking to reuse a
+project name without saying so**, and a `match_id` is exactly how the mapping
+screen already lets them say so on purpose.
+
+### What this does not do
+
+- **No layout write.** The accepted mapping places the pictures this commit
+  indexes; it does not set the library's `Layout` for what comes in *next* —
+  that is Phase 4, and `library_layout.py` is untouched by this module.
+- **No project/character/set membership reconciliation.** These are all
+  brand-new pictures with no prior assignment to reconcile away from, so
+  `project_membership_service.set_character_projects` /
+  `set_picture_set_projects` are called once, at creation, never for an
+  existing entity's membership change.
+
 ---
 
-*Last updated: 2026-08-23. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-08-24. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

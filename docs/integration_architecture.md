@@ -29,6 +29,7 @@
 19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
 20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
 21. [About your library (v1.11)](#21-about-your-library-v111)
+22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
 
 ---
 
@@ -1787,14 +1788,12 @@ than instantly.
 
 ### Not in this API
 
-- **No commit.** Nothing here writes. The accept path is Phase 3.
+- **No commit.** Nothing here writes. The accept path is §22, Phase 3.
 - **No per-row re-read.** A single read answers the whole tree; there is no
   "re-run faces on this one folder" route.
 - **No language reading of folder names.** Explicitly out (release plan §5): no
   LLM ships with PixlStash, and `name_match` is a string comparison against rows
   the vault already has, not a semantic one.
-
----
 
 ## 21. About your library (v1.11)
 
@@ -1926,4 +1925,120 @@ touched. Any UI copy implying otherwise would be wrong.
 
 ---
 
-*Last updated: 2026-08-23. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+## 22. Folder-Structure Commit API (v1.11, Phase 3)
+
+The accept path behind the `Preview` screen: takes the mapping the owner
+confirmed over a §20 read and writes it. Backend design is
+`docs/backend_architecture.md` §25; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3.
+
+**One rule the client must hold to, same as §20's first: it moves, renames and
+copies zero files.** The scanned root is registered as an ordinary reference
+folder — the same mechanism `POST /reference-folders` already ships, indexed in
+place — and every picture it finds is linked to the accepted projects, people,
+sets and tags by writing database rows. Nothing on disk changes.
+
+### `POST /api/v1/folder-structure/commit`
+
+```jsonc
+{
+  "task_id": "…",              // the settled read's task_id (§20)
+  "label": "Generations",       // optional; defaults to the folder's own name
+  "assignments": [
+    // One entry per folder the owner accepted as something. A folder left
+    // "just a folder" or undecided is simply absent — there is nothing here
+    // for it to do, and every picture under it is still indexed and
+    // searchable (§20's "arrives ungrouped" case).
+    {"relative_path": "2024 Shoots", "kind": "project"},
+    {"relative_path": "2024 Shoots/mira", "kind": "person", "match_id": 41},
+    {"relative_path": "Datasets/mira-lora-v3", "kind": "set"},
+    {"relative_path": "final", "kind": "tag"}
+  ]
+}
+```
+
+`relative_path` is the same handle §20's folder rows carry — POSIX-separated,
+relative to the read's root, `""` for the root itself. `kind` is one of
+`project`, `person`, `set`, `tag` (never `folder`: a row with nothing to do is
+omitted, not sent as `folder`). `match_id` names an existing entity to attach
+to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
+`candidates`; omitted, a new one is created named after the folder.
+
+**A folder's nearest accepted ancestor of each exclusive kind wins** — a
+picture is filed under the *closest* Project, Person or Set above it, not
+every one along the path, mirroring `library_layout`'s first-match-wins
+segments. Tags are the exception: every accepted Tag ancestor applies, because
+a picture can carry more than one label.
+
+Returns `{"task_id": "…"}` and starts the commit in the background.
+
+`local_owner_only` (§16.3): the read already validated the host path once, and
+this route is the write that follows from it.
+
+| Status | When |
+|---|---|
+| **400** | an `assignments` row is malformed or names an unknown `kind` |
+| **404** | `task_id` does not name a read this session holds |
+| **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
+
+### `GET /api/v1/folder-structure/commit/status?task_id=…`
+
+Polled per §11's task-id branch, same shape as §20's read status:
+
+```jsonc
+{
+  "task_id": "…",
+  "status": "running",        // queued | running | completed | failed
+  "stage": "indexing",        // registering | indexing | assigning | done
+  "processed": 149,
+  "total": 352,
+  "progress": 42.3,
+  "error": null,
+  "result": null
+}
+```
+
+**A commit is never `cancelled`.** Once the reference folder is registered its
+scan runs to completion regardless of what the screen does next — the
+in-place indexing this route starts is not something a "Cancel and organise
+later" on a *later* screen can safely stop mid-write, and it is also the whole
+reason the mapping screen stays reachable from the sidebar afterwards: the
+scan and the mapping are two different steps, and abandoning the second does
+not undo the first.
+
+`stage` progresses `registering` (creating the reference folder row) →
+`indexing` (waiting for its first scan pass — `processed`/`total` are pictures
+indexed so far, out of the read's own `picture_count`) → `assigning` (creating
+the accepted entities and linking pictures — no filesystem work happens here at
+all) → `done`.
+
+The result, once `status` is `completed`:
+
+```jsonc
+{
+  "reference_folder_id": 7,
+  "pictures_indexed": 28412,
+  "projects_created": 12, "projects_matched": 1,
+  "people_created": 114, "people_matched": 4,
+  "sets_created": 31, "sets_matched": 0,
+  "tags_created": 4
+}
+```
+
+### Not in this API
+
+- **No re-mapping an already-committed folder.** Accepting a mapping is
+  one-shot and **enforced**, not merely a convention the client is trusted to
+  follow: the read is marked committed the instant a commit for it starts
+  (§25), and a second `POST` against the same `task_id` — whether the first
+  commit is still running or long since `completed` — is refused with a
+  **409**, never re-run. Changing what a folder means afterwards is ordinary
+  entity editing (rename a project, move a picture between sets), not a
+  second commit.
+- **No placement of *future* pictures.** This writes the accepted mapping onto
+  the pictures the read found; where a new picture goes on import is the
+  layout, v1.11 Phase 4.
+
+---
+
+*Last updated: 2026-08-24. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*

@@ -54,6 +54,7 @@ import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
+import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 
 /**
@@ -111,6 +112,16 @@ const STORES = [
       };
     },
     isEmpty: (s) => s.job === null && s.status === "idle",
+  },
+  {
+    // v1.11 Phase 3: a host path and the read task id that maps it, same
+    // owner-only reasoning as useModelFoldersStore above.
+    name: "useFolderMappingStore",
+    use: useFolderMappingStore,
+    seed: (s) => {
+      s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
+    },
+    isEmpty: (s) => s.pending === null,
   },
   {
     name: "useLockedSetsStore",

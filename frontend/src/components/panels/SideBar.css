@@ -2506,3 +2506,22 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-collapsed-item.sidebar-destination-btn {
   text-align: center;
 }
+
+/* v1.11 Phase 3: the "finish organising" resume row. Accented rather than the
+   plain sidebar-text color of an ordinary folder row, because it names
+   unfinished work the owner asked to come back to, not a settled folder. */
+.sidebar-mapping-resume-row {
+  color: rgb(var(--v-theme-accent));
+}
+
+.sidebar-mapping-resume-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-mapping-resume-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}

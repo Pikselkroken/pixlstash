@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_40_local_6_loopback():
+def test_host_capability_tier_split_is_42_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 46
-    routes carry a locality tier = 40 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 48
+    routes carry a locality tier = 42 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -351,6 +351,17 @@ def test_host_capability_tier_split_is_40_local_6_loopback():
     disclosure and the path, not a destructive verb. The loopback count is
     unchanged: nothing here spawns anything.
 
+    48 = 46 + 2 with the folder-structure commit's two routes (v1.11 Phase 3):
+    ``POST`` and ``GET .../commit/status``. The POST takes no fresh host path —
+    it addresses a settled read by ``task_id`` — but it is the write that
+    follows the read's own tier: it registers the read's root as a reference
+    folder and creates the accepted projects/people/sets/tags from it, which is
+    ``POST /reference-folders``' authority reached through a different door. The
+    GET is the read status route's own argument again: what it carries is the
+    commit's result, the same host-path-derived map the read already gates at
+    this tier, so polling the write must not be a lower bar than polling the
+    read was. Neither spawns anything, so the loopback count is unchanged.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -364,7 +375,7 @@ def test_host_capability_tier_split_is_40_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 40, sorted(local)
+    assert len(local) == 42, sorted(local)
 
 
 # ===========================================================================

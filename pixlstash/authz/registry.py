@@ -634,6 +634,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3: cancels the owner's in-flight read — authority over another principal's operation, on the same tier as the route that starts it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── folder_structure.py commit (§16.3 host-capability; v1.11 Phase 3) ───
+    ("POST", "/api/v1/folder-structure/commit"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: commits an accepted mapping over the same host path the read already walked — registers it for in-place indexing (the reference-folders/POST write) and creates the projects/people/sets/tags it names; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/folder-structure/commit/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
         "GET",
