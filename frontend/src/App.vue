@@ -195,6 +195,7 @@ const {
   handleImagesMoved,
   handleFacesAssignedToCharacter,
   confirmExportZip,
+  confirmExportFolder,
   handleClearSearch,
   handleResetToAll,
 } = useAppEntityActions({
@@ -707,6 +708,7 @@ defineExpose({
                 @local-import="handleLocalImport"
                 @choose-folder="openAddReferenceFolder"
                 @confirm-export-zip="confirmExportZip"
+                @confirm-export-folder="confirmExportFolder"
               />
             </div>
           </div>

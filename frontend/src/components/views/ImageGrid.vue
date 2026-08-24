@@ -57,6 +57,7 @@
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
+      @confirm-export-folder="emit('confirm-export-folder', $event)"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -384,7 +385,7 @@
           : null
       "
       anchor="top"
-      @abort="abortExportZip"
+      @abort="abortExport"
     />
     <RemixDialog
       :open="remixDialogOpen"
@@ -1270,6 +1271,7 @@ import {
   clearImpossibleTags,
   restoreImpossibleTags,
   startExport,
+  startFolderExport,
   getExportStatus,
   downloadExport,
   listPicturesByIds,
@@ -1401,6 +1403,7 @@ const emit = defineEmits([
   "open-import",
   "local-import",
   "confirm-export-zip",
+  "confirm-export-folder",
   // The empty library's folder route. The reference-folder editor is the
   // sidebar's, and App.vue already holds the ref that reaches it.
   "choose-folder",
@@ -7693,6 +7696,7 @@ defineExpose({
   expandAllStacks,
   collapseAllStacks,
   exportCurrentViewToZip,
+  exportCurrentViewToFolder,
   getExportCount,
   removeImagesById,
   insertGridImagesById,
@@ -8069,9 +8073,154 @@ async function exportCurrentViewToZip(options = {}) {
   }
 }
 
-function abortExportZip() {
+function abortExport() {
   if (!exportProgress.visible) return;
   exportProgress.cancelRequested = true;
+}
+
+// Local-owner counterpart to exportCurrentViewToZip (#291): writes straight
+// into a folder on this machine instead of packaging a ZIP to download, then
+// the server opens that folder in the host file manager once done.
+async function exportCurrentViewToFolder(options = {}) {
+  const destination = options.destination;
+  if (!destination) return;
+  const exportType = options.exportType || "full";
+  const captionMode = options.captionMode || "description";
+  const tagFormat = options.tagFormat || "spaces";
+  const includeCharacterName = options.includeCharacterName !== false;
+  const useOriginalFileNames = options.useOriginalFileNames === true;
+  const resolution = options.resolution || "original";
+  const bboxMode = options.bboxMode || "none";
+  let params;
+  const selectedIds = selectedImageIds.value;
+  if (selectedIds && selectedIds.length > 0) {
+    const selParams = new URLSearchParams();
+    for (const id of selectedIds) {
+      selParams.append("id", getPictureId(id));
+    }
+    params = selParams.toString();
+  } else {
+    params = buildPictureIdsQueryParams();
+  }
+  const extraParams = new URLSearchParams();
+  extraParams.append("destination", destination);
+  if (exportType) {
+    extraParams.append("export_type", exportType);
+  }
+  if (captionMode) {
+    extraParams.append("caption_mode", captionMode);
+  }
+  if (captionMode === "tags" && tagFormat === "underscores") {
+    extraParams.append("tag_format", "underscores");
+  }
+  if (includeCharacterName) {
+    extraParams.append("include_character_name", "true");
+  }
+  if (useOriginalFileNames) {
+    extraParams.append("use_original_file_names", "true");
+  }
+  if (resolution) {
+    extraParams.append("resolution", resolution);
+  }
+  if (bboxMode && bboxMode !== "none") {
+    extraParams.append("bbox_mode", bboxMode);
+  }
+  const extraParamString = extraParams.toString();
+  const exportQuery = [params, extraParamString].filter(Boolean).join("&");
+
+  try {
+    exportProgress.visible = true;
+    exportProgress.status = "starting";
+    exportProgress.processed = 0;
+    exportProgress.total = 0;
+    exportProgress.message = "Preparing export...";
+    exportProgress.cancelRequested = false;
+
+    const startBody = await startFolderExport(exportQuery);
+    const taskId = startBody?.task_id;
+    if (!taskId) {
+      throw new Error("Missing task_id from export response.");
+    }
+
+    let completedBody = null;
+    const maxAttempts = 600; // 600 × 1s = 10 minute timeout; suitable for very large collections
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (exportProgress.cancelRequested) {
+        exportProgress.status = "cancelled";
+        exportProgress.message = "Export cancelled.";
+        exportProgress.visible = false;
+        return;
+      }
+      const statusBody = await getExportStatus(taskId);
+      const status = statusBody?.status;
+      exportProgress.status = status || "in_progress";
+      exportProgress.processed = statusBody?.processed || 0;
+      exportProgress.total = statusBody?.total || 0;
+      exportProgress.message =
+        status === "completed" ? "Opening folder..." : "Exporting images...";
+      if (status === "completed") {
+        completedBody = statusBody;
+        break;
+      }
+      if (status === "failed") {
+        throw new Error("Export failed on server.");
+      }
+      await sleep(1000);
+    }
+
+    if (exportProgress.cancelRequested) {
+      exportProgress.status = "cancelled";
+      exportProgress.message = "Export cancelled.";
+      exportProgress.visible = false;
+      return;
+    }
+
+    if (!completedBody) {
+      throw new Error("Export timed out.");
+    }
+
+    const count = exportProgress.processed;
+    // The server resolves the destination (realpath) before writing to it and
+    // opening it, so what it actually used can differ from the raw string the
+    // picker returned (a symlink, a trailing slash, a `..`) — show that one.
+    const resolvedDestination = completedBody.destination || destination;
+    if (completedBody.opened === false) {
+      noticeStore.warning(
+        `Exported ${count} picture${count === 1 ? "" : "s"} to ${resolvedDestination}, ` +
+          `but couldn't open it — no desktop file manager found on the machine running PixlStash.`,
+        { key: "export-folder" },
+      );
+    } else {
+      noticeStore.success(
+        `Exported ${count} picture${count === 1 ? "" : "s"} to ${resolvedDestination}.`,
+        { key: "export-folder" },
+      );
+    }
+    setTimeout(() => {
+      exportProgress.visible = false;
+      exportProgress.status = "idle";
+      exportProgress.message = "";
+    }, 2000);
+  } catch (e) {
+    exportProgress.status = "failed";
+    exportProgress.message = "Export failed";
+    console.error("Folder export failed", e);
+    const status = e?.response?.status;
+    const message =
+      status === 403
+        ? "Exporting to a folder only works from the machine running PixlStash itself."
+        : status === 404
+          ? "That folder isn't available on the machine running PixlStash. Pick a different destination."
+          : status === 409
+            ? "That folder isn't empty. Pick or create an empty folder to export into."
+            : `Export failed. ${errorDetail(e)}`;
+    noticeStore.error(message, { key: "export-folder" });
+    setTimeout(() => {
+      exportProgress.visible = false;
+      exportProgress.status = "idle";
+      exportProgress.message = "";
+    }, 4000);
+  }
 }
 
 // ============================================================

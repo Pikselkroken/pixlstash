@@ -633,6 +633,23 @@ export async function startExport(query = "") {
 }
 
 /**
+ * Start a folder export of a picture selection or filter scope (#291).
+ *
+ * The local-owner counterpart to {@link startExport}: instead of packaging a
+ * ZIP to download, the server writes the pictures straight into a folder on
+ * its own disk (`destination`, part of `query`) and opens it in the host
+ * file manager once done. Poll the same {@link getExportStatus}; a completed
+ * folder export never gets a `download_url`.
+ *
+ * @param {string} query - pre-encoded selection/filter query string,
+ *   including `destination`.
+ * @returns {Promise<Object>} the response body, whose `task_id` drives polling.
+ */
+export async function startFolderExport(query) {
+  return unwrap(apiClient.post(`/pictures/export/folder?${query}`));
+}
+
+/**
  * Poll a running export.
  * @param {string} taskId
  * @returns {Promise<Object>} the response body: `status`, `processed`,

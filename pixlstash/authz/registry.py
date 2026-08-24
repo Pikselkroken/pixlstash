@@ -826,6 +826,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/pictures/export/status"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/export/download/{task_id}"): RoutePolicy(_ANY),
+    ("POST", "/api/v1/pictures/export/folder"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 RED LINE (#291): writes exported pictures straight onto the host disk and, once done, opens the destination in the host file manager (same host-GUI spawn as pictures/open-location, via pixlstash/utils/host_open.py); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
         _OWNER,
         justification="Import pictures; POST blocked for READ tokens; owner only",
