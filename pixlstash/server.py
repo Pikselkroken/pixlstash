@@ -664,6 +664,12 @@ class Server(
         # second concurrent one would fight the first for the same GPU queue.
         self.folder_structure_read = None
         self.folder_structure_lock = threading.Lock()
+        # The one in-flight (or last-settled) mapping commit (v1.11 Phase 3).
+        # Single slot for the same reason as the read above, and because a
+        # second commit while one runs would race the first over the same
+        # reference folder's scan.
+        self.folder_structure_commit = None
+        self.folder_structure_commit_lock = threading.Lock()
         # Temporary storage for async streaming-import staging sessions (#459).
         # Keyed by staging_id; each records the on-disk staging dir, the streamed
         # files, the declared file count, and (after the safe handoff) the

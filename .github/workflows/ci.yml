@@ -493,6 +493,7 @@ jobs:
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_folder_structure_commit.py
           tests/test_folder_structure_read.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py

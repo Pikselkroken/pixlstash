@@ -141,6 +141,11 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        # vault-injection pattern; owns the register -> wait-for-scan -> assign
+        # commit lifecycle across separate transactions over time (the
+        # scan-status poll cannot share a session with the later write), so no
+        # single caller-supplied session would fit every stage.
+        "pixlstash/services/folder_structure_commit_service.py",
         "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
@@ -432,6 +437,11 @@ _LABEL_SINK_EXEMPT = {
     ),
     ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
         "builds NEW picture rows during a reference-folder scan"
+    ),
+    ("pixlstash/services/folder_structure_commit_service.py", "commit"): (
+        "v1.11 Phase 3: tags pictures the reference-folder scan just created "
+        "in this same commit (new pics) — a not-yet-imported picture cannot "
+        "be in a locked set"
     ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"

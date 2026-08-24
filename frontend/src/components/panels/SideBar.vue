@@ -17,6 +17,8 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -470,6 +472,14 @@ const dragOverReferenceTargetKey = ref(null);
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
 const referenceFolderEditorFolder = ref(null); // null = create, object = edit
+
+// v1.11 Phase 3: adding a new reference folder goes through the mapping
+// wizard instead of the plain editor — see `openReferenceFolderEditor` below.
+// The editor is unchanged for *editing* an already-registered one (sync
+// toggles, sidecar suffixes), which the wizard has no opinion about.
+const mappingStore = useFolderMappingStore();
+const folderMappingWizardOpen = ref(false);
+const folderMappingWizardResume = ref(null);
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
@@ -495,13 +505,33 @@ function chooseFolderType(type) {
 }
 
 function openReferenceFolderEditor(rf = null) {
-  referenceFolderEditorFolder.value = rf ?? null;
+  if (rf === null) {
+    openFolderMappingWizard();
+    return;
+  }
+  referenceFolderEditorFolder.value = rf;
   referenceFolderEditorOpen.value = true;
 }
 
 function closeReferenceFolderEditor() {
   referenceFolderEditorOpen.value = false;
   referenceFolderEditorFolder.value = null;
+}
+
+function openFolderMappingWizard(resume = null) {
+  folderMappingWizardResume.value = resume;
+  folderMappingWizardOpen.value = true;
+}
+
+function closeFolderMappingWizard() {
+  folderMappingWizardOpen.value = false;
+}
+
+async function folderMappingWizardCommitted() {
+  folderMappingWizardOpen.value = false;
+  await fetchReferenceFolders();
+  // A newly added folder may be active-but-unscanned, same as a plain add.
+  _startFolderStatusPoll();
 }
 
 function pathParent(path) {
@@ -4058,6 +4088,13 @@ defineExpose({
     @deleted="referenceFolderDeleted"
     @relocate="openReferenceFolderRelocateDialog"
   />
+  <FolderMappingWizard
+    :open="folderMappingWizardOpen"
+    :registered-paths="registeredFolderPaths"
+    :resume="folderMappingWizardResume"
+    @close="closeFolderMappingWizard"
+    @committed="folderMappingWizardCommitted"
+  />
   <FolderEditor
     type="import"
     :open="importFolderEditorOpen"
@@ -5323,6 +5360,20 @@ defineExpose({
                 size="14"
                 >mdi-chevron-down</v-icon
               >
+            </div>
+            <div
+              v-if="mappingStore.pending"
+              class="sidebar-folder-row sidebar-mapping-resume-row"
+              title="The scan is kept — reopening this does not re-scan"
+              @click="openFolderMappingWizard(mappingStore.pending)"
+            >
+              <v-icon size="15" class="sidebar-mapping-resume-icon"
+                >mdi-map-marker-path</v-icon
+              >
+              <span class="sidebar-mapping-resume-label">
+                Finish organising
+                {{ mappingStore.pending.label || mappingStore.pending.path }}…
+              </span>
             </div>
             <div
               v-for="rf in referenceFolders"

@@ -22,7 +22,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import folder_structure_commit_service as commit_service
 from pixlstash.services.folder_structure_service import (
     FolderStructureRead,
     load_existing_entities,
@@ -75,6 +77,41 @@ class FolderStructureReadStatusResponse(BaseModel):
 
 class FolderStructureReadCancelResponse(BaseModel):
     status: str
+
+
+class FolderStructureAssignmentPayload(BaseModel):
+    """One accepted folder from the mapping screen. See §21 for the shape."""
+
+    relative_path: str
+    kind: str
+    match_id: Optional[int] = None
+
+
+class FolderStructureCommitRequest(BaseModel):
+    task_id: str
+    assignments: list[FolderStructureAssignmentPayload] = []
+    label: Optional[str] = None
+
+
+class FolderStructureCommitStartResponse(BaseModel):
+    task_id: str
+
+
+class FolderStructureCommitStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    """``queued`` | ``running`` | ``completed`` | ``failed``. A commit is never
+    ``cancelled``: once the reference folder is registered the scan runs to
+    completion on its own regardless of what this screen does next."""
+
+    stage: str
+    """``registering`` | ``indexing`` | ``assigning`` | ``done``."""
+
+    processed: int
+    total: int
+    progress: float
+    error: Optional[str] = None
+    result: Optional[dict[str, Any]] = None
 
 
 def _within(root: str, resolved: str) -> bool:
@@ -357,5 +394,213 @@ def create_router(server) -> APIRouter:
         # stays `running` until then and a POST keeps 409-ing meanwhile. §20 says
         # so, because a client reading this as "already stopped" will race it.
         return {"status": "cancelled"}
+
+    def _commit_progress(task_id: str, stage: str, processed: int, total: int) -> None:
+        state = server.folder_structure_commit
+        if not state or state["task_id"] != task_id:
+            return
+        state["stage"] = stage
+        state["processed"] = processed
+        state["total"] = total
+
+    def _run_commit(
+        task_id: str,
+        root_path: str,
+        expected_pictures: int,
+        assignments: list,
+        label: Optional[str],
+    ) -> None:
+        state = server.folder_structure_commit
+        if state and state["task_id"] == task_id:
+            state["status"] = "running"
+        try:
+            rf = commit_service.register_reference_folder(
+                server, root_path, label=label
+            )
+            _commit_progress(task_id, "indexing", 0, expected_pictures)
+            commit_service.wait_for_first_scan(
+                server,
+                rf.id,
+                expected_pictures=expected_pictures,
+                on_progress=lambda processed, total: _commit_progress(
+                    task_id, "indexing", processed, total
+                ),
+            )
+            _commit_progress(task_id, "assigning", expected_pictures, expected_pictures)
+            result = commit_service.apply_mapping(server, rf.id, assignments, root_path)
+        except commit_service.CommitError as exc:
+            logger.error("Folder-structure commit %s failed: %s", task_id, exc)
+            state = server.folder_structure_commit
+            if state and state["task_id"] == task_id:
+                state["status"] = "failed"
+                state["error"] = str(exc)
+            return
+        except BaseException as exc:  # noqa: BLE001 — the slot must never wedge
+            logger.error(
+                "Folder-structure commit %s failed (%s): %s",
+                task_id,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            state = server.folder_structure_commit
+            if state and state["task_id"] == task_id:
+                state["status"] = "failed"
+                state["error"] = f"{type(exc).__name__}: {exc}"
+            if not isinstance(exc, Exception):
+                raise
+            return
+
+        state = server.folder_structure_commit
+        if not state or state["task_id"] != task_id:
+            return
+        state["result"] = result.as_dict()
+        state["stage"] = "done"
+        state["status"] = "completed"
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {"source": "folder-structure-commit", "change_kind": "updated"},
+        )
+        logger.info(
+            "Folder-structure commit %s completed: %d picture(s) indexed",
+            task_id,
+            result.pictures_indexed,
+        )
+
+    @router.post(
+        "/folder-structure/commit",
+        summary="Commit an accepted folder-structure mapping",
+        description=(
+            "Registers the read's root folder for in-place indexing — no file "
+            "is moved, renamed or copied — then creates the accepted "
+            "projects, people, sets and tags and links every picture the scan "
+            "finds to them. Returns a task id to poll; see "
+            "integration_architecture.md §21."
+        ),
+        response_model=FolderStructureCommitStartResponse,
+        tags=["folders"],
+    )
+    def start_folder_structure_commit(
+        request: Request, payload: FolderStructureCommitRequest
+    ):
+        def _check_read_settled():
+            """Validate the named read exists and is settled; return its result.
+
+            Does not mark it committed. Called here, before `assignments` is
+            even parsed, so a 400 on malformed input never burns the read's
+            one commit — the actual commit-reservation re-checks (and this
+            time sets) `committed` again, right before the commit starts.
+            """
+            with server.folder_structure_lock:
+                read_state = server.folder_structure_read
+                if not read_state or read_state["task_id"] != payload.task_id:
+                    raise HTTPException(status_code=404, detail="Task not found")
+                if read_state["status"] not in ("completed", "cancelled"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The folder-structure read has not finished yet.",
+                    )
+                if read_state.get("committed"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This read has already been committed.",
+                    )
+                return read_state["result"]
+
+        result = _check_read_settled()
+        if not result:
+            raise HTTPException(
+                status_code=409, detail="The read found nothing to map."
+            )
+        root_path = result["root"]["path"]
+        expected_pictures = result["picture_count"]
+
+        try:
+            assignments = commit_service.parse_assignments(
+                [a.model_dump() for a in payload.assignments]
+            )
+        except commit_service.CommitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # A read commits once. Re-checked (not just re-validated) here, inside
+        # the lock, immediately before the commit actually starts: two
+        # requests racing this same task_id cannot both pass, because the
+        # loser sees `committed` already true. Marked the instant a commit
+        # STARTS, not once it finishes — a commit already running or already
+        # done must refuse a second one against the same read, or
+        # `apply_mapping` runs twice over the same pictures and creates
+        # duplicate projects, people, sets, tags and memberships. See
+        # backend_architecture.md §25 and integration_architecture.md §21
+        # ("one-shot"). Reserving the (unrelated, single, global) commit slot
+        # BEFORE marking this read committed: if a different read's commit is
+        # already running there, this request must not spend this read's one
+        # commit on a 409 it never got to act on.
+        with server.folder_structure_commit_lock:
+            current = server.folder_structure_commit
+            if current and current["status"] in ("queued", "running"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="A folder-structure commit is already running.",
+                )
+
+            with server.folder_structure_lock:
+                read_state = server.folder_structure_read
+                if not read_state or read_state["task_id"] != payload.task_id:
+                    raise HTTPException(status_code=404, detail="Task not found")
+                if read_state.get("committed"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This read has already been committed.",
+                    )
+                read_state["committed"] = True
+
+            task_id = str(uuid.uuid4())
+            server.folder_structure_commit = {
+                "task_id": task_id,
+                "status": "queued",
+                "stage": "registering",
+                "processed": 0,
+                "total": expected_pictures,
+                "error": None,
+                "result": None,
+            }
+
+        threading.Thread(
+            target=_run_commit,
+            args=(task_id, root_path, expected_pictures, assignments, payload.label),
+            daemon=True,
+            name="folder-structure-commit",
+        ).start()
+        logger.info("Folder-structure commit started: task_id=%s", task_id)
+        return {"task_id": task_id}
+
+    @router.get(
+        "/folder-structure/commit/status",
+        summary="Get folder-structure commit status",
+        description=(
+            "Progress for a commit started by POST /folder-structure/commit. "
+            "`result` is null until `status` is `completed`."
+        ),
+        response_model=FolderStructureCommitStatusResponse,
+        tags=["folders"],
+    )
+    def folder_structure_commit_status(request: Request, task_id: str = Query(...)):
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if not state or state["task_id"] != task_id:
+                raise HTTPException(status_code=404, detail="Task not found")
+            state = dict(state)
+        total = state["total"] or 0
+        processed = state["processed"] or 0
+        return {
+            "task_id": task_id,
+            "status": state["status"],
+            "stage": state["stage"],
+            "processed": processed,
+            "total": total,
+            "progress": (processed / total * 100.0) if total else 0.0,
+            "error": state["error"],
+            "result": state["result"],
+        }
 
     return router
