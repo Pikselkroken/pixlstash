@@ -547,15 +547,16 @@ def create_router(server) -> APIRouter:
                 # names against the library's *current* vocabulary, so a folder
                 # left under the old name would name nothing PixlStash knows
                 # and its pictures would drop out of the layout for good.
-                renamed = rename_entity_folders(
+                # Commits for itself, and rolls the directories back if it
+                # cannot: the renames and the ``file_path`` rewrites describing
+                # them have to land together.
+                rename_entity_folders(
                     session,
                     Facet.PROJECT,
                     previous_name,
                     normalized_name,
                     image_root=server.vault.image_root,
                 )
-                if renamed:
-                    session.commit()
             return project
 
         return server.vault.db.run_task(

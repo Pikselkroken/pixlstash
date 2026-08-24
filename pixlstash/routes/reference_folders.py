@@ -30,7 +30,11 @@ from pixlstash.utils.caption_file_utils import (
     writeback_path,
 )
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
+from pixlstash.utils.library_layout import (
+    DEFAULT_LAYOUT,
+    folder_name,
+    parse_layout,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
     validate_reference_folder_accessible,
@@ -299,6 +303,8 @@ def create_router(server) -> APIRouter:
             tags_suffix=rf.tags_suffix,
             status=rf.status,
             last_scanned=rf.last_scanned,
+            layout=rf.layout,
+            layout_unfiled=rf.layout_unfiled,
         )
 
     def _is_within_path(path: str, root: str) -> bool:
@@ -880,23 +886,39 @@ def create_router(server) -> APIRouter:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
-            if "layout" in payload.model_fields_set:
+            if {"layout", "layout_unfiled"} & payload.model_fields_set:
                 # Validated here rather than stored and hoped for: an unparseable
                 # layout would be dropped every time it was read, which reads as
                 # "the layout is off" and is indistinguishable from having asked
-                # for that.
-                try:
-                    parse_layout(
-                        payload.layout,
-                        payload.layout_unfiled
-                        or rf.layout_unfiled
-                        or DEFAULT_LAYOUT.unfiled,
+                # for that. The unfiled name is checked on its own too, because
+                # ``parse_layout`` short-circuits on an empty layout and would
+                # otherwise never reach ``Layout``'s check on the one field that
+                # reaches a path verbatim.
+                layout = (
+                    (payload.layout or None)
+                    if "layout" in payload.model_fields_set
+                    else rf.layout
+                )
+                unfiled = (
+                    (payload.layout_unfiled or None)
+                    if "layout_unfiled" in payload.model_fields_set
+                    else rf.layout_unfiled
+                )
+                if unfiled is not None and unfiled != folder_name(unfiled):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "layout_unfiled must be a single safe path "
+                            f"component, got {unfiled!r} (try "
+                            f"{folder_name(unfiled)!r})"
+                        ),
                     )
+                try:
+                    parse_layout(layout, unfiled or DEFAULT_LAYOUT.unfiled)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
-                rf.layout = payload.layout or None
-            if "layout_unfiled" in payload.model_fields_set:
-                rf.layout_unfiled = payload.layout_unfiled or None
+                rf.layout = layout
+                rf.layout_unfiled = unfiled
 
             if newly_enabled:
                 # The scan finder treats last_scanned=None as "scan now".

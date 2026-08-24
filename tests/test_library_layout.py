@@ -520,6 +520,37 @@ def test_swapping_the_project_moves_the_file_and_keeps_the_owners_subfolder(libr
     assert picture.file_path == "Client · Nordvik/Mira/2026-08/0412.png"
 
 
+def test_the_thumbnail_follows_the_file(library):
+    """A library picture's thumbnail is a SIBLING file, not a ``.ref_thumbs``
+    entry, and the difference is which path form the mover hands to
+    ``get_thumbnail_path``: it branches on absolute-vs-relative. Handing it the
+    absolute path would look under ``.ref_thumbs``, find nothing, blank the
+    stored dimensions and strand a bitmap nothing ever collects."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    session, root = library["session"], library["root"]
+    picture = session.get(Picture, library["picture_id"])
+    old_thumb = ImageUtils.get_thumbnail_path(root, picture.file_path)
+    with open(old_thumb, "wb") as handle:
+        handle.write(b"thumbnail")
+    picture.thumbnail_width = 320
+    picture.thumbnail_height = 200
+    session.add(picture)
+    session.commit()
+
+    _swap_project(library)
+    plan, _ = engine.plan_moves(session, [library["picture_id"]], root)
+    engine.apply_moves(session, plan, image_root=root)
+    session.commit()
+
+    picture = session.get(Picture, library["picture_id"])
+    new_thumb = ImageUtils.get_thumbnail_path(root, picture.file_path)
+    assert os.path.isfile(new_thumb), new_thumb
+    assert not os.path.exists(old_thumb)
+    # Carried, so the stored dimensions are still true and nothing re-renders.
+    assert picture.thumbnail_width == 320
+
+
 def test_an_emptied_folder_is_kept(library):
     session, root = library["session"], library["root"]
     _swap_project(library)
@@ -808,7 +839,14 @@ def test_a_rating_change_stamps_nothing(stamped):
 
 
 def test_a_second_change_pushes_the_check_out_again(stamped):
-    """The debounce IS the re-stamp: remove-then-add settles into one move."""
+    """The debounce IS the re-stamp: remove-then-add settles into one move.
+
+    Asserted by planting a sentinel rather than by comparing two clock readings.
+    ``second >= first`` is true of a marker that never writes at all — it passed
+    with the whole re-stamp deleted — and two commits a microsecond apart make
+    the strict ``>`` a flake waiting to happen. Overwriting a stamp that is
+    already set is the behaviour, so that is what is checked.
+    """
     session = stamped["session"]
     session.add(
         PictureProjectMember(
@@ -816,13 +854,21 @@ def test_a_second_change_pushes_the_check_out_again(stamped):
         )
     )
     session.commit()
-    first = _due(session, stamped["picture_id"])
+    assert _due(session, stamped["picture_id"]) is not None
+
+    sentinel = 1.0
+    picture = session.get(Picture, stamped["picture_id"])
+    picture.layout_check_due_at = sentinel
+    session.add(picture)
+    session.commit()
 
     for member in session.exec(select(PictureProjectMember)).all():
         session.delete(member)
     session.commit()
     second = _due(session, stamped["picture_id"])
-    assert second >= first
+    assert second is not None and second != sentinel, (
+        "the second change must re-stamp, not leave the first stamp standing"
+    )
 
 
 def test_nothing_is_stamped_in_a_library_with_no_layout(stamped):
@@ -870,3 +916,208 @@ def test_the_task_finds_only_what_is_due(stamped):
     assert LayoutMoveTask.find_due_pictures(session, 10, due_at - 1) == []
     found = LayoutMoveTask.find_due_pictures(session, 10, due_at + 1)
     assert [picture.id for picture in found] == [stamped["picture_id"]]
+
+
+# ---------------------------------------------------------------------------
+# The paths that can lose a file
+# ---------------------------------------------------------------------------
+
+
+def test_a_failure_after_the_moves_puts_every_file_back(library):
+    """The rollback has to cover the caller's whole transaction, not the loop.
+
+    Everything after ``apply_moves`` can raise — two state captures, the
+    operation row, the flag clear, the commit — and the writer thread then rolls
+    the session back. A row left naming a path with no file at it is not
+    cosmetic: ``MissingFilePurgeFinder`` deletes it within the hour and the
+    picture's tags, sets and score go with it.
+    """
+    session, root = library["session"], library["root"]
+    _swap_project(library)
+    plan, _ = engine.plan_moves(session, [library["picture_id"]], root)
+    assert plan
+
+    applied: list = []
+    engine.apply_moves(session, plan, image_root=root, applied=applied)
+    assert applied, "the move reached the disk"
+    assert os.path.isfile(
+        os.path.join(root, "Client · Nordvik", "Mira", "2026-08", "0412.png")
+    )
+
+    engine.rollback_applied_moves(applied, root)
+    session.rollback()
+
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    assert not os.path.exists(
+        os.path.join(root, "Client · Nordvik", "Mira", "2026-08", "0412.png")
+    )
+    assert session.get(Picture, library["picture_id"]).file_path == (
+        "2024 Shoots/Mira/2026-08/0412.png"
+    )
+
+
+def test_the_rollback_brings_the_thumbnail_back_too(library):
+    """A bitmap left at the new name is stranded: nothing sweeps by anything but
+    a row's *current* path, and the row still claims a thumbnail so
+    ``MissingThumbnailFinder`` will not render a fresh one either."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    session, root = library["session"], library["root"]
+    picture = session.get(Picture, library["picture_id"])
+    old_thumb = ImageUtils.get_thumbnail_path(root, picture.file_path)
+    with open(old_thumb, "wb") as handle:
+        handle.write(b"thumbnail")
+
+    _swap_project(library)
+    plan, _ = engine.plan_moves(session, [library["picture_id"]], root)
+    applied: list = []
+    engine.apply_moves(session, plan, image_root=root, applied=applied)
+    engine.rollback_applied_moves(applied, root)
+    session.rollback()
+
+    assert os.path.isfile(old_thumb)
+
+
+def test_renaming_a_person_leaves_a_same_named_sets_folder_alone(library):
+    """Under the default layout a person and a set both sit one level down, so a
+    folder name alone cannot say which of them wrote it.
+
+    Renaming the person must not claim the set's folder: doing so drags the
+    set's rows to a name that is not theirs and leaves the engine planning a
+    second move to undo it — two file operations on the owner's disk for a
+    change to an entity nobody touched.
+    """
+    session, root = library["session"], library["root"]
+    picture_set = PictureSet(name="Summer")
+    person = Character(name="Summer")
+    session.add_all([picture_set, person])
+    session.commit()
+
+    folder = os.path.join(root, "2024 Shoots", "Summer")
+    os.makedirs(folder)
+    with open(os.path.join(folder, "s.png"), "wb") as handle:
+        handle.write(b"pixels")
+    # In the project AND the set, so `2024 Shoots/Summer/` is true of it and the
+    # engine has nothing to do — which is what makes the assertion at the end
+    # about the rename rather than about the rule.
+    member = Picture(
+        file_path="2024 Shoots/Summer/s.png", project_id=library["project_id"]
+    )
+    session.add(member)
+    session.commit()
+    session.add(PictureSetMember(set_id=picture_set.id, picture_id=member.id))
+    session.add(
+        PictureProjectMember(picture_id=member.id, project_id=library["project_id"])
+    )
+    session.commit()
+
+    person.name = "Summer B"
+    session.add(person)
+    session.commit()
+    renamed = engine.rename_entity_folders(
+        session, Facet.PERSON, "Summer", "Summer B", image_root=root
+    )
+
+    assert renamed == 0
+    assert os.path.isdir(folder)
+    assert session.get(Picture, member.id).file_path == "2024 Shoots/Summer/s.png"
+    # And nothing is queued to move, which is the failure the rename would cause.
+    assert engine.plan_moves(session, [member.id], root) == ([], [])
+
+
+def test_move_to_match_takes_the_offer_and_records_one_undo(library):
+    session, root = library["session"], library["root"]
+    session.add(
+        PictureProjectMember(
+            picture_id=library["picture_id"], project_id=library["other_project_id"]
+        )
+    )
+    picture = session.get(Picture, library["picture_id"])
+    picture.project_id = library["other_project_id"]
+    session.add(picture)
+    session.commit()
+
+    report = engine.describe_drift(session, [library["picture_id"]], root)
+    entry = report[library["picture_id"]]
+    assert entry["current_folder"] == "2024 Shoots/Mira/2026-08"
+    assert entry["suggested_folder"] == "Client · Nordvik/Mira/2026-08"
+
+    plan, skipped = engine.plan_match_moves(session, [library["picture_id"]], root)
+    assert len(plan) == 1 and skipped == []
+    engine.apply_moves(session, plan, image_root=root)
+    session.commit()
+    assert os.path.isfile(
+        os.path.join(root, "Client · Nordvik", "Mira", "2026-08", "0412.png")
+    )
+
+
+def test_move_to_match_skips_a_picture_that_already_matches(library):
+    session, root = library["session"], library["root"]
+    plan, skipped = engine.plan_match_moves(session, [library["picture_id"]], root)
+    assert plan == []
+    assert skipped == [(library["picture_id"], "already_matches")]
+
+
+def test_restore_location_refuses_a_path_outside_the_root(library, tmp_path):
+    session, root = library["session"], library["root"]
+    outside = tmp_path / "elsewhere" / "0412.png"
+    assert (
+        engine.restore_location(
+            session, library["picture_id"], str(outside), image_root=root
+        )
+        is False
+    )
+    assert session.get(Picture, library["picture_id"]).file_path == (
+        "2024 Shoots/Mira/2026-08/0412.png"
+    )
+    assert not outside.exists()
+
+
+def test_restore_location_refuses_a_recorded_none(library):
+    session, root = library["session"], library["root"]
+    assert (
+        engine.restore_location(session, library["picture_id"], None, image_root=root)
+        is False
+    )
+
+
+def test_restore_location_is_idempotent(library):
+    """Applying the recorded path twice is a no-op, which is what makes undo
+    converge on a file something else has since moved rather than drift."""
+    session, root = library["session"], library["root"]
+    assert (
+        engine.restore_location(
+            session,
+            library["picture_id"],
+            "2024 Shoots/Mira/2026-08/0412.png",
+            image_root=root,
+        )
+        is False
+    )
+
+
+def test_the_journal_is_pruned_past_its_retention_window(library):
+    from datetime import datetime, timedelta
+
+    from pixlstash.db_models.picture_move import RETENTION_S
+
+    session = library["session"]
+    stale = PictureMove(
+        picture_id=library["picture_id"],
+        old_path="a.png",
+        new_path="b.png",
+        moved_at=datetime.utcnow() - timedelta(seconds=RETENTION_S * 2),
+    )
+    fresh = PictureMove(
+        picture_id=library["picture_id"], old_path="c.png", new_path="d.png"
+    )
+    session.add_all([stale, fresh])
+    session.commit()
+
+    assert engine.prune_move_journal(session) == 1
+    session.commit()
+    assert [row.old_path for row in session.exec(select(PictureMove)).all()] == [
+        "c.png"
+    ]

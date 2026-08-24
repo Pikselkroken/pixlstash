@@ -30,6 +30,7 @@ from pixlstash.services.layout_move_service import (
     apply_moves,
     plan_moves,
     prune_move_journal,
+    rollback_applied_moves,
 )
 from pixlstash.services.operation_log_service import (
     capture_state_in_session,
@@ -114,6 +115,7 @@ class LayoutMoveTask(BaseTask):
         ever.
         """
         image_root = self._db.image_root
+        applied: list = []
         plan, skipped = plan_moves(session, picture_ids, image_root)
         for picture_id, reason in skipped:
             logger.warning(
@@ -132,26 +134,40 @@ class LayoutMoveTask(BaseTask):
                 len(plan),
             )
             targets = [move.picture_id for move in plan]
-            before = capture_state_in_session(session, targets)
-            moved = apply_moves(session, plan, image_root=image_root)
-            after = capture_state_in_session(session, targets)
-            record = record_operation_in_session(
-                session,
-                op_type=OP_LAYOUT_MOVE,
-                before=before,
-                after=after,
-                source="system",
-                summary=_summary,
-                undoable=True,
-                commit=False,
-            )
-            operation = record.id if record is not None else None
+        try:
+            if plan:
+                before = capture_state_in_session(session, targets)
+                moved = apply_moves(
+                    session, plan, image_root=image_root, applied=applied
+                )
+                after = capture_state_in_session(session, targets)
+                record = record_operation_in_session(
+                    session,
+                    op_type=OP_LAYOUT_MOVE,
+                    before=before,
+                    after=after,
+                    source="system",
+                    summary=_summary,
+                    undoable=True,
+                    commit=False,
+                )
+                operation = record.id if record is not None else None
 
-        self._clear_due(session, picture_ids)
-        pruned = prune_move_journal(session)
-        if pruned:
-            logger.debug("Layout: pruned %d expired move-journal row(s).", pruned)
-        session.commit()
+            self._clear_due(session, picture_ids)
+            pruned = prune_move_journal(session)
+            if pruned:
+                logger.debug("Layout: pruned %d expired move-journal row(s).", pruned)
+            session.commit()
+        except BaseException:
+            # The rollback has to cover the WHOLE task, not just the move loop.
+            # Everything after ``apply_moves`` — two captures, the operation row,
+            # the flag clear, the commit — can raise, and the writer thread then
+            # rolls the session back while the files stay where this put them.
+            # A row naming a path with no file at it is not a cosmetic
+            # inconsistency: ``MissingFilePurgeFinder`` deletes that row within
+            # the hour and the picture's tags, sets and score go with it.
+            rollback_applied_moves(applied, image_root)
+            raise
         return moved, skipped, operation
 
     @staticmethod

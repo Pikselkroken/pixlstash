@@ -6141,13 +6141,27 @@ reference picture, relative for a library one, which is the same branch
 
 ### The two jobs
 
-**Placement on write.** `placement_subfolder` renders the folder a new picture
-belongs in, and `PictureImportTask` passes it to `ImageUtils.create_picture_from_file`
-as `subfolder`. It uses only the assignments that are *already* true — the
-project and the set. A drop-to-person import carries a **pending** character id
-and the picture has no faces yet, so writing it into that person's folder would
-make the folder false the moment anything read it; it lands unfiled instead and
-leaves on its own when face extraction assigns the person.
+**Placement on write.** `resolve_placement` is the one call every creation site
+makes, and it answers `None` — write where you always did — for a root with no
+layout and for a file that is not going into the library's own root at all (a
+ComfyUI edit or a plugin output written beside its original in a reference
+folder is already where the owner's tree put it). `ImageUtils.create_picture_from_bytes`
+takes the answer as `subfolder` and keeps the stored path **relative**, so the
+picture is still a library picture and its thumbnail is still a sibling file;
+only `output_dir` makes a path absolute, and that means a reference folder.
+
+Wired at every site that writes into the library root: the staged import, the
+one-shot upload, the ComfyUI ingest, the watch-folder import and the image
+plugins. The two `vault.py` calls are deliberately not — they write PixlStash's
+own bundled logo and tagger-test images, into a folder of their own.
+
+It uses only the assignments that are *already* true — the project and the set.
+A drop-to-person import carries a **pending** character id and the picture has
+no faces yet, so writing it into that person's folder would make the folder
+false the moment anything read it. A site that knows no assignments at all (a
+watch folder, a plugin output) gets the unfiled folder, which is not a fallback
+but the drawn behaviour: the picture leaves it one debounce after the assignment
+that follows lands.
 
 **The truth check.** `relocate` returns `None` for every case the rule calls
 still true and the destination otherwise. The destination **keeps the owner's
@@ -6194,6 +6208,22 @@ drop the source name, carry the thumbnail and sidecars, write the row.
   it the engine is entitled to destroy. A taken destination is *declined*, never
   uniquified: renaming the owner's file to make room is a bigger liberty than
   not moving.
+- **The rollback covers the caller's whole transaction, not the move loop.**
+  Everything after `apply_moves` can raise — two state captures, the operation
+  row, the flag clear, the commit — and the writer thread then rolls the session
+  back. A row left naming a path with no file at it is not a cosmetic
+  inconsistency: `MissingFilePurgeFinder` deletes that row within the hour and
+  takes the picture's tags, sets and score with it. So the caller passes its own
+  `applied` list, every move is appended as it reaches the disk, and
+  `rollback_applied_moves` puts them back — the thumbnail included, because a
+  bitmap left at the new name is stranded while the restored row still claims
+  one.
+- **The residue no ordering removes** is a power loss between the last rename
+  and the commit: the file is at the new path and the row still names the old
+  one. It is the same residue `POST /reference-folders/{id}/move-pictures` has
+  always carried. In a reference folder the scan repairs it by `pixel_sha` every
+  300 s, well inside the purge sweep's hour; in the library's own root there is
+  no scan, which is why the batch is 200 files rather than the whole library.
 - **A symlinked source is refused.** `os.link` follows the link, so moving one
   would pull whatever it points at — anywhere on the machine — into the library
   under the link's name. That is a read escape wearing a write sink's clothes,
@@ -6229,6 +6259,22 @@ from then on. The rename is what keeps those pictures inside the language. Only
 directories at a depth some segment of the root's layout could put that facet at
 are considered, so a folder of the owner's own that happens to share the name is
 left alone.
+
+**A name the library cannot attribute is refused.** A folder is only a name and
+says nothing about which facet wrote it: under the default `Project / Person or
+Set` a person and a set both sit one level down, so renaming a person called
+*Summer* would otherwise rename the *set* Summer's folder, drag its rows with
+it, and leave the engine planning a second move to put them back — two file
+operations for a change to an entity nobody touched. Character names are only
+unique *within a project*, so two people called Mira in different projects
+collide the same way. `_name_is_ambiguous` declines those. The cost is that
+those folders drop out of the layout's language; the alternative costs the owner
+moved files, and this design errs the other way every time.
+
+The renames and the `file_path` rewrites that describe them commit **together**,
+inside `rename_entity_folders` itself, and the directories are renamed back if
+that commit fails. A half-applied rename would leave every picture under the
+folder naming a path that does not exist, which is the purge sweep's input.
 
 ### The move journal, and why it is Phase 4b's job
 

@@ -23,12 +23,22 @@ from pixlstash.services.layout_move_service import (
 )
 from pixlstash.services.library_settings_service import get_layout, set_layout
 from pixlstash.services.operation_log_service import request_context
-from pixlstash.utils.library_layout import DEFAULT_LAYOUT, format_layout, parse_layout
+from pixlstash.utils.library_layout import (
+    DEFAULT_LAYOUT,
+    folder_name,
+    format_layout,
+    parse_layout,
+)
 
-#: Most ids one "Move to match" request may carry. The same order as the rotate
-#: cap and for the same reason: every id is a file rename on the owner's disk,
-#: and one request is one undo.
-MOVE_TO_MATCH_MAX_IDS = 5000
+#: Most ids one "Move to match" request may carry — the same number as
+#: ``ROTATE_MAX_IDS``, and for the same two reasons. Every id is a file
+#: operation on the owner's own disk, and the whole request runs in one
+#: transaction on the single DB writer thread, so a batch large enough to be
+#: convenient is also large enough to stall every other request behind it. It is
+#: also one undo unit, and an undo covering thousands of files is not something
+#: a person can hold in their head. The background engine batches at the same
+#: order (``layout_move_service.BATCH_SIZE``) and simply takes more passes.
+MOVE_TO_MATCH_MAX_IDS = 200
 
 
 class LayoutResponse(BaseModel):
@@ -130,11 +140,39 @@ def create_router(server) -> APIRouter:
         responses={400: {"description": "The layout is not readable."}},
     )
     def patch_layout(request: Request, body: LayoutPatch = Body(...)):
+        # A PATCH, not a PUT. A field the caller did not send keeps its stored
+        # value: sending only ``layout_unfiled`` must rename the unfiled folder,
+        # not silently turn the layout off, and a client that reads-modifies-
+        # writes the whole object still gets what it asked for either way.
+        current_layout, current_unfiled = get_layout(server.vault.db)
+        layout = (
+            (body.layout or None)
+            if "layout" in body.model_fields_set
+            else current_layout
+        )
+        unfiled = (
+            (body.layout_unfiled or None)
+            if "layout_unfiled" in body.model_fields_set
+            else current_unfiled
+        )
+        # Validated even when there is no layout to parse: ``parse_layout``
+        # short-circuits on empty text and would never reach ``Layout``'s own
+        # check, so an unfiled name that could escape the library root would be
+        # stored and only refused later, on read, as if the owner had asked for
+        # no layout at all.
+        if unfiled is not None and unfiled != folder_name(unfiled):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"layout_unfiled must be a single safe path component, got "
+                    f"{unfiled!r} (try {folder_name(unfiled)!r})"
+                ),
+            )
         try:
-            parse_layout(body.layout, body.layout_unfiled or DEFAULT_LAYOUT.unfiled)
+            parse_layout(layout, unfiled or DEFAULT_LAYOUT.unfiled)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        set_layout(server.vault.db, body.layout or None, body.layout_unfiled or None)
+        set_layout(server.vault.db, layout, unfiled)
         return _response(*get_layout(server.vault.db))
 
     return router

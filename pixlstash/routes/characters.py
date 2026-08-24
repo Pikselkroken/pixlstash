@@ -1064,14 +1064,16 @@ def create_router(server) -> APIRouter:
                     # reads folder names against the library's current
                     # vocabulary, so a folder left under the old name names
                     # nobody and its pictures fall out of the rule for good.
-                    if rename_entity_folders(
+                    # Commits for itself, and rolls the directories back if
+                    # it cannot: the renames and the ``file_path`` rewrites
+                    # describing them have to land together.
+                    rename_entity_folders(
                         session,
                         Facet.PERSON,
                         previous_name,
                         character.name,
                         image_root=server.vault.image_root,
-                    ):
-                        session.commit()
+                    )
                 # Serialize while the session is open; the row may be detached
                 # (and its attributes expired) by the time the handler returns.
                 payload = character.model_dump(exclude_unset=False)

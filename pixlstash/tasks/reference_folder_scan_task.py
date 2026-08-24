@@ -34,7 +34,10 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_E
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.layout_move_service import claim_own_moves
+from pixlstash.services.layout_move_service import (
+    claim_own_moves,
+    prune_move_journal,
+)
 from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
 from pixlstash.utils.path_utils import path_is_within
 
@@ -359,6 +362,13 @@ class ReferenceFolderScanTask(BaseTask):
                     session,
                     [(old_path, new_path) for _, new_path, _, old_path in pairs],
                 )
+                # The journal's only other reader is ``LayoutMoveTask``, which
+                # runs only when a picture is due a check — so in a library
+                # where the owner only ever renames things, nothing would ever
+                # prune the rows a rename writes. This scan runs on its own
+                # schedule and is the journal's other consumer, so it is where
+                # the retention window is actually enforced.
+                prune_move_journal(session)
                 external: list[int] = []
                 for pic_id, new_path, thumbnail_carried, old_path in pairs:
                     pic = session.get(Picture, pic_id)

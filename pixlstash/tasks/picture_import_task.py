@@ -14,7 +14,7 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import import_dedup_service
-from pixlstash.services.layout_move_service import placement_subfolder
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
@@ -164,11 +164,8 @@ class PictureImportTask(BaseTask):
         # batch, because every picture in it gets the same project and set, and
         # empty for a library with no layout — which is every library until its
         # owner chooses one.
-        subfolder = self._db.run_immediate_read_task(
-            placement_subfolder,
-            self._db.image_root,
-            project_id=self._project_id,
-            set_id=self._set_id,
+        subfolder = resolve_placement(
+            self._db, project_id=self._project_id, set_id=self._set_id
         )
         if subfolder:
             logger.info(
@@ -285,7 +282,7 @@ class PictureImportTask(BaseTask):
                     image_root_path=self._db.image_root,
                     source_file_path=file_path,
                     pixel_sha=pixel_sha,
-                    subfolder=subfolder or None,
+                    subfolder=subfolder,
                 )
                 pic.imported_at = datetime.utcnow()
                 if original_file_name:

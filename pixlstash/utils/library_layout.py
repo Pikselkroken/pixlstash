@@ -148,6 +148,18 @@ def _match_key(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def folder_match_key(name: str) -> str:
+    """The key two entity names are the same folder under.
+
+    ``folder_name`` then the case/NFC fold, in that order — the same pair
+    :func:`is_true` compares a path component with, exposed because deciding
+    *whether a rename may claim a directory* has to ask exactly the question the
+    truth check will ask of the result. Two entities with the same key share a
+    folder on every filesystem this runs on.
+    """
+    return _match_key(folder_name(name))
+
+
 def _names_of(facet: Facet, names: Mapping[Facet, Collection[str]]) -> Collection[str]:
     """Return one facet's names, refusing a bare string handed in for a list."""
     values = names.get(facet) or ()

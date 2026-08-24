@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -57,9 +58,11 @@ from pixlstash.database import DBPriority
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_mover import publish_no_clobber
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     Facet,
+    folder_match_key,
     format_layout,
     match_destination,
     FacetVocabulary,
@@ -114,7 +117,10 @@ class PlannedMove:
     #: What goes into ``Picture.file_path``: relative for a library picture,
     #: absolute for a reference-folder one.
     stored_path: str
-    old_stored_path: str
+    #: What ``Picture.file_path`` held before the move — the journal's ``old_path``
+    #: and the thumbnail's old key. Optional because a row can carry no path at
+    #: all, in which case callers fall back to the resolved source.
+    old_stored_path: Optional[str]
     sidecars: list[tuple[str, str, str]] = field(default_factory=list)
 
 
@@ -299,7 +305,14 @@ def absolute_path(picture: Picture, root: LayoutRoot) -> Optional[str]:
     resolved = os.path.abspath(
         stored if os.path.isabs(stored) else os.path.join(root.path, stored)
     )
-    if resolved != root.path and not resolved.startswith(root.path + os.sep):
+    # ``path_is_within`` rather than a hand-rolled prefix test: it is what every
+    # other read path in the product uses, it normalises case on Windows, and it
+    # accepts a root reached through a different alias of the same directory,
+    # which a hand-rolled ``startswith`` refuses. Its documented lenience — a
+    # symlink planted *inside* the root pointing out of it — is closed one step
+    # later, at the only place it could matter here: ``_prepare_move`` declines
+    # a source that is a link at all.
+    if not path_is_within(resolved, root.path):
         return None
     return resolved
 
@@ -446,7 +459,7 @@ def _sidecar_plan(
         if not sidecar or not os.path.isfile(sidecar):
             continue
         sidecar_abs = os.path.abspath(sidecar)
-        if not sidecar_abs.startswith(root.path + os.sep):
+        if not path_is_within(sidecar_abs, root.path):
             continue
         if os.path.dirname(sidecar_abs) != os.path.dirname(source):
             # Not a sibling of the picture. Leave it where it is rather than
@@ -473,6 +486,7 @@ def apply_moves(
     *,
     image_root: Optional[str],
     reason: str = REASON_LAYOUT,
+    applied: Optional[list] = None,
 ) -> list:
     """Move the planned files and repoint their rows. Returns the moved ids.
 
@@ -484,12 +498,32 @@ def apply_moves(
     it is entitled to destroy.
 
     A picture that cannot be moved is skipped and logged; the rest of the batch
-    still goes. A failure *after* files have moved rolls the files back and
-    re-raises, because the caller's transaction is about to disappear and a row
-    naming a path where no file is would outlive it.
+    still goes.
+
+    **The caller owns the rollback, and must have one.** Every move this makes
+    is appended to *applied* as it happens, so a failure anywhere in the
+    caller's transaction — not only inside this function — can put the files
+    back with :func:`rollback_applied_moves`. That is not tidiness: the writer
+    thread rolls the session back on any exception, and a row left naming a path
+    where no file is does not merely look wrong, it is purged by
+    ``MissingFilePurgeFinder`` within the hour, taking the picture's tags, sets
+    and score with it. A caller that passes no *applied* list gets a local
+    rollback covering this function alone, which is strictly weaker.
+
+    A power loss between the last rename and the commit is a residue no ordering
+    removes, and it is the same one ``POST /reference-folders/{id}/move-pictures``
+    has always carried: the file is at the new path and the row still names the
+    old one. In a reference folder the scan repairs it by ``pixel_sha`` (every
+    300 s, well inside the purge sweep's hour). In the library's own root there
+    is no scan, so the residue stands until the picture is re-imported — which
+    is why the batch is 200 files rather than the whole library.
+
+    Args:
+        applied: Appended to, in order, with every move that reached the disk.
+            The caller passes its own list and reverses it on failure.
     """
     moved: list = []
-    done: list = []
+    done: list = applied if applied is not None else []
     try:
         for move in plan:
             if not _move_one_file(move):
@@ -507,7 +541,9 @@ def apply_moves(
                 continue
             picture.file_path = move.stored_path
             if not _carry_thumbnail(
-                image_root, move.source_path, move.destination_path
+                image_root,
+                move.old_stored_path or move.source_path,
+                move.stored_path,
             ):
                 # Nothing to carry, or it could not be carried. Point
                 # MissingThumbnailFinder at the picture instead of leaving the
@@ -530,10 +566,22 @@ def apply_moves(
             )
             moved.append(move.picture_id)
     except BaseException:
-        for move in reversed(done):
-            _undo_one_file(move)
+        rollback_applied_moves(done, image_root)
         raise
     return moved
+
+
+def rollback_applied_moves(applied: list, image_root: Optional[str] = None) -> None:
+    """Put every already-moved file back, newest first. Best effort.
+
+    Runs while an error is already on its way to the caller and must not replace
+    it, so every failure here is logged and swallowed. A file that cannot be put
+    back is named in the log, because that one is the residue somebody has to
+    know about.
+    """
+    for move in reversed(applied):
+        _undo_one_file(move, image_root)
+    applied.clear()
 
 
 def _move_one_file(move: PlannedMove) -> bool:
@@ -568,11 +616,21 @@ def _move_one_file(move: PlannedMove) -> bool:
     return True
 
 
-def _undo_one_file(move: PlannedMove) -> None:
-    """Put one already-moved file back, best effort, while an error is in flight."""
+def _undo_one_file(move: PlannedMove, image_root: Optional[str] = None) -> None:
+    """Put one already-moved file back, best effort, while an error is in flight.
+
+    The thumbnail comes back with it. ``_carry_thumbnail`` renamed the bitmap to
+    a name derived from the new path, and leaving it there would strand it where
+    nothing ever looks while the row — restored to its old path — still claims a
+    non-NULL ``thumbnail_width``, so ``MissingThumbnailFinder`` would not
+    regenerate one either.
+    """
     for _, source, destination in move.sidecars:
         _restore_file(destination, source)
     _restore_file(move.destination_path, move.source_path)
+    _carry_thumbnail(
+        image_root, move.stored_path, move.old_stored_path or move.source_path
+    )
 
 
 def _restore_file(current: str, original: str) -> None:
@@ -590,17 +648,22 @@ def _restore_file(current: str, original: str) -> None:
         )
 
 
-def _carry_thumbnail(image_root: Optional[str], old_path: str, new_path: str) -> bool:
+def _carry_thumbnail(
+    image_root: Optional[str], old_stored: str, new_stored: str
+) -> bool:
     """Move a moved picture's thumbnail to its new path-derived name.
 
-    Both conventions are handled by ``get_thumbnail_path`` itself: a library
-    picture's thumbnail is a sibling file, a reference picture's is a hashed
-    name under ``.ref_thumbs``. Either way it is derived from the path, so a
-    move that did not carry it would strand a bitmap nothing ever collects —
-    the sweep only ever looks where a row's *current* path says.
+    **Both arguments are the STORED form of the path, never the absolute one**,
+    because that is the form ``get_thumbnail_path`` branches on: an absolute
+    path means a reference-folder picture and routes the bitmap to a hashed name
+    under ``.ref_thumbs``, and a relative one means a library picture whose
+    thumbnail is a sibling file. Handing it the absolute path of a library
+    picture would look for the sibling under ``.ref_thumbs``, find nothing, and
+    strand a bitmap at the old name that nothing ever collects — the sweep only
+    ever looks where a row's *current* path says.
     """
-    old_thumb = ImageUtils.get_thumbnail_path(image_root, old_path)
-    new_thumb = ImageUtils.get_thumbnail_path(image_root, new_path)
+    old_thumb = ImageUtils.get_thumbnail_path(image_root, old_stored)
+    new_thumb = ImageUtils.get_thumbnail_path(image_root, new_stored)
     if not old_thumb or not new_thumb:
         return False
     if old_thumb == new_thumb:
@@ -770,6 +833,45 @@ def _prepare_move(
 # ---------------------------------------------------------------------------
 
 
+def resolve_placement(
+    vault_db,
+    dest_folder: Optional[str] = None,
+    *,
+    project_id: Optional[int] = None,
+    set_id: Optional[int] = None,
+) -> Optional[str]:
+    """Where a picture about to be written belongs, or ``None`` to write flat.
+
+    The one call every creation site makes. It answers ``None`` — write where
+    you always did — for the two cases placement must not touch:
+
+    * the library root has no layout, which is every library until its owner
+      picks one;
+    * the file is not going into the library's own root at all. A ComfyUI edit
+      written beside its original in a reference folder, or a plugin output in
+      one, is where the owner's own tree already put it, and that tree is not
+      this root's to arrange.
+
+    A site that knows nothing about the picture's assignments still calls this
+    and still gets an answer: the unfiled folder. That is not a fallback, it is
+    the drawn behaviour — *"they land here, and leave on their own the moment
+    you give them one"* — and the assignment that follows a few milliseconds
+    later stamps the picture, so the engine files it inside one debounce.
+    """
+    image_root = getattr(vault_db, "image_root", None)
+    if not image_root:
+        return None
+    if dest_folder and os.path.abspath(dest_folder) != os.path.abspath(image_root):
+        return None
+    subfolder = vault_db.run_immediate_read_task(
+        placement_subfolder,
+        image_root,
+        project_id=project_id,
+        set_id=set_id,
+    )
+    return subfolder or None
+
+
 def picture_layout(vault, picture_id: int) -> Optional[dict]:
     """Return one picture's current folder and the layout's offer for it.
 
@@ -822,21 +924,29 @@ def move_to_match(vault, picture_ids: Iterable[int], **operation_context) -> tup
         logger.info(
             "Move to match: moving %d file(s) at the owner's request.", len(plan)
         )
+        applied: list = []
         targets = [move.picture_id for move in plan]
-        before = capture_state_in_session(session, targets)
-        moved = apply_moves(session, plan, image_root=image_root)
-        after = capture_state_in_session(session, targets)
-        operation = record_operation_in_session(
-            session,
-            op_type=OP_LAYOUT_MOVE,
-            before=before,
-            after=after,
-            summary=_match_summary,
-            undoable=True,
-            commit=False,
-            **operation_context,
-        )
-        session.commit()
+        try:
+            before = capture_state_in_session(session, targets)
+            moved = apply_moves(session, plan, image_root=image_root, applied=applied)
+            after = capture_state_in_session(session, targets)
+            operation = record_operation_in_session(
+                session,
+                op_type=OP_LAYOUT_MOVE,
+                before=before,
+                after=after,
+                summary=_match_summary,
+                undoable=True,
+                commit=False,
+                **operation_context,
+            )
+            session.commit()
+        except BaseException:
+            # Covers the whole transaction, not just the move loop — see
+            # :func:`apply_moves`. A row naming a path with no file at it is
+            # purged within the hour, and the picture's metadata with it.
+            rollback_applied_moves(applied, image_root)
+            raise
         return moved, skipped, (operation.id if operation is not None else None)
 
     return vault.db.run_task(_move, priority=DBPriority.IMMEDIATE)
@@ -882,6 +992,26 @@ def rename_entity_folders(
     facet at are considered, so a folder of the owner's own that happens to
     share the name is left alone.
 
+    **A folder name the library cannot attribute is left alone.** A folder is
+    only a name, and the name says nothing about which facet wrote it: under the
+    default ``Project / Person or Set`` a person and a set both live one level
+    down, so renaming a person called *Summer* would otherwise rename the *set*
+    Summer's folder, drag its pictures' rows with it, and leave the engine
+    planning a second move to put them back — two file operations on the owner's
+    disk for a change to an entity that was not touched. Character names are
+    only unique *within a project*, so the same collision arises between two
+    people of the same name in different projects. :func:`_name_is_ambiguous`
+    refuses those, which costs those folders their place in the layout's
+    language and costs nobody a moved file — the direction this whole design
+    errs in.
+
+    **The caller must not commit before this returns**, and this commits for
+    them: the directory renames and the ``file_path`` rewrites that describe
+    them have to land together, or a failed commit leaves every picture under a
+    renamed folder naming a path that no longer exists — which
+    ``MissingFilePurgeFinder`` purges within the hour, taking their metadata.
+    On any failure the directories are renamed back.
+
     Returns:
         How many directories were renamed.
     """
@@ -890,42 +1020,108 @@ def rename_entity_folders(
     if old_folder == new_folder:
         return 0
 
-    renamed = 0
-    for root in layout_roots(session, image_root).values():
-        depths = [
-            depth
-            for depth, segment in enumerate(root.layout.segments)
-            if facet in segment
-        ]
-        for depth in depths:
-            for parent in _directories_at_depth(root.path, depth):
-                source = os.path.join(parent, old_folder)
-                destination = os.path.join(parent, new_folder)
-                if not os.path.isdir(source):
+    roots = layout_roots(session, image_root)
+    renamed: list = []
+    try:
+        for root in roots.values():
+            if _name_is_ambiguous(session, facet, old_name, root.layout):
+                logger.warning(
+                    "Layout rename: %r names more than one thing this layout "
+                    "could put at the same depth, so its folders under %s are "
+                    "left under the old name. Their pictures read as off-layout "
+                    "until the folder is renamed by hand, and no file is moved.",
+                    old_name,
+                    root.path,
+                )
+                continue
+            for depth, segment in enumerate(root.layout.segments):
+                if facet not in segment:
                     continue
-                if os.path.exists(destination):
-                    logger.warning(
-                        "Layout rename: %s already exists, so %s keeps its old "
-                        "name. Its pictures read as unfiled against the layout "
-                        "until one of the two folders is renamed by hand.",
-                        destination,
-                        source,
-                    )
-                    continue
-                try:
-                    os.rename(source, destination)
-                except OSError as exc:
-                    logger.error(
-                        "Layout rename: could not rename %s to %s (%s); the "
-                        "folder keeps its old name.",
-                        source,
-                        destination,
-                        exc,
-                    )
-                    continue
-                renamed += 1
-                _repoint_under(session, root, source, destination, image_root)
-    return renamed
+                for parent in _directories_at_depth(root.path, depth):
+                    source = os.path.join(parent, old_folder)
+                    destination = os.path.join(parent, new_folder)
+                    if not os.path.isdir(source):
+                        continue
+                    if os.path.exists(destination):
+                        logger.warning(
+                            "Layout rename: %s already exists, so %s keeps its "
+                            "old name. Its pictures read as off-layout until "
+                            "one of the two folders is renamed by hand.",
+                            destination,
+                            source,
+                        )
+                        continue
+                    try:
+                        os.rename(source, destination)
+                    except OSError as exc:
+                        logger.error(
+                            "Layout rename: could not rename %s to %s (%s); the "
+                            "folder keeps its old name.",
+                            source,
+                            destination,
+                            exc,
+                        )
+                        continue
+                    renamed.append((source, destination))
+                    _repoint_under(session, root, source, destination, image_root)
+        if renamed:
+            session.commit()
+    except BaseException:
+        for source, destination in reversed(renamed):
+            try:
+                if os.path.isdir(destination) and not os.path.exists(source):
+                    os.rename(destination, source)
+            except OSError as exc:
+                logger.error(
+                    "Layout rename: could not put %s back at %s (%s). Its "
+                    "pictures now name a path that does not exist.",
+                    destination,
+                    source,
+                    exc,
+                )
+        raise
+    return len(renamed)
+
+
+def _name_is_ambiguous(
+    session: Session, facet: Facet, name: str, layout: Layout
+) -> bool:
+    """Whether another entity would write the same folder name at the same depth.
+
+    Compared as folder names rather than as entity names, because that is what
+    is on disk: ``A/B`` and ``A:B`` both become ``A_B``, and both would claim
+    the same directory. Only the facets sharing a *segment* with this one are
+    considered — a project and a person of the same name sit at different
+    depths and never collide.
+    """
+    wanted = {
+        other for segment in layout.segments if facet in segment for other in segment
+    }
+    key = folder_match_key(name)
+    for other in wanted:
+        for candidate in _entity_names(session, other):
+            if folder_match_key(candidate) != key:
+                continue
+            if other is facet and candidate == name:
+                # The entity being renamed no longer carries this name (the
+                # caller wrote the new one first), so a row still holding it is
+                # a genuine second entity. A row that IS this one — an
+                # unflushed session, a caller that renames after — is not.
+                continue
+            return True
+    return False
+
+
+def _entity_names(session: Session, facet: Facet) -> list:
+    """Every name in the library for one facet."""
+    model = {
+        Facet.PROJECT: Project,
+        Facet.SET: PictureSet,
+        Facet.PERSON: Character,
+    }.get(facet)
+    if model is None:
+        return []
+    return [name for name in session.exec(select(model.name)).all() if name]
 
 
 def _directories_at_depth(root: str, depth: int) -> list:
@@ -965,9 +1161,27 @@ def _repoint_under(
     one of these files at a new path and would otherwise read a rename as the
     owner reorganising their library by hand.
     """
+    # Narrowed in SQL rather than walked in Python: for the library's own root
+    # "every picture in this root" is the whole table, and a project rename
+    # would load 28,000 rows to touch the handful under one folder. The LIKE is
+    # a PRE-filter and is allowed to be loose — ``_`` and ``%`` inside a folder
+    # name only widen it — because the containment check below is what actually
+    # decides. Both separators are matched: this module normalises what it
+    # writes, but a row written by something older may carry the other one.
+    stored_prefix = stored_form(old_dir, root)
     pictures = session.exec(
-        select(Picture).where(Picture.reference_folder_id == root.reference_folder_id)
+        select(Picture)
+        .where(Picture.reference_folder_id == root.reference_folder_id)
+        .where(
+            or_(
+                Picture.file_path.like(f"{stored_prefix}/%"),
+                Picture.file_path.like(f"{stored_prefix}\\%"),
+            )
+        )
     ).all()
+    # A plain prefix test, not ``path_is_within``: what is being asked here is
+    # "was this file under the directory that was just renamed", and the answer
+    # has to be the same string comparison ``os.path.relpath`` below relies on.
     prefix = old_dir + os.sep
     for picture in pictures:
         source = absolute_path(picture, root)
@@ -976,7 +1190,7 @@ def _repoint_under(
         destination = os.path.join(new_dir, os.path.relpath(source, old_dir))
         old_stored = picture.file_path
         picture.file_path = stored_form(destination, root)
-        if not _carry_thumbnail(image_root, source, destination):
+        if not _carry_thumbnail(image_root, old_stored or source, picture.file_path):
             picture.thumbnail_width = None
             picture.thumbnail_height = None
         for attribute in ("tags_file", "description_file"):
@@ -1046,6 +1260,10 @@ def restore_location(
             stored_path,
         )
         return False
+    # The layout is a placeholder and is never consulted: an undo goes to the
+    # path that was recorded, not to one this function renders. What the root is
+    # actually for here is the pair of path conventions it carries —
+    # ``absolute_path`` and ``stored_form`` — and the containment they give.
     root = LayoutRoot(
         path=root_path,
         layout=DEFAULT_LAYOUT,
@@ -1058,7 +1276,7 @@ def restore_location(
         if os.path.isabs(stored_path)
         else os.path.join(root_path, stored_path)
     )
-    if source is None or not destination.startswith(root_path + os.sep):
+    if source is None or not path_is_within(destination, root_path):
         logger.error(
             "Layout undo: picture %s would move between %r and %r, at least one "
             "of which is outside its root %r; the file is not touched.",
@@ -1092,7 +1310,9 @@ def restore_location(
     if not _move_one_file(move):
         return False
     picture.file_path = move.stored_path
-    if not _carry_thumbnail(image_root, source, destination):
+    if not _carry_thumbnail(
+        image_root, move.old_stored_path or source, move.stored_path
+    ):
         picture.thumbnail_width = None
         picture.thumbnail_height = None
     for attribute, _, sidecar_destination in move.sidecars:

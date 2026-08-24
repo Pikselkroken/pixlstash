@@ -1655,14 +1655,16 @@ def create_router(server) -> APIRouter:
                 # (v1.11 §4). Required, not cosmetic: a folder still carrying
                 # the old name names nothing the library knows, so the layout
                 # can no longer read it and its pictures fall out of the rule.
-                if rename_entity_folders(
+                # Commits for itself, and rolls the directories back if it
+                # cannot: the renames and the ``file_path`` rewrites describing
+                # them have to land together.
+                rename_entity_folders(
                     session,
                     Facet.SET,
                     previous_name,
                     picture_set.name,
                     image_root=server.vault.image_root,
-                ):
-                    session.commit()
+                )
             return (
                 True,
                 project_id_changed or pictures_changed,
