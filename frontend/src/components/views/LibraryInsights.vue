@@ -14,7 +14,7 @@
            title in a span and Toolbar.test.js pins this one's size and ink to
            theirs — so this is the outline only, not a visual change. -->
       <h2 class="ins-title">About your library</h2>
-      <span class="ins-sub">read only · nothing here has been changed</span>
+      <span class="ins-sub">read-only · nothing here has been changed</span>
       <div class="ins-tb-right">
         <AppButton
           variant="ghost"

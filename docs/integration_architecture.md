@@ -1913,10 +1913,11 @@ expressible at all.
    treated a project scope. The fast path represents a stack by its **global**
    `stack_position == 0` member; under a folder filter that member can be
    outside the scope, and the whole stack fell out of a grid whose own pictures
-   were right there. The sibling check reuses
-   `PredicateFilter.file_path_prefix_predicates(model)` — the same predicate
-   compiled against the sibling row, because two spellings of "in this folder"
-   is how the leader and the members get to disagree.
+   were right there. The narrowed collapse reuses
+   `PredicateFilter(file_path_prefix=…).file_path_prefix_predicates()` — the
+   clauses are compiled once and handed to `Picture.stack_leader_filter`, which
+   ranks the in-scope members and takes the best one, because two spellings of
+   "in this folder" is how the leader and the members get to disagree.
 
 ### Not in this API
 

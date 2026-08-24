@@ -27,7 +27,7 @@ import tempfile
 
 import pytest
 from sqlalchemy import func
-from sqlmodel import delete, update
+from sqlmodel import delete, select, update
 from starlette.testclient import TestClient
 
 from pixlstash.database import DBPriority
@@ -143,6 +143,24 @@ def _seed(srv, specs):
     def insert(session):
         picture_ids = []
         stacks: dict = {}
+
+        def named_row(model, name: str) -> int:
+            """One row per name, the way ``stacks`` gives one stack per key.
+
+            ``Project.name`` is unique, so two specs naming the same project
+            used to raise an IntegrityError from inside the seed helper. Set and
+            character names are not constrained, but two rows called
+            ``selects`` is not what a spec saying ``in_set="selects"`` asks for
+            either. The lookup hits the table rather than a local dict so a
+            second ``_seed`` call in the same test reuses the first's rows.
+            """
+            row = session.exec(select(model).where(model.name == name)).first()
+            if row is None:
+                row = model(name=name)
+                session.add(row)
+                session.flush()
+            return int(row.id)
+
         for index, spec in enumerate(specs):
             name = spec.get("name", f"pic_{index}.png")
             folder = spec.get("folder")
@@ -165,10 +183,7 @@ def _seed(srv, specs):
             if face:
                 character_id = None
                 if isinstance(face, str):
-                    character = Character(name=face)
-                    session.add(character)
-                    session.flush()
-                    character_id = int(character.id)
+                    character_id = named_row(Character, face)
                 session.add(
                     Face(picture_id=pic_id, face_index=0, character_id=character_id)
                 )
@@ -188,18 +203,18 @@ def _seed(srv, specs):
                 pic.stack_position = spec.get("stack_position", index)
                 session.add(pic)
             if spec.get("in_set"):
-                picture_set = PictureSet(name=spec["in_set"])
-                session.add(picture_set)
-                session.flush()
                 session.add(
-                    PictureSetMember(set_id=int(picture_set.id), picture_id=pic_id)
+                    PictureSetMember(
+                        set_id=named_row(PictureSet, spec["in_set"]),
+                        picture_id=pic_id,
+                    )
                 )
             if spec.get("in_project"):
-                project = Project(name=spec["in_project"])
-                session.add(project)
-                session.flush()
                 session.add(
-                    PictureProjectMember(project_id=int(project.id), picture_id=pic_id)
+                    PictureProjectMember(
+                        project_id=named_row(Project, spec["in_project"]),
+                        picture_id=pic_id,
+                    )
                 )
             picture_ids.append(pic_id)
         session.commit()
@@ -819,12 +834,14 @@ def test_the_pile_action_opens_a_grid_holding_exactly_the_pile(server, client):
         server,
         # The pile the finding will name.
         [{"folder": "_unsorted"} for _ in range(insights.PILE_MIN_PICTURES)]
-        # A picture in the same folder that belongs to a PROJECT and nothing
-        # else. The app does not treat that as assignment — the grid shows it —
-        # so the finding must count it too. The first version of this service
-        # restated "assigned" in Python, added project membership to it, and
-        # undercounted the pile by exactly this row.
-        + [{"folder": "_unsorted", "in_project": "Nordvik"}]
+        # Two pictures in the same folder that belong to a PROJECT and nothing
+        # else. The app does not treat that as assignment — the grid shows them
+        # — so the finding must count them too. The first version of this
+        # service restated "assigned" in Python, added project membership to it,
+        # and undercounted the pile by exactly these rows. Two rather than one
+        # because `Project.name` is unique: a seed helper that made a fresh
+        # project per spec raised an IntegrityError on the second.
+        + [{"folder": "_unsorted", "in_project": "Nordvik"} for _ in range(2)]
         # …and an unassigned group somewhere else, which the button must NOT show.
         + [{"folder": "elsewhere"} for _ in range(7)],
     )
@@ -843,7 +860,7 @@ def test_the_pile_action_opens_a_grid_holding_exactly_the_pile(server, client):
 
     # The number in the finding's title is the number the grid shows. Read off
     # the finding rather than restated, so the two cannot drift.
-    in_pile = insights.PILE_MIN_PICTURES + 1
+    in_pile = insights.PILE_MIN_PICTURES + 2
     assert f"{in_pile:,}" in pile["title"]
     assert len(scoped.json()) == in_pile
     assert len(whole.json()) == in_pile + 7
