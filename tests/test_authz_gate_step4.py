@@ -616,6 +616,51 @@ def test_integration_picture_scoped_via_set_token(env):
         )
 
 
+def test_integration_picture_layout_read_is_picture_scoped(env):
+    """v1.11 Phase 4b. ``GET /pictures/{id}/layout`` is PICTURE_SCOPED.
+
+    Both directions on a real membership query, and the positive one is not
+    decoration: over-blocking is its own regression, and the route answering
+    "this library has no layout" for a picture the token legitimately reaches
+    is the whole in-scope behaviour."""
+    anon, tok = env["anon"], env["tokens"]["set"]
+    with _enforcing(env["server"]):
+        r = anon.get(f"{API}/pictures/{env['pic_a']}/layout", headers=_bearer(tok))
+        assert r.status_code == 200, f"in-scope A should pass: {r.status_code} {r.text}"
+        assert r.json()["suggested_folder"] is None, r.text
+        r = anon.get(f"{API}/pictures/{env['pic_b']}/layout", headers=_bearer(tok))
+        assert r.status_code == 403, (
+            f"out-of-scope B must 403: {r.status_code} {r.text}"
+        )
+
+
+def test_integration_move_to_match_refuses_a_mixed_batch_whole(env):
+    """v1.11 Phase 4b. ``POST /pictures/layout/move-to-match`` is PICTURE_SCOPED
+    over ``body_ids``, so one out-of-scope id refuses the request and moves
+    nothing — the ``POST /pictures/rotate`` contract (#950).
+
+    A READ token is refused by the middleware before the gate (POST is not in
+    ``READ_SAFE_POST_PATHS``), which is what makes "write-enabled" the operative
+    condition; that refusal is the deny direction here. The owner's own call is
+    the positive control: it reaches the handler and reports zero moved, because
+    this library has no layout and therefore nothing to match."""
+    anon, tok = env["anon"], env["tokens"]["set"]
+    with _enforcing(env["server"]):
+        r = anon.post(
+            f"{API}/pictures/layout/move-to-match",
+            json={"picture_ids": [env["pic_a"], env["pic_b"]]},
+            headers=_bearer(tok),
+        )
+        assert r.status_code == 403, f"a READ token must not move files: {r.text}"
+
+        r = env["owner"].post(
+            f"{API}/pictures/layout/move-to-match",
+            json={"picture_ids": [env["pic_a"], env["pic_b"]]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["moved_count"] == 0, r.text
+
+
 def test_integration_picture_scoped_via_project_token(env):
     """Sibling vector: a project-scoped token reaches its member picture (A) and is
     403'd on a non-member (B)."""

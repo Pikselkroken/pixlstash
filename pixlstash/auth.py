@@ -169,6 +169,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # as the read above (v1.11 Phase 3) — same tier, same rollback
         # reasoning, same belt.
         "/api/v1/folder-structure/commit/status",
+        # The library's own folder layout (v1.11 Phase 4b). It names no path,
+        # but it describes the shape of the owner's folder tree and it is the
+        # read side of the control that decides where their files get written.
+        # LOCAL_OWNER_ONLY at the gate; here as well for the same rollback
+        # reason as the entries above.
+        "/api/v1/server-config/layout",
     }
 )
 

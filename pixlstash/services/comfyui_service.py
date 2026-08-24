@@ -34,6 +34,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.services import import_dedup_service
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
@@ -662,6 +663,13 @@ def _import_comfyui_outputs(
         candidates, fingerprints, server.vault.image_root
     )
 
+    # Placement on write (v1.11 Phase 4b). `None` whenever `output_dir` is set:
+    # an edit written beside its original in a reference folder is already where
+    # the owner's own tree put it. A generation with no project or set yet lands
+    # in the unfiled folder and is filed by the engine one debounce after the
+    # assignment below lands.
+    subfolder = resolve_placement(server.vault.db, output_dir)
+
     new_picture_map = {}
     for (img_bytes, ext), fingerprint in zip(image_entries, fingerprints):
         if fingerprint in existing_map or fingerprint in new_picture_map:
@@ -678,6 +686,7 @@ def _import_comfyui_outputs(
             pixel_sha=sampled_sha,
             output_dir=output_dir,
             reference_folder_id=reference_folder_id,
+            subfolder=subfolder,
         )
     new_pictures = list(new_picture_map.values())
 

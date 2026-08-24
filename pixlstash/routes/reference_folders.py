@@ -30,6 +30,11 @@ from pixlstash.utils.caption_file_utils import (
     writeback_path,
 )
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
+from pixlstash.utils.library_layout import (
+    DEFAULT_LAYOUT,
+    folder_name,
+    parse_layout,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
     validate_reference_folder_accessible,
@@ -123,6 +128,25 @@ class ReferenceFolderUpdateRequest(BaseModel):
     description_suffix: Optional[str] = None
     tags_suffix: Optional[str] = None
     host_path: Optional[str] = None
+    layout: Optional[str] = Field(
+        default=None,
+        description=(
+            "How this folder is laid out, as `project/person,set` — segments "
+            "separated by `/`, a segment's alternatives by `,`, first match "
+            "wins (v1.11 Phase 4b). `null` turns the layout off, which is the "
+            "default: without one PixlStash places nothing here and moves "
+            "nothing here, whatever changes about the pictures. Setting one "
+            "does NOT reorganise the folder — every path already in it produced "
+            "the assignments it holds, so every path is already true."
+        ),
+    )
+    layout_unfiled: Optional[str] = Field(
+        default=None,
+        description=(
+            "The folder a picture with nothing to file it by is written to. "
+            "One safe path component; `null` means `_Inbox`."
+        ),
+    )
 
 
 class ReferenceFolderResponse(BaseModel):
@@ -139,6 +163,8 @@ class ReferenceFolderResponse(BaseModel):
     tags_suffix: Optional[str]
     status: str
     last_scanned: Optional[float]
+    layout: Optional[str] = None
+    layout_unfiled: Optional[str] = None
     relocation: Optional[dict] = None
 
 
@@ -277,6 +303,8 @@ def create_router(server) -> APIRouter:
             tags_suffix=rf.tags_suffix,
             status=rf.status,
             last_scanned=rf.last_scanned,
+            layout=rf.layout,
+            layout_unfiled=rf.layout_unfiled,
         )
 
     def _is_within_path(path: str, root: str) -> bool:
@@ -858,6 +886,39 @@ def create_router(server) -> APIRouter:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
+            if {"layout", "layout_unfiled"} & payload.model_fields_set:
+                # Validated here rather than stored and hoped for: an unparseable
+                # layout would be dropped every time it was read, which reads as
+                # "the layout is off" and is indistinguishable from having asked
+                # for that. The unfiled name is checked on its own too, because
+                # ``parse_layout`` short-circuits on an empty layout and would
+                # otherwise never reach ``Layout``'s check on the one field that
+                # reaches a path verbatim.
+                layout = (
+                    (payload.layout or None)
+                    if "layout" in payload.model_fields_set
+                    else rf.layout
+                )
+                unfiled = (
+                    (payload.layout_unfiled or None)
+                    if "layout_unfiled" in payload.model_fields_set
+                    else rf.layout_unfiled
+                )
+                if unfiled is not None and unfiled != folder_name(unfiled):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "layout_unfiled must be a single safe path "
+                            f"component, got {unfiled!r} (try "
+                            f"{folder_name(unfiled)!r})"
+                        ),
+                    )
+                try:
+                    parse_layout(layout, unfiled or DEFAULT_LAYOUT.unfiled)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                rf.layout = layout
+                rf.layout_unfiled = unfiled
 
             if newly_enabled:
                 # The scan finder treats last_scanned=None as "scan now".

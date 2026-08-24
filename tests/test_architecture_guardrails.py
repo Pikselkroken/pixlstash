@@ -175,6 +175,12 @@ def test_services_no_direct_db_calls():
         # record run in ONE queued task; the wrapper owning that submission is
         # the atomicity guarantee, not transitional debt.
         "pixlstash/services/operation_log_service.py",  # vault-injection pattern; atomic record-with-mutation task
+        # v1.11 Phase 4b. The two vault-taking entry points (picture_layout,
+        # move_to_match) exist so the routes do not, and move_to_match owes the
+        # same atomicity the op-log wrapper above does: plan, move the files,
+        # capture and record inside ONE queued task, or a write landing between
+        # the plan and the record is attributed to this move.
+        "pixlstash/services/layout_move_service.py",  # vault-injection pattern; atomic plan-move-record task
     }
 
     violations = []
@@ -1548,6 +1554,12 @@ _PICTURE_METADATA_FIELDS = {
     "import_source_folder",
     "imported_at",
     "is_video",
+    # v1.11 Phase 4b. When the layout engine should next ask whether this
+    # picture's folder is still true, and NULL for every picture nobody has
+    # just reassigned. A scheduling stamp about this one picture, saying
+    # nothing about any other and nothing about its content, so a
+    # picture-scoped token may see it.
+    "layout_check_due_at",
     "metadata_hash",
     "original_file_name",
     # (#950) The picture's own EXIF orientation, 1-8. Carries no membership,

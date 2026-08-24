@@ -206,3 +206,41 @@ def set_views_config(vault_db, root: Optional[str], kinds: list[str]) -> None:
             session.commit()
 
     vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)
+
+
+# ---------------------------------------------------------------------------
+# The folder layout (v1.11 Phase 4b)
+# ---------------------------------------------------------------------------
+
+
+def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(layout, unfiled)`` for this library's own picture root.
+
+    ``(None, None)`` means the root has no layout, which is every library until
+    its owner picks one — and while it has none, nothing is ever placed by the
+    layout and nothing is ever moved by it.
+
+    Per library rather than per user because it describes this library's own
+    folder tree: the same segments applied to somebody's other library would
+    name folders that are not there.
+    """
+
+    def _read(session: Session) -> tuple[Optional[str], Optional[str]]:
+        row = _row(session)
+        return row.layout, row.layout_unfiled
+
+    return vault_db.run_immediate_read_task(_read)
+
+
+def set_layout(vault_db, layout: Optional[str], unfiled: Optional[str]) -> None:
+    """Record this library's layout. Validated by the caller, not here."""
+
+    def _write(session: Session):
+        row = _row(session)
+        if row.layout != layout or row.layout_unfiled != unfiled:
+            row.layout = layout
+            row.layout_unfiled = unfiled
+            session.add(row)
+            session.commit()
+
+    vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)
