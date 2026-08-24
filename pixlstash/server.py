@@ -109,6 +109,9 @@ from pixlstash.routes.folder_structure import (
     create_router as create_folder_structure_router,
 )
 from pixlstash.routes.libraries import create_router as create_libraries_router
+from pixlstash.routes.library_layout import (
+    create_router as create_library_layout_router,
+)
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
@@ -665,6 +668,12 @@ class Server(
         # second concurrent one would fight the first for the same GPU queue.
         self.folder_structure_read = None
         self.folder_structure_lock = threading.Lock()
+        # The one in-flight (or last-settled) mapping commit (v1.11 Phase 3).
+        # Single slot for the same reason as the read above, and because a
+        # second commit while one runs would race the first over the same
+        # reference folder's scan.
+        self.folder_structure_commit = None
+        self.folder_structure_commit_lock = threading.Lock()
         # Temporary storage for async streaming-import staging sessions (#459).
         # Keyed by staging_id; each records the on-disk staging dir, the streamed
         # files, the declared file count, and (after the safe handoff) the
@@ -1627,6 +1636,12 @@ class Server(
         )
         self.api.include_router(
             create_folder_structure_router(self),
+            prefix=API_V1_PREFIX,
+            include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_library_layout_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
             dependencies=gate,

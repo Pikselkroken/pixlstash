@@ -1465,7 +1465,8 @@ def _setup_scoped_token_env():
     # Versioned login so the auth middleware establishes the owner session.
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )

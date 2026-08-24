@@ -20,12 +20,25 @@ Two properties the screen depends on and this module owns:
   check scopes the duplicate queue to the pair's common ancestor rather than to
   one of the two folders. A number the owner cannot reach is worse than no
   number: it reads as the feature being broken.
-* **A folder means the owner's folder.** ``Picture.file_path`` is an absolute
-  path only for pictures indexed in place (reference folders); a vault-managed
-  picture stores a flat ``<uuid>.png`` that is storage, not organisation. The
-  folder-shaped checks therefore consider only paths that have a directory
-  component, and the payload reports ``folder_pictures`` / ``folders`` so the
-  screen can say how much of the library that was.
+* **A folder means a folder that carries meaning.** ``Picture.file_path`` is an
+  absolute path only for pictures indexed in place (reference folders); a
+  vault-managed picture in a library with no layout stores a flat ``<uuid>.png``
+  that is storage, not organisation. The folder-shaped checks therefore consider
+  only paths that have a directory component, and the payload reports
+  ``folder_pictures`` / ``folders`` so the screen can say how much of the library
+  that was.
+
+  **Since v1.11 Phase 4b a vault-managed picture can have one too.** A library
+  whose owner has chosen a layout stores ``<Project>/<Person>/<uuid>.png``, so
+  the directory-component test now admits folders PixlStash wrote from the
+  layout as well as folders the owner made by hand. That is deliberate and not a
+  hole in the rule above: under a layout those folders *are* the organisation —
+  they are named after the projects, people and sets these findings are about —
+  so a check that skipped them would be blind to exactly the libraries this
+  release is for. What it does mean is that a folder-shaped finding in a
+  laid-out library may be restating a membership the owner can already see, and
+  the wording of those findings is worth a look once both are on a real
+  library.
 """
 
 import os

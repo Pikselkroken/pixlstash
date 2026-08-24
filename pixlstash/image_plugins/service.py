@@ -21,6 +21,7 @@ from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.stacking import (
     get_or_create_stack_for_picture,
     normalize_stack_positions,
@@ -264,6 +265,12 @@ def _import_output_images(
                 pixel_sha=sha,
                 output_dir=out_dir,
                 reference_folder_id=ref_id,
+                # Placement on write (v1.11 Phase 4b). `None` whenever
+                # ``out_dir`` is set — an edit written beside its original in a
+                # reference folder is already where the owner put it. Otherwise
+                # the unfiled folder, and the memberships this service copies
+                # from the source picture file it one debounce later.
+                subfolder=resolve_placement(server.vault.db, out_dir),
             )
         )
 

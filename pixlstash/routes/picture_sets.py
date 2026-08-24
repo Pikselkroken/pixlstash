@@ -30,6 +30,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.services import operation_log_service
+from pixlstash.services.layout_move_service import rename_entity_folders
 from pixlstash.services.project_membership_service import (
     picture_set_project_ids,
     reconcile_entity_projects_change,
@@ -39,6 +40,7 @@ from pixlstash.services.set_lock_service import (
     enforce_set_not_locked,
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.library_layout import Facet
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
@@ -1586,6 +1588,7 @@ def create_router(server) -> APIRouter:
 
             project_assignment_requested = project_provided and bool(target_project_ids)
             pictures_changed = False
+            previous_name = picture_set.name
             if name is not None:
                 picture_set.name = name
             if description is not None:
@@ -1647,6 +1650,21 @@ def create_router(server) -> APIRouter:
                 ]
 
             session.commit()
+            if name_changing:
+                # **Renaming a set renames its FOLDER; it moves no files**
+                # (v1.11 §4). Required, not cosmetic: a folder still carrying
+                # the old name names nothing the library knows, so the layout
+                # can no longer read it and its pictures fall out of the rule.
+                # Commits for itself, and rolls the directories back if it
+                # cannot: the renames and the ``file_path`` rewrites describing
+                # them have to land together.
+                rename_entity_folders(
+                    session,
+                    Facet.SET,
+                    previous_name,
+                    picture_set.name,
+                    image_root=server.vault.image_root,
+                )
             return (
                 True,
                 project_id_changed or pictures_changed,

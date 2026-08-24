@@ -21,8 +21,9 @@ vocabulary of names per facet. The vocabulary is the only thing that separates
 *this folder names a project the picture is no longer in* (false, it moves) from
 *this folder names nothing PixlStash knows about* (unparseable, it never moves).
 
-Nothing here moves a file. See v1.11.0 Phase 4b for that. The rule and its case
-table live in ``design/1.11-existing-library/DECISIONS.md``.
+Nothing here moves a file. :func:`relocate` says where a file would go and
+``services/layout_move_service.py`` is what takes it there. The rule and its
+case table live in ``design/1.11-existing-library/DECISIONS.md``.
 """
 
 import re
@@ -147,6 +148,18 @@ def _match_key(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def folder_match_key(name: str) -> str:
+    """The key two entity names are the same folder under.
+
+    ``folder_name`` then the case/NFC fold, in that order — the same pair
+    :func:`is_true` compares a path component with, exposed because deciding
+    *whether a rename may claim a directory* has to ask exactly the question the
+    truth check will ask of the result. Two entities with the same key share a
+    folder on every filesystem this runs on.
+    """
+    return _match_key(folder_name(name))
+
+
 def _names_of(facet: Facet, names: Mapping[Facet, Collection[str]]) -> Collection[str]:
     """Return one facet's names, refusing a bare string handed in for a list."""
     values = names.get(facet) or ()
@@ -268,29 +281,201 @@ def is_true(
         # override has to survive that.
         return render(facets, layout) == layout.unfiled
 
+    still_true, _ = _walk(components, facets, layout, known_names)
+    return still_true
+
+
+def _walk(
+    components: Sequence[str],
+    facets: FacetValues,
+    layout: Layout,
+    known_names: FacetVocabulary,
+) -> tuple[bool, int]:
+    """Read *components* against the layout and report what it made of them.
+
+    The one reading both :func:`is_true` and :func:`relocate` share, so the
+    folder a picture is moved out of and the judgement that it had to move can
+    never disagree about where the layout's part of the path ends.
+
+    Returns:
+        ``(still_true, owned)`` — whether every component the layout could read
+        still describes the picture, and **how many leading components the
+        layout owns**. Owning one is not the same as being right about it: a
+        component that names a project the picture has left is the layout's to
+        rewrite, so it counts, and it is also what makes *still_true* ``False``.
+        Everything from ``owned`` on is the owner's own and travels with the
+        picture unchanged.
+    """
     vocab = [_segment_keys(segment, known_names) for segment in layout.segments]
     mine = [_segment_keys(segment, facets) for segment in layout.segments]
 
+    still_true = True
+    owned = 0
     next_segment = 0
     for component in components:
         key = _match_key(component)
-        parses = False
+        parses_at: int | None = None
+        mine_at: int | None = None
         for index in range(next_segment, len(layout.segments)):
             if key not in vocab[index]:
                 continue
-            parses = True
+            if parses_at is None:
+                parses_at = index
             if key in mine[index]:
-                # Still true here. Consume this segment and move on.
-                next_segment = index + 1
+                mine_at = index
                 break
-        else:
-            if parses:
-                # It names something of the layout's, in every reading, and the
-                # picture is none of them any more. The folder has stopped
-                # being true.
-                return False
-            # Nothing the layout knows about: the owner's own folder, and the
-            # rest of the path below it is theirs too.
-            break
+        if mine_at is not None:
+            # Still true here. Consume this segment and move on.
+            next_segment = mine_at + 1
+            owned += 1
+            continue
+        if parses_at is not None:
+            # It names something of the layout's, in every reading, and the
+            # picture is none of them any more. The folder has stopped being
+            # true. The walk carries on rather than returning, because the
+            # segments below this one may still be the layout's and a move has
+            # to rewrite the whole prefix, not the one component that failed.
+            still_true = False
+            next_segment = parses_at + 1
+            owned += 1
+            continue
+        # Nothing the layout knows about: the owner's own folder, and the rest
+        # of the path below it is theirs too.
+        break
 
-    return True
+    return still_true, owned
+
+
+def relocate(
+    folder: str,
+    facets: FacetValues,
+    layout: Layout,
+    known_names: FacetVocabulary,
+) -> str | None:
+    """Return the folder a picture has to move to, or ``None`` to leave it alone.
+
+    The move engine's whole decision in one call: ``None`` for every case
+    :func:`is_true` calls true, and otherwise the destination. Arguments are
+    :func:`is_true`'s, and so is the reading.
+
+    **The owner's own folders below the layout are carried across, not
+    flattened.** A picture in ``2024 Shoots/Mira/2026-08`` whose project changes
+    goes to ``Client · Nordvik/Mira/2026-08``: the layout owns the first two
+    components and rewrites them, and ``2026-08`` is nobody's business but the
+    owner's. Flattening it would collapse a date tree into one folder and make
+    two files of the same name collide, which is a curated library's structure
+    being destroyed by a rule that promised to preserve it.
+
+    Returns:
+        A ``/``-separated relative folder path, or ``None`` when the picture
+        must not move — which includes the case where the destination is where
+        the picture already is.
+    """
+    components = _components(folder)
+    if not components:
+        return None
+
+    if len(components) == 1 and _match_key(components[0]) == _match_key(layout.unfiled):
+        destination = render(facets, layout)
+        return None if destination == layout.unfiled else destination
+
+    still_true, owned = _walk(components, facets, layout, known_names)
+    if still_true:
+        return None
+    destination = "/".join((render(facets, layout), *components[owned:]))
+    return None if _components(destination) == components else destination
+
+
+def match_destination(
+    folder: str,
+    facets: FacetValues,
+    layout: Layout,
+    known_names: FacetVocabulary,
+) -> str | None:
+    """Where ``render`` would put a picture that is allowed to stay put.
+
+    The **drift** the design bundle draws, and it is deliberately not a move:
+    a picture filed under ``2024 Shoots`` that has become mostly a Nordvik job
+    is still a 2024 Shoots picture, so the folder never stopped being true and
+    the rule leaves it alone. The tree is not wrong; it is not always what the
+    owner would have picked. This is what "Move to match" offers, and it is
+    offered, never taken.
+
+    ``None`` when there is nothing to offer, which is three cases and each is
+    the answer rather than a gap:
+
+    * The folder has stopped being true — that is :func:`relocate`'s move, and
+      it needs no offering.
+    * The layout owns none of the path. A folder of the owner's own contradicts
+      nothing and is a permanent override; offering to pull it into the layout
+      would be offering to undo the override.
+    * ``render`` already agrees with where the picture is.
+
+    The tail below the layout travels, exactly as it does for a move.
+    """
+    components = _components(folder)
+    if not components:
+        return None
+    still_true, owned = _walk(components, facets, layout, known_names)
+    if not still_true or owned == 0:
+        return None
+    destination = "/".join((render(facets, layout), *components[owned:]))
+    return None if _components(destination) == components else destination
+
+
+# ---------------------------------------------------------------------------
+# Serialisation — one column, readable in a database browser
+# ---------------------------------------------------------------------------
+
+_SEGMENT_SEPARATOR = "/"
+_FACET_SEPARATOR = ","
+
+
+def format_layout(layout: Layout) -> str:
+    """Return the stored form of a layout: ``"project/person,set"``.
+
+    Segments are separated by ``/`` and a segment's alternatives by ``,``, which
+    is what the design bundle draws (``Project / Person or Set``) with the words
+    the :class:`Facet` values already use. ``unfiled`` is deliberately NOT in
+    here: it is a folder name the owner can type, and folding a free-text name
+    into a separator-bearing format is how it eventually contains a separator.
+    """
+    return _SEGMENT_SEPARATOR.join(
+        _FACET_SEPARATOR.join(facet.value for facet in segment)
+        for segment in layout.segments
+    )
+
+
+def parse_layout(text: str | None, unfiled: str = "_Inbox") -> Layout | None:
+    """Return the layout *text* describes, or ``None`` for "this root has none".
+
+    ``None`` and the empty string both mean no layout, which is the default and
+    the only state in which nothing is ever moved.
+
+    Raises:
+        ValueError: The text names something that is not a facet, or *unfiled*
+            is not a safe single path component. Refused rather than silently
+            dropped: a layout with a segment quietly missing would move files
+            somewhere nobody asked for.
+    """
+    if not text:
+        return None
+    segments = []
+    for raw_segment in text.split(_SEGMENT_SEPARATOR):
+        facets = []
+        for raw_facet in raw_segment.split(_FACET_SEPARATOR):
+            name = raw_facet.strip().lower()
+            if not name:
+                continue
+            try:
+                facets.append(Facet(name))
+            except ValueError:
+                raise ValueError(
+                    f"{raw_facet.strip()!r} is not a layout facet; expected one "
+                    f"of {', '.join(facet.value for facet in Facet)}"
+                ) from None
+        if facets:
+            segments.append(tuple(facets))
+    if not segments:
+        return None
+    return Layout(segments=tuple(segments), unfiled=unfiled)

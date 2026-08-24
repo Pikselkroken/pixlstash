@@ -31,6 +31,31 @@
   PixlStash leaves it exactly where it is. A rebuild removes links and nothing
   else — never a file whose only copy is there — and tells you which files it
   kept. Switching a kind off removes its folder, so nothing stale is left behind.
+- **Your folders, laid out.** A library can now be given a folder layout —
+  `Project / Person or Set` to begin with — and PixlStash writes new pictures
+  where that says. Choosing a layout moves nothing that is already there: the
+  folders you have are where your projects and people came from in the first
+  place, so they are already right. A library with no layout chosen behaves
+  exactly as it always has, and that is still every library — the screen for
+  choosing one lands with the rest of this release.
+- **A picture only moves when its folder stops being true.** Adding a second
+  project, or a second person, moves nothing — it is still in the first one.
+  Removing the project a picture's folder is named after is what moves it, and
+  swapping one project for another. Two changes in a row are one move rather
+  than a trip through the inbox folder and back.
+- A move keeps the folders you made underneath: a picture in
+  `2024 Shoots / Mira / 2026-08` that changes project ends up in
+  `Client · Nordvik / Mira / 2026-08`, not flattened into one folder. Renaming a
+  project, a person or a set renames their folder and moves no files at all.
+- A folder that does not match the layout is never wrong. Drop something into a
+  folder of your own and PixlStash has nothing to contradict, so it stays there —
+  permanently, with no setting to remember. A folder left empty is kept, never
+  deleted.
+- Where a picture is filed truthfully but not where the layout would put it
+  today, **Move to match** is available for it. It is offered, never automatic.
+  Every move is counted before it happens and the whole batch is one undo.
+- PixlStash records the moves it makes itself, so a folder you reorganise by hand
+  is still read as your decision and its own writes are not.
 - Views checks the folder you pick before writing anything, and says why when it
   cannot use one: inside your library (it would break backups), inside a
   reference folder (every link would be re-imported as a second copy), a folder

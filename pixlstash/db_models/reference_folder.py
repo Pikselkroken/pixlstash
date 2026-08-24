@@ -76,4 +76,7 @@ class ReferenceFolder(SQLModel, table=True):
         ),
     )
 
+    layout: Optional[str] = Field(default=None)
+    layout_unfiled: Optional[str] = Field(default=None)
+
     pictures: List["Picture"] = Relationship(back_populates="reference_folder")

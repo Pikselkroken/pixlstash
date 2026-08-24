@@ -107,7 +107,8 @@ def _env():
     client = TestClient(server.api)
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )
@@ -1580,7 +1581,7 @@ def test_two_clients_cannot_interleave_inside_an_atomic_verdict_gesture(
         assert (
             client_b.post(
                 f"{API}/login",
-                json={"username": "owner", "password": "ownerpass1"},
+                json={"username": "owner", "password": "example-owner-password"},
             ).status_code
             == 200
         )

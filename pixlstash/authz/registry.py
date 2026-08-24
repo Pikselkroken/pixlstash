@@ -277,6 +277,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "deleter), so the §16.3 host-capability tiers do not apply."
         ),
     ),
+    ("GET", "/api/v1/server-config/layout"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 reads back how this library's own picture root is laid out, "
+            "and is the control surface of the PATCH beside it — the tier that "
+            "alone may decide where the owner's files get written is the tier "
+            "that may see the decision. Same reasoning as GET "
+            "/server-config/views; owner + loopback/LAN/Tailscale, or remote "
+            "owner iff allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/layout"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 decides the folder names PixlStash writes into the library "
+            "root from here on, and therefore where a background task later "
+            "renames the owner's files to. It writes no file itself and moves "
+            "nothing — a layout is true of every path already there — but the "
+            "authority it hands out is host-filesystem authority, so it sits "
+            "on the tier that grants it. Sibling of PATCH "
+            "/server-config/views; owner + loopback/LAN/Tailscale, or remote "
+            "owner iff allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
     ("GET", "/api/v1/server-config/views"): RoutePolicy(
         _LOCAL,
         justification=(
@@ -634,6 +658,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3: cancels the owner's in-flight read — authority over another principal's operation, on the same tier as the route that starts it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── folder_structure.py commit (§16.3 host-capability; v1.11 Phase 3) ───
+    ("POST", "/api/v1/folder-structure/commit"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: commits an accepted mapping over the same host path the read already walked — registers it for in-place indexing (the reference-folders/POST write) and creates the projects/people/sets/tags it names; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/folder-structure/commit/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
         "GET",
@@ -854,6 +887,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # The gate resolves body_ids element by element and raises on the first id
     # out of scope, before the handler runs, so a mixed batch is refused whole
     # and rotates nothing. (#950)
+    # v1.11 Phase 4b. Picture-scoped rather than §16.3 local, and the line is
+    # the same one rotate sits on: the caller supplies no host path. It names
+    # pictures, and the server computes both the root and the destination from
+    # a layout only the LOCAL tier could have set. What moves is a file the
+    # library already manages, inside the root it already lives in, and the
+    # whole batch is one undo on the operation log.
+    ("GET", "/api/v1/pictures/{id}/layout"): RoutePolicy(_PIC, id_param="id"),
+    ("POST", "/api/v1/pictures/layout/move-to-match"): RoutePolicy(
+        _PIC,
+        body_ids="picture_ids",
+        justification=(
+            "Moves pictures the caller names to the folder this library's own "
+            "layout renders for them — no caller-supplied path, no root the "
+            "caller chose, and nothing outside the library root (a source that "
+            "resolves outside it, or is a symlink, is refused at the planner). "
+            "Write-enabled picture-scoped grant, the POST /pictures/rotate "
+            "class. READ tokens are refused earlier by the middleware: POST is "
+            "not in READ_SAFE. Gate loops enforce_picture_scope over every id."
+        ),
+    ),
     ("POST", "/api/v1/pictures/rotate"): RoutePolicy(
         _PIC,
         body_ids="picture_ids",

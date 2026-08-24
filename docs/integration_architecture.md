@@ -29,6 +29,8 @@
 19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
 20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
 21. [About your library (v1.11)](#21-about-your-library-v111)
+22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
+23. [Layout & Move API (v1.11, Phase 4b)](#23-layout--move-api-v111-phase-4b)
 
 ---
 
@@ -1787,14 +1789,12 @@ than instantly.
 
 ### Not in this API
 
-- **No commit.** Nothing here writes. The accept path is Phase 3.
+- **No commit.** Nothing here writes. The accept path is §22, Phase 3.
 - **No per-row re-read.** A single read answers the whole tree; there is no
   "re-run faces on this one folder" route.
 - **No language reading of folder names.** Explicitly out (release plan §5): no
   LLM ships with PixlStash, and `name_match` is a string comparison against rows
   the vault already has, not a semantic one.
-
----
 
 ## 21. About your library (v1.11)
 
@@ -1926,4 +1926,216 @@ touched. Any UI copy implying otherwise would be wrong.
 
 ---
 
-*Last updated: 2026-08-23. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+## 22. Folder-Structure Commit API (v1.11, Phase 3)
+
+The accept path behind the `Preview` screen: takes the mapping the owner
+confirmed over a §20 read and writes it. Backend design is
+`docs/backend_architecture.md` §25; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3.
+
+**One rule the client must hold to, same as §20's first: it moves, renames and
+copies zero files.** The scanned root is registered as an ordinary reference
+folder — the same mechanism `POST /reference-folders` already ships, indexed in
+place — and every picture it finds is linked to the accepted projects, people,
+sets and tags by writing database rows. Nothing on disk changes.
+
+### `POST /api/v1/folder-structure/commit`
+
+```jsonc
+{
+  "task_id": "…",              // the settled read's task_id (§20)
+  "label": "Generations",       // optional; defaults to the folder's own name
+  "assignments": [
+    // One entry per folder the owner accepted as something. A folder left
+    // "just a folder" or undecided is simply absent — there is nothing here
+    // for it to do, and every picture under it is still indexed and
+    // searchable (§20's "arrives ungrouped" case).
+    {"relative_path": "2024 Shoots", "kind": "project"},
+    {"relative_path": "2024 Shoots/mira", "kind": "person", "match_id": 41},
+    {"relative_path": "Datasets/mira-lora-v3", "kind": "set"},
+    {"relative_path": "final", "kind": "tag"}
+  ]
+}
+```
+
+`relative_path` is the same handle §20's folder rows carry — POSIX-separated,
+relative to the read's root, `""` for the root itself. `kind` is one of
+`project`, `person`, `set`, `tag` (never `folder`: a row with nothing to do is
+omitted, not sent as `folder`). `match_id` names an existing entity to attach
+to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
+`candidates`; omitted, a new one is created named after the folder.
+
+**A folder's nearest accepted ancestor of each exclusive kind wins** — a
+picture is filed under the *closest* Project, Person or Set above it, not
+every one along the path, mirroring `library_layout`'s first-match-wins
+segments. Tags are the exception: every accepted Tag ancestor applies, because
+a picture can carry more than one label.
+
+Returns `{"task_id": "…"}` and starts the commit in the background.
+
+`local_owner_only` (§16.3): the read already validated the host path once, and
+this route is the write that follows from it.
+
+| Status | When |
+|---|---|
+| **400** | an `assignments` row is malformed or names an unknown `kind` |
+| **404** | `task_id` does not name a read this session holds |
+| **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
+
+### `GET /api/v1/folder-structure/commit/status?task_id=…`
+
+Polled per §11's task-id branch, same shape as §20's read status:
+
+```jsonc
+{
+  "task_id": "…",
+  "status": "running",        // queued | running | completed | failed
+  "stage": "indexing",        // registering | indexing | assigning | done
+  "processed": 149,
+  "total": 352,
+  "progress": 42.3,
+  "error": null,
+  "result": null
+}
+```
+
+**A commit is never `cancelled`.** Once the reference folder is registered its
+scan runs to completion regardless of what the screen does next — the
+in-place indexing this route starts is not something a "Cancel and organise
+later" on a *later* screen can safely stop mid-write, and it is also the whole
+reason the mapping screen stays reachable from the sidebar afterwards: the
+scan and the mapping are two different steps, and abandoning the second does
+not undo the first.
+
+`stage` progresses `registering` (creating the reference folder row) →
+`indexing` (waiting for its first scan pass — `processed`/`total` are pictures
+indexed so far, out of the read's own `picture_count`) → `assigning` (creating
+the accepted entities and linking pictures — no filesystem work happens here at
+all) → `done`.
+
+The result, once `status` is `completed`:
+
+```jsonc
+{
+  "reference_folder_id": 7,
+  "pictures_indexed": 28412,
+  "projects_created": 12, "projects_matched": 1,
+  "people_created": 114, "people_matched": 4,
+  "sets_created": 31, "sets_matched": 0,
+  "tags_created": 4
+}
+```
+
+### Not in this API
+
+- **No re-mapping an already-committed folder.** Accepting a mapping is
+  one-shot and **enforced**, not merely a convention the client is trusted to
+  follow: the read is marked committed the instant a commit for it starts
+  (§25), and a second `POST` against the same `task_id` — whether the first
+  commit is still running or long since `completed` — is refused with a
+  **409**, never re-run. Changing what a folder means afterwards is ordinary
+  entity editing (rename a project, move a picture between sets), not a
+  second commit.
+- **No placement of *future* pictures.** This writes the accepted mapping onto
+  the pictures the read found; where a new picture goes on import is the
+  layout, v1.11 Phase 4.
+
+---
+
+---
+
+## 23. Layout & Move API (v1.11, Phase 4b)
+
+How a library's folders are laid out, and the one action the client offers over
+it. Backend design is `docs/backend_architecture.md` §26; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
+
+**Three rules the client must hold to.**
+
+1. **A picture moves only when its folder stops being true.** Not whenever
+   something about it changes. Adding a second project or a second person moves
+   nothing, and the UI must not suggest otherwise — the copy that sits next to
+   the layout builder is a table of what does and does not move, not a warning.
+2. **Choosing a layout reorganises nothing.** Every path already in the library
+   is what its assignments were read from, so every path is already true. A
+   confirmation dialog saying "this will move your files" would be false, and
+   `PATCH /server-config/layout` will not have moved one when it returns.
+3. **Drift is offered, never taken.** A picture whose folder is still true but is
+   not what the layout would pick today is *not wrong*. `suggested_folder` is an
+   offer the owner accepts; nothing in the product acts on it by itself.
+
+### The layout string
+
+One field, `layout`, in the form `project/person,set`:
+
+- `/` separates **segments** — one folder level each, in order.
+- `,` separates a segment's **alternatives**; the first the picture has a value
+  for wins.
+- A segment nothing fills is **skipped**, not left as an empty folder, which is
+  what keeps the tree two deep instead of five.
+- Facets: `project`, `person`, `set`, `tag`. `person` is the user-facing word;
+  `character` is the database's.
+
+`null` or `""` means **no layout**, which is the default and the only state in
+which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
+with nothing to file it by goes to — one safe path component, `_Inbox` when
+null. It is deliberately not the library root: the root is where an unmigrated
+flat library lives and those files must never move.
+
+**Both PATCHes are patches, not puts.** A field you do not send keeps its stored
+value, so sending `layout_unfiled` alone renames the unfiled folder and does not
+turn the layout off. Send `layout: null` explicitly to turn it off. An unfiled
+name that is not a single safe path component is `400`, and so is an
+unparseable layout — checked independently, so a bad unfiled name is refused
+even when there is no layout to parse beside it.
+
+### Routes
+
+| Method | Path | Tier | Returns |
+|---|---|---|---|
+| `GET` | `/api/v1/server-config/layout` | `local_owner_only` | `{layout, layout_unfiled, default_layout}` for the library's own picture root |
+| `PATCH` | `/api/v1/server-config/layout` | `local_owner_only` | the same, after recording. `400` with the reason if the layout cannot be read |
+| `PATCH` | `/api/v1/reference-folders/{folder_id}` | `local_owner_only` | the folder, now carrying `layout` / `layout_unfiled`. The same two fields on the folder the owner indexed in place, and they are read back by `GET /reference-folders` too |
+| `GET` | `/api/v1/pictures/{id}/layout` | `picture_scoped` | `{layout, current_folder, suggested_folder}` |
+| `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |
+
+`GET /pictures/{id}/layout` answers `{"layout": null, "current_folder": null,
+"suggested_folder": null}` — **not** a 404 — for a picture in a root with no
+layout. A 404 there means the picture does not exist.
+
+`suggested_folder` is `null` whenever there is nothing to offer, and the client
+must treat all four cases the same way (no button): the root has no layout, the
+picture is not in a laid-out root, its folder is one of the owner's own, or it
+is already where the layout would put it.
+
+### `move-to-match`
+
+Body `{"picture_ids": [int, ...]}`, at most 200 — the same cap as `POST /pictures/rotate`, because every id is a file operation on the owner's disk and the whole request is one transaction and one undo. A larger selection is `422`; send it in batches. Every picture that is already
+where the layout would put it, or is in a folder of the owner's own, comes back
+in `skipped` as `{"picture_id": int, "reason": str}` and is **left exactly where
+it is**. Reasons the client may see: `already_matches`, `no_layout`,
+`destination_taken`, `source_file_missing`, `source_is_symlink`,
+`path_outside_root`, `destination_outside_root`.
+
+The whole request is recorded as **one** `pictures.layout.move` operation, so
+one Ctrl+Z puts every file back — `operation_id` names it. A folder the move
+leaves empty is kept, never deleted.
+
+### Events
+
+A move — whether the owner asked for it or the rule decided it — broadcasts
+`CHANGED_PICTURES` with `change_kind: "updated"` and
+`fields: ["file_path", "pixels"]`. **`pixels` is not decoration.** The thumbnail
+URL is derived from the file path and does not come back from
+`GET /pictures/{id}/metadata`, so a client that re-reads metadata alone goes on
+painting a thumbnail that is no longer at that address — the same marker an
+in-place rotate raises, for the same reason.
+
+There is no event for "a picture became due a layout check", and there should
+not be: the check is debounced by design, almost always decides nothing, and a
+client that drew a spinner for it would be drawing one for every membership edit
+in the product.
+
+---
+
+*Last updated: 2026-08-24. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*

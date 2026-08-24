@@ -84,7 +84,7 @@ def _owner(server, client_ip: str | None = None) -> TestClient:
     """
     client = TestClient(server.api)
     response = client.post(
-        "/login", json={"username": "libowner", "password": "libownerpass1"}
+        "/login", json={"username": "libowner", "password": "example-libowner-password"}
     )
     assert response.status_code == 200, response.text
     if client_ip:

@@ -141,6 +141,11 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        # vault-injection pattern; owns the register -> wait-for-scan -> assign
+        # commit lifecycle across separate transactions over time (the
+        # scan-status poll cannot share a session with the later write), so no
+        # single caller-supplied session would fit every stage.
+        "pixlstash/services/folder_structure_commit_service.py",
         "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
@@ -170,6 +175,12 @@ def test_services_no_direct_db_calls():
         # record run in ONE queued task; the wrapper owning that submission is
         # the atomicity guarantee, not transitional debt.
         "pixlstash/services/operation_log_service.py",  # vault-injection pattern; atomic record-with-mutation task
+        # v1.11 Phase 4b. The two vault-taking entry points (picture_layout,
+        # move_to_match) exist so the routes do not, and move_to_match owes the
+        # same atomicity the op-log wrapper above does: plan, move the files,
+        # capture and record inside ONE queued task, or a write landing between
+        # the plan and the record is attributed to this move.
+        "pixlstash/services/layout_move_service.py",  # vault-injection pattern; atomic plan-move-record task
     }
 
     violations = []
@@ -433,6 +444,11 @@ _LABEL_SINK_EXEMPT = {
     ),
     ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
         "builds NEW picture rows during a reference-folder scan"
+    ),
+    ("pixlstash/services/folder_structure_commit_service.py", "commit"): (
+        "v1.11 Phase 3: tags pictures the reference-folder scan just created "
+        "in this same commit (new pics) — a not-yet-imported picture cannot "
+        "be in a locked set"
     ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"
@@ -1538,6 +1554,12 @@ _PICTURE_METADATA_FIELDS = {
     "import_source_folder",
     "imported_at",
     "is_video",
+    # v1.11 Phase 4b. When the layout engine should next ask whether this
+    # picture's folder is still true, and NULL for every picture nobody has
+    # just reassigned. A scheduling stamp about this one picture, saying
+    # nothing about any other and nothing about its content, so a
+    # picture-scoped token may see it.
+    "layout_check_due_at",
     "metadata_hash",
     "original_file_name",
     # (#950) The picture's own EXIF orientation, 1-8. Carries no membership,

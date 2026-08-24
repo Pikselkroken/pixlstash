@@ -61,7 +61,7 @@ def _owner_client(server) -> TestClient:
     """A client logged in as the owner."""
     client = TestClient(server.api)
     response = client.post(
-        "/login", json={"username": "pinowner", "password": "pinownerpass1"}
+        "/login", json={"username": "pinowner", "password": "example-pinowner-password"}
     )
     assert response.status_code == 200, response.text
     return client

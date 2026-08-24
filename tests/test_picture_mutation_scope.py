@@ -200,7 +200,8 @@ def _shared_env():
         try:
             client = TestClient(server.api, raise_server_exceptions=True)
             r = client.post(
-                f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
             )
             assert r.status_code == 200, r.text
 
@@ -303,7 +304,7 @@ def fresh_state(_shared_env):
     )
 
     r = shared.client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, (
         f"owner re-login failed — the shared environment is dirty: {r.text}"
