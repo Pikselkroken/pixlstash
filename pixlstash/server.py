@@ -104,6 +104,9 @@ from pixlstash.routes.import_folders import (
     create_router as create_import_folders_router,
 )
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
+from pixlstash.routes.folder_structure import (
+    create_router as create_folder_structure_router,
+)
 from pixlstash.routes.libraries import create_router as create_libraries_router
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
@@ -656,6 +659,11 @@ class Server(
 
         # Temporary storage for import tasks
         self.import_tasks = {}
+        # The one in-flight folder-structure read (v1.11 Phase 2). A single slot
+        # rather than a dict: the mapping screen only ever shows one read, and a
+        # second concurrent one would fight the first for the same GPU queue.
+        self.folder_structure_read = None
+        self.folder_structure_lock = threading.Lock()
         # Temporary storage for async streaming-import staging sessions (#459).
         # Keyed by staging_id; each records the on-disk staging dir, the streamed
         # files, the declared file count, and (after the safe handoff) the
@@ -1606,6 +1614,12 @@ class Server(
         )
         self.api.include_router(
             create_filesystem_router(self),
+            prefix=API_V1_PREFIX,
+            include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_folder_structure_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
             dependencies=gate,

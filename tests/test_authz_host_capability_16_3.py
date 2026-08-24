@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_37_local_6_loopback():
+def test_host_capability_tier_split_is_40_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 43
-    routes carry a locality tier = 37 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 46
+    routes carry a locality tier = 40 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -330,6 +330,27 @@ def test_host_capability_tier_split_is_37_local_6_loopback():
     every share token. The loopback count is unchanged: neither route spawns
     anything.
 
+    46 = 40 + 6 with the folder-structure read's three routes (v1.11 Phase 2):
+    ``POST``, ``GET .../status`` and ``DELETE /folder-structure/read``. The POST
+    is ``GET /filesystem/browse``'s class and then some — it takes a
+    caller-supplied host path, walks it *recursively* and decodes pictures out
+    of it, where browse lists one directory — so it must not be a second,
+    weaker way to ask what is on the disk. It is the ``GET /libraries/inspect``
+    lesson above applied one route later, and then once more: the blocklist runs
+    after ``realpath`` (validating the string the caller sent lets a symlink hand
+    ``/etc`` to a route that walks it) **and again on every directory the walk
+    descends into**, because a root-only check is a check on one string — ``/``
+    names no restricted directory and contains all of them. Measured: 391 of 400
+    folders came out of ``/etc``, ``/proc`` and ``/root`` before that second
+    check, and 0 after. The GET is the deliberate
+    one, for the reason ``GET /model-moves`` is on this tier: what it carries
+    *is* the answer, a map of the owner's folder names, tree shape and picture
+    counts, so polling cannot be a lower bar than starting. The DELETE is the
+    POST's authority from the other end. None of the three writes anything —
+    no row is created, no file is moved — which is why the tier follows the
+    disclosure and the path, not a destructive verb. The loopback count is
+    unchanged: nothing here spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -343,7 +364,7 @@ def test_host_capability_tier_split_is_37_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 37, sorted(local)
+    assert len(local) == 40, sorted(local)
 
 
 # ===========================================================================

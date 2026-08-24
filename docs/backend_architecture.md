@@ -34,6 +34,7 @@
 21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
+24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
 
 ---
 
@@ -3431,6 +3432,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 - [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
 - [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
 - [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
+- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it. Writes nothing (§24).
 
 **Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`, so they do not themselves verify that the caller is *unscoped*. A plain `ALL` token leaves `token_scope = None` (the middleware builds a `TokenScope` only for non-`ALL` tokens — the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)) and is treated as owner-equivalent here, which is correct: `ALL == owner` (below). The danger *used* to be that an `ALL`+`resource_type` token **masqueraded** as that plain-owner shape — it also left `token_scope = None` — letting a nominally "restricted" token drive filesystem authority. That vector (the §16.2 item 4 footgun, applied to owner-only operations rather than picture-scoped reads) is now **closed**: `create_token` refuses to mint it and the middleware fail-closed-rejects any already-existing row before these handlers run. The correct *explicit* gate for this class is still `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py); moving to it (below) is still wanted as defense in depth, but it is no longer closing an open hole.
 
@@ -5672,6 +5674,238 @@ Both are covered in both directions by
 
 ---
 
-*Last updated: 2026-08-02. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 24. The folder-structure read (v1.11 Phase 2)
+
+`pixlstash/services/folder_structure_service.py`, exposed by
+`pixlstash/routes/folder_structure.py`. The wire contract is
+`docs/integration_architecture.md` §20; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 2. This section is the part
+that is not on the wire: why the signals are shaped the way they are, and what
+they cost.
+
+**It reads. It never writes.** No `Picture`, `Project`, `PictureSet`,
+`Character` or `Tag` row is created, and no file is opened for writing, moved or
+renamed. That is not an implementation detail to preserve by care — it is the
+release's headline (*"import moves zero files"*), and Phase 3 is the only thing
+that commits anything.
+
+### The four signals
+
+| Signal | Scope | Cost | Proposes |
+|---|---|---|---|
+| `cardinality` | one level | free (it is arithmetic over the walk) | `tag`, or *not* `tag` |
+| `sidecars` | one folder | free (the walk already listed the folder) | `set` |
+| `faces` | one folder | **`SAMPLED_PER_FOLDER` decodes + one detection batch** | `person` |
+| `name_match` | one folder | one query for the whole read | that entity's kind |
+
+Only `faces` is expensive, and it is the reason the constants are constants.
+`SAMPLED_PER_FOLDER = 20` is what makes the pass two minutes rather than an
+hour: a few hundred folders × 20 pictures is a few thousand detections, and the
+folders themselves hold tens of thousands. `MIN_FACE_SAMPLE = 5` keeps the
+signal quiet on folders too small to say anything — *"one face, 2 of 3"* is not
+evidence — and `FACE_MAJORITY = 0.7` is the share of the *sampled* pictures that
+must carry the same identity.
+
+`SAME_IDENTITY_COSINE = 0.35` is deliberately strict. ArcFace embeddings arrive
+L2-normalised, so identity comparison is a dot product and the whole folder is
+one `n×n` matrix over at most 20 vectors — 400 products, nothing. The threshold
+is set where a **missed** Person costs the owner one dropdown and a **wrong**
+one costs them trust in every other row on the screen. The identity itself is a
+medoid vote, not a clustering library: for each sampled face, count the faces
+within the threshold of it, and take the largest count. That is the number the
+evidence string says out loud (`"one face, 19 of 20"`).
+
+The sample is **evenly spaced through the folder's sorted filenames**, never the
+first 20. The first twenty files of a shoot are frequently one burst of the same
+frame, and a date-ordered folder would otherwise be judged on its first minute.
+
+`faces` runs through the shipped `FaceDetectionTask` on the shared GPU queue
+rather than opening its own InsightFace session, so there is one model in memory
+rather than two. **It does not queue politely**: `FaceDetectionTask.priority` is
+`URGENT` — "user-triggered interactive tasks, skip ahead of everything" — so
+every batch of the read jumps ahead of background work. That is arguably right
+(the owner is watching a progress bar) but it is worth knowing rather than
+assuming, and it is the reason the read has a deadline: an URGENT task that
+cannot finish starves the queue it jumped.
+
+### Why cardinality is level-scoped and nothing else is
+
+Cardinality is a property of a *level* — "four names under 118 parents" cannot
+be said about one folder — so it is the only signal that speaks in a level's
+`proposal`, and a level of one folder (the root) never carries a reading at all.
+Its **negative** matters as much as its positive: names used once each are not
+labels, which rules `tag` out and rules nothing in, and that is what produces a
+level with `candidates` and no `kind`.
+
+A level with no cardinality reading is answered by its rows instead, when at
+least 60% of them agree on one kind. That branch states its own count
+(*"31 of 149 folders read as Set"*) rather than inheriting the rows' evidence,
+because a level-wide claim needs a level-wide reason.
+
+**The share is compared as integers, not as `round(0.6 * n)`.** `round(0.6 * 4)`
+is `2`, which would quietly make a rule written as sixty percent a fifty-percent
+rule on a level of four — and at fifty percent a 2–2 split is a *tie*, which
+`Counter.most_common` breaks by insertion order, which here is folder sort
+order. The same tree would then answer "Set" or "Person" depending on what the
+folders happened to be called. At a true 60% a tie is arithmetically
+unreachable: two kinds would need 120% of the level. The exact comparison is
+therefore not pedantry, it is the whole of why there is no tie-break to get
+wrong, and it is asserted in the code.
+
+### Evidence, and the refusal to guess
+
+Every proposal carries the evidence that produced it, and **a signal that cannot
+state its reason proposes nothing**. Two consequences fall out rather than being
+designed in:
+
+1. `kind: null` with `evidence: []` is the *normal* answer for an ordinary
+   folder name. `Mira` could be a person, a project or a client, and no LLM
+   ships with PixlStash (release plan §5).
+2. Two signals that disagree — a folder read as one person whose name is also an
+   existing project — return **both** kinds as `candidates` and no `kind`.
+   Picking one would be exactly the guess the evidence rule exists to prevent.
+
+`kind: "folder"` ("just a folder") is in the enum because the *owner* chooses it
+on the mapping screen and Phase 3 sends it back. **No signal proposes it**, and
+no code path here emits it, because no signal can prove a negative about a
+string. A row the backend had nothing to say about is `kind: null`.
+
+The other four kinds are `Facet` (`pixlstash/utils/library_layout.py`, Phase 4a)
+and are read out of that enum rather than written again, so a facet renamed for
+the layout cannot leave this read proposing a word the layout no longer places.
+`tests/test_folder_structure_read.py::test_the_read_speaks_the_layout_s_facet_vocabulary`
+fails the build on the drift, which is the only way anyone would notice: the
+symptom otherwise is a picture that quietly fails to move, one release later.
+
+### Folding a name
+
+**There are two name folds in v1.11 and they disagree on purpose.**
+`library_layout._match_key` (Phase 4a) is NFC + casefold: accents and separators
+survive, so `José` and `Jose` are two folders. It has to be exact, because it
+decides whether a picture **moves**. `normalise_name` here folds accents and
+separator runs as well, because it only decides what to **propose** on a screen
+the owner then confirms — a wrong guess costs one dropdown, a missed one costs a
+lookup they wanted. They are not a duplicated helper waiting to be reconciled:
+merging them would either start moving files on a fuzzy match, or stop the read
+recognising `2024_Shoots` as the project the owner already has.
+
+`normalise_name` is Unicode-aware, and that is a correctness requirement rather
+than a nicety. An ASCII-only character class does not merely *miss* a Cyrillic or
+CJK name — it folds every one of them to the **same empty string**, at which
+point a level of fifteen distinct people has one distinct name, `cardinality`
+sees names repeating under many parents, and a Russian or Japanese owner's
+library is confidently proposed as a single Tag level with the evidence
+*"1 names under 3 parents"*. The fold also runs NFKD and drops combining marks,
+so `José` and `Jose` are the same name; without that, the accented spelling
+matches nothing and the *unaccented* one matches a person who does not exist.
+
+### The bounds
+
+Three bounds, and each one has a way of saying it was hit.
+
+`MAX_FOLDERS = 20_000` bounds the walk. The path comes from the caller and can be
+`/`; the result is a JSON document a browser has to hold. Hitting the bound
+truncates and sets `truncated`, which the screen must show — a truncated read
+presented as a complete one is worse than a refusal.
+
+`DEFAULT_DEADLINE_S` (30 minutes) bounds the *read*, not a batch. The face
+signal has a per-batch timeout — `_FACE_BATCH_TIMEOUT_S`, 180 s — but a per-batch
+timeout is the wrong bound on its own: 180 s × 20,000 folders is **41 days**, and
+the single read slot would leave the feature dead for the process lifetime while
+reporting `running`. Past the deadline the read stops where it is and returns
+what it has, which is the same shape a cancel produces.
+
+**The partial result has to be a usable one**, which is why the recursive
+picture counts are summed in `_build_result` and not at the end of the walk. A
+cancel or a deadline raises from *inside* the walk loop, so a version that summed
+there returned every row at `picture_count: 0` beside a real
+`direct_picture_count` — a partial map saying the library is empty, on the one
+path whose entire justification is that the partial map is showable.
+
+`skipped_folders` counts what the walk deliberately did not enter: dot-folders
+(a vault's own caches) and, separately, directories on the system blocklist found
+*below* the root. **The blocklist is re-checked per directory**, because
+validating only the path the caller named is a check on one string and not
+containment: `POST {"path": "/"}` names no restricted directory and would
+otherwise walk every one of them, decoding image-extensioned files out of
+`/etc`, `/proc` and `/root`. A route that recurses cannot borrow
+`GET /filesystem/browse`'s root-only check, because browse lists one level and
+this does not.
+
+`unreadable_folders` counts what the walk could not open. **`os.walk` swallows
+every `scandir` error by default** — no exception, no return value, the subtree
+simply is not there — so an `onerror` callback is not optional here: without it a
+library with one root-owned import folder in it comes back as a *complete* map
+that is quietly missing a subtree, and the owner accepts a mapping built on it.
+Each skip is logged at warning and counted, and the count is on the wire.
+
+`os.walk(followlinks=False)` is load-bearing for a fourth reason: a symlink loop
+under a caller-supplied path would otherwise walk forever.
+
+A corrupt or unreadable picture decodes to `None` and is sampled as
+*no face*, logged at warning with its basename. A whole folder's detection batch
+failing is logged and costs that folder its face evidence — never the read.
+
+### Authorization
+
+All three routes are `LOCAL_OWNER_ONLY` (§16.3), and the `GET` is on that tier
+for the reason `GET /model-moves` is: what it carries **is** the answer — a map
+of the owner's folder names, tree shape and picture counts — so polling must not
+be a lower bar than starting.
+
+`POST` runs `validate_reference_folder_path` on the **realpath**, which is
+deliberately stricter than `GET /filesystem/browse`, which validates the raw
+string the caller sent. Browse lists one directory; this walks a subtree
+recursively and decodes image files out of it, so a symlink pointing at a
+restricted directory is the difference between one listing and a recursive read
+of `/etc`. `validate_reference_folder_accessible` is the shipped helper that
+already does realpath-then-blocklist, and its comment — *"Canonicalize before
+touching the filesystem"* — is describing exactly this. `filesystem_roots`
+containment is the same as browse's, and note that it is **empty by default**,
+so it is not the containment that holds on an unconfigured install. What holds is
+the blocklist — run on the realpath at the root *and* again on every directory
+the walk descends into, which is the pair that makes it a property of the whole
+traversal rather than of one string.
+
+The status route is on `READ_BLOCKED_GET_PATHS` as well, so the documented
+`AUTHZ_GATE_ENFORCING = False` rollback does not hand the folder map to a share
+token. **That belt is GET-only** (`auth.py` checks it for GETs), so under a
+rollback the `POST` and `DELETE` are covered by the gate alone. The gate is the
+live enforcement and ships enforcing; the belt is the extra layer, and it can
+only ever be an extra layer for the reads.
+
+### One read at a time
+
+`Server.folder_structure_read` is a single slot, not a dict. The mapping screen
+only ever shows one read, and a second concurrent one would fight the first for
+the same GPU queue for no gain, so a second `POST` while one runs is a **409**.
+A cancelled read keeps its partial result: the screen can still show what was
+found, which is what makes Cancel safe to offer for the whole two minutes.
+
+The slot's cost is one result document plus the `FolderStructureRead`, held until
+the next read replaces it. The per-folder **filename lists are dropped** once the
+rows are built — they were only ever input to the signals, and a 28,000-picture
+library would otherwise pin all 28,000 filenames for the process lifetime.
+
+The lock covers the 409 check-and-set and nothing else. The worker writes
+`result` before it writes `status`, and the status handler reads `status` first
+and serves `result` only once the read has settled, which is what keeps §20's
+*"`result` is null until the read has settled"* true without taking a lock on
+every poll.
+
+### Ambiguity in `name_match`
+
+`PictureSet.name` carries no unique constraint and a real vault has duplicates
+immediately. §20 promises that `match.id` is *that row's real primary key*, so
+when two entities of the same kind share a name the read returns the **kind**
+(which is genuinely known) with `match: null` and evidence saying
+`"matches 2 existing sets"`. Handing back whichever row the query ordered first
+would aim Phase 3's attach at an arbitrary set, confidently, with evidence. Two
+different *kinds* sharing a name is the other case and is already a narrowing:
+`candidates`, no `kind`.
+
+---
+
+*Last updated: 2026-08-23. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
