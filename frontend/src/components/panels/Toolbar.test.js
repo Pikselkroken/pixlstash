@@ -220,8 +220,12 @@ describe("Toolbar — the shell band's one box recipe", () => {
       "src/components/views/ModelShelf.vue",
       ".shelf-toolbar",
     );
+    const insights = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-toolbar",
+    );
 
-    for (const block of [grid, dq, shelf]) {
+    for (const block of [grid, dq, shelf, insights]) {
       expect(block).toContain("height: 36px");
       expect(block).toContain("box-sizing: border-box");
       // min-height + vertical padding is exactly the recipe that drifted.
@@ -253,6 +257,7 @@ describe("Toolbar — the shell band's one box recipe", () => {
     };
     expect(rightInset(dq)).toBe(rightInset(grid));
     expect(rightInset(shelf)).toBe(rightInset(grid));
+    expect(rightInset(insights)).toBe(rightInset(grid));
 
     // Two of the three bars LEAD with an identity (the queue's count, the
     // shelf's title) and each carries a quieter count beneath it. They read as
@@ -278,10 +283,23 @@ describe("Toolbar — the shell band's one box recipe", () => {
       ".shelf-sub",
     );
 
+    const insTitle = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-title",
+    );
+    const insSub = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-sub",
+    );
+
     expect(decl(shelfTitle, "font-size")).toBe(decl(qtitle, "font-size"));
     expect(decl(shelfTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
     expect(decl(shelfSub, "font-size")).toBe(decl(qsub, "font-size"));
     expect(decl(shelfSub, "color")).toBe(decl(qsub, "color"));
+    expect(decl(insTitle, "font-size")).toBe(decl(qtitle, "font-size"));
+    expect(decl(insTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
+    expect(decl(insSub, "font-size")).toBe(decl(qsub, "font-size"));
+    expect(decl(insSub, "color")).toBe(decl(qsub, "color"));
   });
 });
 

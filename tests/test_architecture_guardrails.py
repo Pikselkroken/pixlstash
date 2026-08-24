@@ -146,6 +146,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/keep_cover_only_service.py",  # vault-injection pattern; thin wrappers around the *_in_session keep-cover-only preview and collapse
+        "pixlstash/services/library_insights_service.py",  # vault-injection pattern; read-only wrapper around build_insights_in_session
         "pixlstash/services/mixed_stack_service.py",  # vault-injection pattern; thin wrappers around the *_in_session mixed-stack list, actions and Keep
         "pixlstash/services/model_shelf_service.py",  # vault-injection pattern; the adapter_attachment reads are the vault half of a hub/vault join no session can span
         "pixlstash/services/picture_stats.py",  # pending session injection refactor

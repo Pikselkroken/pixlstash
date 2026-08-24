@@ -169,6 +169,35 @@ class ExportType(Enum):
         return cls.FULL
 
 
+def _scope_predicates_for_leaders(
+    *, file_path_prefix: Optional[str] = None, face_filter: Optional[str] = None
+) -> list:
+    """The intrinsic narrowings a stack-leader collapse has to know about.
+
+    Compiled from :class:`~pixlstash.utils.query.predicate_filter.PredicateFilter`
+    rather than restated, so the clause that decides which member represents the
+    stack is character-for-character the clause that decides which members show.
+    A second spelling is how the leader and the members get to disagree.
+
+    Only the predicates that can hide a stack's global position-0 member belong
+    here. A score range or a tag filter can too, in principle — they are left
+    out deliberately, because both are already applied to every member and a
+    stack whose every member fails them has no row to show either way. A FOLDER
+    and a FACE facet are different: they are *where the picture is* and *what is
+    in it*, and a stack routinely straddles both.
+    """
+    from pixlstash.utils.query.predicate_filter import PredicateFilter
+
+    predicates: list = []
+    if file_path_prefix is not None:
+        predicates += PredicateFilter(
+            file_path_prefix=file_path_prefix
+        ).file_path_prefix_predicates()
+    if face_filter in ("with_face", "without_face"):
+        predicates += PredicateFilter(face_filter=face_filter).face_predicates()
+    return predicates
+
+
 class Picture(SQLModel, table=True):
     ExportType: ClassVar[type["ExportType"]] = ExportType
     id: int = Field(default=None, primary_key=True)
@@ -995,129 +1024,47 @@ class Picture(SQLModel, table=True):
                         id_scope.append(int(raw))
                     except (TypeError, ValueError):
                         continue
+
+            # Every narrowing that can hide a stack's global position-0 member,
+            # collected in ONE list and answered by ONE rule
+            # (`stack_leader_filter`). Written out as a list rather than a
+            # branch per scope because the failure mode is a scope nobody added
+            # to the branch: `file_path_prefix` was such a scope, and a folder
+            # grid silently dropped every stack whose cover sat in a sibling
+            # folder. The predicates must be the same ones the outer query
+            # applies, so each is compiled from the same source.
+            leader_scope: list = []
             if id_scope:
-                # An explicit id filter (a picture set, a share token's scope, a
-                # split) narrows the grid to those pictures. Represent each
-                # stack by its lowest-positioned member INSIDE that filter:
-                # the global position-0 leader may not be in it, and requiring
-                # it rendered NEITHER picture — a set containing only a
-                # non-cover stack member showed 5 tiles for its 6 members and
-                # no stack at all (the owner's #670/#1746 report). Same rule
-                # as the project-scoped branch below, scoped to the id list.
-                #
-                # The rank is resolved ONCE, in a derived table, instead of per
-                # candidate row.  The first cut of this branch compared each row
-                # against an aliased picture and re-tested the whole id list
-                # inside that subquery, so it cost (id-list size x stacked
-                # fraction).  Measured on a 19,822-picture vault: a 6,641-id set
-                # view spent 102 ms on the COUNT(*) that every grid load runs,
-                # against 4.6 ms for the unscoped fast path below, and the same
-                # shape took seconds once most rows in scope were stacked.
-                # Ranking is the same operation for every member of a stack, so
-                # it belongs in a single pass: the same set view now costs 9.7 ms
-                # and returns the identical id set.  The EXISTS below still
-                # correlates, but only against that already-computed
-                # one-row-per-stack result, which SQLite materialises once and
-                # probes through an automatic index.
-                cur_pos = func.coalesce(cls.stack_position, 999999)
-                # One row per (stack, in-scope member), ranked by the SAME
-                # ordering the correlated form compared on: NULL positions sort
-                # last (999999), ties broken by ascending id.
-                ranked_members = (
-                    select(
-                        cls.stack_id.label("stack_id"),
-                        cls.id.label("member_id"),
-                        func.coalesce(cls.stack_position, 999999).label("member_pos"),
-                        func.row_number()
-                        .over(
-                            partition_by=cls.stack_id,
-                            order_by=(
-                                func.coalesce(cls.stack_position, 999999),
-                                cls.id,
-                            ),
-                        )
-                        .label("member_rank"),
-                    )
-                    .where(
-                        cls.stack_id.is_not(None),
-                        cls.deleted.is_(False),
-                        cls.id.in_(id_scope),
-                    )
-                    .subquery("scoped_stack_members")
-                )
-                # rank 1 is the highest-ranked in-scope member of each stack,
-                # exactly the row the correlated EXISTS was searching for.
-                scoped_leader = (
-                    select(
-                        ranked_members.c.stack_id,
-                        ranked_members.c.member_id,
-                        ranked_members.c.member_pos,
-                    )
-                    .where(ranked_members.c.member_rank == 1)
-                    .subquery("scoped_stack_leader")
-                )
-                # Testing the one leader row is equivalent to the old "does ANY
-                # sibling outrank me" test: if any member outranks this row,
-                # the best-ranked one does, and a row never outranks itself.
-                # A stack with no in-scope, non-deleted member at all (the trash
-                # view, where every candidate row is deleted) has no leader row,
-                # so nothing outranks the candidate and it is kept, exactly as
-                # the sibling EXISTS left it.
-                leader_outranks_candidate = exists(
-                    select(scoped_leader.c.member_id).where(
-                        scoped_leader.c.stack_id == cls.stack_id,
-                        or_(
-                            scoped_leader.c.member_pos < cur_pos,
-                            (scoped_leader.c.member_pos == cur_pos)
-                            & (scoped_leader.c.member_id < cls.id),
-                        ),
-                    )
-                )
-                query = query.where(
-                    or_(cls.stack_id.is_(None), ~leader_outranks_candidate)
-                )
-            elif project_scope is _NO_PROJECT_SCOPE or isinstance(
+                # An id filter (a picture set, a share token's scope, a split).
+                leader_scope.append(cls.id.in_(id_scope))
+            if project_scope is not _NO_PROJECT_SCOPE and not isinstance(
                 project_scope, (list, tuple)
             ):
-                # Unscoped (or multi-project) grid: fast path — leader is the
-                # global stack_position == 0, backed by the partial leader index.
+                project_members = select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id == cls.id
+                )
+                leader_scope.append(
+                    ~exists(project_members)
+                    if project_scope is None
+                    else exists(
+                        project_members.where(
+                            PictureProjectMember.project_id == project_scope
+                        )
+                    )
+                )
+            leader_scope += _scope_predicates_for_leaders(
+                file_path_prefix=file_path_prefix, face_filter=face_filter
+            )
+
+            if not leader_scope:
+                # Unscoped (or multi-project) grid: fast path — the leader is
+                # the global stack_position == 0, backed by the partial leader
+                # index. Left untouched so the common grid stays fast.
                 query = query.where(
                     or_(cls.stack_id.is_(None), cls.stack_position == 0)
                 )
             else:
-                # Project-scoped grid: represent each stack by its lowest-positioned
-                # member that is itself in this project scope, so a stack is not
-                # dropped just because its global position-0 leader belongs to a
-                # different project (e.g. a legacy stack whose membership predates
-                # the stack-atomic invariant). Mirrors find_unassigned().
-                sibling = aliased(cls)
-                sibling_project = select(PictureProjectMember.picture_id).where(
-                    PictureProjectMember.picture_id == sibling.id
-                )
-                if project_scope is None:
-                    sibling_in_scope = ~exists(sibling_project)
-                else:
-                    sibling_in_scope = exists(
-                        sibling_project.where(
-                            PictureProjectMember.project_id == project_scope
-                        )
-                    )
-                cur_pos = func.coalesce(cls.stack_position, 999999)
-                sib_pos = func.coalesce(sibling.stack_position, 999999)
-                has_higher_ranked_sibling = exists(
-                    select(sibling.id).where(
-                        sibling.stack_id == cls.stack_id,
-                        sibling.deleted.is_(False),
-                        sibling_in_scope,
-                        or_(
-                            sib_pos < cur_pos,
-                            (sib_pos == cur_pos) & (sibling.id < cls.id),
-                        ),
-                    )
-                )
-                query = query.where(
-                    or_(cls.stack_id.is_(None), ~has_higher_ranked_sibling)
-                )
+                query = query.where(cls.stack_leader_filter(leader_scope))
         if comfyui_self_parts:
             self_where = " OR ".join(comfyui_self_parts)
             if stack_leaders_only:
@@ -1331,6 +1278,7 @@ class Picture(SQLModel, table=True):
         face_filter: Optional[str] = None,
         stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
+        file_path_prefix: Optional[str] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
         guest_token_public_id: Optional[str] = None,
@@ -1369,8 +1317,15 @@ class Picture(SQLModel, table=True):
 
         # Intrinsic-attribute predicates via the shared compiler.  The unassigned /
         # project / deleted scoping is applied above; stack-leader collapsing stays
-        # below.  find_unassigned never filters on comfyui / file-path / import-source
-        # / import-excluded, so those fields are left unset.
+        # below.  find_unassigned never filters on comfyui / import-source /
+        # import-excluded, so those fields are left unset.
+        #
+        # ``file_path_prefix`` IS honoured, on the same children-only semantics
+        # ``find()`` uses, so "the unassigned pictures in one folder" is one
+        # query rather than two views that cannot be combined. It is what the
+        # "About your library" unsorted-pile finding opens on: without it the
+        # grid answered with every unassigned picture in the library under a
+        # header naming one folder.
         query = PredicateFilter(
             format=format,
             min_score=min_score,
@@ -1386,55 +1341,38 @@ class Picture(SQLModel, table=True):
             face_filter=face_filter,
             stack_state=stack_state,
             impossible_sources=impossible_sources,
+            file_path_prefix=file_path_prefix,
             apply_deleted_filter=False,
         ).apply(query)
 
         if stack_leaders_only:
-            project_scope_active = project_id is not None or only_unassigned_project
-            if not project_scope_active:
-                # Fast path: the stack leader is simply stack_position == 0,
-                # backed by the partial ix_picture_grid_leaders_* indexes (0047).
-                # Left unchanged so the common (unscoped) grid stays fast.
+            # Same rule and same implementation as `find` — see
+            # `stack_leader_filter`. This branch used to be a fourth private
+            # copy of it, and the copy was the slow shape.
+            leader_scope: list = []
+            if project_id is not None or only_unassigned_project:
+                project_members = select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id == cls.id
+                )
+                leader_scope.append(
+                    ~exists(project_members)
+                    if only_unassigned_project
+                    else exists(
+                        project_members.where(
+                            PictureProjectMember.project_id == project_id
+                        )
+                    )
+                )
+            leader_scope += _scope_predicates_for_leaders(
+                file_path_prefix=file_path_prefix, face_filter=face_filter
+            )
+
+            if not leader_scope:
                 query = query.where(
                     or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
                 )
             else:
-                # Project-scoped grid: the global position-0 leader may belong to
-                # a different project and be filtered out, which would wrongly drop
-                # the whole stack. Represent each stack by its lowest-positioned
-                # member that is itself in this project scope. This correlated check
-                # runs only over the already project-narrowed candidate set, so the
-                # common (unscoped) grid still hits the fast path above.
-                sibling = aliased(Picture)
-                sibling_project = select(PictureProjectMember.picture_id).where(
-                    PictureProjectMember.picture_id == sibling.id
-                )
-                if only_unassigned_project:
-                    sibling_in_scope = ~exists(sibling_project)
-                else:
-                    sibling_in_scope = exists(
-                        sibling_project.where(
-                            PictureProjectMember.project_id == project_id
-                        )
-                    )
-                # NULL positions sort last, matching normalize_stack_positions and
-                # the global "leader == position 0" convention.
-                cur_pos = func.coalesce(Picture.stack_position, 999999)
-                sib_pos = func.coalesce(sibling.stack_position, 999999)
-                has_higher_ranked_sibling = exists(
-                    select(sibling.id).where(
-                        sibling.stack_id == Picture.stack_id,
-                        sibling.deleted.is_(False),
-                        sibling_in_scope,
-                        or_(
-                            sib_pos < cur_pos,
-                            (sib_pos == cur_pos) & (sibling.id < Picture.id),
-                        ),
-                    )
-                )
-                query = query.where(
-                    or_(Picture.stack_id.is_(None), ~has_higher_ranked_sibling)
-                )
+                query = query.where(cls.stack_leader_filter(leader_scope))
 
         select_fields = metadata_fields or cls.metadata_fields()
         if count_only:
@@ -1508,6 +1446,101 @@ class Picture(SQLModel, table=True):
             query = query.offset(offset).limit(limit)
 
         return session.exec(query).all()
+
+    @classmethod
+    def stack_leader_filter(cls, scope_predicates: list):
+        """Collapse a NARROWED grid to one row per stack, correctly.
+
+        The leaders-only fast path represents a stack by its **global**
+        ``stack_position == 0`` member. That is right only for an unnarrowed
+        grid: any predicate that can hide that member — a project, an id list, a
+        folder, a face facet — drops the whole stack from a grid whose own
+        pictures are right there. The owner reported it as a set showing 5 tiles
+        for its 6 members and no stack at all (#670/#1746).
+
+        The rule is one sentence: **represent each stack by its best-ranked
+        member that is itself in scope.** This is the single implementation of
+        it. Before this there were three — the id-list branch here, the
+        project branch here, and a fourth written for `find_unassigned` — and
+        only the first had been made fast.
+
+        **The shape is the measured one, not the obvious one.** Comparing each
+        candidate row against an aliased sibling re-evaluates the scope for
+        every member of every stack: on a 19,822-picture vault a 6,641-id set
+        view spent 102 ms on the COUNT(*) every grid load runs (4.6 ms for the
+        unscoped fast path), and seconds once most rows in scope were stacked.
+        Ranking is the same operation for every member of a stack, so it belongs
+        in one pass: the derived table below resolves it once, SQLite
+        materialises it and probes through an automatic index, and the same set
+        view costs 9.7 ms for an identical id set. Do not "simplify" this back
+        into a correlated sibling EXISTS.
+
+        Re-measured when the folder and face scopes were added, on a
+        20,000-picture vault with half its rows stacked across two folders:
+        unscoped fast path **2.0 ms**, folder-scoped through this filter
+        **9.1 ms**, folder-scoped on the unassigned view **13.8 ms**. The
+        previous behaviour for a folder scope was the 2.0 ms fast path and it
+        was wrong — it dropped every stack whose cover sat in another folder —
+        so the ~7 ms is the price of the grid agreeing with itself, not a
+        regression against a correct baseline.
+
+        Args:
+            scope_predicates: The narrowing clauses, against ``Picture`` itself.
+                Must be the SAME predicates the outer query applies — two
+                spellings of "in scope" is how the leader and the members get
+                to disagree about which stack is showing.
+
+        Returns:
+            A clause for ``query.where(...)``: unstacked pictures, plus the
+            in-scope leader of each stack.
+        """
+        cur_pos = func.coalesce(cls.stack_position, 999999)
+        # One row per (stack, in-scope member), ranked by the SAME ordering the
+        # correlated form compared on: NULL positions sort last, ties by id.
+        ranked_members = (
+            select(
+                cls.stack_id.label("stack_id"),
+                cls.id.label("member_id"),
+                func.coalesce(cls.stack_position, 999999).label("member_pos"),
+                func.row_number()
+                .over(
+                    partition_by=cls.stack_id,
+                    order_by=(func.coalesce(cls.stack_position, 999999), cls.id),
+                )
+                .label("member_rank"),
+            )
+            .where(
+                cls.stack_id.is_not(None),
+                cls.deleted.is_(False),
+                *scope_predicates,
+            )
+            .subquery("scoped_stack_members")
+        )
+        scoped_leader = (
+            select(
+                ranked_members.c.stack_id,
+                ranked_members.c.member_id,
+                ranked_members.c.member_pos,
+            )
+            .where(ranked_members.c.member_rank == 1)
+            .subquery("scoped_stack_leader")
+        )
+        # Testing the one leader row is equivalent to "does ANY sibling outrank
+        # me": if any member outranks this row, the best-ranked one does, and a
+        # row never outranks itself. A stack with no in-scope, non-deleted
+        # member at all (the trash view) has no leader row, so nothing outranks
+        # the candidate and it is kept.
+        leader_outranks_candidate = exists(
+            select(scoped_leader.c.member_id).where(
+                scoped_leader.c.stack_id == cls.stack_id,
+                or_(
+                    scoped_leader.c.member_pos < cur_pos,
+                    (scoped_leader.c.member_pos == cur_pos)
+                    & (scoped_leader.c.member_id < cls.id),
+                ),
+            )
+        )
+        return or_(cls.stack_id.is_(None), ~leader_outranks_candidate)
 
     @classmethod
     def build_unassigned_conditions(

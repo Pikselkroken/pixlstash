@@ -127,7 +127,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, TrainingRuns, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, TrainingRuns, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -285,6 +285,27 @@ It is split in two so the URL contract is testable on its own:
 - Folder routes (`ref-folder` / `import-folder`) deliberately do **not** clear `selectedFolderFilter`. The sidebar owns that payload and emits `select-folder` once the folder has loaded, so the route must not wipe what the sidebar just set.
 
 **`?stack_state=` is the one filter the route owns**, and it is **additive only**: an absent or unrecognised value resolves to `null`, which means "leave `useFilterStore.stackStateFilter` alone". Resetting it on every route tick would silently clear a filter the user set in the filter panel the moment they navigated anywhere, which no other filter does. It exists because the Duplicates queue-clear screen routes to All Pictures with the stacked filter applied (`docs/design/keep-cover-only.md` → "The route from Duplicates"), and that destination has to be reloadable and Back-able rather than a state only one click can produce. It is read for every grid route, not just `/`. Adding a second route-owned filter is a design decision, not a copy-paste: the store is otherwise the writer of selection/project state only.
+
+**`?path=<absolute folder>` is the folder facet for folders that have no id.** A
+reference folder and an import folder each have a route (`/ref-folder/:id`,
+`/import-folder/:id`) and the sidebar owns their payload — which is why those
+two routes do not clear `selectedFolderFilter`, and why `?path=` is ignored on
+them (`applyView` guards on `folderKey`). The folder an "About your library"
+finding points at (§9.3) has no id of any kind, which is what this param is
+for. **The sidebar's subfolder selection is still not in the URL:**
+`FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
+`pushRouteForCurrentSelection`'s ref-folder branch and the path is dropped as
+before — closing that means teaching the sidebar's `activeFolderKey` watcher to
+restore a subfolder rather than the folder root, which is a change to the
+folder tree. `parseFolderPath`
+resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
+to the listing API's existing `file_path_prefix` param — there is no new backend
+filter behind it. Read on every grid route rather than only on `/`, the same
+reasoning as `?stack_state=`: it is what makes `/character/UNASSIGNED?path=…`,
+the unassigned pictures in ONE folder, expressible at all. Unlike
+`?stack_state=` it is **not** additive — an absent `path` on a non-folder route
+clears the filter, because the facet describes what the grid is showing rather
+than a sticky preference.
 
 **The URL cannot grant a project scope the credential does not have.** `applyRoute` narrows the parsed descriptor through `scopeProjectToSession` before writing it: a credential with a `resource_type` takes its project scope from the **token**, never from the URL — `project` → its own project (whatever project the URL names), everything else (`character` / `picture_set` / `picture`) → global mode with no project id. An owner session and a whole-library READ share both have **no** `resource_type` and are left exactly as the URL says; narrowing them would be over-blocking, since the backend places no project restriction on either (`visible_project_ids` returns `None`).
 
@@ -4402,6 +4423,47 @@ Back returns to the queue. Covered in `DuplicateQueue.test.js`.
 `filteredSortOptions`). The backend still serves the mechanism, so a saved
 preference naming it keeps working; the menu simply shows a one-time migration
 notice in its place, persisted through `useOneTimeNotice`.
+
+### 9.3 The "About your library" destination
+
+`/insights` mounts `LibraryInsights.vue` in place of `ImageGrid` (`App.vue`,
+`isInsightsView`), for the same reason `/duplicates` and `/models` do: it reads
+the library rather than showing it, so it has no selection to express and the
+grid's fetches go quiet while it is open. Like the shelf, the predicate is
+gated on `isReadOnly` and the route bounces (`useAppNavigation`): `GET
+/insights` is owner-only, so mounting it for a READ session would only fire a
+request the credential can never satisfy (issue #1014). The sidebar row is
+inert-not-hidden there, and says why.
+
+Three rules carry the screen, and the first is the reason it exists:
+
+- **A check that came back clear still gets a row.** The server returns every
+  check in both directions (`state: "todo" | "clear"`), and the view renders
+  both — the clear card is dashed and unpainted, wears a tick, and says
+  "nothing to do" instead of offering a button. A screen where every row is a
+  complaint reads as a nag; one that says "11,900 of your 12,000 pictures carry
+  a tag, nothing to fix here" reads as someone who looked. Filtering the clear
+  rows out client-side would undo the whole design.
+- **The action object is emitted untouched.** `LibraryInsights` emits `act`
+  with the server's `action` verbatim; `App.vue` routes `kind: "settings"` to
+  `openSettingsDialog` (a dialog, not a route) and everything else to
+  `handleInsightAction`, which is where the navigation lives
+  (`useAppNavigationInsights.test.js` pins each kind's destination). The view
+  never re-derives a path or a kind — the folder the evidence counted has to be
+  the folder the tool opens on, and two of the kinds carry a facet
+  (`?path=`, `?face=with_face`) precisely so the destination is the counted set
+  rather than a superset. See `docs/integration_architecture.md` §20.
+- **Nothing on it writes.** There is one request, it is a GET, and "Look again"
+  is that same GET. The bar and the footnote both say so, and the buttons open
+  tools that ask before they change anything. Any control added here that
+  mutates breaks the promise the screen is built on.
+
+The glyph per row is keyed on the finding `id`, never on its prose, so a
+reworded finding does not silently lose its icon. The screen's own title is an
+`h2` above the findings' `h3`s — the other view bars carry a span, but a screen
+whose entire body is headed sections needs an outline to move through. The
+contract is in `docs/integration_architecture.md` §20, including why the
+counts are in grid ROWS rather than pictures.
 
 ## 10. Naming and Coding Conventions
 

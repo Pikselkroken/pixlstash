@@ -266,8 +266,18 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         });
         return;
       }
-      // Path-based subfolder — no dedicated route; fall through to all-pictures.
-      pushAppRoute({ name: "all-pictures" });
+      // A folder payload with no id of any kind — what an "About your
+      // library" finding points at. It travels as `?path=` rather than being
+      // dropped, and `useViewStore.parseFolderPath` reads it back.
+      //
+      // NOT the sidebar's subfolder case: `FolderTreeNode.vue` requires
+      // `rfId`, so a subfolder click takes the ref-folder branch above and its
+      // path is still lost from the URL. Fixing that is a change to the folder
+      // tree's route restoration, not to this branch.
+      pushAppRoute({
+        name: "all-pictures",
+        query: f.pathPrefix ? { path: f.pathPrefix } : {},
+      });
       return;
     }
 
@@ -394,10 +404,16 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // navigation here uses, because the ONLY session that reaches this line is
   // one whose credential lives in `?token=`. Dropping it would leave a share
   // visitor on a URL that 401s the moment they reload or bookmark it.
+  // `/insights` bounces for the same reason and through the same watcher:
+  // GET /insights is owner-only, so a READ session that pasted the URL would
+  // mount a screen whose only request is a guaranteed 403.
   watch(
     [isReadOnly, () => route.name],
     ([readOnly, name]) => {
-      if (readOnly && MODEL_SHELF_ROUTES.includes(name))
+      if (
+        readOnly &&
+        (MODEL_SHELF_ROUTES.includes(name) || name === "insights")
+      )
         replaceAppRoute({ name: "all-pictures" });
     },
     { immediate: true },
@@ -406,6 +422,63 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   /** Open the model shelf. */
   function handleSelectModels() {
     pushAppRoute({ name: "models" });
+  }
+
+  // "About your library" is a destination for the same reason Duplicates is: it
+  // shows findings rather than pictures, so it has no selection to express.
+  //
+  // Gated on `isReadOnly` exactly like the shelf, and for the reason in issue
+  // #1014: GET /insights is owner-only, so mounting the screen for a READ
+  // session would only fire a request the credential can never satisfy. The
+  // predicate is gated rather than the component, so the one place that
+  // answers "is this showing" stays the one place that decides.
+  const isInsightsView = computed(
+    () => !isReadOnly.value && route.name === "insights",
+  );
+
+  /** Open the read-only findings about this library. */
+  function handleSelectInsights() {
+    pushAppRoute({ name: "insights" });
+  }
+
+  /**
+   * Act on one finding's button: open the tool it names, on the pictures it
+   * counted. The `kind` vocabulary is the backend's (`routes/insights.py`).
+   *
+   * `settings` is not handled here — the settings dialog is not a route, so
+   * App.vue takes that one straight to `openSettingsDialog`.
+   *
+   * @param {{kind: string, path?: string, folder_label?: string}} action
+   */
+  function handleInsightAction(action) {
+    if (!action) return;
+    if (
+      action.kind === "unassigned_in_folder" ||
+      action.kind === "unassigned_with_face"
+    ) {
+      const query = {};
+      if (action.path) query.path = action.path;
+      // The face half of the unnamed-faces finding: unassigned AND holding a
+      // face is exactly the set that finding counted.
+      if (action.kind === "unassigned_with_face") query.face = "with_face";
+      pushAppRoute({
+        name: "character",
+        params: { id: UNASSIGNED_PICTURES_ID },
+        query,
+      });
+      return;
+    }
+    if (action.kind === "duplicates_in_folder" && action.path) {
+      handleSelectDuplicates({
+        type: "folder",
+        id: action.path,
+        label: action.folder_label || action.path,
+        icon: "mdi-folder-outline",
+      });
+      return;
+    }
+    // Two folders with no usable common ancestor: the whole queue, unscoped.
+    if (action.kind === "duplicates") handleSelectDuplicates({});
   }
 
   /**
@@ -436,7 +509,10 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   return {
     isDuplicatesView,
     isModelsView,
+    isInsightsView,
     handleSelectModels,
+    handleSelectInsights,
+    handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,
     handleSelectFolder,

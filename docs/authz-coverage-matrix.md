@@ -533,6 +533,12 @@ and the declarations themselves are pinned by
 | POST | `/api/v1/operations/{operation_id}/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
 | POST | `/api/v1/operations/batches/{batch_id}/undo` | owner_only |  | Reverts a whole bulk action across the vault; owner-only write |
 
+### insights.py
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/insights` | owner_only |  | Vault-wide findings: folder names, counts and the absolute path of the folder each finding points at. Same reasoning as tag_health and the dedup queue — the numbers ARE the aggregate, so narrowing them to a share token's scope would leak that out-of-scope pictures exist or report a wrong total. Reads only; no write, no queued work |
+
 ### tag_health.py
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |

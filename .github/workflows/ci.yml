@@ -513,6 +513,7 @@ jobs:
           tests/test_libraries_routes.py
           tests/test_library_backup.py
           tests/test_library_generation_coordinator.py
+          tests/test_library_insights.py
           tests/test_library_layout.py
           tests/test_library_restore_cli.py
           tests/test_library_settings.py

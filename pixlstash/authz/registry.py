@@ -1408,6 +1408,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Reverts a whole bulk action across the vault; owner-only write",
     ),
+    # ── insights.py (v1.11 "About your library"; read-only findings) ────────
+    ("GET", "/api/v1/insights"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Vault-wide findings: folder names and picture counts from anywhere "
+            "in the library, plus the absolute path of the folder each finding "
+            "points at. Same reasoning as tag_health and the dedup queue — the "
+            "numbers ARE the aggregate, so narrowing them to a share token's "
+            "scope would either leak the existence of out-of-scope pictures or "
+            "report a wrong total. Reads only; queues no work and writes no row"
+        ),
+    ),
     # ── tag_health.py (bespoke "reject resource-scoped" gate; owner-only) ────
     # Same unscoped-READ nuance as reviews (see NEEDS REVIEW above).
     ("GET", "/api/v1/tag_health"): RoutePolicy(
