@@ -966,6 +966,7 @@ jobs:
           tests/multi_project_authz/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_find_orphaned_files.py
+          tests/test_library_layout.py
           tests/test_server.py
           tests/test_authentication.py
           tests/test_rate_limiter.py

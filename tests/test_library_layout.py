@@ -409,6 +409,29 @@ def test_an_unsafe_unfiled_name_is_refused():
 # ---------------------------------------------------------------------------
 
 
+def _require_symlinks(tmp_path, *, directory: bool):
+    """Skip unless this host can actually create the kind of link the case needs.
+
+    The house pattern (`tests/test_views_links.py`): probe rather than test
+    `os.name`, so the case still runs on a Windows host with Developer Mode or
+    admin rights, and skips with the real `OSError` on one without. Both hazards
+    below need a link to *exist* to be reachable at all, so a host that cannot
+    make one is not exposed to them — failing there would report a platform
+    limitation as a bug in the engine.
+    """
+    probe = tmp_path / "symlink-probe"
+    try:
+        os.symlink(
+            str(tmp_path if directory else __file__),
+            str(probe),
+            target_is_directory=directory,
+        )
+    except OSError as exc:
+        kind = "directory" if directory else "file"
+        pytest.skip(f"this host cannot create a {kind} symlink: {exc}")
+    os.remove(probe)
+
+
 @pytest.fixture
 def library(tmp_path):
     """A library root with a layout, one project, one person, and one picture.
@@ -418,38 +441,51 @@ def library(tmp_path):
     case rather than an invented one.
     """
     root = tmp_path / "Generations"
-    engine_ = create_engine(f"sqlite:///{tmp_path / 'vault.db'}")
+    # ``as_posix`` so the URL carries forward slashes on Windows too: a raw
+    # ``C:\\...\\vault.db`` inside a ``sqlite:///`` URL is a backslash escape
+    # sequence waiting to be read as one.
+    engine_ = create_engine(f"sqlite:///{(tmp_path / 'vault.db').as_posix()}")
     SQLModel.metadata.create_all(engine_)
-    with Session(engine_) as session:
-        session.add(LibrarySettings(layout=format_layout(DEFAULT_LAYOUT)))
-        project = Project(name="2024 Shoots")
-        other = Project(name="Client · Nordvik")
-        person = Character(name="Mira")
-        session.add_all([project, other, person])
-        session.commit()
+    try:
+        with Session(engine_) as session:
+            session.add(LibrarySettings(layout=format_layout(DEFAULT_LAYOUT)))
+            project = Project(name="2024 Shoots")
+            other = Project(name="Client · Nordvik")
+            person = Character(name="Mira")
+            session.add_all([project, other, person])
+            session.commit()
 
-        folder = root / "2024 Shoots" / "Mira" / "2026-08"
-        folder.mkdir(parents=True)
-        (folder / "0412.png").write_bytes(b"pixels")
+            folder = root / "2024 Shoots" / "Mira" / "2026-08"
+            folder.mkdir(parents=True)
+            (folder / "0412.png").write_bytes(b"pixels")
 
-        picture = Picture(
-            file_path="2024 Shoots/Mira/2026-08/0412.png",
-            original_file_name="0412.png",
-            project_id=project.id,
-        )
-        session.add(picture)
-        session.commit()
-        session.add(PictureProjectMember(picture_id=picture.id, project_id=project.id))
-        session.add(Face(picture_id=picture.id, character_id=person.id))
-        session.commit()
-        yield {
-            "session": session,
-            "root": str(root),
-            "picture_id": picture.id,
-            "project_id": project.id,
-            "other_project_id": other.id,
-            "person_id": person.id,
-        }
+            picture = Picture(
+                file_path="2024 Shoots/Mira/2026-08/0412.png",
+                original_file_name="0412.png",
+                project_id=project.id,
+            )
+            session.add(picture)
+            session.commit()
+            session.add(
+                PictureProjectMember(picture_id=picture.id, project_id=project.id)
+            )
+            session.add(Face(picture_id=picture.id, character_id=person.id))
+            session.commit()
+            yield {
+                "session": session,
+                "root": str(root),
+                "picture_id": picture.id,
+                "project_id": project.id,
+                "other_project_id": other.id,
+                "person_id": person.id,
+            }
+
+    finally:
+        # Windows will not delete a file another handle still has open, and
+        # ``tmp_path`` cleanup is what would hit it. Disposing the pool is also
+        # the rule this repo learned the hard way: anything that used to die
+        # with a per-test engine leaks once the engine outlives the test body.
+        engine_.dispose()
 
 
 def _swap_project(library):
@@ -521,6 +557,12 @@ def test_swapping_the_project_moves_the_file_and_keeps_the_owners_subfolder(libr
     )
     picture = session.get(Picture, library["picture_id"])
     assert picture.file_path == "Client · Nordvik/Mira/2026-08/0412.png"
+    # The stored form is ``/``-separated on every platform. This one only bites
+    # on Windows, which is why the file is on the OS-sensitive list: everything
+    # that reads a library picture's path — the thumbnail sibling, the layout's
+    # own component split, the grid's URL — assumes forward slashes, and
+    # ``os.path.relpath`` hands back backslashes there.
+    assert "\\" not in picture.file_path
 
 
 def test_the_thumbnail_follows_the_file(library):
@@ -658,6 +700,7 @@ def test_renaming_a_project_renames_the_folder_and_moves_no_files(library):
     # The picture is in the SAME place under a new name. Nothing about its
     # position in the tree changed, which is the whole point.
     assert picture.file_path == "2024 Shoots (archive)/Mira/2026-08/0412.png"
+    assert "\\" not in picture.file_path, "a rename must not native-ise the path"
 
     # And it is still true there, so the engine has nothing to do afterwards.
     assert engine.plan_moves(session, [library["picture_id"]], root) == ([], [])
@@ -689,12 +732,13 @@ def test_a_taken_destination_is_declined_not_overwritten(library):
 
 
 def test_a_symlinked_source_is_refused(library, tmp_path):
+    _require_symlinks(tmp_path, directory=False)
     session, root = library["session"], library["root"]
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"not the library's")
     source = os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
     os.unlink(source)
-    os.symlink(outside, source)
+    os.symlink(str(outside), source)
     _swap_project(library)
 
     plan, skipped = engine.plan_moves(session, [library["picture_id"]], root)
@@ -712,10 +756,13 @@ def test_a_symlinked_destination_folder_is_refused(library, tmp_path):
     check the file would be written outside the library while the row went on
     naming a path inside it.
     """
+    _require_symlinks(tmp_path, directory=True)
     session, root = library["session"], library["root"]
     outside = tmp_path / "another-volume"
     outside.mkdir()
-    os.symlink(outside, os.path.join(root, "Client · Nordvik"))
+    os.symlink(
+        str(outside), os.path.join(root, "Client · Nordvik"), target_is_directory=True
+    )
     _swap_project(library)
 
     plan, skipped = engine.plan_moves(session, [library["picture_id"]], root)
