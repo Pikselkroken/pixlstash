@@ -404,15 +404,18 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // navigation here uses, because the ONLY session that reaches this line is
   // one whose credential lives in `?token=`. Dropping it would leave a share
   // visitor on a URL that 401s the moment they reload or bookmark it.
-  // `/insights` bounces for the same reason and through the same watcher:
-  // GET /insights is owner-only, so a READ session that pasted the URL would
-  // mount a screen whose only request is a guaranteed 403.
+  // `/insights` and `/moves` bounce for the same reason and through the same
+  // watcher: GET /insights and GET /moves/pending are both owner-only, so a
+  // READ session that pasted either URL would mount a screen whose only
+  // request is a guaranteed 403.
   watch(
     [isReadOnly, () => route.name],
     ([readOnly, name]) => {
       if (
         readOnly &&
-        (MODEL_SHELF_ROUTES.includes(name) || name === "insights")
+        (MODEL_SHELF_ROUTES.includes(name) ||
+          name === "insights" ||
+          name === "moves")
       )
         replaceAppRoute({ name: "all-pictures" });
     },
@@ -439,6 +442,19 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   /** Open the read-only findings about this library. */
   function handleSelectInsights() {
     pushAppRoute({ name: "insights" });
+  }
+
+  // Moves is a destination for the same reason Insights is: it reports on the
+  // library rather than expressing a selection within it, gated on
+  // `isReadOnly` for the same reason (GET /moves/pending is owner-only,
+  // issue #1014's pattern).
+  const isMovesView = computed(
+    () => !isReadOnly.value && route.name === "moves",
+  );
+
+  /** Open the reconciliation queue for moves made outside PixlStash. */
+  function handleSelectMoves() {
+    pushAppRoute({ name: "moves" });
   }
 
   /**
@@ -510,8 +526,10 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isDuplicatesView,
     isModelsView,
     isInsightsView,
+    isMovesView,
     handleSelectModels,
     handleSelectInsights,
+    handleSelectMoves,
     handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,

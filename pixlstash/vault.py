@@ -961,6 +961,13 @@ class Vault:
             moved_ids = result.get("moved_picture_ids") or []
             if moved_ids:
                 self.notify(EventType.CHANGED_PICTURES, moved_ids)
+            # v1.11 Phase 5: moves this scan could not attribute to PixlStash
+            # itself, in a root laid out enough to have something to say about
+            # them. The sidebar strip listens for this rather than polling
+            # GET /moves/pending.
+            queued_for_review = result.get("external_moves_queued_for_review") or []
+            if queued_for_review:
+                self.notify(EventType.EXTERNAL_MOVES_PENDING, queued_for_review)
             picture_ids = result.get("caption_updated_picture_ids") or []
             if picture_ids:
                 self._queue_changed_tags_notification(picture_ids)

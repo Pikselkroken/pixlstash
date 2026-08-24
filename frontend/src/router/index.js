@@ -20,6 +20,7 @@ import App from "../App.vue";
 //   /duplicates                             → Duplicate triage queue
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
 //   /insights                               → About your library (read-only findings)
+//   /moves                                  → Moves made outside PixlStash (reconciliation queue)
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
@@ -53,6 +54,7 @@ const routes = [
   { path: "/scrapheap", name: "scrapheap", component: App },
   { path: "/duplicates", name: "duplicates", component: App },
   { path: "/insights", name: "insights", component: App },
+  { path: "/moves", name: "moves", component: App },
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   // The runs were briefly a destination of their own. They are a view of the

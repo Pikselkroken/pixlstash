@@ -74,6 +74,9 @@ const ModelShelf = defineAsyncComponent(() =>
 const LibraryInsights = defineAsyncComponent(() =>
   import("./components/views/LibraryInsights.vue"),
 );
+const MovesReview = defineAsyncComponent(() =>
+  import("./components/views/MovesReview.vue"),
+);
 const ReviewSessionsOverlay = defineAsyncComponent(() =>
   import("./components/views/ReviewSessionsOverlay.vue"),
 );
@@ -151,8 +154,10 @@ const {
   isDuplicatesView,
   isModelsView,
   isInsightsView,
+  isMovesView,
   handleSelectModels,
   handleSelectInsights,
+  handleSelectMoves,
   handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
@@ -582,6 +587,7 @@ defineExpose({
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
             @select-insights="handleSelectInsights"
+            @select-moves="handleSelectMoves"
             @select-duplicates="handleSelectDuplicates"
             @select-models="handleSelectModels"
             @select-set="handleSelectSet"
@@ -674,6 +680,10 @@ defineExpose({
                       : handleInsightAction(action)
                 "
               />
+              <!-- Moves is a destination for the same reason Insights is: it
+                   reports on the queue rather than showing the library, so it
+                   replaces the grid instead of floating over it. -->
+              <MovesReview v-else-if="isMovesView" />
               <ImageGrid
                 v-else
                 ref="gridContainer"

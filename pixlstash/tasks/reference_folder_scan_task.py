@@ -38,7 +38,9 @@ from pixlstash.services.layout_move_service import (
     claim_own_moves,
     prune_move_journal,
 )
+from pixlstash.services.move_reconciliation_service import record_pending_reviews
 from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
+from pixlstash.utils.library_layout import parse_layout
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -71,6 +73,12 @@ class ReferenceFolderScanTask(BaseTask):
     result is that second list, and it is what Phase 5 reconciles.  Without the
     split, PixlStash's own writes come back through this scan as owner intent
     and the two flip each other for ever.
+
+    Of that list, only the moves inside a root that has a *layout* are queued
+    for review (``external_moves_queued_for_review``,
+    ``move_reconciliation_service.record_pending_reviews``): a root with no
+    layout has no vocabulary a folder name could contradict, so there is
+    nothing for Phase 5 to reconcile even though the file still moved.
     """
 
     def __init__(
@@ -98,6 +106,9 @@ class ReferenceFolderScanTask(BaseTask):
         # _run_task(); None means "use known conventions / module defaults".
         self._tags_suffix: str | None = None
         self._description_suffix: str | None = None
+        # The folder's layout, loaded at the start of _run_task(); None means
+        # "no layout", same as an unset column (v1.11 Phase 5).
+        self._layout = None
 
     def _run_task(self):
         resolved = self._resolved_path
@@ -134,6 +145,8 @@ class ReferenceFolderScanTask(BaseTask):
                 bool(rf.sync_tags),
                 bool(rf.sync_descriptions),
                 bool(rf.pending_reimport),
+                rf.layout,
+                rf.layout_unfiled,
             )
 
         config = self._db.run_task(fetch_folder_config, priority=DBPriority.LOW)
@@ -143,7 +156,23 @@ class ReferenceFolderScanTask(BaseTask):
             sync_tags,
             sync_descriptions,
             pending_reimport,
-        ) = config or (None, None, False, False, False)
+            layout_text,
+            layout_unfiled,
+        ) = config or (None, None, False, False, False, None, None)
+        # v1.11 Phase 5: only a laid-out root has a vocabulary a folder name
+        # can contradict, so only a laid-out root's moves are worth queuing for
+        # reconciliation at all (see move_reconciliation_service.record_pending_reviews).
+        try:
+            self._layout = parse_layout(layout_text, layout_unfiled or "_Inbox")
+        except ValueError as exc:
+            logger.error(
+                "Reference folder %s: layout %r is not usable: %s. Moves made "
+                "outside PixlStash will not be reconciled until it is corrected.",
+                self._folder_path,
+                layout_text,
+                exc,
+            )
+            self._layout = None
 
         # When a synced folder has no explicit suffix yet (a migrated folder or a
         # Docker folder added before its mount was reachable), detect the naming
@@ -370,6 +399,7 @@ class ReferenceFolderScanTask(BaseTask):
                 # the retention window is actually enforced.
                 prune_move_journal(session)
                 external: list[int] = []
+                external_moves: list[tuple[int, str, str]] = []
                 for pic_id, new_path, thumbnail_carried, old_path in pairs:
                     pic = session.get(Picture, pic_id)
                     if pic is None:
@@ -401,6 +431,12 @@ class ReferenceFolderScanTask(BaseTask):
                     session.add(pic)
                     if (old_path, new_path) not in ours:
                         external.append(pic_id)
+                        external_moves.append((pic_id, old_path, new_path))
+                if external_moves and self._layout is not None:
+                    # Only a laid-out root has a vocabulary this move could
+                    # contradict (v1.11 Phase 5); see
+                    # move_reconciliation_service.record_pending_reviews.
+                    record_pending_reviews(session, external_moves)
                 session.commit()
                 return external
 
@@ -597,6 +633,12 @@ class ReferenceFolderScanTask(BaseTask):
             "imported_picture_ids": imported_picture_ids,
             "moved_picture_ids": moved_picture_ids,
             "external_moved_picture_ids": external_moved_picture_ids,
+            # v1.11 Phase 5: which of those were actually queued for
+            # reconciliation review — empty whenever this root has no layout,
+            # even though external_moved_picture_ids is not.
+            "external_moves_queued_for_review": (
+                external_moved_picture_ids if self._layout is not None else []
+            ),
         }
 
     def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:

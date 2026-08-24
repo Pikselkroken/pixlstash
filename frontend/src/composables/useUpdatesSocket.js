@@ -15,6 +15,7 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
+import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   isFullRestoreRequestInFlight,
@@ -131,6 +132,7 @@ export function useUpdatesSocket({
   const operationStore = useOperationStore();
   const snapshotsStore = useSnapshotsStore();
   const dedupStore = useDedupStore();
+  const movesStore = useMovesStore();
   const noticeStore = useNoticeStore();
 
   let updatesSocket = null;
@@ -138,6 +140,13 @@ export function useUpdatesSocket({
   let reconnectEnabled = false;
   let gridWsCoalesceTimer = null;
   let fullRestorePending = false;
+  // "A sidebar strip a few seconds after the moves stop" (release plan §4
+  // Phase 5): reorganising a folder queues one EXTERNAL_MOVES_PENDING event
+  // per scan, and a scan runs once per batch rather than once per file, but
+  // this debounce is what keeps a burst of scans (several reference folders
+  // settling around the same time) from re-fetching the queue once per event.
+  let externalMovesPendingTimer = null;
+  const EXTERNAL_MOVES_PENDING_DEBOUNCE_MS = 3000;
   let fullRestoreTransitioning = false;
 
   // --- WebSocket ---
@@ -417,6 +426,19 @@ export function useUpdatesSocket({
         // frame update it in place rather than stacking three warnings.
         const notice = vramOomNotice(payload);
         noticeStore.push({ ...notice, key: VRAM_OOM_NOTICE_KEY });
+      } else if (
+        payload?.type === "external_moves_pending" &&
+        !isReadOnly.value
+      ) {
+        // No count on the wire (server.py's broadcaster deliberately sends
+        // none — the queue is reclassified live, so any number sent here
+        // could already be wrong by the time it renders). Debounced re-fetch
+        // is the whole reaction.
+        if (externalMovesPendingTimer) clearTimeout(externalMovesPendingTimer);
+        externalMovesPendingTimer = setTimeout(() => {
+          externalMovesPendingTimer = null;
+          movesStore.fetchPending();
+        }, EXTERNAL_MOVES_PENDING_DEBOUNCE_MS);
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
@@ -579,6 +601,10 @@ export function useUpdatesSocket({
   onUnmounted(() => {
     disconnectUpdatesSocket();
     gridWsScheduler.cancel();
+    if (externalMovesPendingTimer) {
+      clearTimeout(externalMovesPendingTimer);
+      externalMovesPendingTimer = null;
+    }
   });
 
   return {

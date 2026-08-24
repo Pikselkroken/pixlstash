@@ -24,3 +24,9 @@ class EventType(Enum):
     # only event here that carries no picture ids: it describes the machine,
     # not the library, and the SPA renders it as a warning toast.
     VRAM_OOM = auto()
+    # A reference-folder scan queued one or more moves the owner made outside
+    # PixlStash for reconciliation (v1.11 Phase 5). The sidebar strip listens
+    # for this to appear a few seconds after the moves stop, rather than
+    # polling; the count itself is re-fetched from GET /moves/pending, this
+    # event only says "look again".
+    EXTERNAL_MOVES_PENDING = auto()
