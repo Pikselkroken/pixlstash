@@ -358,6 +358,15 @@ class Picture(SQLModel, table=True):
     reference_folder_id: Optional[int] = Field(
         default=None, foreign_key="reference_folder.id", index=True
     )
+    # When the layout engine should next ask whether this picture's folder is
+    # still true (a Unix timestamp), or NULL for "there is nothing to ask".
+    # Written by the assignment-change hook in ``database.py`` and cleared by
+    # ``LayoutMoveTask``; the debounce IS this column, because a second change
+    # pushes the stamp out again and a remove-then-add therefore settles into
+    # one move rather than two via the unfiled folder. Indexed because the
+    # finder's only query is "anything due yet?" against a table where the
+    # answer is almost always no.
+    layout_check_due_at: Optional[float] = Field(default=None, index=True)
     # Absolute path to the import-folder root that produced this picture.
     # NULL for pictures imported through other workflows.
     import_source_folder: Optional[str] = Field(

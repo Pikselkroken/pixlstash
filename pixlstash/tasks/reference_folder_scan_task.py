@@ -34,6 +34,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_E
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import claim_own_moves
 from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
 from pixlstash.utils.path_utils import path_is_within
 
@@ -60,6 +61,13 @@ class ReferenceFolderScanTask(BaseTask):
     Phase-2 path validation (resolve mapping → blocklist → isdir/access) is
     performed before any filesystem work.  On failure the folder status is set
     to ``mount_error`` and the task exits without touching the picture table.
+
+    A followed move is attributed before it is reported: a pair the move
+    journal claims was made by PixlStash itself (v1.11 Phase 4b), and every
+    other pair was made by the owner.  ``external_moved_picture_ids`` in the
+    result is that second list, and it is what Phase 5 reconciles.  Without the
+    split, PixlStash's own writes come back through this scan as owner intent
+    and the two flip each other for ever.
     """
 
     def __init__(
@@ -318,6 +326,11 @@ class ReferenceFolderScanTask(BaseTask):
             existing_by_path, new_paths, removed_paths
         )
         moved_picture_ids: list[int] = []
+        # The moves this scan attributes to the OWNER, i.e. everything the move
+        # journal did not claim. v1.11 Phase 5 reconciles these into assignment
+        # changes; Phase 4b's job is only to make sure PixlStash's own writes
+        # are never in the list.
+        external_moved_picture_ids: list[int] = []
         if moved_paths:
             # The thumbnail is stored under sha256(file_path), so the bitmap
             # follows the file rather than being abandoned at the old name.
@@ -333,9 +346,21 @@ class ReferenceFolderScanTask(BaseTask):
             }
 
             def apply_moves(
-                session: Session, pairs: list[tuple[int, str, bool]]
-            ) -> None:
-                for pic_id, new_path, thumbnail_carried in pairs:
+                session: Session, pairs: list[tuple[int, str, bool, str]]
+            ) -> list[int]:
+                # Which of these moves did PixlStash make itself? The layout
+                # engine (v1.11 Phase 4b) journals every file it moves, and a
+                # move that is ours is NOT the owner reorganising their library:
+                # reading it as intent is what makes our write come back as a
+                # change, unfile the picture, and start the two flipping each
+                # other for ever over real files. Claimed here, at the one place
+                # that has both paths and a session.
+                ours = claim_own_moves(
+                    session,
+                    [(old_path, new_path) for _, new_path, _, old_path in pairs],
+                )
+                external: list[int] = []
+                for pic_id, new_path, thumbnail_carried, old_path in pairs:
                     pic = session.get(Picture, pic_id)
                     if pic is None:
                         # The row went between the scan's read and this write —
@@ -364,27 +389,36 @@ class ReferenceFolderScanTask(BaseTask):
                         pic.thumbnail_width = None
                         pic.thumbnail_height = None
                     session.add(pic)
+                    if (old_path, new_path) not in ours:
+                        external.append(pic_id)
                 session.commit()
+                return external
 
             move_pairs = sorted(
                 (
                     existing_by_path[old].id,
                     new,
                     carried_thumbnails.get(old, False),
+                    old,
                 )
                 for old, new in moved_paths.items()
                 if existing_by_path[old].id is not None
             )
-            self._db.run_task(apply_moves, move_pairs, priority=DBPriority.LOW)
+            external_moved_picture_ids = (
+                self._db.run_task(apply_moves, move_pairs, priority=DBPriority.LOW)
+                or []
+            )
             # A followed move changes file_path (and with it the thumbnail URL
             # and the download name) on a row an open grid may already be
             # showing, and nothing else in this task reports it: without this the
             # grid keeps the old state until the next full reload.
-            moved_picture_ids = [pic_id for pic_id, _, _ in move_pairs]
+            moved_picture_ids = [pic_id for pic_id, _, _, _ in move_pairs]
             logger.info(
-                "Reference folder %s: followed %d moved file(s).",
+                "Reference folder %s: followed %d moved file(s), %d of them "
+                "moved by PixlStash itself.",
                 self._folder_path,
                 len(moved_paths),
+                len(moved_paths) - len(external_moved_picture_ids),
             )
             # A moved file is neither removed nor new.  ``existing_by_path`` is
             # re-keyed as well as narrowed, because the sidecar pass below walks
@@ -552,6 +586,7 @@ class ReferenceFolderScanTask(BaseTask):
             "caption_updated_picture_ids": caption_updated_picture_ids,
             "imported_picture_ids": imported_picture_ids,
             "moved_picture_ids": moved_picture_ids,
+            "external_moved_picture_ids": external_moved_picture_ids,
         }
 
     def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:

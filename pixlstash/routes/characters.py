@@ -49,9 +49,11 @@ from pixlstash.services.project_membership_service import (
     reconcile_entity_projects_change,
     set_character_projects,
 )
+from pixlstash.services.layout_move_service import rename_entity_folders
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.routes.pictures import FaceListResponse
+from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.field_allowlist import (
     CHARACTER_EXTRA_SERVABLE_FIELDS,
     require_servable_field,
@@ -937,6 +939,7 @@ def create_router(server) -> APIRouter:
                     _ensure_unique_character_name(
                         session, final_name, target_project_ids, exclude_char_id=id
                     )
+                previous_name = character.name
                 updated = False
                 # Tracked apart from ``updated`` because the invalidation below
                 # is about IDENTITY: the name and description are baked into
@@ -1055,6 +1058,20 @@ def create_router(server) -> APIRouter:
 
                     session.commit()
                     session.refresh(character)
+                if name_changing:
+                    # **Renaming a person renames their FOLDER; it moves no
+                    # files** (v1.11 §4). Required rather than tidy: the layout
+                    # reads folder names against the library's current
+                    # vocabulary, so a folder left under the old name names
+                    # nobody and its pictures fall out of the rule for good.
+                    if rename_entity_folders(
+                        session,
+                        Facet.PERSON,
+                        previous_name,
+                        character.name,
+                        image_root=server.vault.image_root,
+                    ):
+                        session.commit()
                 # Serialize while the session is open; the row may be detached
                 # (and its attributes expired) by the time the handler returns.
                 payload = character.model_dump(exclude_unset=False)

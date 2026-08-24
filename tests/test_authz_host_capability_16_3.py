@@ -163,7 +163,7 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_42_local_6_loopback():
+def test_host_capability_tier_split_is_44_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
     the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 48
     routes carry a locality tier = 42 local + 6 loopback.
@@ -362,6 +362,21 @@ def test_host_capability_tier_split_is_42_local_6_loopback():
     this tier, so polling the write must not be a lower bar than polling the
     read was. Neither spawns anything, so the loopback count is unchanged.
 
+    50 = 44 + 6 with the layout pair (v1.11 Phase 4b): ``GET`` and
+    ``PATCH /server-config/layout``. Neither takes a host path at all — the root
+    is the library's own — and the PATCH moves nothing, because the release's
+    rule is that every path already in the library is true the moment it is
+    written. What puts them here is the authority the PATCH *hands out*: from
+    then on a background task renames the owner's files into the folder names it
+    chose, so the tier that may decide that is the tier that holds it, and the
+    GET is its control surface by the ``GET /model-moves`` argument. The GET is
+    also on ``READ_BLOCKED_GET_PATHS``, so an ``AUTHZ_GATE_ENFORCING = False``
+    rollback does not hand the shape of the owner's folder tree to share tokens.
+    The move itself is NOT here: ``POST /pictures/layout/move-to-match`` is
+    ``picture_scoped``, on the ``POST /pictures/rotate`` line, because the
+    caller supplies pictures and never a path. The loopback count is unchanged:
+    neither route spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -375,7 +390,7 @@ def test_host_capability_tier_split_is_42_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 42, sorted(local)
+    assert len(local) == 44, sorted(local)
 
 
 # ===========================================================================

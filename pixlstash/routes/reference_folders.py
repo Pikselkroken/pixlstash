@@ -30,6 +30,7 @@ from pixlstash.utils.caption_file_utils import (
     writeback_path,
 )
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
+from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
     validate_reference_folder_accessible,
@@ -123,6 +124,25 @@ class ReferenceFolderUpdateRequest(BaseModel):
     description_suffix: Optional[str] = None
     tags_suffix: Optional[str] = None
     host_path: Optional[str] = None
+    layout: Optional[str] = Field(
+        default=None,
+        description=(
+            "How this folder is laid out, as `project/person,set` — segments "
+            "separated by `/`, a segment's alternatives by `,`, first match "
+            "wins (v1.11 Phase 4b). `null` turns the layout off, which is the "
+            "default: without one PixlStash places nothing here and moves "
+            "nothing here, whatever changes about the pictures. Setting one "
+            "does NOT reorganise the folder — every path already in it produced "
+            "the assignments it holds, so every path is already true."
+        ),
+    )
+    layout_unfiled: Optional[str] = Field(
+        default=None,
+        description=(
+            "The folder a picture with nothing to file it by is written to. "
+            "One safe path component; `null` means `_Inbox`."
+        ),
+    )
 
 
 class ReferenceFolderResponse(BaseModel):
@@ -139,6 +159,8 @@ class ReferenceFolderResponse(BaseModel):
     tags_suffix: Optional[str]
     status: str
     last_scanned: Optional[float]
+    layout: Optional[str] = None
+    layout_unfiled: Optional[str] = None
     relocation: Optional[dict] = None
 
 
@@ -858,6 +880,23 @@ def create_router(server) -> APIRouter:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
+            if "layout" in payload.model_fields_set:
+                # Validated here rather than stored and hoped for: an unparseable
+                # layout would be dropped every time it was read, which reads as
+                # "the layout is off" and is indistinguishable from having asked
+                # for that.
+                try:
+                    parse_layout(
+                        payload.layout,
+                        payload.layout_unfiled
+                        or rf.layout_unfiled
+                        or DEFAULT_LAYOUT.unfiled,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                rf.layout = payload.layout or None
+            if "layout_unfiled" in payload.model_fields_set:
+                rf.layout_unfiled = payload.layout_unfiled or None
 
             if newly_enabled:
                 # The scan finder treats last_scanned=None as "scan now".

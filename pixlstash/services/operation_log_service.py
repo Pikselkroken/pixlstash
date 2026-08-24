@@ -80,6 +80,7 @@ from pixlstash.db_models.operation import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import restore_location
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -124,6 +125,14 @@ FACET_DELETED = "deleted"
 # FILE, and it is reversible for the reason the rest are: the recorded value is
 # the whole prior state, not a delta.
 FACET_ORIENTATION = "orientation"
+# Where the picture's FILE is (``Picture.file_path``), so the v1.11 layout
+# engine's batch of moves is one Ctrl+Z (§4 of the release plan). The second
+# facet whose applier writes to the filesystem, and reversible for the reason
+# the orientation is: the recorded value is the whole prior state — a path — and
+# putting a file back at a path it just came from loses nothing. Captured for
+# every operation, so a move made by any recorded route is undoable, not only
+# the engine's own.
+FACET_LOCATION = "location"
 
 FACETS = (
     FACET_TAGS,
@@ -138,6 +147,7 @@ FACETS = (
     FACET_STACK,
     FACET_DELETED,
     FACET_ORIENTATION,
+    FACET_LOCATION,
 )
 
 # Operation types the scrapheap lifecycle records. Named constants because the
@@ -186,6 +196,7 @@ _FACET_EVENTS = {
     FACET_PENDING_CHARACTER_ID: (EventType.CHANGED_CHARACTERS,),
     FACET_STACK: (EventType.CHANGED_PICTURES,),
     FACET_DELETED: (EventType.CHANGED_PICTURES,),
+    FACET_LOCATION: (EventType.CHANGED_PICTURES,),
 }
 
 
@@ -290,6 +301,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             # by ``apply_orientation`` and backfilled by
             # ``MissingOrientationFinder``.
             FACET_ORIENTATION: picture.orientation,
+            FACET_LOCATION: picture.file_path,
             FACET_TAGS: [],
             FACET_TAG_PREDICTIONS: {},
             FACET_SETS: [],
@@ -1604,6 +1616,30 @@ def apply_state_in_session(
                             picture_id,
                             exc,
                         )
+                elif facet == FACET_LOCATION:
+                    # Not guarded on ``value is not None``: a recorded None
+                    # means the picture had no path at all, and
+                    # ``restore_location`` says so rather than silently doing
+                    # nothing. Like the orientation above it, this applier
+                    # leaves the database, so it fails for reasons the rest of
+                    # the batch has nothing to do with — a destination taken
+                    # since, a read-only folder, a file the owner has since
+                    # moved themselves. Those degrade to a logged skip instead
+                    # of failing an undo that also has tags and memberships in
+                    # it.
+                    try:
+                        restore_location(
+                            session, picture_id, value, image_root=image_root
+                        )
+                    except OSError as exc:
+                        logger.error(
+                            "operation_log: could not move picture %d back to "
+                            "%r (%s); the rest of this restore still applies "
+                            "and the file keeps the path it has.",
+                            picture_id,
+                            value,
+                            exc,
+                        )
                 elif facet == FACET_DELETED:
                     if value is not None:
                         _apply_deleted(session, picture, value)
@@ -1957,7 +1993,12 @@ def _emit(
     # mixed batch re-reads a few thumbnails it did not need to. That costs one
     # request against a conditional-GET-friendly URL; guessing wrong the other
     # way leaves a visibly stale photo on screen.
-    updated_fields = ["pixels"] if FACET_ORIENTATION in facets else None
+    # A restored location moves the FILE, so the card's thumbnail URL changes
+    # for exactly the reason a restored orientation does — the URL is derived
+    # from the path, not from ``GET /pictures/{id}/metadata``.
+    updated_fields = (
+        ["pixels"] if facets & {FACET_ORIENTATION, FACET_LOCATION} else None
+    )
     for event in events:
         _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")

@@ -84,6 +84,7 @@ class WorkPlanner:
         from pixlstash.tasks.missing_stack_cohesion_finder import (
             MissingStackCohesionFinder,
         )
+        from pixlstash.tasks.layout_move_finder import LayoutMoveFinder
 
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -169,6 +170,10 @@ class WorkPlanner:
             ),
             TaskType.STACK_COHESION: MissingStackCohesionFinder(
                 database=database,
+            ),
+            TaskType.LAYOUT_MOVE: LayoutMoveFinder(
+                database=database,
+                notifier=notifier,
             ),
         }
 

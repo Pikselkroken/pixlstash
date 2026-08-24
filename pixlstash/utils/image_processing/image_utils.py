@@ -729,9 +729,15 @@ class ImageUtils:
         source_file_path: str,
         picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
+        subfolder: Optional[str] = None,
     ) -> Picture:
         """
         Create a Picture from a file path, using metadata for created_at if available.
+
+        Args:
+            subfolder: Relative folder under ``image_root_path`` to write into,
+                for a library whose root has a v1.11 layout. See
+                :meth:`create_picture_from_bytes`.
         """
         if not os.path.exists(source_file_path):
             raise ValueError(f"Source file path does not exist: {source_file_path}")
@@ -747,6 +753,7 @@ class ImageUtils:
             pixel_sha=pixel_sha,
             created_at=created_at,
             original_file_name=os.path.basename(source_file_path),
+            subfolder=subfolder,
         )
 
     @staticmethod
@@ -759,6 +766,7 @@ class ImageUtils:
         original_file_name: Optional[str] = None,
         output_dir: Optional[str] = None,
         reference_folder_id: Optional[int] = None,
+        subfolder: Optional[str] = None,
     ) -> Picture:
         """Create a Picture from raw bytes, deriving metadata and saving the file.
 
@@ -776,6 +784,13 @@ class ImageUtils:
                 correctly routed to ``image_root/.ref_thumbs/``.
             reference_folder_id: When set, assigned to the Picture so that the
                 reference-folder scan recognises the record as already indexed.
+            subfolder: A ``/``-separated relative folder under
+                *image_root_path* to write into — where the v1.11 layout says a
+                new picture belongs (``services/layout_move_service.render``).
+                The stored ``file_path`` stays RELATIVE, so the picture is still
+                a library picture and its thumbnail is still a sibling file;
+                only ``output_dir`` makes a path absolute, and that means a
+                reference folder. Ignored when *output_dir* is given.
         """
         if not pixel_sha:
             pixel_sha = ImageUtils.calculate_hash_from_bytes(image_bytes)
@@ -882,6 +897,13 @@ class ImageUtils:
             # reference-folder picture and writes the thumb to .ref_thumbs/.
             full_path = os.path.join(output_dir, file_name)
             picture_file_path: str = full_path
+        elif subfolder:
+            # Placement on write, v1.11 Phase 4b. Relative, so the picture stays
+            # a library picture; the layout decided the folder and the caller
+            # has already checked that the root has one.
+            relative = os.path.join(*subfolder.split("/"), file_name)
+            full_path = os.path.join(image_root_path, relative)
+            picture_file_path = relative.replace(os.sep, "/")
         else:
             full_path = os.path.join(image_root_path, file_name)
             picture_file_path = file_name

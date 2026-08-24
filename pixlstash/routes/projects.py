@@ -36,6 +36,8 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import rename_entity_folders
+from pixlstash.utils.library_layout import Facet
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
@@ -515,6 +517,7 @@ def create_router(server) -> APIRouter:
             project = session.get(Project, pid)
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
+            previous_name = project.name
             if normalized_name is not None:
                 _ensure_unique_project_name(
                     session,
@@ -538,6 +541,21 @@ def create_router(server) -> APIRouter:
                     detail="Project name already exists",
                 )
             session.refresh(project)
+            if normalized_name is not None and previous_name != normalized_name:
+                # **Renaming a project renames its FOLDER; it moves no files**
+                # (v1.11 §4). It is also not cosmetic: the layout reads folder
+                # names against the library's *current* vocabulary, so a folder
+                # left under the old name would name nothing PixlStash knows
+                # and its pictures would drop out of the layout for good.
+                renamed = rename_entity_folders(
+                    session,
+                    Facet.PROJECT,
+                    previous_name,
+                    normalized_name,
+                    image_root=server.vault.image_root,
+                )
+                if renamed:
+                    session.commit()
             return project
 
         return server.vault.db.run_task(

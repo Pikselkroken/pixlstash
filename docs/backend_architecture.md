@@ -36,6 +36,7 @@
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
 24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
 25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
+26. [The layout and the move engine](#26-the-layout-and-the-move-engine-v111-phase-4b)
 
 ---
 
@@ -596,6 +597,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                       |
 | POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                  |
 | POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                           |
+| POST   | /api/v1/pictures/layout/move-to-match                                         | pictures        | Move pictures to where the layout would put them            |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                    |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                    |
 | POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                    |
@@ -614,6 +616,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                    |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                      |
 | GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                          |
+| GET    | /api/v1/pictures/{id}/layout                                                  | pictures        | Where this picture is, and where the layout would put it    |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                        |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                          |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                           |
@@ -3574,6 +3577,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
 
   - **Updated 2026-08-23 (v1.11 Phase 7, PixlStash Views) — the locality total is now `43 = 37 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` after merging the library-lifecycle block, not carried forward: those four routes and these two landed independently, so the figure this paragraph would have named alone (`39 = 33 + 6`) was never true of a merged tree. `GET` and `PATCH /api/v1/server-config/views` publish the library's sets, people and projects as folders of **links** to the files the owner already keeps. The PATCH is the **third** route on this tier for both reasons at once: it takes a caller-supplied host path like `POST /model-folders`, and it writes a folder tree into it like `POST /model-moves`. It is here for the authority and **not** for destruction — it creates only links, and the one thing it unlinks is a name that is not the last one: a symlink, or a regular file with `st_nlink > 1`. `shutil.rmtree` is deliberately not used, because it is not link-aware and would delete a file the owner had dropped into a view folder; anything that is not a link is reported back as `kept_by_owner` and left standing. A folder that already has content and no `.pixlstash-views` marker is refused rather than adopted, so a views root aimed at somebody's pictures folder never becomes one in the first place. Every destination is built with `resolve_path_within` against its kind folder and each kind folder against the root, and a symlink standing where a kind folder goes is unlinked *as a link* rather than descended, so neither a vault-supplied name nor a planted symlink can take the rebuild outside the views root; and five location classes are refused outright before a byte is written — inside the library, inside **any other registered** library (the same broken backup in one that is not open), inside a reference folder (the scan lists symlinked *files*, so every link would be indexed as a second copy), the containing cases of each, and a cloud-sync folder (the client uploads what the link points at). **The GET is the control-surface argument that put `GET /model-moves` here rather than one tier down**: it names the host folder the tree went to, and the tier that alone may publish it is the tier that may see where it landed. It is also on `READ_BLOCKED_GET_PATHS`, so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand that path back to every share token. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_37_local_6_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-08-24 (v1.11 Phase 4b, the move engine) — the locality total is now `48 = 42 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` rather than added to the line above, which is one branch behind: Phase 2's three folder-structure routes landed in between and took the local tier to 40 without a bullet of their own. This change adds **+2**: `GET` and `PATCH /api/v1/server-config/layout`. **Neither takes a host path at all** — the root is the library's own, and there is no field in which a caller could name another — and the PATCH moves nothing when it is called, because the release's rule is that every path already in the library is true the moment it is written, so choosing a layout reorganises no folder that exists. What puts the pair on this tier is the authority the PATCH *hands out*: from then on a background task (`LayoutMoveTask`) renames the owner's own files into the folder names the layout renders, so the tier that may decide those names is the tier that holds host-filesystem authority. The GET is its control surface by the `GET /model-moves` argument, and is on `READ_BLOCKED_GET_PATHS` so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand the shape of the owner's folder tree to every share token. **The move itself is deliberately NOT on this tier.** `POST /api/v1/pictures/layout/move-to-match` is `picture_scoped`, on the `POST /api/v1/pictures/rotate` line: the caller names pictures, the server derives the root from each picture's own row and the destination from a layout only this tier could have set, so what a caller exercises is authority over pictures it already reaches. Its planner refuses a source that resolves outside its root and refuses a symlink outright — `publish_no_clobber` links the *target*, so moving a link would pull a file from anywhere on the machine into the library under the link's name, the #1024 shape one sink over — and a destination whose name is taken is declined rather than overwritten. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_42_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -6092,6 +6096,159 @@ screen already lets them say so on purpose.
   `project_membership_service.set_character_projects` /
   `set_picture_set_projects` are called once, at creation, never for an
   existing entity's membership change.
+
+## 26. The layout and the move engine (v1.11 Phase 4b)
+
+`pixlstash/utils/library_layout.py` decides *where* a picture belongs and
+whether it still does; `pixlstash/services/layout_move_service.py` decides
+*whether to act* and then acts. The wire contract is
+`docs/integration_architecture.md` §23; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
+
+Everything here is downstream of one sentence:
+
+> **A picture moves only when its folder stops being true.**
+
+Not whenever something about it changes. Three properties fall out of that
+rather than being designed in, and they are what the section is for:
+
+1. **Import moves zero files.** Assignments are derived *from* the paths, so
+   every path is true the moment it is written.
+2. **Nothing is re-derived**, so a picture in three projects never needs a
+   winner picked. The many-to-many problem does not arise.
+3. **A path the layout cannot read can never be false**, so it never moves. An
+   existing flat library needs no migration and a hand-placed file is a
+   permanent override that needs no setting.
+
+### Where a layout lives, and why in two places
+
+| Root | Column | Governs |
+|---|---|---|
+| The library's own picture root | `library_settings.layout` / `layout_unfiled` | pictures with `reference_folder_id IS NULL` (`Picture.file_path` relative) |
+| A reference folder | `reference_folder.layout` / `layout_unfiled` | that folder's pictures (`Picture.file_path` absolute) |
+
+NULL in both means **no layout**, which is every root that exists today: with
+none, nothing is placed by the layout and nothing is moved by it, whatever
+changes about the pictures. Opt-in is not a setting bolted on — it is the
+absence of a row value, so the safe state is also the default state.
+
+Two locations rather than one because they are two different trees and the
+engine has to know which one a picture is in anyway (`Picture.reference_folder_id`
+answers that already). `LayoutRoot` is the one abstraction over both, and the
+only thing it has to reconcile is the stored-path convention: absolute for a
+reference picture, relative for a library one, which is the same branch
+`ImageUtils.get_thumbnail_path` already makes.
+
+### The two jobs
+
+**Placement on write.** `placement_subfolder` renders the folder a new picture
+belongs in, and `PictureImportTask` passes it to `ImageUtils.create_picture_from_file`
+as `subfolder`. It uses only the assignments that are *already* true — the
+project and the set. A drop-to-person import carries a **pending** character id
+and the picture has no faces yet, so writing it into that person's folder would
+make the folder false the moment anything read it; it lands unfiled instead and
+leaves on its own when face extraction assigns the person.
+
+**The truth check.** `relocate` returns `None` for every case the rule calls
+still true and the destination otherwise. The destination **keeps the owner's
+own folders below the layout**: a picture in `2024 Shoots/Mira/2026-08` whose
+project changes goes to `Client · Nordvik/Mira/2026-08`. Flattening it would
+collapse a date tree into one folder and make two files of the same name
+collide — a curated library's structure destroyed by a rule that promised to
+preserve it.
+
+### The trigger, and why it is a flush hook
+
+`database._before_flush_layout_tracker` / `_after_flush_layout_marker` stamp
+`Picture.layout_check_due_at` when a picture's project, set or person membership
+changes. They sit beside the metadata-hash hooks on every writer-thread session
+because the alternative — a call at each mutation site — cannot be kept in step:
+a picture gains a project through the import route, the CRUD route, the
+membership service, a plugin, the ComfyUI ingest, stack propagation and a
+restore, and the one that gets missed is a picture whose folder has quietly
+stopped being true and that nothing ever revisits.
+
+The hook narrows hard. `session.dirty` means "something on this object changed",
+not "this column did", so a rating, a caption or a thumbnail write on a
+`Picture` would otherwise stamp the whole library; `_attribute_changed` reads
+the attribute history instead. And the whole stamp is gated on
+`_library_has_layout`, cached per session, so a library that has chosen no
+layout pays one small indexed read per task and never a write.
+
+**The debounce IS the stamp.** Each change writes `now + CHECK_DEBOUNCE_S`, so a
+second change pushes the check out again rather than queueing a second one. That
+is what makes a remove-then-add **one** move: swapping a picture's project is
+two requests a fraction of a second apart, and acting on the first would take
+the file through the unfiled folder on its way to the right one.
+
+### Doing it: order, refusals, and what is never done
+
+`LayoutMoveFinder` → `LayoutMoveTask` plans the whole batch, **logs the count
+before executing it**, moves, and records one `pictures.layout.move` operation
+so the batch is one Ctrl+Z. Per picture the order is: claim the destination,
+drop the source name, carry the thumbnail and sidecars, write the row.
+
+- **The claim is `publish_no_clobber`** — the model shelf's single-syscall
+  primitive — so a name that appeared since the plan was made is refused rather
+  than overwritten. This walks the owner's own library and there is no file in
+  it the engine is entitled to destroy. A taken destination is *declined*, never
+  uniquified: renaming the owner's file to make room is a bigger liberty than
+  not moving.
+- **A symlinked source is refused.** `os.link` follows the link, so moving one
+  would pull whatever it points at — anywhere on the machine — into the library
+  under the link's name. That is a read escape wearing a write sink's clothes,
+  the shape #1024 closed for the rotate sink.
+- **A source that resolves outside its root is refused**, which is not tidiness:
+  everything below it moves a file.
+- **An emptied folder is kept.** Nothing in the module calls `rmdir`. A folder
+  the owner made is theirs, and one PixlStash made may already hold something we
+  cannot see.
+
+Undo is `FACET_LOCATION` on the operation log, applied by `restore_location`.
+Like the orientation facet it is **absolute, not a delta** — the recorded value
+is a path, so applying it twice is a no-op and a file something else has since
+moved converges instead of drifting — and it makes every one of the refusals
+above again, because an undo is a move.
+
+Undoing a move deliberately does **not** re-arm the check: the engine spent the
+stamp when it moved, and nothing re-stamps a picture whose memberships did not
+change. A picture the owner has undone therefore stays where they put it back,
+which is the same override an off-layout folder gets.
+
+### Renaming an entity renames its folder
+
+`rename_entity_folders` renames the directories named after a project, set or
+person and repoints the rows under them. It moves no files, and that is not a
+nicety: a project with three thousand pictures would otherwise rewrite three
+thousand paths on disk to say the same thing in different words.
+
+It is also not optional. `is_true` reads a folder name against the library's
+**current** vocabulary, so a folder still carrying the old name names nothing
+PixlStash knows — unreadable, permanently frozen, and quietly outside the layout
+from then on. The rename is what keeps those pictures inside the language. Only
+directories at a depth some segment of the root's layout could put that facet at
+are considered, so a folder of the owner's own that happens to share the name is
+left alone.
+
+### The move journal, and why it is Phase 4b's job
+
+Every move the engine makes writes a `picture_move` row **before** anything
+walks the tree again, and `ReferenceFolderScanTask` claims the pairs that are
+ours. Without it the scan reads PixlStash's own write as the owner reorganising
+their library: Phase 5 turns that into an assignment change, which makes the
+folder untrue, which moves the file again, and the two flip each other for ever
+over real files on a real disk. Building it here rather than there is what makes
+Phase 5 a feature instead of a fix.
+
+The row is keyed by the two **paths** rather than by the picture id, because the
+scan pairs a vanished path with an arrived one by pixel content and has no
+picture id in hand until after it has decided the pairing. A claimed row is
+marked consumed and rows are pruned after `RETENTION_S`: a pair is not unique
+over time, and a row kept for ever would let a genuine owner move between the
+same two folders next month be dismissed as ours.
+
+`ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
+moves it attributes to the owner — which is exactly Phase 5's input.
 
 ---
 
