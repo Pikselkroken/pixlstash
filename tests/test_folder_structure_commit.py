@@ -203,7 +203,7 @@ def test_the_accepted_mapping_actually_attaches_the_pictures(owner_env):
 
 
 def test_recommitting_a_completed_read_is_refused_and_creates_nothing_twice(owner_env):
-    """The one-shot invariant integration_architecture.md §21 documents.
+    """The one-shot invariant integration_architecture.md §22 documents.
 
     Not vacuous: without the `committed` guard this would create a second
     "2026" Project and a second "kai" Character, so the count assertions

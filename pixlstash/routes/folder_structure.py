@@ -80,7 +80,7 @@ class FolderStructureReadCancelResponse(BaseModel):
 
 
 class FolderStructureAssignmentPayload(BaseModel):
-    """One accepted folder from the mapping screen. See §21 for the shape."""
+    """One accepted folder from the mapping screen. See §22 for the shape."""
 
     relative_path: str
     kind: str
@@ -396,12 +396,20 @@ def create_router(server) -> APIRouter:
         return {"status": "cancelled"}
 
     def _commit_progress(task_id: str, stage: str, processed: int, total: int) -> None:
-        state = server.folder_structure_commit
-        if not state or state["task_id"] != task_id:
-            return
-        state["stage"] = stage
-        state["processed"] = processed
-        state["total"] = total
+        # Locked, unlike the read's own `_on_progress`/`_run_read` above: those
+        # rely on a deliberate write ORDER (`result` before `status`) so a
+        # torn read can only ever show "not ready yet", never a wrong ready
+        # value. A commit writes real database rows behind these fields, so
+        # this takes the small, cheap step further and makes every multi-field
+        # update atomic with respect to the status endpoint's snapshot,
+        # instead of relying on getting every write order right by hand.
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if not state or state["task_id"] != task_id:
+                return
+            state["stage"] = stage
+            state["processed"] = processed
+            state["total"] = total
 
     def _run_commit(
         task_id: str,
@@ -410,9 +418,10 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
     ) -> None:
-        state = server.folder_structure_commit
-        if state and state["task_id"] == task_id:
-            state["status"] = "running"
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if state and state["task_id"] == task_id:
+                state["status"] = "running"
         try:
             rf = commit_service.register_reference_folder(
                 server, root_path, label=label
@@ -430,10 +439,11 @@ def create_router(server) -> APIRouter:
             result = commit_service.apply_mapping(server, rf.id, assignments, root_path)
         except commit_service.CommitError as exc:
             logger.error("Folder-structure commit %s failed: %s", task_id, exc)
-            state = server.folder_structure_commit
-            if state and state["task_id"] == task_id:
-                state["status"] = "failed"
-                state["error"] = str(exc)
+            with server.folder_structure_commit_lock:
+                state = server.folder_structure_commit
+                if state and state["task_id"] == task_id:
+                    state["error"] = str(exc)
+                    state["status"] = "failed"
             return
         except BaseException as exc:  # noqa: BLE001 — the slot must never wedge
             logger.error(
@@ -443,20 +453,22 @@ def create_router(server) -> APIRouter:
                 exc,
                 exc_info=True,
             )
-            state = server.folder_structure_commit
-            if state and state["task_id"] == task_id:
-                state["status"] = "failed"
-                state["error"] = f"{type(exc).__name__}: {exc}"
+            with server.folder_structure_commit_lock:
+                state = server.folder_structure_commit
+                if state and state["task_id"] == task_id:
+                    state["error"] = f"{type(exc).__name__}: {exc}"
+                    state["status"] = "failed"
             if not isinstance(exc, Exception):
                 raise
             return
 
-        state = server.folder_structure_commit
-        if not state or state["task_id"] != task_id:
-            return
-        state["result"] = result.as_dict()
-        state["stage"] = "done"
-        state["status"] = "completed"
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if not state or state["task_id"] != task_id:
+                return
+            state["result"] = result.as_dict()
+            state["stage"] = "done"
+            state["status"] = "completed"
         server.vault.notify(
             EventType.CHANGED_PICTURES,
             {"source": "folder-structure-commit", "change_kind": "updated"},
@@ -475,7 +487,7 @@ def create_router(server) -> APIRouter:
             "is moved, renamed or copied — then creates the accepted "
             "projects, people, sets and tags and links every picture the scan "
             "finds to them. Returns a task id to poll; see "
-            "integration_architecture.md §21."
+            "integration_architecture.md §22."
         ),
         response_model=FolderStructureCommitStartResponse,
         tags=["folders"],
@@ -530,7 +542,7 @@ def create_router(server) -> APIRouter:
         # done must refuse a second one against the same read, or
         # `apply_mapping` runs twice over the same pictures and creates
         # duplicate projects, people, sets, tags and memberships. See
-        # backend_architecture.md §25 and integration_architecture.md §21
+        # backend_architecture.md §25 and integration_architecture.md §22
         # ("one-shot"). Reserving the (unrelated, single, global) commit slot
         # BEFORE marking this read committed: if a different read's commit is
         # already running there, this request must not spend this read's one

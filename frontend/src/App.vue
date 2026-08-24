@@ -71,6 +71,9 @@ const DuplicateQueue = defineAsyncComponent(() =>
 const ModelShelf = defineAsyncComponent(() =>
   import("./components/views/ModelShelf.vue"),
 );
+const LibraryInsights = defineAsyncComponent(() =>
+  import("./components/views/LibraryInsights.vue"),
+);
 const ReviewSessionsOverlay = defineAsyncComponent(() =>
   import("./components/views/ReviewSessionsOverlay.vue"),
 );
@@ -147,7 +150,10 @@ const error = ref(null);
 const {
   isDuplicatesView,
   isModelsView,
+  isInsightsView,
   handleSelectModels,
+  handleSelectInsights,
+  handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -258,7 +264,15 @@ let stopOpenSettings = null;
 
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
-    return selectionStore.selectedFolderFilter.label || "Folder";
+    const folder = selectionStore.selectedFolderFilter.label || "Folder";
+    // A folder filter and the unassigned view together are ONE destination:
+    // "About your library" opens its unsorted-pile finding on exactly that
+    // pair. Naming only the folder would head a grid holding 900 of a
+    // folder's 1,000 pictures with the folder's own name, which reads as the
+    // whole of it.
+    return selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID
+      ? `Unassigned in ${folder}`
+      : folder;
   }
   if (selectionStore.selectedSetIds.length > 1) {
     const modeLabel =
@@ -566,6 +580,7 @@ defineExpose({
             @suggest-pictures-for-character="handleSuggestPicturesForCharacter"
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
+            @select-insights="handleSelectInsights"
             @select-duplicates="handleSelectDuplicates"
             @select-models="handleSelectModels"
             @select-set="handleSelectSet"
@@ -642,6 +657,21 @@ defineExpose({
               <ModelShelf
                 v-else-if="isModelsView"
                 @open-settings="openSettingsDialog"
+              />
+              <!-- "About your library" reads the library rather than showing
+                   it, so like the two above it replaces the grid instead of
+                   floating over it. `act` carries one finding's action: the
+                   settings pane is a dialog rather than a route, so that one
+                   kind lands here; every other kind is a navigation and
+                   belongs to useAppNavigation. -->
+              <LibraryInsights
+                v-else-if="isInsightsView"
+                @act="
+                  (action) =>
+                    action.kind === 'settings'
+                      ? openSettingsDialog(action.tab)
+                      : handleInsightAction(action)
+                "
               />
               <ImageGrid
                 v-else

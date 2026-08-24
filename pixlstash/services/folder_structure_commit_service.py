@@ -1,7 +1,7 @@
 """Commit an accepted folder-structure mapping. v1.11 Phase 3.
 
 ``docs/plans/v1.11.0-existing-library.md`` §4 Phase 3; wire contract
-``docs/integration_architecture.md`` §21. The read (Phase 2,
+``docs/integration_architecture.md`` §22. The read (Phase 2,
 ``folder_structure_service.py``) only ever proposes; this module is the one
 place anything from the mapping screen is written.
 

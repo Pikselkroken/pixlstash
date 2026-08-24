@@ -28,7 +28,8 @@
 18. [Integration Diagrams](#18-integration-diagrams)
 19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
 20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
-21. [Folder-Structure Commit API (v1.11, Phase 3)](#21-folder-structure-commit-api-v111-phase-3)
+21. [About your library (v1.11)](#21-about-your-library-v111)
+22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
 
 ---
 
@@ -1237,7 +1238,7 @@ into the list's tail); the server never invents a stamp for them.
   "cursor": null,                    // echo of the cursor this page was read from
   "next_cursor": "MXwxfDQy",         // pass back as ?cursor=; null at end-of-found
   "policy": { … }, "scope": { "scope_type": "global", "scope_id": null, "key": "global" },
-  "scan": { "status": "running", "scanned_pictures": 79412, "total_pictures": 128412,
+  "scan": { "status": "running", "scanned_pictures": 79412, "total_pictures": 112000,
             "scanned_buckets": 210, "total_buckets": 940, "groups_found": 128,
             "error": null }
 }
@@ -1787,14 +1788,144 @@ than instantly.
 
 ### Not in this API
 
-- **No commit.** Nothing here writes. The accept path is §21, Phase 3.
+- **No commit.** Nothing here writes. The accept path is §22, Phase 3.
 - **No per-row re-read.** A single read answers the whole tree; there is no
   "re-run faces on this one folder" route.
 - **No language reading of folder names.** Explicitly out (release plan §5): no
   LLM ships with PixlStash, and `name_match` is a string comparison against rows
   the vault already has, not a semantic one.
 
-## 21. Folder-Structure Commit API (v1.11, Phase 3)
+## 21. About your library (v1.11)
+
+### `GET /insights`
+
+Read-only findings over the library. One request, computed live — there is no
+cache, no rebuild route and nothing to poll, so the screen's "Look again"
+button is this same GET. `owner_only`.
+
+```jsonc
+{
+  "total_pictures": 12000,
+  "folder_pictures": 12000,   // how many sit in a folder read in place; the
+  "folders": 200,             // rest are vault-managed and have no folder name
+  "findings": [ /* … */ ]
+}
+```
+
+Each finding:
+
+```jsonc
+{
+  "id": "unsorted_pile",      // stable key for the CHECK, not for the row
+  "state": "todo",            // "todo" | "clear"
+  "title": "900 pictures are in _unsorted and nowhere else",
+  "evidence": "…the counts the finding was read off…",
+  "action": {                 // null when there is nothing to open
+    "label": "Sort them",
+    "note": "rapid triage",   // what the button opens, shown under it
+    "kind": "unassigned_in_folder",
+    "path": "/home/me/library/_unsorted",
+    "folder_label": "_unsorted"
+  }
+}
+```
+
+**Two contract points the frontend depends on.**
+
+1. **A check that found nothing still returns a row**, with `state: "clear"`,
+   its evidence, and `action: null`. The client must render it rather than
+   filter it out: a screen where every row is a complaint reads as a nag, and a
+   check that vanishes when it passes cannot be trusted when it fires. The
+   client picks the glyph from `id`, so a reworded finding keeps its icon.
+2. **`action` is passed through untouched.** The client must not re-derive the
+   path or the kind — the folder the evidence counted is the folder the tool
+   opens on, and rewriting is where the two get to disagree.
+
+`kind` is a closed vocabulary, and each value maps to something that already
+exists in the client:
+
+| `kind` | Opens |
+|---|---|
+| `unassigned_in_folder` | `/character/UNASSIGNED?path=<path>` |
+| `unassigned_with_face` | `/character/UNASSIGNED?face=with_face` |
+| `duplicates_in_folder` | `/duplicates?scope=folder&scope_id=<path>` (the queue's existing folder scope) |
+| `duplicates` | `/duplicates`, unscoped |
+| `settings` | the settings dialog on the `tab` pane — a dialog, not a route, so App.vue handles this one |
+
+**None of these is the obvious destination, and the reason is always the same
+one: a finding counts what its own button can show.** A number the owner cannot
+reach reads as the feature being broken, so where the two disagreed the *check*
+was changed to match the destination, not the other way round.
+
+* `unassigned_with_face` carries the face facet because unassigned alone is
+  mostly pictures with no face in them. Unassigned means no face here is named;
+  `with_face` means there is one. The pair is the counted set exactly — and
+  both sides exclude `face.face_index = -1`, the sentinel row the extractor
+  writes for a picture it found **no** face in. Reading that row as an unnamed
+  face made the finding fire on most of a scanned library and open an empty
+  grid.
+* `duplicates_in_folder` for a two-folder overlap scopes to the pair's **common
+  ancestor**, never to one of the two folders. Tier 1 is
+  `GROUP BY pixel_sha, size_bytes HAVING count(*) > 1` with the scope predicate
+  applied *inside* the aggregate, so a scope holding one copy of each shared
+  file sees count 1 and the queue comes back empty. The queue's folder scope is
+  a sub-tree prefix match, so the ancestor holds both copies. The server sends
+  the unscoped `duplicates` instead when that ancestor would not narrow
+  anything — a filesystem root, a relative path, or a sub-tree holding more
+  than `SCOPE_MAX_WIDENING` times the two folders' own pictures. Two unrelated
+  trees under one home directory are *siblings*, structurally identical to two
+  folders inside a library, so only the size test separates them.
+
+**Counts are in ROWS, not pictures.** Every grid request the app makes carries
+`fields=grid`, which the listing route maps to `stack_leaders_only`: a stack of
+eight is one row. A finding counting pictures states a number its own button
+cannot produce.
+
+### `?path=` and `?face=` — the two facets a finding opens on
+
+A reference folder and an import folder each have a route of their own
+(`/ref-folder/:id`, `/import-folder/:id`). The folder an insight points at has
+no id of any kind, so it travels as **`?path=<absolute folder>`** on any grid
+route (`useViewStore.parseFolderPath`), resolving to the same `{pathPrefix}`
+payload the sidebar emits and therefore to the listing API's existing
+`file_path_prefix` query param. It is ignored on a folder route, where the
+sidebar owns the payload. (It does **not** yet put the sidebar's own subfolder
+selection in the URL: `FolderTreeNode.vue` requires an `rfId`, so a subfolder
+click still takes the ref-folder branch.)
+
+**`?face=with_face|without_face`** is the face facet, additive like
+`?stack_state=` — an absent or unrecognised value leaves
+`useFilterStore.faceBboxFilter` alone.
+
+Reading both on every grid route rather than only on `/` is what makes
+`/character/UNASSIGNED?path=…` and `/character/UNASSIGNED?face=with_face`
+expressible at all.
+
+**Two backend changes were needed for this, both small and both in
+`Picture.find_unassigned`:**
+
+1. It now accepts `file_path_prefix` and passes it to the shared
+   `PredicateFilter`. It did not before, so
+   `character_id=UNASSIGNED&file_path_prefix=…` silently answered with every
+   unassigned picture in the library.
+2. Its `stack_leaders_only` branch now treats a folder scope the way it already
+   treated a project scope. The fast path represents a stack by its **global**
+   `stack_position == 0` member; under a folder filter that member can be
+   outside the scope, and the whole stack fell out of a grid whose own pictures
+   were right there. The narrowed collapse reuses
+   `PredicateFilter(file_path_prefix=…).file_path_prefix_predicates()` — the
+   clauses are compiled once and handed to `Picture.stack_leader_filter`, which
+   ranks the in-scope members and takes the best one, because two spellings of
+   "in this folder" is how the leader and the members get to disagree.
+
+### Not in this API
+
+There is **no write anywhere on this surface**, no work queued and no file
+touched. Any UI copy implying otherwise would be wrong.
+
+---
+
+## 22. Folder-Structure Commit API (v1.11, Phase 3)
 
 The accept path behind the `Preview` screen: takes the mapping the owner
 confirmed over a §20 read and writes it. Backend design is

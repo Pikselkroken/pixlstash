@@ -19,12 +19,18 @@ import App from "../App.vue";
 //   /scrapheap                              → Scrapheap
 //   /duplicates                             → Duplicate triage queue
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
+//   /insights                               → About your library (read-only findings)
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
 //   Any of the above routes may also carry:
+//   ?path=<absolute folder>      → Narrow the grid to one folder by path. The
+//                                  facet the sidebar's ref-folder/import-folder
+//                                  routes carry as an id, for the folders that
+//                                  have no id of their own (a subfolder, or a
+//                                  folder an insight points at).
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
@@ -46,6 +52,7 @@ const routes = [
   { path: "/project/:projectId/set/:id", name: "project-set", component: App },
   { path: "/scrapheap", name: "scrapheap", component: App },
   { path: "/duplicates", name: "duplicates", component: App },
+  { path: "/insights", name: "insights", component: App },
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   // The runs were briefly a destination of their own. They are a view of the

@@ -110,7 +110,7 @@ function onMappingNext(built) {
 }
 
 function organiseLater() {
-  // A commit that has started cannot be cancelled (§21) and keeps running
+  // A commit that has started cannot be cancelled (§22) and keeps running
   // server-side either way, so this must be a no-op while `committing` is
   // true — `:persistent` on the dialog below blocks Escape and a backdrop
   // click, but AppDialog's header close button and `@click:outside` both

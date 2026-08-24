@@ -2,7 +2,7 @@
 /**
  * Wizard step 3 ("Preview") — the accepted mapping, before anything is
  * written. Commits nothing until "Yes, build this library" is pressed; see
- * integration_architecture.md §21. Moves, renames and copies zero files
+ * integration_architecture.md §22. Moves, renames and copies zero files
  * either way — committing registers the folder for in-place indexing and
  * writes database rows only.
  */
@@ -29,7 +29,7 @@ const emit = defineEmits(["back", "cancel", "committed", "update:committing"]);
 const committing = ref(false);
 // The wizard makes its dialog undismissable while this is true: a commit,
 // once started, runs to completion server-side regardless of what this
-// screen does next (§21), so Escape or a backdrop click must not be able to
+// screen does next (§22), so Escape or a backdrop click must not be able to
 // quietly abandon the UI while it keeps running — that is what let the same
 // read's task id come back through the sidebar's resume flow and get
 // committed a second time.

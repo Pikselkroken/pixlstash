@@ -154,6 +154,7 @@ pixlstash/
 │   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
 │   ├── dedup_tier_service.py         # Tiered detection, tier policy, cover + evidence (§22)
 │   ├── dedup_verdict_service.py      # Stack / keep-separate verdicts + metadata union (§22)
+│   ├── library_insights_service.py   # "About your library" findings, read-only (v1.11)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -441,6 +442,19 @@ Stack placement for these graphs therefore does **not** come from `build_stack_f
 
 **Seed ranges differ by route.** `run_t2i` / `run_i2i` validate a fixed seed to 32 bits; `run_recipe` allows the full 64-bit range ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and a 32-bit check would reject reproducing our own built-in's default.
 
+### `insights.py`
+`GET /insights` — the v1.11 "About your library" screen. One route, no writes
+anywhere on the surface. Every finding is computed live from data that already
+ships (the tier-1 exact-duplicate key, the captioner's own sentinel predicate,
+face rows and their character assignment, the `Tag` table, and the app's own
+definition of an unassigned picture), so there is no cache to rebuild and no
+background job behind it — "Look again" is this same GET. `owner_only` for the
+`tag_health` reasoning: the numbers **are** the vault-wide aggregate, so a
+narrowed answer would either leak that out-of-scope pictures exist or state a
+wrong total. Findings and the reasoning behind each check live in
+[services/library_insights_service.py](../pixlstash/services/library_insights_service.py);
+the contract is in `docs/integration_architecture.md` §20.
+
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
 
@@ -504,6 +518,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                       |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
+| GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                       |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                               |
 | POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                   |
@@ -1415,6 +1430,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/restore/](../pixlstash/services/restore/) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
 | [services/tagger_run_service.py](../pixlstash/services/tagger_run_service.py) | System-of-record DB side for tagger evaluation runs pushed from PixlTagger: upsert a posted report on the run name and list stored runs for the stats panel |
+| [services/library_insights_service.py](../pixlstash/services/library_insights_service.py) | **"About your library" findings (v1.11 Phase 6), read-only.** Five checks over one gathered pass of the library: the largest folder whose pictures carry no set, project or person; two folders holding mostly the same pictures (grouped on tier 1's own `(pixel_sha, size_bytes)` identity, so the finding is true on a library nobody has swept); uncaptioned; a face nobody has named; untagged.<br><br>**Every check answers in both directions.** A check that finds nothing returns `state="clear"` with the number that made it clear rather than disappearing — a screen where every row is a complaint reads as a nag, and a check that vanishes when it passes cannot be trusted when it fires. **A folder means the owner's folder:** `Picture.file_path` is absolute only for pictures indexed in place, so the folder-shaped checks read `os.path.dirname` and skip the flat `<uuid>.png` a vault-managed picture carries; a library with no folder tree gets one row saying so instead of arithmetic over zero folders. **A finding counts what its own button can show**, and where the two disagreed the CHECK was changed rather than the destination: a number the owner cannot reach reads as the feature being broken. Three consequences, each of which was a real defect first. The unnamed-faces check intersects with *unassigned* (that is what `/character/UNASSIGNED?face=with_face` is) and excludes `face.face_index = -1`, the sentinel row `FaceExtractionTask` writes for a picture holding **no** face — read as an unnamed face it fired on most of a scanned library and opened an empty grid. Counts are in grid **rows**, not pictures, because every grid request carries `fields=grid` (`stack_leaders_only`) and a stack of eight is one row. And the overlap check scopes the duplicate queue to the pair's **common ancestor**, never to one of the two folders (tier 1 applies the scope predicate inside `HAVING count(*) > 1`, so a scope holding one copy of each shared file finds nothing), falling back to the unscoped queue when that ancestor would not narrow anything — two unrelated trees under one home directory are siblings, structurally identical to two folders inside a library, so only `SCOPE_MAX_WIDENING` separates them. Nothing here writes, queues work, or reads a pixel |
 | [services/tag_health_service.py](../pixlstash/services/tag_health_service.py) | Tag health board cache — computes one `TagHealth` row per tag from indexed SQL over `tag_prediction` / `tag` / `tag_suggestion` / `picture` plus stored `PictureLikeness` pairs; rebuilt in the background |
 | [services/tag_suggestion_service.py](../pixlstash/services/tag_suggestion_service.py) | Human half of the tag-suggestion review queue: list ranked suspects and apply (write through to `Tag`) or dismiss them |
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
@@ -5945,7 +5961,7 @@ different *kinds* sharing a name is the other case and is already a narrowing:
 
 `pixlstash/services/folder_structure_commit_service.py`, exposed by the
 `/folder-structure/commit` routes added to `pixlstash/routes/folder_structure.py`.
-Wire contract `docs/integration_architecture.md` §21; release plan
+Wire contract `docs/integration_architecture.md` §22; release plan
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24's read only ever
 proposes; this is the one module anything from the mapping screen writes.
 

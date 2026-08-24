@@ -51,6 +51,14 @@ _FACE_REQUIRING_LOWER = sorted(FACE_REQUIRING_TAGS)
 _PERSON_LOWER = sorted(PERSON_TAGS)
 _OBJECT_META_LOWER = sorted(OBJECT_META_TAGS)
 
+# "This picture holds a face the extractor actually found", i.e. not the
+# ``face_index == -1`` sentinel it writes when it found none. One spelling,
+# because the stack-leader collapse and the row filter must agree exactly.
+_HAS_REAL_FACE_SQL = (
+    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id "
+    "AND face.face_index != -1)"
+)
+
 # The shared no-real-face test (only sentinel faces, ``face_index == -1``).
 _NO_REAL_FACE_SQL = (
     "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id "
@@ -218,12 +226,20 @@ class PredicateFilter(BaseModel):
             return [*not_null, area >= 16_000_000]
         return []
 
-    def _file_path_prefix_predicates(self) -> list[ColumnElement]:
+    def file_path_prefix_predicates(self) -> list[ColumnElement]:
+        """The "in this folder" clauses.
+
+        Public because the stack-leader collapse compiles them too: with a
+        folder scope the stack's global position-0 member can live in another
+        folder, so the collapse has to know which members are in scope, and a
+        second spelling of "in this folder" is how it gets that wrong.
+        """
+        target = Picture
         if self.file_path_prefix is None:
             return []
         if not self.file_path_prefix_children_only:
             # Sub-tree match used by the stats sidebar.
-            return [Picture.file_path.startswith(self.file_path_prefix)]
+            return [target.file_path.startswith(self.file_path_prefix)]
         # Normalise to always end with a path separator so that a prefix like
         # "/ref/photos" does not accidentally match "/ref/photos2/a.jpg".  Support
         # both Unix ("/") and Windows ("\") separators.
@@ -237,10 +253,28 @@ class PredicateFilter(BaseModel):
         # after the prefix (i.e. files in sub-directories).  Check for both "/" and
         # "\" to handle all platforms.
         return [
-            Picture.file_path.like(escaped + "%", escape="\\"),
-            ~Picture.file_path.like(escaped + "%/%", escape="\\"),
-            ~Picture.file_path.like(escaped + "%\\\\%", escape="\\"),
+            target.file_path.like(escaped + "%", escape="\\"),
+            ~target.file_path.like(escaped + "%/%", escape="\\"),
+            ~target.file_path.like(escaped + "%\\\\%", escape="\\"),
         ]
+
+    def face_predicates(self) -> list[ColumnElement]:
+        """The "has a real face" / "has none" clauses.
+
+        Public and separate from :meth:`predicates` because the stack-leader
+        collapse needs the SAME clause: a face facet can hide a stack's global
+        position-0 member (the cover is often the tidy shot and the face is on a
+        sibling), so the collapse has to know which members are in scope, and a
+        second spelling of "has a face" is how it gets that wrong.
+
+        ``face_index == -1`` is the sentinel row the extractor writes for a
+        picture it found NO face in, so both directions exclude it.
+        """
+        if self.face_filter == "with_face":
+            return [text(_HAS_REAL_FACE_SQL)]
+        if self.face_filter == "without_face":
+            return [text(f"NOT {_HAS_REAL_FACE_SQL}")]
+        return []
 
     def predicates(self) -> list[ColumnElement]:
         """Compile this filter to a list of SQLAlchemy WHERE clauses.
@@ -261,7 +295,7 @@ class PredicateFilter(BaseModel):
         if not self.include_unimported:
             preds.append(Picture.imported_at.is_not(None))
 
-        preds.extend(self._file_path_prefix_predicates())
+        preds.extend(self.file_path_prefix_predicates())
 
         if self.import_source_folder:
             preds.append(Picture.import_source_folder == self.import_source_folder)
@@ -374,18 +408,7 @@ class PredicateFilter(BaseModel):
                     ).bindparams(**{f"clf_{i}": m})
                 )
 
-        if self.face_filter == "with_face":
-            preds.append(
-                text(
-                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
-        elif self.face_filter == "without_face":
-            preds.append(
-                text(
-                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
+        preds.extend(self.face_predicates())
 
         if self.stack_state in ("stacked", "unstacked"):
             # Both halves ask "is this picture in a stack that is still a stack",
