@@ -1,3 +1,14 @@
+# [1.10.2]
+
+- Fix scrolling of plugin list to avoid the whole pane having a horisonstal scrollbar
+- Handle pasting of updates after pasting pictures
+- Fix a CORS issue causing Retry-After failures
+- Count install types correctly in the telemetry worker for update checks
+- Report the frontend correctly to the update checker. Docker and Electron often
+  just reported "pip"
+- Follow symlinks in the folder picker
+- Further fixes for ALT-TAB icons under certain circumstances
+
 # [1.10.1]
 
 - Add missing dependency to docker images
