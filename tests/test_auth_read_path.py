@@ -94,7 +94,7 @@ def owner_client(server):
 
     client = TestClient(server.api)
     response = client.post(
-        "/login", json={"username": "owner651", "password": "ownerpass1"}
+        "/login", json={"username": "owner651", "password": "example-owner-password"}
     )
     assert response.status_code == 200, response.text
     yield client

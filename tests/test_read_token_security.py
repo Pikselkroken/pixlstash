@@ -167,7 +167,7 @@ def _setup_server_with_pictures(temp_dir: str):
 
     # Set up credentials.
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
 
@@ -245,7 +245,7 @@ def _setup_two_picture_sets(tmp: str):
     client = TestClient(server.api, raise_server_exceptions=True)
 
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
 
@@ -382,9 +382,9 @@ def _reset_owner_credentials(server, owner_client) -> None:
     otherwise 429 the re-login below.
 
     The re-login is itself an assertion. It proves the owner password is still
-    ``ownerpass1``, which is precisely what the "READ token cannot change the
-    password" tests are protecting, and it fails loudly instead of letting a
-    dirty environment masquerade as a scope refusal.
+    ``example-owner-password``, which is precisely what the "READ token cannot
+    change the password" tests are protecting, and it fails loudly instead of
+    letting a dirty environment masquerade as a scope refusal.
     """
 
     def _wipe(session: Session):
@@ -399,7 +399,7 @@ def _reset_owner_credentials(server, owner_client) -> None:
     _clear_rate_limit_window(server)
 
     r = owner_client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, (
         f"owner re-login failed — the shared environment is dirty: {r.text}"
@@ -693,7 +693,8 @@ def _comfyui_stack_env():
         try:
             owner_client = TestClient(server.api, raise_server_exceptions=True)
             r = owner_client.post(
-                f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
             )
             assert r.status_code == 200, r.text
 
@@ -822,8 +823,8 @@ class TestReadTokenBlocksWrites(_SharedPictureLibrary):
         r = TestClient(library_env.server.api).post(
             f"{API}/users/me/auth",
             json={
-                "current_password": "ownerpass1",
-                "new_password": "hacked12345",
+                "current_password": "example-owner-password",
+                "new_password": "example-hacked-password",
             },
             headers={"Authorization": f"Bearer {library_env.read_token}"},
         )
@@ -1994,7 +1995,8 @@ class TestComfyuiFilterCannotEscapeTokenScope:
             try:
                 owner_client = TestClient(server.api, raise_server_exceptions=True)
                 r = owner_client.post(
-                    f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                    f"{API}/login",
+                    json={"username": "owner", "password": "example-owner-password"},
                 )
                 assert r.status_code == 200, r.text
 
@@ -2247,7 +2249,7 @@ class TestLoginBruteForce:
                 # Establish a password.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
@@ -2255,7 +2257,10 @@ class TestLoginBruteForce:
                 for i in range(5):
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
                     assert r.status_code == 401, (
                         f"Expected 401 on attempt {i + 1}, got {r.status_code}"
@@ -2264,7 +2269,7 @@ class TestLoginBruteForce:
                 # The 6th attempt should be blocked.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "wrongpass6"},
+                    json={"username": "victim", "password": "example-wrong-password-6"},
                 )
                 assert r.status_code == 429, (
                     f"Expected 429 lockout after 5 failures, got {r.status_code}: {r.text}"
@@ -2282,20 +2287,23 @@ class TestLoginBruteForce:
 
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
                 for i in range(5):
                     client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
 
                 # Correct password — should still be blocked during lockout.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 429, (
                     f"Correct password during lockout should still return 429, "
@@ -2312,7 +2320,7 @@ class TestLoginBruteForce:
 
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
@@ -2320,13 +2328,16 @@ class TestLoginBruteForce:
                 for i in range(4):
                     client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
 
                 # 5th attempt with correct password should succeed (lockout hits at 5+).
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, (
                     f"4 failures should not yet trigger lockout; "
@@ -2357,13 +2368,16 @@ class TestRateLimiter:
                     for _ in range(5):
                         client.post(
                             f"{API}/login",
-                            json={"username": "u", "password": "initialpass"},
+                            json={
+                                "username": "u",
+                                "password": "example-initial-password",
+                            },
                         )
 
                     # This should now be rate limited.
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "u", "password": "initialpass"},
+                        json={"username": "u", "password": "example-initial-password"},
                     )
                     assert r.status_code == 429, (
                         f"Expected 429 from rate limiter after {5} hits, "
@@ -2381,7 +2395,10 @@ class TestRateLimiter:
 
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "owner", "password": "ownerpass99"},
+                        json={
+                            "username": "owner",
+                            "password": "example-owner-password-99",
+                        },
                     )
                     assert r.status_code == 200, r.text
 
@@ -2418,13 +2435,16 @@ class TestRateLimiter:
 
                     # Exhaust the limit.
                     assert client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     ).status_code in {200, 401}
                     assert client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     ).status_code in {200, 401}
                     r = client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     )
                     assert r.status_code == 429
 
@@ -2432,7 +2452,8 @@ class TestRateLimiter:
                     time.sleep(window_seconds + 0.2)
 
                     r = client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     )
                     assert r.status_code in {200, 401}, (
                         f"After window reset, login should no longer be rate-limited; "
@@ -2507,8 +2528,8 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         attack_client.post(
             f"{API}/users/me/auth",
             json={
-                "current_password": "ownerpass1",
-                "new_password": "hacked12345",
+                "current_password": "example-owner-password",
+                "new_password": "example-hacked-password",
             },
             headers=headers,
         )
@@ -2517,7 +2538,7 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         fresh_client = TestClient(library_env.server.api)
         r = fresh_client.post(
             f"{API}/login",
-            json={"username": "owner", "password": "ownerpass1"},
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, (
             f"Owner password must be unchanged after attack attempts, "
@@ -2534,7 +2555,7 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         for i in range(5):
             r = attack_client.post(
                 f"{API}/login",
-                json={"username": "owner", "password": f"wrongpass{i}"},
+                json={"username": "owner", "password": f"example-wrong-password-{i}"},
             )
             assert r.status_code == 401, (
                 f"attempt {i + 1} should have been a plain auth failure, "
@@ -2542,7 +2563,8 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
                 "about was never reached"
             )
         r = attack_client.post(
-            f"{API}/login", json={"username": "owner", "password": "wrongpass5"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-wrong-password-5"},
         )
         assert r.status_code == 429, (
             f"the 6th failure should have hit the lockout, got {r.status_code}"
