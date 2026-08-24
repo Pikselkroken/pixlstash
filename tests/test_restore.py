@@ -3465,7 +3465,8 @@ def _empty_scrapheap_via_http(server):
 
     client = TestClient(server.api, raise_server_exceptions=True)
     login = client.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     # The destructive endpoint refuses without the single-use confirm_token the
@@ -4157,7 +4158,8 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     token_response = owner.post(
@@ -4246,7 +4248,8 @@ def test_share_link_is_unavailable_while_restore_admission_is_closed(server):
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _pic, created = _create_picture_share(owner, server, "share-gate.jpg")
@@ -4278,7 +4281,8 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _pic, created = _create_picture_share(owner, server, "share-drain.jpg")
@@ -4399,7 +4403,8 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkey
     blocked_client = TestClient(server.api, raise_server_exceptions=True)
     for client in (restore_client, blocked_client):
         login = client.post(
-            "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+            "/api/v1/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert login.status_code == 200, login.text
 
@@ -4524,7 +4529,8 @@ def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _create_file(server, "restore-auth-reset-failure.jpg")
