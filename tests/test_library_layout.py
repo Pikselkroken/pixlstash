@@ -455,12 +455,15 @@ def library(tmp_path):
 def _swap_project(library):
     """Take the picture out of the project its folder is named after."""
     session = library["session"]
-    session.exec(
+    # Scoped to this picture. An unfiltered delete works today only because the
+    # fixture has one membership row, and would quietly remove another
+    # picture's the moment the fixture grew — which is how a test starts passing
+    # for the wrong reason.
+    for member in session.exec(
         select(PictureProjectMember).where(
             PictureProjectMember.picture_id == library["picture_id"]
         )
-    ).all()
-    for member in session.exec(select(PictureProjectMember)).all():
+    ).all():
         session.delete(member)
     session.add(
         PictureProjectMember(
@@ -698,6 +701,30 @@ def test_a_symlinked_source_is_refused(library, tmp_path):
     assert plan == []
     assert skipped == [(library["picture_id"], "source_is_symlink")]
     assert outside.read_bytes() == b"not the library's"
+
+
+def test_a_symlinked_destination_folder_is_refused(library, tmp_path):
+    """The source is not the only path a move can escape through.
+
+    The rendered folder names cannot escape lexically — ``folder_name`` strips
+    every separator — but a directory that already exists inside the root can be
+    a symlink, and ``os.makedirs(exist_ok=True)`` follows one. Without the
+    check the file would be written outside the library while the row went on
+    naming a path inside it.
+    """
+    session, root = library["session"], library["root"]
+    outside = tmp_path / "another-volume"
+    outside.mkdir()
+    os.symlink(outside, os.path.join(root, "Client · Nordvik"))
+    _swap_project(library)
+
+    plan, skipped = engine.plan_moves(session, [library["picture_id"]], root)
+    assert plan == []
+    assert skipped == [(library["picture_id"], "destination_outside_root")]
+    assert list(outside.iterdir()) == [], "nothing was written outside the library"
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
 
 
 def test_a_reference_folder_without_a_layout_is_left_alone(library, tmp_path):

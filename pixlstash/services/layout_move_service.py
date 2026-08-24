@@ -58,7 +58,7 @@ from pixlstash.database import DBPriority
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_mover import publish_no_clobber
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     Facet,
@@ -438,6 +438,50 @@ def plan_moves(
     return plan, skipped
 
 
+def _destination_stays_inside(root_path: str, destination_path: str) -> bool:
+    """Whether writing *destination_path* actually lands inside *root_path*.
+
+    The rendered components cannot escape lexically — ``folder_name`` strips
+    every separator and refuses ``..`` — but a **directory that already exists
+    inside the root can be a symlink**, and ``os.makedirs(exist_ok=True)``
+    traverses one happily. Without this a project folder linked to another
+    volume, or one planted there, would take the write out of the library and
+    the row would go on naming a path inside it.
+
+    Resolved, not lexical, and applied to the **deepest ancestor that exists**:
+    that is the only part a link can be hiding in, and everything below it is
+    created here as a plain directory. ``resolve_path_within`` is the same
+    strict primitive the rotate sink uses (#1024).
+
+    **The price is deliberate and it is small.** A picture whose destination
+    folder is a symlinked subfolder is declined and stays exactly where it is —
+    which is this engine's default answer to almost everything anyway, not a
+    feature the owner loses. That is why the strict form is affordable here and
+    was contentious for rotate, where refusing meant a photo that could not be
+    turned at all.
+    """
+    ancestor = os.path.dirname(destination_path)
+    while ancestor and not os.path.exists(ancestor):
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        ancestor = parent
+    try:
+        resolve_path_within(root_path, ancestor)
+    except ValueError as exc:
+        logger.error(
+            "Layout move: %s resolves through to somewhere outside the library "
+            "root %r (%s), so the picture is left where it is. A folder inside "
+            "the library is a symbolic link to another location; move it back "
+            "or take that folder out of the layout's levels.",
+            ancestor,
+            root_path,
+            exc,
+        )
+        return False
+    return True
+
+
 def _sidecar_plan(
     picture: Picture, source: str, destination: str, root: LayoutRoot
 ) -> list:
@@ -806,6 +850,8 @@ def _prepare_move(
     destination_path = os.path.join(
         root.path, *destination.split("/"), os.path.basename(source)
     )
+    if not _destination_stays_inside(root.path, destination_path):
+        return None, "destination_outside_root"
     # Two pictures of the same name from two folders can render into one. The
     # claim set catches the pair inside this batch; ``publish_no_clobber``
     # catches everything else, including a file that appeared while the plan was
@@ -861,7 +907,11 @@ def resolve_placement(
     image_root = getattr(vault_db, "image_root", None)
     if not image_root:
         return None
-    if dest_folder and os.path.abspath(dest_folder) != os.path.abspath(image_root):
+    # ``normcase`` as well as ``abspath``, the pair ``path_is_within`` uses:
+    # Windows and macOS hand back the same directory spelled differently often
+    # enough that a bare string compare would answer "this is not the library
+    # root" for the library root, and silently write every picture flat.
+    if dest_folder and not _same_path(dest_folder, image_root):
         return None
     subfolder = vault_db.run_immediate_read_task(
         placement_subfolder,
@@ -870,6 +920,13 @@ def resolve_placement(
         set_id=set_id,
     )
     return subfolder or None
+
+
+def _same_path(left: str, right: str) -> bool:
+    """Whether two paths name the same directory, as this platform reads them."""
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+        os.path.abspath(right)
+    )
 
 
 def picture_layout(vault, picture_id: int) -> Optional[dict]:

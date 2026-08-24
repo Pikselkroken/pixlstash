@@ -6228,6 +6228,18 @@ drop the source name, carry the thumbnail and sidecars, write the row.
   would pull whatever it points at — anywhere on the machine — into the library
   under the link's name. That is a read escape wearing a write sink's clothes,
   the shape #1024 closed for the rotate sink.
+- **A destination that resolves out of the root is refused too**, and the source
+  check does not cover it. The rendered folder names cannot escape lexically —
+  `folder_name` strips every separator — but a directory that already exists
+  inside the root can be a symlink, and `os.makedirs(exist_ok=True)` traverses
+  one; the file would land on another volume while the row went on naming a path
+  inside the library. `_destination_stays_inside` resolves the **deepest
+  ancestor that exists**, which is the only part a link can hide in, since
+  everything below it is created here as a plain directory. Strict
+  `resolve_path_within`, as the rotate sink uses — and affordable here in a way
+  it was contentious there: refusing means the picture stays in its current
+  folder, which is this engine's default answer to almost everything, not a
+  photo the owner can no longer turn.
 - **A source that resolves outside its root is refused**, which is not tidiness:
   everything below it moves a file.
 - **An emptied folder is kept.** Nothing in the module calls `rmdir`. A folder
