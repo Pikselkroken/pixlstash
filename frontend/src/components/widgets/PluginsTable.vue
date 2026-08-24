@@ -199,15 +199,24 @@ function onParamsSaved({ name, params }) {
   font-size: var(--text-sm);
 }
 
+/* Sticky because the table is scrolled inside its Settings column (see
+   BehaviourSection): the scroll box wraps the whole table, so an unpinned
+   header row would scroll out of a viewport only a few rows tall. The rule
+   under it is a box-shadow rather than a border — `border-collapse: collapse`
+   hands the border to the table, which does not travel with a sticky cell. */
 .pt-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   text-align: left;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.55);
+  background: rgb(var(--v-theme-surface));
   padding: var(--space-2) var(--space-3) var(--space-2);
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  box-shadow: inset 0 -1px 0 rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .pt-table td {
@@ -230,16 +239,28 @@ function onParamsSaved({ name, params }) {
   text-align: right;
 }
 
+/* The name column is whatever these three leave it, and inside a ~280px
+   Settings column that is the difference between a plugin name on one line and
+   two — so the fixed-width columns take the tighter padding step. */
+.pt-table .pt-col-active,
+.pt-table .pt-col-loaded,
+.pt-table .pt-col-actions {
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+/* The name column is whatever is left of a ~280px Settings column, so a long
+   plugin name wraps rather than holding the table open: nowrap here made the
+   table wider than its column, and the column wider than the pane. */
 .pt-plugin-name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   cursor: default;
 }
 
 .pt-info-icon {
+  margin-left: var(--space-2);
   opacity: 0.5;
+  vertical-align: -2px;
 }
 
 .pt-radio {
