@@ -165,6 +165,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # LOCAL_OWNER_ONLY at the gate; it is here as well for the same
         # rollback reason as filesystem/browse above.
         "/api/v1/folder-structure/read/status",
+        # The commit's result carries the same host-path-derived information
+        # as the read above (v1.11 Phase 3) — same tier, same rollback
+        # reasoning, same belt.
+        "/api/v1/folder-structure/commit/status",
     }
 )
 
