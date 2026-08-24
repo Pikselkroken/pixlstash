@@ -6288,6 +6288,22 @@ inside `rename_entity_folders` itself, and the directories are renamed back if
 that commit fails. A half-applied rename would leave every picture under the
 folder naming a path that does not exist, which is the purge sweep's input.
 
+### What Phase 6 sees once a layout is on
+
+`library_insights_service` gates its folder-shaped findings on a picture's path
+having a directory component, on the stated premise that a vault-managed picture
+stores a flat `<uuid>.png` — storage, not organisation. **A layout makes that
+premise false**: the same picture stores `<Project>/<Person>/<uuid>.png`, so
+those checks now also see folders PixlStash wrote.
+
+That is the right behaviour rather than a hole — under a layout those folders
+*are* the organisation, named after the very projects, people and sets the
+findings are about, so skipping them would be blind to exactly the libraries
+v1.11 is for. It is recorded here because the two phases landed independently
+and neither could have tested the combination: a folder-shaped finding in a
+laid-out library may restate a membership the owner can already see, and the
+wording is worth a look on a real library once both are in.
+
 ### The move journal, and why it is Phase 4b's job
 
 Every move the engine makes writes a `picture_move` row **before** anything
