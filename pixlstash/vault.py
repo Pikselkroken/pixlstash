@@ -47,7 +47,10 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
-from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+from pixlstash.tagger_plugins.registry import (
+    get_tagger_plugin_manager,
+    unload_loaded_tagger_plugins,
+)
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
@@ -1818,6 +1821,14 @@ class Vault:
             self._engine.aggressive_unload()
         except Exception as exc:
             logger.warning("Aggressive unload failed for InferenceEngine: %s", exc)
+        # The engine unloads the services it owns by name; a tagger plugin's
+        # model is reachable only through the registry, and until this it was
+        # not reachable at all — a plugin captioner stayed resident for the
+        # life of the process and this setting could not free it (#967).
+        try:
+            unload_loaded_tagger_plugins()
+        except Exception as exc:
+            logger.warning("Aggressive unload failed for tagger plugins: %s", exc)
         try:
             FaceExtractionTask.release_detection_models()
         except Exception as exc:

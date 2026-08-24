@@ -87,11 +87,15 @@ class DetectionTask(BaseTask):
     def estimated_vram_mb(self) -> int:
         # Detection shares Florence-2 with captioning; reuse the description
         # workflow's VRAM estimate (model weights dominate; detection's extra
-        # output tokens are negligible activation scratch).
+        # output tokens are negligible activation scratch). Named explicitly:
+        # detection always runs Florence-2, whatever plugin is configured to
+        # caption, and that estimate now follows the active plugin.
         try:
             return max(
                 0,
-                self._engine.description_workflow.estimate_vram_mb(len(self._pictures)),
+                self._engine.description_workflow.estimate_vram_mb(
+                    len(self._pictures), plugin_name="florence2"
+                ),
             )
         except Exception as exc:
             logger.debug(

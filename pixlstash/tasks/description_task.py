@@ -105,7 +105,12 @@ class DescriptionTask(BaseTask):
 
     def estimated_vram_mb(self) -> int:
         try:
-            return max(0, self._workflow.estimate_vram_mb(len(self._pictures)))
+            return max(
+                0,
+                self._workflow.estimate_vram_mb(
+                    len(self._pictures), plugin_name=self._engine_override
+                ),
+            )
         except Exception as exc:
             logger.debug(
                 "DescriptionTask: VRAM estimate failed for %d picture(s); "

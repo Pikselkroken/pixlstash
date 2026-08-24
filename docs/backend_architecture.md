@@ -1287,14 +1287,50 @@ folder's absolute host path needs somewhere to be served from, which is why
 `GET /taggers`, which was `ANY_TOKEN` then and is `OWNER_ONLY` now (the same disclosure `GET /pictures/plugins` and
 `GET /comfyui/workflows` had made all along, now removed from both).
 
-**The plugin lifecycle is not fully wired for third parties, and the guide says so.**
-`ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
-registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; and
-`DescriptionWorkflow` charges the VRAM budget for Florence-2 only, so
-`estimated_vram_mb()` is never consulted. Closing either is a separate change to the
-workflow, not to discovery. The third gap listed here — `generate_descriptions` being
-called without a `stop_event` — is closed: `DescriptionWorkflow` now passes one on both
-paths, so a plugin that honours it stops between images instead of running the batch out.
+**The lifecycle methods the contract declares are now called (issue #967).** All three
+gaps the guide used to list are closed, each of them "the host ignores a method it
+declared":
+
+- **`unload()` reaches every plugin**, through `unload_loaded_tagger_plugins()` in the
+  registry. Until this, a plugin's model stayed resident for the life of the process and
+  *Keep models in memory = off* could not free it — a multi-GB problem for a VLM
+  captioner. **Where it is called from is the whole design.** The one caller is
+  `Vault._maybe_aggressive_unload`, the setting's own sweep, which fires only once every
+  worker is idle. Hanging it off `ModelLifecycleManager.aggressive_unload` instead reads
+  as the tidier place and is wrong twice over: the registry is process-wide and bound to
+  the *vault's* engine (`_bind_engine_services`), while `InferenceEngine.close()` is also
+  what `DescriptionTask` and `TagTask` call to reap a throwaway CPU spillover engine —
+  on the hot path, before every batch — so a per-engine walk would unload the GPU
+  engine's Florence-2 immediately before captioning with it. Waiting for idle also keeps
+  the walk away from a plugin's in-flight load, which is memory-unsafe rather than merely
+  wrong (`tests/test_model_unload_race.py`); the built-in services hold one lock across
+  load and unload, and a third-party plugin may not. Each plugin is guarded on its own,
+  and `is_loaded()` gates the call — which is also what keeps the walk off a built-in
+  wrapper with no service bound, whose `unload()` would raise. It never builds the
+  registry: a registry nothing has imported is holding nothing.
+- **`estimated_vram_mb()` is consulted on the description path.**
+  `DescriptionWorkflow.estimate_vram_mb` asks the plugin that will actually run the
+  batch, capped at that plugin's own `effective_batch_size` and asked with the parameters
+  it will run with. Charging the Florence figure for a batch that never loads Florence
+  let the scheduler start a second model alongside the plugin's and OOM. `DescriptionTask`
+  passes its `engine_override` so an overridden batch is billed for the plugin it
+  dispatches to, and `DetectionTask` — which borrows this estimate but always runs
+  Florence-2 — names `florence2` explicitly. Two limits worth naming rather than
+  implying. **First, 0 is ambiguous and the host resolves it against the plugin.**
+  `TaggerPlugin.estimated_vram_mb` documents 0 as "CPU-only" and 0 is also what the
+  base class returns for a plugin that never overrode it, so a 0 on CUDA is read as *no
+  answer* and charged the Florence figure. For a CPU-only plugin that is a harmless
+  over-charge; for a GPU model that returned 0 merely because it was not resident yet it
+  is the under-charge the budget exists to prevent, which is exactly what
+  `JoyCaptionPlugin` used to do — it now bills its full 8 GB footprint until its weights
+  are actually on the CPU. The three docstrings that authors read (`base.py`,
+  `plugin_template.py`, `docs/writing-tagger-plugins.md`) state the ambiguity rather than
+  leaving it to be discovered. Distinguishing "unknown" from "genuinely zero" would need
+  a new sentinel in the published MIT contract, which is a decision for a separate
+  change. **Second**, `TaggingWorkflow.estimated_vram_mb` still bills its own constants
+  without asking a tag plugin, which is the same gap on the other surface.
+- **`generate_descriptions` gets a `stop_event`** on both paths, so a plugin that honours
+  it stops between images instead of running the batch out.
 
 #### Florence-2 checkpoint selection (issue #512)
 
