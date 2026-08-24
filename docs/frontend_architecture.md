@@ -127,7 +127,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, TrainingRuns, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -228,6 +228,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen`, `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
+| `useMovesStore` | `useMovesStore.js` | v1.11 Phase 5, the reconciliation queue for moves made outside PixlStash. `unambiguous` / `ambiguous` / `offLayout`, `loading`, `error`, `loaded`; `hasPending`/`pendingCount` deliberately **exclude `offLayout`** — that bucket carries no decision (backend_architecture.md §27), so a sidebar badge counting it would nag about nothing. `fetchPending` never invents or corrects a verdict; it re-fetches `GET /moves/pending`, which the backend reclassifies live on every call. `applyAllUnambiguous`/`applyReview`/`dismissReviews`/`dismissAll` all re-fetch afterward rather than mutating the local lists — see §9.4. |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. **Under `folder` the key carries the COPY, not the folder**, because the hub is content-addressed and the same bytes can be registered twice *inside one folder* under two names — the exact collision the previous sentence describes, reached on the axis it was written for. `relpath` is half the `model_file` key and so unique within a folder by construction. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
@@ -4464,6 +4465,76 @@ reworded finding does not silently lose its icon. The screen's own title is an
 whose entire body is headed sections needs an outline to move through. The
 contract is in `docs/integration_architecture.md` §20, including why the
 counts are in grid ROWS rather than pictures.
+
+### 9.4 The "Moves" destination (v1.11 Phase 5)
+
+`/moves` mounts `MovesReview.vue` in place of `ImageGrid`, the same
+replaces-the-grid shape as Insights/Duplicates/the shelf (`App.vue`,
+`isMovesView`), and the same read-only bounce (`GET /moves/pending` is
+owner-only). Where it diverges from those three is the sidebar row: Insights,
+Duplicates and the shelf are permanent destinations shown-and-disabled for a
+read-only session (issue #1014's rule — a demo visitor should still see the
+feature exists); Moves is a to-do queue almost no library ever populates (no
+reference folder has opted into a layout) and one whose contents are never a
+useful thing for a share visitor to see even inertly, so `SideBar.vue` hides
+the row entirely behind `movesStore.hasPending` instead. `hasPending` never
+becomes true for a read-only session because `SideBar`'s `onMounted` only
+calls `movesStore.fetchPending()` when `!isReadOnly`.
+
+**Two entry paths, matching the release plan's "screen on next start" /
+"a sidebar strip a few seconds after the moves stop":**
+
+- **On next start:** the sidebar's own `onMounted` fires one
+  `GET /moves/pending`, so a backlog left over from while PixlStash was
+  closed is reflected the moment the sidebar renders.
+- **While running:** `useUpdatesSocket` debounces `EXTERNAL_MOVES_PENDING`
+  3s before calling `movesStore.fetchPending()` — a burst of reference-folder
+  scans settling around the same time re-fetches once, not once per scan. The
+  event carries no count (the backend's classification is live, so any number
+  put on the wire could already be wrong by the time it renders); the
+  debounced re-fetch is the whole reaction.
+
+**The view never corrects a verdict itself.** Every mutating action
+(`applyAllUnambiguous`, `applyReview`, `dismissReviews`, `dismissAll`)
+re-fetches the queue afterward rather than patching `unambiguous` /
+`ambiguous` / `offLayout` locally — the backend reclassifies fresh on
+`POST /moves/apply` too, so a picture whose memberships changed between the
+GET and the click is applied against what is true at mutation time, and the
+view has to read that back rather than assume its own request matched.
+
+**Reading the response, three shapes:**
+
+- **Unambiguous**: one removal and one addition of the *same* facet reads as
+  a swap (`2024 Shoots → Client · Nordvik`, `changeShape` picks this
+  deliberately over forcing every case through an arrow); anything else — a
+  pure addition, a pure removal, a cross-facet change — reads as separate
+  `+`/`−` tags. Each row also has its own **Apply** button (`applyReview`, the
+  same call `applyAllUnambiguous` makes for every row at once).
+- **Ambiguous**: `item.current` names why — the picture's own current values
+  for the facet a removal is ambiguous about (`"in 2024 Shoots and Client ·
+  Nordvik"`). Two buttons only, matching the design bundle's Moves artboard:
+  a resolve button and **Keep both** (`dismissReviews`, never calls apply).
+  **The resolve button always names the destination, never a generic verb**
+  (`onlyNowLabel`), because it applies a removal and must not read as a
+  no-op. The canonical case — the artboard's own example — has NO addition:
+  the picture already belongs to the folder it moved into, so there is
+  nothing to gain, only the old membership to leave. The label is derived
+  from `item.current` for that case (the ambiguous facet's current names,
+  minus the one being removed), falling back to `additions[0].name` when
+  there genuinely is one and to a generic "Apply this move" only when
+  neither derivation resolves to exactly one name.
+- **Off-layout**: informational chips, no button at all — "already followed,
+  nothing to decide" is the screen's own description of the bucket, so
+  offering an action there would contradict it.
+
+**A scope cut from the artboard, not the plan.** The Moves artboard groups
+identical `(old_folder → new_folder)` patterns into one row with a picture
+count; `GET /moves/pending` returns a flat per-picture list instead, and the
+view renders one row per picture. Every fact the grouped view would show
+(the folders, the implied change) is in the response — this is a presentation
+simplification, not a data gap — and it keeps the backend contract simple: no
+second, pattern-keyed shape to keep in sync with the per-picture one apply
+and dismiss actually operate on.
 
 ## 10. Naming and Coding Conventions
 

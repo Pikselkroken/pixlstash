@@ -16,12 +16,25 @@ import tempfile
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, ReferenceFolder, Tag
+from pixlstash.db_models import (
+    Picture,
+    PictureProjectMember,
+    PictureSet,
+    PictureSetMember,
+    Project,
+    ReferenceFolder,
+    Tag,
+)
+from pixlstash.db_models.external_move_review import ExternalMoveReview
+from pixlstash.db_models.operation import Operation
 from pixlstash.server import Server
+from pixlstash.services import move_reconciliation_service
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.library_layout import DEFAULT_LAYOUT, format_layout
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 
@@ -64,7 +77,7 @@ def server():
             yield srv
 
 
-def _make_folder(server, folder_dir):
+def _make_folder(server, folder_dir, layout=None):
     """Register a reference folder that the background scanner will leave alone.
 
     ``ReferenceFolderScanFinder`` selects on ``last_scanned``, not on status: a
@@ -90,6 +103,7 @@ def _make_folder(server, folder_dir):
             label="refs",
             status="active",
             last_scanned=time.time(),
+            layout=layout,
         )
         session.add(folder)
         session.commit()
@@ -421,3 +435,285 @@ def test_ambiguous_pixel_match_is_not_followed(server, tmp_path):
         "a 2:2 pixel match is ambiguous; the scan must re-import rather than "
         "bind one picture's row to the other's file"
     )
+
+
+def test_a_move_in_a_laid_out_folder_is_queued_for_reconciliation(server, tmp_path):
+    """v1.11 Phase 5: a laid-out root's move is a fact worth reconciling.
+
+    The queue only needs the file to have moved and the root to have a
+    layout — classifying what it means happens later, live, in
+    move_reconciliation_service (see tests/test_library_layout.py).
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir, layout=format_layout(DEFAULT_LAYOUT))
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+
+    moved_to = os.path.join(folder_dir, "Client Nordvik", "mira.png")
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    result = _run_scan(server, folder_id, folder_dir)
+
+    assert result["external_moved_picture_ids"] == [picture_id]
+    assert result["external_moves_queued_for_review"] == [picture_id]
+
+    rows = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(ExternalMoveReview).where(
+                ExternalMoveReview.picture_id == picture_id
+            )
+        ).all()
+    )
+    assert len(rows) == 1
+    assert rows[0].old_path == original
+    assert rows[0].new_path == moved_to
+
+
+def test_a_move_in_a_folder_without_a_layout_is_not_queued(server, tmp_path):
+    """The move is still followed; there is just nothing to reconcile it against."""
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+
+    moved_to = os.path.join(folder_dir, "Client Nordvik", "mira.png")
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    result = _run_scan(server, folder_id, folder_dir)
+
+    assert result["external_moved_picture_ids"] == [picture_id]
+    assert result["external_moves_queued_for_review"] == []
+
+    rows = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(ExternalMoveReview).where(
+                ExternalMoveReview.picture_id == picture_id
+            )
+        ).all()
+    )
+    assert rows == []
+
+
+def _make_project(server, name):
+    def _insert(session: Session):
+        project = Project(name=name)
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        return project.id
+
+    return server.vault.db.run_task(_insert)
+
+
+def _assign_project(server, picture_id, project_id):
+    def _update(session: Session):
+        pic = session.get(Picture, picture_id)
+        pic.project_id = project_id
+        session.add(pic)
+        session.add(PictureProjectMember(picture_id=picture_id, project_id=project_id))
+        session.commit()
+
+    server.vault.db.run_task(_update)
+
+
+def _pending_review(server, picture_id):
+    return server.vault.db.run_task(
+        lambda s: s.exec(
+            select(ExternalMoveReview).where(
+                ExternalMoveReview.picture_id == picture_id
+            )
+        ).first()
+    )
+
+
+def test_applying_an_unambiguous_move_swaps_the_project_and_clears_the_queue(
+    server, tmp_path
+):
+    """The end-to-end path: scan queues it, apply reconciles it, undo is recorded."""
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir, layout=format_layout(DEFAULT_LAYOUT))
+    old_project = _make_project(server, "2024 Shoots")
+    new_project = _make_project(server, "Client Nordvik")
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+    _assign_project(server, picture_id, old_project)
+
+    moved_to = os.path.join(folder_dir, "Client Nordvik", "mira.png")
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    _run_scan(server, folder_id, folder_dir)
+
+    review = _pending_review(server, picture_id)
+    assert review is not None
+
+    result = move_reconciliation_service.apply_reviews(server.vault, [review.id])
+    assert result["applied_picture_ids"] == [picture_id]
+
+    picture = server.vault.db.run_task(lambda s: s.get(Picture, picture_id))
+    assert picture.project_id == new_project
+
+    memberships = server.vault.db.run_task(
+        lambda s: sorted(
+            m.project_id
+            for m in s.exec(
+                select(PictureProjectMember).where(
+                    PictureProjectMember.picture_id == picture_id
+                )
+            ).all()
+        )
+    )
+    assert memberships == [new_project]
+    assert _pending_review(server, picture_id) is None, "the row must clear either way"
+
+    operations = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(Operation).where(
+                Operation.op_type
+                == move_reconciliation_service.OP_EXTERNAL_MOVE_RECONCILE
+            )
+        ).all()
+    )
+    assert len(operations) == 1, (
+        "an applied reconciliation must be one undoable operation"
+    )
+
+
+def test_dismissing_a_move_clears_the_queue_without_changing_membership(
+    server, tmp_path
+):
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir, layout=format_layout(DEFAULT_LAYOUT))
+    old_project = _make_project(server, "2024 Shoots (dismiss)")
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots (dismiss)", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+    _assign_project(server, picture_id, old_project)
+
+    moved_to = os.path.join(folder_dir, "Client Nordvik (dismiss)", "mira.png")
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    _run_scan(server, folder_id, folder_dir)
+
+    review = _pending_review(server, picture_id)
+    assert review is not None
+
+    result = move_reconciliation_service.dismiss_reviews(server.vault, [review.id])
+    assert result["dismissed_review_ids"] == [review.id]
+
+    picture = server.vault.db.run_task(lambda s: s.get(Picture, picture_id))
+    assert picture.project_id == old_project, "dismissing must not touch any assignment"
+    assert _pending_review(server, picture_id) is None
+
+
+def test_the_http_routes_round_trip_an_unambiguous_move(server, tmp_path):
+    """GET /moves/pending, POST /moves/apply — the wiring, not the classification.
+
+    Everything about *what* gets classified is tested at the service level
+    above; this is the one place that proves the route table, the response
+    models and the authz gate actually agree on the shape.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir, layout=format_layout(DEFAULT_LAYOUT))
+    old_project = _make_project(server, "2024 Shoots (http)")
+    new_project = _make_project(server, "Client Nordvik (http)")
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots (http)", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+    _assign_project(server, picture_id, old_project)
+
+    moved_to = os.path.join(folder_dir, "Client Nordvik (http)", "mira.png")
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    _run_scan(server, folder_id, folder_dir)
+
+    client = TestClient(server.api)
+    login = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
+    assert login.status_code == 200, login.text
+
+    pending = client.get("/api/v1/moves/pending")
+    assert pending.status_code == 200, pending.text
+    body = pending.json()
+    review_ids = [
+        item["review_id"]
+        for item in body["unambiguous"]
+        if item["picture_id"] == picture_id
+    ]
+    assert review_ids, body
+
+    applied = client.post("/api/v1/moves/apply", json={"review_ids": review_ids})
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["applied_picture_ids"] == [picture_id]
+
+    picture = server.vault.db.run_task(lambda s: s.get(Picture, picture_id))
+    assert picture.project_id == new_project
+
+    dismiss_empty = client.post("/api/v1/moves/dismiss", json={"review_ids": []})
+    assert dismiss_empty.status_code == 200
+    assert dismiss_empty.json()["dismissed_review_ids"] == []
+
+
+def test_applying_a_move_to_a_non_unique_set_name_is_skipped_not_guessed(
+    server, tmp_path
+):
+    """Set names are not DB-unique — a collision must be refused, not applied.
+
+    The refusal happens at entity resolution, after the picture already left
+    the queue by review_id, so the caller has to be able to tell "applied
+    nothing because it was refused" apart from "applied nothing because there
+    was nothing to apply".
+    """
+
+    def _make_duplicate_sets(session):
+        first = PictureSet(name="Summer (skip)")
+        second = PictureSet(name="Summer (skip)")
+        session.add_all([first, second])
+        session.commit()
+
+    server.vault.db.run_task(_make_duplicate_sets)
+
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir, layout=format_layout(DEFAULT_LAYOUT))
+    project_id = _make_project(server, "2024 Shoots (skip)")
+    original = _make_image(
+        os.path.join(folder_dir, "2024 Shoots (skip)", "mira.png"), (10, 20, 30)
+    )
+    _run_scan(server, folder_id, folder_dir)
+    picture_id = _pictures(server, folder_dir)[0].id
+    _assign_project(server, picture_id, project_id)
+
+    moved_to = os.path.join(
+        folder_dir, "2024 Shoots (skip)", "Summer (skip)", "mira.png"
+    )
+    os.makedirs(os.path.dirname(moved_to), exist_ok=True)
+    os.rename(original, moved_to)
+    _run_scan(server, folder_id, folder_dir)
+
+    review = _pending_review(server, picture_id)
+    assert review is not None
+
+    result = move_reconciliation_service.apply_reviews(server.vault, [review.id])
+    assert result["applied_picture_ids"] == []
+    assert result["skipped_review_ids"] == [review.id]
+
+    members = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(PictureSetMember).where(PictureSetMember.picture_id == picture_id)
+        ).all()
+    )
+    assert members == [], "a non-unique name must never be guessed"
+    assert _pending_review(server, picture_id) is None, "the row must clear either way"

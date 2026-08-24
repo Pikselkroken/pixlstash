@@ -149,6 +149,9 @@ class WsBroadcasterMixin:
                 # Machine-level, not view-level: the GPU is full whatever the
                 # client's grid filters are.
                 EventType.VRAM_OOM,
+                # Vault-wide, like VRAM_OOM: the reconciliation queue is not a
+                # grid view a client's filters could exclude it from.
+                EventType.EXTERNAL_MOVES_PENDING,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
@@ -268,6 +271,15 @@ class WsBroadcasterMixin:
                 "max_attempts": int(info.get("max_attempts") or 0),
                 "gave_up": bool(info.get("gave_up")),
                 "recovered": bool(info.get("recovered")),
+            }
+        elif event_type == EventType.EXTERNAL_MOVES_PENDING:
+            # A "look again" nudge, not a count: the buckets (unambiguous /
+            # ambiguous / off-layout) are classified live, so the client
+            # re-fetches GET /moves/pending rather than trusting a number
+            # carried on the wire.
+            payload = {
+                "type": "external_moves_pending",
+                "event": event_type.name,
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}

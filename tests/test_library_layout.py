@@ -21,10 +21,12 @@ from pixlstash.db_models import (
     PictureSetMember,
     Project,
 )
+from pixlstash.db_models.external_move_review import ExternalMoveReview
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.services import layout_move_service as engine
+from pixlstash.services import move_reconciliation_service as reconciliation
 from pixlstash.services.operation_log_service import (
     FACET_LOCATION,
     apply_state_in_session,
@@ -35,11 +37,14 @@ from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     Facet,
     Layout,
+    MoveOutcome,
     folder_name,
     format_layout,
     is_true,
     match_destination,
     parse_layout,
+    read_named_components,
+    reconcile_move,
     relocate,
     render,
 )
@@ -402,6 +407,158 @@ def test_an_unknown_facet_is_refused_rather_than_dropped():
 def test_an_unsafe_unfiled_name_is_refused():
     with pytest.raises(ValueError):
         parse_layout("project", "../escape")
+
+
+# ---------------------------------------------------------------------------
+# reconcile_move — the mirror, for moves made outside PixlStash (v1.11 Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def test_read_named_components_stops_at_the_first_unknown():
+    assert read_named_components(["2024 Shoots", "random"], DEFAULT_LAYOUT, KNOWN) == [
+        (Facet.PROJECT, "2024 Shoots")
+    ]
+
+
+def test_read_named_components_is_empty_for_the_owners_own_folder():
+    assert read_named_components(["_unsorted"], DEFAULT_LAYOUT, KNOWN) == []
+
+
+def test_read_named_components_refuses_to_guess_a_folder_name_collision():
+    """Two entities that render to the same folder are unreadable, not a coin flip.
+
+    ``folder_name`` is documented many-to-one (``Client: Nordvik`` and
+    ``Client_ Nordvik`` both become ``Client_ Nordvik``). Silently picking
+    whichever the vocabulary happened to list last would add a picture to a
+    different project than the one whose folder it is actually in.
+    """
+    known = {
+        Facet.PROJECT: ["Client: Nordvik", "Client_ Nordvik"],
+        Facet.PERSON: [],
+        Facet.SET: [],
+    }
+    assert read_named_components(["Client_ Nordvik"], DEFAULT_LAYOUT, known) == []
+
+
+def test_a_folder_name_collision_is_off_layout_not_a_guess():
+    known = {
+        Facet.PROJECT: ["Client: Nordvik", "Client_ Nordvik"],
+        Facet.PERSON: [],
+        Facet.SET: [],
+    }
+    picture = facets(projects=["Client: Nordvik"])
+    reconciled = reconcile_move(
+        "Client: Nordvik", "Client_ Nordvik", picture, DEFAULT_LAYOUT, known
+    )
+    assert reconciled.outcome == MoveOutcome.OFF_LAYOUT
+    assert reconciled.removals == ()
+    assert reconciled.additions == ()
+
+
+def test_a_third_colliding_name_does_not_undo_the_ambiguity_a_second_one_raised():
+    """The collision flag is sticky: A, B, C sharing a key must not resolve to C."""
+    # ":" and "|" are both in the unsafe-character class, so all three fold to
+    # the same folder name "Client_ Nordvik" (space preserved, punctuation
+    # replaced).
+    known = {
+        Facet.PROJECT: ["Client: Nordvik", "Client_ Nordvik", "Client| Nordvik"],
+        Facet.PERSON: [],
+        Facet.SET: [],
+    }
+    assert read_named_components(["Client_ Nordvik"], DEFAULT_LAYOUT, known) == []
+
+
+def test_a_name_appearing_twice_identically_is_not_a_collision():
+    known = {
+        Facet.PROJECT: ["2024 Shoots", "2024 Shoots"],
+        Facet.PERSON: [],
+        Facet.SET: [],
+    }
+    assert read_named_components(["2024 Shoots"], DEFAULT_LAYOUT, known) == [
+        (Facet.PROJECT, "2024 Shoots")
+    ]
+
+
+def test_a_project_swap_is_unambiguous_when_the_picture_had_exactly_one():
+    picture = facets(projects=["2024 Shoots"])
+    reconciled = reconcile_move(
+        "2024 Shoots", "Client Nordvik", picture, DEFAULT_LAYOUT, KNOWN
+    )
+    assert reconciled.outcome == MoveOutcome.UNAMBIGUOUS
+    assert reconciled.removals == ((Facet.PROJECT, "2024 Shoots"),)
+    assert reconciled.additions == ((Facet.PROJECT, "Client Nordvik"),)
+
+
+def test_leaving_a_shared_project_folder_is_ambiguous():
+    """A folder holds a picture once; a project can share it (DECISIONS.md)."""
+    picture = facets(projects=["2024 Shoots", "Client Nordvik"])
+    reconciled = reconcile_move(
+        "2024 Shoots", "Client Nordvik", picture, DEFAULT_LAYOUT, KNOWN
+    )
+    assert reconciled.outcome == MoveOutcome.AMBIGUOUS
+    assert reconciled.removals == ((Facet.PROJECT, "2024 Shoots"),)
+    # Already a member of "Client Nordvik" — nothing new to add.
+    assert reconciled.additions == ()
+
+
+def test_gaining_a_person_the_picture_never_had_is_unambiguous():
+    """An addition is never ambiguous: it cannot make any folder untrue."""
+    picture = facets(projects=["2024 Shoots"])
+    reconciled = reconcile_move(
+        "2024 Shoots", "2024 Shoots/Mira", picture, DEFAULT_LAYOUT, KNOWN
+    )
+    assert reconciled.outcome == MoveOutcome.UNAMBIGUOUS
+    assert reconciled.removals == ()
+    assert reconciled.additions == ((Facet.PERSON, "Mira"),)
+
+
+def test_a_folder_naming_nothing_known_is_off_layout_and_touches_nothing():
+    picture = facets(projects=["2024 Shoots"])
+    reconciled = reconcile_move(
+        "2024 Shoots", "_unsorted", picture, DEFAULT_LAYOUT, KNOWN
+    )
+    assert reconciled.outcome == MoveOutcome.OFF_LAYOUT
+    assert reconciled.removals == ()
+    assert reconciled.additions == ()
+
+
+def test_landing_at_the_root_is_off_layout():
+    picture = facets(projects=["2024 Shoots"])
+    reconciled = reconcile_move("2024 Shoots", "", picture, DEFAULT_LAYOUT, KNOWN)
+    assert reconciled.outcome == MoveOutcome.OFF_LAYOUT
+
+
+def test_only_the_owners_own_subfolder_changing_reconciles_to_nothing():
+    picture = facets(projects=["2024 Shoots"], people=["Mira"])
+    reconciled = reconcile_move(
+        "2024 Shoots/Mira/2026-08",
+        "2024 Shoots/Mira/2026-09",
+        picture,
+        DEFAULT_LAYOUT,
+        KNOWN,
+    )
+    assert reconciled.outcome == MoveOutcome.NONE
+    assert reconciled.removals == ()
+    assert reconciled.additions == ()
+
+
+def test_arriving_at_the_unfiled_folder_is_a_deliberate_unambiguous_removal():
+    picture = facets(projects=["2024 Shoots"])
+    reconciled = reconcile_move(
+        "2024 Shoots", DEFAULT_LAYOUT.unfiled, picture, DEFAULT_LAYOUT, KNOWN
+    )
+    assert reconciled.outcome == MoveOutcome.UNAMBIGUOUS
+    assert reconciled.removals == ((Facet.PROJECT, "2024 Shoots"),)
+    assert reconciled.additions == ()
+
+
+def test_a_cross_facet_swap_within_one_segment_reconciles_both_sides():
+    """Person and Set share a segment; a folder can name either."""
+    picture = facets(sets=["mira-lora-v3"])
+    reconciled = reconcile_move("mira-lora-v3", "Mira", picture, DEFAULT_LAYOUT, KNOWN)
+    assert reconciled.outcome == MoveOutcome.UNAMBIGUOUS
+    assert reconciled.removals == ((Facet.SET, "mira-lora-v3"),)
+    assert reconciled.additions == ((Facet.PERSON, "Mira"),)
 
 
 # ---------------------------------------------------------------------------
@@ -1195,3 +1352,285 @@ def test_the_journal_is_pruned_past_its_retention_window(library):
     assert [row.old_path for row in session.exec(select(PictureMove)).all()] == [
         "c.png"
     ]
+
+
+# ---------------------------------------------------------------------------
+# move_reconciliation_service — classifying and clearing the queue (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def _reference_folder(library, root="/library/refs", layout=DEFAULT_LAYOUT):
+    session = library["session"]
+    folder = ReferenceFolder(folder=root, layout=format_layout(layout))
+    session.add(folder)
+    session.commit()
+    return folder.id, root
+
+
+def _reference_picture(library, folder_id, path, *, project_ids=()):
+    session = library["session"]
+    project_ids = list(project_ids)
+    pic = Picture(
+        file_path=path,
+        original_file_name=os.path.basename(path),
+        reference_folder_id=folder_id,
+        project_id=project_ids[0] if project_ids else None,
+    )
+    session.add(pic)
+    session.commit()
+    for project_id in project_ids:
+        session.add(PictureProjectMember(picture_id=pic.id, project_id=project_id))
+    session.commit()
+    return pic.id
+
+
+def test_an_unambiguous_move_is_bucketed_with_its_implied_swap(library):
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    old_path = f"{root}/2024 Shoots/a.png"
+    new_path = f"{root}/Client · Nordvik/a.png"
+    picture_id = _reference_picture(
+        library, folder_id, new_path, project_ids=[library["project_id"]]
+    )
+    reconciliation.record_pending_reviews(session, [(picture_id, old_path, new_path)])
+    session.commit()
+
+    summary = reconciliation.pending_summary_in_session(session)
+    assert summary["ambiguous"] == []
+    assert summary["off_layout"] == []
+    assert len(summary["unambiguous"]) == 1
+    item = summary["unambiguous"][0]
+    assert item["picture_id"] == picture_id
+    assert item["removals"] == [{"facet": "project", "name": "2024 Shoots"}]
+    assert item["additions"] == [{"facet": "project", "name": "Client · Nordvik"}]
+
+    # Still there: a GET must not consume a row nobody acted on.
+    assert session.exec(
+        select(ExternalMoveReview).where(ExternalMoveReview.picture_id == picture_id)
+    ).first()
+
+
+def test_leaving_a_shared_project_is_bucketed_ambiguous(library):
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    old_path = f"{root}/2024 Shoots/a.png"
+    new_path = f"{root}/Client · Nordvik/a.png"
+    picture_id = _reference_picture(
+        library,
+        folder_id,
+        new_path,
+        project_ids=[library["project_id"], library["other_project_id"]],
+    )
+    reconciliation.record_pending_reviews(session, [(picture_id, old_path, new_path)])
+    session.commit()
+
+    summary = reconciliation.pending_summary_in_session(session)
+    assert summary["unambiguous"] == []
+    assert len(summary["ambiguous"]) == 1
+    item = summary["ambiguous"][0]
+    assert item["removals"] == [{"facet": "project", "name": "2024 Shoots"}]
+    assert item["current"] == {"project": ["2024 Shoots", "Client · Nordvik"]}
+
+
+def test_a_move_to_an_unknown_folder_is_bucketed_off_layout(library):
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    old_path = f"{root}/2024 Shoots/a.png"
+    new_path = f"{root}/_unsorted/a.png"
+    picture_id = _reference_picture(
+        library, folder_id, new_path, project_ids=[library["project_id"]]
+    )
+    reconciliation.record_pending_reviews(session, [(picture_id, old_path, new_path)])
+    session.commit()
+
+    summary = reconciliation.pending_summary_in_session(session)
+    assert summary["unambiguous"] == []
+    assert summary["ambiguous"] == []
+    assert len(summary["off_layout"]) == 1
+    assert summary["off_layout"][0]["removals"] == []
+    assert summary["off_layout"][0]["additions"] == []
+
+
+def test_an_off_layout_row_is_pruned_past_its_retention_window(library):
+    """off_layout carries no decision, so it is shown once and then ages out.
+
+    Unlike unambiguous/ambiguous, nothing here waits on the owner — the
+    row exists so the screen can say "already followed, nothing to decide"
+    at least once, not so it can sit forever as unreachable, unclearable
+    state (see docs/backend_architecture.md §27).
+    """
+    from datetime import datetime, timedelta
+
+    from pixlstash.db_models.picture_move import RETENTION_S
+
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    picture_id = _reference_picture(
+        library,
+        folder_id,
+        f"{root}/_unsorted/a.png",
+        project_ids=[library["project_id"]],
+    )
+    session.add(
+        ExternalMoveReview(
+            picture_id=picture_id,
+            old_path=f"{root}/2024 Shoots/a.png",
+            new_path=f"{root}/_unsorted/a.png",
+            detected_at=datetime.utcnow() - timedelta(seconds=RETENTION_S * 2),
+        )
+    )
+    session.commit()
+
+    summary = reconciliation.pending_summary_in_session(session)
+    assert summary["off_layout"] == []
+    assert (
+        session.exec(
+            select(ExternalMoveReview).where(
+                ExternalMoveReview.picture_id == picture_id
+            )
+        ).first()
+        is None
+    )
+
+
+def test_a_move_that_reconciles_to_nothing_is_pruned_from_the_queue(library):
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    old_path = f"{root}/2024 Shoots/2026-08/a.png"
+    new_path = f"{root}/2024 Shoots/2026-09/a.png"
+    picture_id = _reference_picture(
+        library, folder_id, new_path, project_ids=[library["project_id"]]
+    )
+    reconciliation.record_pending_reviews(session, [(picture_id, old_path, new_path)])
+    session.commit()
+
+    summary = reconciliation.pending_summary_in_session(session)
+    assert summary == {"unambiguous": [], "ambiguous": [], "off_layout": []}
+    assert (
+        session.exec(
+            select(ExternalMoveReview).where(
+                ExternalMoveReview.picture_id == picture_id
+            )
+        ).first()
+        is None
+    ), "a row implying nothing must not sit in the queue forever"
+
+
+def test_a_deleted_pictures_row_is_dropped_rather_than_crashing(library):
+    session = library["session"]
+    folder_id, root = _reference_folder(library)
+    reconciliation.record_pending_reviews(
+        session, [(999999, f"{root}/2024 Shoots/a.png", f"{root}/_unsorted/a.png")]
+    )
+    session.commit()
+
+    assert reconciliation.pending_summary_in_session(session) == {
+        "unambiguous": [],
+        "ambiguous": [],
+        "off_layout": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# The appliers — set and person, the two facets pending_summary never exercises
+# ---------------------------------------------------------------------------
+
+
+def test_add_person_prefers_an_unassigned_face_and_never_steals_one(library):
+    """An addition is supposed to be safe. Stealing Sara's face is not."""
+    from pixlstash.services.move_reconciliation_service import _add_person
+
+    session = library["session"]
+    sara = Character(name="Sara (steal-test)")
+    mira = Character(name="Mira (steal-test)")
+    session.add_all([sara, mira])
+    session.commit()
+
+    picture = Picture(file_path="steal-test.png", original_file_name="steal-test.png")
+    session.add(picture)
+    session.commit()
+    sara_face = Face(picture_id=picture.id, character_id=sara.id, face_index=0)
+    free_face = Face(picture_id=picture.id, character_id=None, face_index=1)
+    session.add_all([sara_face, free_face])
+    session.commit()
+
+    changed = _add_person(session, picture, mira.id)
+    session.commit()
+
+    assert changed is True
+    session.refresh(sara_face)
+    session.refresh(free_face)
+    assert sara_face.character_id == sara.id, "Sara's face must survive an addition"
+    assert free_face.character_id == mira.id
+
+
+def test_add_person_is_a_safe_no_op_when_every_face_already_names_someone(library):
+    from pixlstash.services.move_reconciliation_service import _add_person
+
+    session = library["session"]
+    sara = Character(name="Sara (no-room)")
+    mira = Character(name="Mira (no-room)")
+    session.add_all([sara, mira])
+    session.commit()
+
+    picture = Picture(file_path="no-room.png", original_file_name="no-room.png")
+    session.add(picture)
+    session.commit()
+    session.add(Face(picture_id=picture.id, character_id=sara.id))
+    session.commit()
+
+    assert _add_person(session, picture, mira.id) is False
+    faces = session.exec(select(Face).where(Face.picture_id == picture.id)).all()
+    assert [f.character_id for f in faces] == [sara.id]
+
+
+def test_remove_person_clears_only_that_characters_face(library):
+    from pixlstash.services.move_reconciliation_service import _remove_person
+
+    session = library["session"]
+    sara = Character(name="Sara (remove-test)")
+    mira = Character(name="Mira (remove-test)")
+    session.add_all([sara, mira])
+    session.commit()
+
+    picture = Picture(file_path="remove-test.png", original_file_name="remove-test.png")
+    session.add(picture)
+    session.commit()
+    sara_face = Face(picture_id=picture.id, character_id=sara.id, face_index=0)
+    mira_face = Face(picture_id=picture.id, character_id=mira.id, face_index=1)
+    session.add_all([sara_face, mira_face])
+    session.commit()
+
+    assert _remove_person(session, picture, sara.id) is True
+    session.commit()
+    session.refresh(sara_face)
+    session.refresh(mira_face)
+    assert sara_face.character_id is None
+    assert mira_face.character_id == mira.id, "removing Sara must not touch Mira"
+
+
+def test_add_and_remove_set_membership(library):
+    from pixlstash.db_models import PictureSetMember
+    from pixlstash.services.move_reconciliation_service import _add_set, _remove_set
+
+    session = library["session"]
+    picture_set = PictureSet(name="Summer (add-remove-test)")
+    session.add(picture_set)
+    session.commit()
+
+    picture = session.get(Picture, library["picture_id"])
+    assert _add_set(session, picture, picture_set.id) is True
+    session.commit()
+    assert _add_set(session, picture, picture_set.id) is False, (
+        "adding twice is a no-op"
+    )
+
+    assert _remove_set(session, picture, picture_set.id) is True
+    session.commit()
+    members = session.exec(
+        select(PictureSetMember).where(
+            PictureSetMember.picture_id == picture.id,
+            PictureSetMember.set_id == picture_set.id,
+        )
+    ).all()
+    assert members == []

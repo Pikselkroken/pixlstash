@@ -181,6 +181,11 @@ def test_services_no_direct_db_calls():
         # capture and record inside ONE queued task, or a write landing between
         # the plan and the record is attributed to this move.
         "pixlstash/services/layout_move_service.py",  # vault-injection pattern; atomic plan-move-record task
+        # v1.11 Phase 5. pending_moves(vault) is the canonical thin
+        # *_in_session wrapper (pending_summary_in_session); apply_reviews
+        # owes run_recorded_metadata_task the same atomicity layout_move_service
+        # owes it above — capture, mutate and record in ONE queued task.
+        "pixlstash/services/move_reconciliation_service.py",
     }
 
     violations = []
@@ -322,6 +327,9 @@ def test_event_types_fully_classified():
             # The GPU ran out of memory. A fact about the machine, so it goes to
             # every client regardless of grid filters.
             EventType.VRAM_OOM.name,
+            # Vault-wide reconciliation queue nudge (v1.11 Phase 5), like
+            # VRAM_OOM: not a grid view a client's filters could exclude it from.
+            EventType.EXTERNAL_MOVES_PENDING.name,
         }
     )
 

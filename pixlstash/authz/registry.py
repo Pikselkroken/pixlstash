@@ -1473,6 +1473,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "report a wrong total. Reads only; queues no work and writes no row"
         ),
     ),
+    # ── moves.py (v1.11 Phase 5, reconciling moves made outside PixlStash) ───
+    # Vault-wide, like operations.py: the queue enumerates moves across the
+    # whole library and apply/dismiss write project/set/person membership onto
+    # arbitrary pictures, none of it boundable to a single resource-scoped
+    # grant.
+    ("GET", "/api/v1/moves/pending"): RoutePolicy(
+        _OWNER,
+        justification="Vault-wide reconciliation queue; owner-only read",
+    ),
+    ("POST", "/api/v1/moves/apply"): RoutePolicy(
+        _OWNER,
+        justification="Writes project/set/person membership across the vault; owner-only write",
+    ),
+    ("POST", "/api/v1/moves/dismiss"): RoutePolicy(
+        _OWNER,
+        justification="Clears rows from the vault-wide reconciliation queue; owner-only write",
+    ),
     # ── tag_health.py (bespoke "reject resource-scoped" gate; owner-only) ────
     # Same unscoped-READ nuance as reviews (see NEEDS REVIEW above).
     ("GET", "/api/v1/tag_health"): RoutePolicy(

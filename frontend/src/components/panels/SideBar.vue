@@ -87,6 +87,7 @@ import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
+import { useMovesStore } from "../../stores/useMovesStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -127,6 +128,7 @@ function noticeDetail(e) {
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const dedupStore = useDedupStore();
+const movesStore = useMovesStore();
 
 // Store-direct (Phase 3): the sidebar reads the selection, sort, project and
 // preference state it displays straight from the stores and writes changes
@@ -193,6 +195,15 @@ const isInsightsView = computed(() => route.name === "insights");
 const READ_ONLY_INSIGHTS_HINT =
   "Findings about a library are only available in your own";
 
+// Moves is not a permanent destination the way the three above are: it is a
+// to-do queue of moves made outside PixlStash, most libraries never populate
+// it (no reference folder has opted into a layout), and unlike the others its
+// data is never useful to a share visitor even as a curiosity. So it follows
+// the opposite rule — hidden rather than shown-and-disabled — gated on
+// movesStore.hasAnyPending, which itself never becomes true for a read-only
+// session because nothing here ever calls GET /moves/pending for one.
+const isMovesView = computed(() => route.name === "moves");
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
@@ -203,6 +214,7 @@ const emit = defineEmits([
   "select-duplicates",
   "select-models",
   "select-insights",
+  "select-moves",
   "select-character",
   "select-set",
   "import-finished",
@@ -3604,6 +3616,15 @@ onMounted(() => {
   };
 });
 
+// The "screen on next start" half of Phase 5's review (release plan §4): one
+// GET on mount, so a backlog left over from while PixlStash was closed shows
+// up the moment the sidebar renders rather than waiting for the next scan's
+// WebSocket nudge. Read-only sessions never call this — GET /moves/pending is
+// owner-only and the row it would feed is hidden for them regardless.
+onMounted(() => {
+  if (!isReadOnly.value) movesStore.fetchPending();
+});
+
 function onSidebarCtxOutside(event) {
   if (!sidebarCtxVisible.value) return;
   if (event.target.closest(".sidebar-ctx-appearance-panel")) return;
@@ -5288,6 +5309,39 @@ defineExpose({
             </button>
           </div>
 
+          <!-- Moves in the dock: reachable whenever the queue holds anything
+               at all (movesStore.hasAnyPending), never shown-and-disabled the
+               way the three permanent destinations above are — see the
+               comment on isMovesView. The attention dot is narrower than the
+               row: an off_layout-only queue has nothing to decide, so it
+               earns the row (or its retention window would expire it unseen)
+               but not the dot. -->
+          <div
+            v-if="movesStore.hasAnyPending"
+            :class="['sidebar-collapsed-row', { active: isMovesView }]"
+          >
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{ active: isMovesView }"
+              :aria-current="isMovesView ? 'page' : undefined"
+              aria-label="Moves made outside PixlStash"
+              :title="
+                movesStore.hasPending
+                  ? `${movesStore.pendingCount} move(s) to review`
+                  : 'Moves already followed, nothing to decide'
+              "
+              @click="emit('select-moves')"
+            >
+              <v-icon>mdi-folder-move-outline</v-icon>
+              <span
+                v-if="movesStore.hasPending"
+                class="sidebar-collapsed-dedup-badge"
+                title="There are moves to review"
+              ></span>
+            </button>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -5816,6 +5870,30 @@ defineExpose({
                   ><v-icon size="18">mdi-lightbulb-on-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">About your library</span>
+              </button>
+            </div>
+
+            <!-- Moves: a to-do queue, not a permanent destination, so it earns
+                 its row while the queue holds anything at all — including an
+                 off_layout-only backlog, which has nothing to decide but
+                 still has to be reachable before its retention window expires
+                 it unseen (see hasAnyPending's own comment). The count only
+                 ever names what needs a DECISION; an off_layout-only queue
+                 shows the row with no number, not a "0" that reads as empty. -->
+            <div v-if="movesStore.hasAnyPending" class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                :class="['sidebar-list-item', { active: isMovesView }]"
+                :aria-current="isMovesView ? 'page' : undefined"
+                @click="emit('select-moves')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-folder-move-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Moves</span>
+                <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
+                  movesStore.pendingCount
+                }}</span>
               </button>
             </div>
 

@@ -37,6 +37,7 @@
 24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
 25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
 26. [The layout and the move engine](#26-the-layout-and-the-move-engine-v111-phase-4b)
+27. [Reconciling moves made outside PixlStash](#27-reconciling-moves-made-outside-pixlstash-v111-phase-5)
 
 ---
 
@@ -558,6 +559,9 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
 | GET    | /api/v1/models/{model_id}/samples/{filename}                                  | model_shelf     | One training preview stored beside an imported checkpoint   |
+| POST   | /api/v1/moves/apply                                                           | moves           | Apply the given pending moves                               |
+| POST   | /api/v1/moves/dismiss                                                         | moves           | Drop the given pending moves without changing anything      |
+| GET    | /api/v1/moves/pending                                                         | moves           | Moves made outside PixlStash, awaiting reconciliation       |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                     |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                  |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                 |
@@ -3319,24 +3323,25 @@ a promise that Tailscale is local for every authentication mechanism.
 - All `EventType` values in [event_types.py](../pixlstash/event_types.py) are emitted internally by `Vault`, but only a subset is forwarded to WebSocket clients by the broadcaster in `server.py` (see `_should_send_ws_update`). The table below is auto-generated from the source:
 
 <!-- AUTOGEN:start name="events" -->
-| Event                  | WebSocket   |
-| ---------------------- | ----------- |
-| `CHANGED_PICTURES`     | ✓ broadcast |
-| `PICTURE_IMPORTED`     | ✓ broadcast |
-| `PLUGIN_PROGRESS`      | ✓ broadcast |
-| `CHANGED_TAGS`         | ✓ broadcast |
-| `CHANGED_CHARACTERS`   | ✓ broadcast |
-| `CHANGED_DESCRIPTIONS` | ✓ broadcast |
-| `CHANGED_FACES`        | ✓ broadcast |
-| `QUALITY_UPDATED`      | ✗ internal  |
-| `CLEARED_TAGS`         | ✓ broadcast |
-| `SNAPSHOT_CREATED`     | ✗ internal  |
-| `SNAPSHOT_DELETED`     | ✗ internal  |
-| `RESTORE_STARTED`      | ✗ internal  |
-| `RESTORE_COMPLETED`    | ✗ internal  |
-| `RESTORE_FAILED`       | ✗ internal  |
-| `LIBRARY_SWITCHED`     | ✓ broadcast |
-| `VRAM_OOM`             | ✓ broadcast |
+| Event                    | WebSocket   |
+| ------------------------ | ----------- |
+| `CHANGED_PICTURES`       | ✓ broadcast |
+| `PICTURE_IMPORTED`       | ✓ broadcast |
+| `PLUGIN_PROGRESS`        | ✓ broadcast |
+| `CHANGED_TAGS`           | ✓ broadcast |
+| `CHANGED_CHARACTERS`     | ✓ broadcast |
+| `CHANGED_DESCRIPTIONS`   | ✓ broadcast |
+| `CHANGED_FACES`          | ✓ broadcast |
+| `QUALITY_UPDATED`        | ✗ internal  |
+| `CLEARED_TAGS`           | ✓ broadcast |
+| `SNAPSHOT_CREATED`       | ✗ internal  |
+| `SNAPSHOT_DELETED`       | ✗ internal  |
+| `RESTORE_STARTED`        | ✗ internal  |
+| `RESTORE_COMPLETED`      | ✗ internal  |
+| `RESTORE_FAILED`         | ✗ internal  |
+| `LIBRARY_SWITCHED`       | ✓ broadcast |
+| `VRAM_OOM`               | ✓ broadcast |
+| `EXTERNAL_MOVES_PENDING` | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).
@@ -6323,6 +6328,195 @@ same two folders next month be dismissed as ours.
 
 `ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
 moves it attributes to the owner — which is exactly Phase 5's input.
+
+## 27. Reconciling moves made outside PixlStash (v1.11 Phase 5)
+
+`pixlstash/utils/library_layout.py::reconcile_move` decides what an owner-made
+move implies; `pixlstash/services/move_reconciliation_service.py` queues the
+fact, classifies it live and applies what is asked. The wire contract is three
+routes in `pixlstash/routes/moves.py`; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 5; the design reference is
+the Moves artboard in `design/1.11-existing-library/`.
+
+> **The mirror of §26's rule.** PixlStash moves a file when an assignment
+> change makes its folder stop being true; when the *owner* moves a file,
+> PixlStash reconsiders an assignment when the move makes it stop being true.
+
+### The queue is a fact, not a verdict
+
+`ExternalMoveReview` (migration `0109`) holds exactly `(picture_id, old_path,
+new_path, detected_at)` — the raw fact a move happened, nothing derived.
+`ReferenceFolderScanTask.apply_moves` writes one row per picture in its
+`external` list, in the same transaction that updates `Picture.file_path`, and
+only when the reference folder's own `layout` column is set
+(`record_pending_reviews`): a root with no layout has no vocabulary a folder
+name could contradict, so queuing for the rest would grow the table for
+nothing ever readable off it. The task's result carries
+`external_moves_queued_for_review`, a subset of `external_moved_picture_ids`
+for exactly this reason — the two differ whenever the move happened in a root
+with no layout.
+
+**Classification never touches the row it reads until it deletes it.**
+`pending_summary_in_session` reclassifies every row against the picture's
+*current* facets and the root's *current* layout on every call — there is no
+cached verdict to invalidate, so a picture whose memberships changed between
+the move and the review is judged on what is true now. `reconcile_move` reuses
+`layout_move_service.layout_roots` / `library_vocabulary` / `picture_facets`,
+the same reads §26's engine uses, rather than a second query surface.
+
+### `reconcile_move`: the three outcomes, and a fourth
+
+`reconcile_move(old_folder, new_folder, facets, layout, known_names)` is pure
+— no database, no filesystem, argument shape borrowed from `relocate` — and
+returns a `ReconciledMove(outcome, removals, additions)`:
+
+1. **Read both folders against the layout's vocabulary**
+   (`read_named_components`, the reverse of `render`: given a path, which
+   entity does each leading component name, regardless of who currently holds
+   it). Stops at the first component naming nothing known, same as `is_true`.
+2. **Diff the two readings.** A `(facet, name)` the old folder named and the
+   new one does not, that the picture is *currently* a member of, is a
+   candidate **removal** — "the owner left this folder". One the new folder
+   names and the old one does not, that the picture is *not* currently a
+   member of, is a candidate **addition**. Either set can be empty.
+3. **Classify:**
+   - **`OFF_LAYOUT`** — the new folder's leading component names nothing the
+     layout's vocabulary knows (including landing at the root). Touches
+     nothing at all, not even a removal on the old side: the path was already
+     followed by the scan, and an unreadable destination is a permanent
+     override under §26's rule too.
+   - **`AMBIGUOUS`** — at least one candidate removal is for a facet the
+     picture currently has **more than one** value of. A folder holds a
+     picture once; a project (or set, or person) can share it, so leaving one
+     folder cannot say which the owner meant. The whole picture is held for
+     review — an addition riding alongside an ambiguous removal is not
+     applied piecemeal, because the two buttons the screen offers
+     ("Only X now" / "Keep both") act on the picture as a unit.
+   - **`UNAMBIGUOUS`** — every candidate removal is for a facet with exactly
+     one current value. An addition is *never* ambiguous by itself — gaining a
+     membership cannot make any existing folder untrue — so a picture with
+     additions and no removals is always unambiguous.
+   - **`NONE`** — no removals and no additions (most commonly: only the
+     owner's own subfolder below the layout changed). Not one of the plan's
+     three named outcomes because it is not shown at all;
+     `pending_summary_in_session` deletes the row rather than surfacing it.
+4. **Arriving at the literal unfiled folder** (`layout.unfiled`) is read as a
+   deliberate "nothing files this" signal, not as an unreadable destination —
+   the one component check `reconcile_move` makes before the general
+   off-layout test.
+
+Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
+91–100% of assigned pictures have exactly one project or set, so `AMBIGUOUS`
+is the minority outcome by construction, not by a threshold this module
+chose.
+
+### Applying: three memberships, deliberately not four
+
+`move_reconciliation_service` turns `removals`/`additions` into writes for
+`Facet.PROJECT`, `Facet.SET` and `Facet.PERSON` only:
+
+- **Project** copies `routes/pictures/_crud.py::set_project_for_pictures`'s
+  own add/remove mechanics — including the primary-project fallback on
+  removal — but **deliberately does not stack-expand.**
+  `set_project_for_pictures` propagates because there the owner is making one
+  decision for a group they are looking at; here the signal is one specific
+  picture's *file* having moved on disk, and stack siblings whose own files
+  did not move must not have their assignments rewritten on that picture's
+  say-so — that would make a sibling's still-true folder wrong for a reason
+  that has nothing to do with it. This does not leave a moved stack
+  inconsistent: every stacked picture is its own `Picture` row with its own
+  `file_path`, so a stack move that happens together produces one
+  `ExternalMoveReview` per member (the scan follows each file independently)
+  and each is reconciled on its own — stack coherence falls out of the
+  per-picture trigger rather than needing code of its own.
+- **Set** is a plain `PictureSetMember` insert/delete; there is no primary set
+  to maintain.
+- **Person** reuses the two mechanisms `POST /characters/{id}/faces` already
+  has: assign the picture's largest **unassigned** real face (`Face.find`,
+  area-ranked, no likeness comparison — a folder move is not the manual
+  assignment UI) when one exists, or defer via `Picture.pending_character_id`
+  when face extraction has not run yet. **Never a face that already names
+  someone** — an addition is supposed to be the safe half of a
+  reconciliation (`reconcile_move`'s whole argument for treating it as
+  automatically unambiguous is that gaining a membership cannot make an
+  existing folder untrue), and that only holds if it never costs another
+  person their face. A group shot with Sara's face largest and Mira's
+  smallest, moved into a folder that adds Mira, gains Mira without losing
+  Sara. If every real face already names someone, the addition is a safe
+  no-op rather than a reassignment. Removal clears `Face.character_id` (and a
+  matching pending assignment) back to `None`.
+- **Tag is not reconciled.** The default layout never places by tag and Phase
+  4c (custom layouts) has not shipped, so a tag-typed layout segment is
+  unreachable through the product today; `reconcile_move` still classifies a
+  hypothetical one correctly, the applier just skips and logs it.
+  `ponytail:` marked in the service module for when 4c ships a layout builder
+  that can select `Facet.TAG`.
+
+**Both a project and a set/person name are resolved by unique-name lookup, and
+a collision is refused rather than guessed — twice over.** `Project.name` is
+DB-unique; `PictureSet.name` and `Character.name` are not (§26, "Renaming an
+entity renames its folder" already declines the equivalent ambiguity for a
+rename). `_resolve_entity_id` refuses a name matching more than one row. That
+alone is not sufficient: two *distinct* names can render to the same folder
+(`folder_name` is documented many-to-one — `Client: Nordvik` and
+`Client_ Nordvik` both become `Client_ Nordvik`), and by the time
+`_resolve_entity_id` sees an exact, non-colliding string the wrong one could
+already have been picked upstream. `read_named_components` closes that:
+building its key→name map, two different names landing on the same key mark
+that key **unreadable** rather than keeping whichever the vocabulary query
+happened to return last — the same safe direction as an unparseable
+component, not a coin flip between two real entities. A name refused at
+either layer is logged and the one change it belonged to is skipped; the rest
+of the review's changes (and every other review in the batch) still apply.
+**A review whose only change was refused is still cleared from the queue**
+(it was explicitly acted on by id) but is reported back as
+`skipped_review_ids`, distinct from `applied_picture_ids`, so an apply that
+silently changed nothing does not read the same as one that worked.
+
+**Reconciliation is recomputed fresh inside the mutation's own DB-queue slot,
+never trusted from an earlier GET.** `apply_reviews` wraps its mutation in
+`operation_log_service.run_recorded_metadata_task` — capture, reclassify,
+mutate and record land in one queued task, the same atomicity guarantee
+`layout_move_service`'s own vault-taking entry points rely on — so a picture
+whose memberships changed in the gap between a GET and the Apply click is
+applied against what is true at mutation time, not at list time. A review row
+is deleted whether or not anything was actually applied (the picture or its
+layout may have vanished in the interval): once acted on by id, the row's job
+is done either way. `dismiss_reviews` is the same shape without a mutation —
+clear the rows, touch nothing.
+
+**Every query built from the queue's own ids is chunked**
+(`pixlstash/utils/sql_chunking.py`, `SQLITE_ID_CHUNK`), not just the picture
+facets read: reorganising a folder queues hundreds of rows at once (the
+release plan's own framing), and this is the one query surface Phase 5 adds
+that can see the *whole* queue in one call rather than `layout_move_service`'s
+own `BATCH_SIZE=200`-bounded caller.
+
+**`off_layout` rows age out on their own.** They carry no decision — nothing
+here ever waits on a human for one — so unlike `unambiguous`/`ambiguous` they
+are not kept indefinitely: a row is shown for `PictureMove.RETENTION_S` (the
+same window the move journal keeps a claimed row for) and pruned past it,
+whether or not anyone opened the screen. The frontend's own reachability rule
+follows from this — see `docs/frontend_architecture.md` §9.4.
+
+### The route surface
+
+Three `OWNER_ONLY` routes (`pixlstash/routes/moves.py`), vault-wide like
+`operations.py` — none of this is boundable to a single resource-scoped grant:
+
+| Route | Backs onto |
+|---|---|
+| `GET /moves/pending` | `pending_summary_in_session`, bucketed `unambiguous` / `ambiguous` / `off_layout` |
+| `POST /moves/apply` | `apply_reviews` — pass every currently-unambiguous `review_id` for the bulk "Apply all N", or one ambiguous id to resolve it |
+| `POST /moves/dismiss` | `dismiss_reviews` — "Keep both" on one row, or "Leave everything as it was" on the whole strip |
+
+`EventType.EXTERNAL_MOVES_PENDING` is emitted from `Vault._on_task_completed`
+when a `ReferenceFolderScanTask` result carries a non-empty
+`external_moves_queued_for_review`, broadcast like `VRAM_OOM` (machine/vault
+fact, not a grid view a client's filters could exclude it from). It carries no
+count — the payload is a "look again" nudge, and the client re-fetches
+`GET /moves/pending` for the real, live-classified numbers, the same reason
+the queue itself keeps no cached verdict.
 
 ---
 

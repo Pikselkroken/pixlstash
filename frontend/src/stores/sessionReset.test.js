@@ -56,6 +56,7 @@ import { useModelShelfStore } from "./useModelShelfStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
+import { useMovesStore } from "./useMovesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -255,6 +256,24 @@ const STORES = [
       s.canManage === false &&
       s.cliHint === "" &&
       s.hasLoadedSuccessfully === false,
+  },
+  {
+    // v1.11 Phase 5. Every row names a picture in the previous credential's
+    // library, so it is exactly the class of server-sourced cache §655 is
+    // about.
+    name: "useMovesStore",
+    use: useMovesStore,
+    seed: (s) => {
+      s.unambiguous = [{ review_id: 1, picture_id: 11 }];
+      s.ambiguous = [{ review_id: 2, picture_id: 12 }];
+      s.offLayout = [{ review_id: 3, picture_id: 13 }];
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.unambiguous.length === 0 &&
+      s.ambiguous.length === 0 &&
+      s.offLayout.length === 0 &&
+      s.loaded === false,
   },
 ];
 

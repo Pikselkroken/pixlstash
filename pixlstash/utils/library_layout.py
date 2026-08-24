@@ -424,6 +424,215 @@ def match_destination(
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation — the mirror, for moves made outside PixlStash (v1.11 Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class MoveOutcome(str, Enum):
+    """What an owner-made move implies about a picture's assignments.
+
+    The three the release plan names, plus the ordinary case a real library
+    mostly produces:
+
+    * ``UNAMBIGUOUS`` — apply the removals and additions below.
+    * ``AMBIGUOUS`` — at least one removal cannot be told apart from a refile:
+      the picture has more than one of that facet, so leaving one folder does
+      not say which. Listed, changed only when asked.
+    * ``OFF_LAYOUT`` — the new folder names nothing the layout's vocabulary
+      knows. The path was already followed; no assignment is touched, and it
+      is never moved back.
+    * ``NONE`` — nothing to reconcile at all, most commonly a subfolder of the
+      owner's own changing below an unchanged layout prefix.
+    """
+
+    UNAMBIGUOUS = "unambiguous"
+    AMBIGUOUS = "ambiguous"
+    OFF_LAYOUT = "off_layout"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class ReconciledMove:
+    """The reconciliation of one owner-made move.
+
+    Attributes:
+        outcome: See :class:`MoveOutcome`.
+        removals: Facet/name pairs the picture should leave. Non-empty only for
+            ``UNAMBIGUOUS`` and ``AMBIGUOUS``.
+        additions: Facet/name pairs the picture should gain. An addition is
+            never ambiguous by itself — it cannot make any folder untrue — so
+            an ``AMBIGUOUS`` outcome is decided entirely by its removals; this
+            function never holds an addition back because a removal next to
+            it needs a human. What a *caller* does with that when the outcome
+            is ``AMBIGUOUS`` is the caller's policy, not this function's: this
+            struct states the reconciliation, not an action. The two calling
+            services this repository has read it against apply BOTH tuples
+            together when a caller resolves the row (an explicit "apply this
+            id" on a picture is asking for what is true right now, ambiguity
+            included) and NEITHER when a caller dismisses it (a dismissal
+            changes nothing at all, by construction).
+    """
+
+    outcome: MoveOutcome
+    removals: tuple[tuple[Facet, str], ...] = ()
+    additions: tuple[tuple[Facet, str], ...] = ()
+
+
+def read_named_components(
+    components: Sequence[str], layout: Layout, known_names: FacetVocabulary
+) -> list[tuple[Facet, str]]:
+    """Return what the leading, layout-readable *components* name.
+
+    The read :func:`is_true` and :func:`relocate` do not need, because they
+    only ask whether a picture's OWN names still explain its folder.
+    :func:`reconcile_move` asks the opposite question — what does this path
+    say, regardless of who currently holds it — which is what a move made
+    outside PixlStash has to be read against.
+
+    Segments are consumed left to right and, within a segment, a facet's
+    listed order wins on a name two facets could both claim — the same
+    convention :func:`render` already uses to resolve it going forward, so a
+    folder means the same entity read either direction. Stops at the first
+    component that names nothing in *known_names*: everything from there is
+    the owner's own and this function has nothing to say about it.
+
+    Two distinct names that render to the same folder (``folder_name`` is
+    documented many-to-one: ``Client: Nordvik`` and ``Client_ Nordvik`` both
+    become ``Client_ Nordvik``) are read as **unreadable at that key**, not as
+    one of the two arbitrarily. ``is_true`` accepts this same collision going
+    forward because it only asks about membership, never about which specific
+    entity a component names — but this function's caller has to name one, so
+    picking whichever the vocabulary query happened to return last would
+    silently add the picture to a different entity than the one on disk.
+    Unreadable is the safe reading: it stops the walk here, same as a name
+    nothing in the vocabulary claims at all.
+
+    Returns:
+        One ``(facet, canonical name)`` pair per component consumed, in
+        layout order — the canonical name from *known_names*, not the raw
+        component text, so a folder-name-safe rendering of the entity (e.g.
+        punctuation replaced by ``_``) still resolves to the real name.
+    """
+    _AMBIGUOUS = object()
+    name_by_key: dict[Facet, dict[str, str]] = {}
+    for facet in Facet:
+        keyed: dict[str, object] = {}
+        for name in known_names.get(facet) or ():
+            key = _match_key(folder_name(name))
+            existing = keyed.get(key)
+            if existing is None or existing == name:
+                keyed[key] = name
+            else:
+                # A second (or third, ...) distinct name landed on this key.
+                # Sticky once marked: a third colliding name must not undo the
+                # ambiguity a second one already raised.
+                keyed[key] = _AMBIGUOUS
+        name_by_key[facet] = {
+            key: name for key, name in keyed.items() if name is not _AMBIGUOUS
+        }
+    result: list[tuple[Facet, str]] = []
+    next_segment = 0
+    for component in components:
+        key = _match_key(component)
+        found: tuple[int, Facet, str] | None = None
+        for index in range(next_segment, len(layout.segments)):
+            for facet in layout.segments[index]:
+                name = name_by_key[facet].get(key)
+                if name is not None:
+                    found = (index, facet, name)
+                    break
+            if found is not None:
+                break
+        if found is None:
+            break
+        index, facet, name = found
+        result.append((facet, name))
+        next_segment = index + 1
+    return result
+
+
+def reconcile_move(
+    old_folder: str,
+    new_folder: str,
+    facets: FacetValues,
+    layout: Layout,
+    known_names: FacetVocabulary,
+) -> ReconciledMove:
+    """Return what a picture's move from *old_folder* to *new_folder* implies.
+
+    The mirror of :func:`relocate`: that function moves a file when an
+    assignment change makes its folder untrue; this reads a file the owner
+    already moved and says whether an assignment should change to match. Same
+    arguments, same reading of a path — a component the layout cannot read is
+    the owner's own and never contradicts anything, in either direction.
+
+    Args:
+        old_folder: Where the picture's file was, relative to the root, not
+            including the file name.
+        new_folder: Where it is now, likewise.
+        facets: The picture's own, CURRENT names per facet — not a snapshot
+            from when it moved. Reconciliation asks whether today's
+            assignments explain today's path, so a picture that gained or
+            lost a membership since the move is judged on what is true now.
+        layout: The root's layout.
+        known_names: Every entity name the library currently has, per facet —
+            also read live, for the same reason.
+
+    Returns:
+        The :class:`ReconciledMove`.
+    """
+    new_components = _components(new_folder)
+    if not new_components:
+        # The root itself, or a path this cannot split. Matches is_true's own
+        # reading of the same shape: it contradicts nothing, so nothing here
+        # is touched at all — not even a removal on the old side.
+        return ReconciledMove(MoveOutcome.OFF_LAYOUT)
+
+    is_unfiled_arrival = len(new_components) == 1 and _match_key(
+        new_components[0]
+    ) == _match_key(layout.unfiled)
+    if is_unfiled_arrival:
+        new_read: list[tuple[Facet, str]] = []
+    else:
+        new_read = read_named_components(new_components, layout, known_names)
+        if not new_read:
+            # Names nothing the layout's vocabulary knows. The path was
+            # already followed by the scan; nothing here is an override to
+            # correct, so nothing is touched.
+            return ReconciledMove(MoveOutcome.OFF_LAYOUT)
+
+    old_read = read_named_components(_components(old_folder), layout, known_names)
+
+    old_set = set(old_read)
+    new_set = set(new_read)
+
+    removals: list[tuple[Facet, str]] = []
+    for facet, name in sorted(old_set - new_set):
+        member_keys = {_match_key(n) for n in _names_of(facet, facets) if n}
+        if _match_key(name) in member_keys:
+            # Currently a membership, and the picture just left its folder:
+            # this is the "leaving a folder" half of the mirror.
+            removals.append((facet, name))
+
+    additions: list[tuple[Facet, str]] = []
+    for facet, name in sorted(new_set - old_set):
+        member_keys = {_match_key(n) for n in _names_of(facet, facets) if n}
+        if _match_key(name) not in member_keys:
+            additions.append((facet, name))
+
+    if not removals and not additions:
+        return ReconciledMove(MoveOutcome.NONE)
+
+    # Ambiguous exactly when a removal cannot be told apart from a refile: the
+    # picture has more than one of that facet, so leaving one folder does not
+    # say which it left. An addition never carries this — gaining a facet
+    # value cannot make any existing folder untrue, so it is always safe.
+    ambiguous = any(len(_names_of(facet, facets)) > 1 for facet, _ in removals)
+    outcome = MoveOutcome.AMBIGUOUS if ambiguous else MoveOutcome.UNAMBIGUOUS
+    return ReconciledMove(outcome, tuple(removals), tuple(additions))
+
+
+# ---------------------------------------------------------------------------
 # Serialisation — one column, readable in a database browser
 # ---------------------------------------------------------------------------
 

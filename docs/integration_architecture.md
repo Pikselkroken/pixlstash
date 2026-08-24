@@ -31,6 +31,7 @@
 21. [About your library (v1.11)](#21-about-your-library-v111)
 22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
 23. [Layout & Move API (v1.11, Phase 4b)](#23-layout--move-api-v111-phase-4b)
+24. [Move Reconciliation API (v1.11, Phase 5)](#24-move-reconciliation-api-v111-phase-5)
 
 ---
 
@@ -631,7 +632,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. Machine events (carry neither): `vram_oom`. |
+| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. Machine/vault events (carry neither): `vram_oom` \| `external_moves_pending`. |
 | `event` | string | Backend `EventType.name`; diagnostic only, not part of the behavioural contract. |
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
@@ -650,6 +651,7 @@ Per-type payload specifics (all carry the envelope fields above):
 | `descriptions_changed` | Picture descriptions/captions changed | `picture_ids: number[]` | Refresh affected descriptions |
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
 | `vram_oom` | A GPU task ran out of VRAM: emitted before each retry, then once more to close the sequence | `attempt` (the attempt this frame is about, 1-based), `max_attempts`, `gave_up`, `recovered`, `task_type` (diagnostic only) | One keyed notice (`vram-oom`), updated in place by the later frames. Exactly one closing frame: `recovered` (that attempt succeeded) or `gave_up` (the sequence ended without the work). **`gave_up` with `attempt < max_attempts` is an early stop** — the task died of something else, or the app is shutting down — and the SPA promises no later retry for it; only an exhausted sequence says the work will be tried again. The retry frames carry an explicit timeout longer than the backend's pause, or the card would expire between frames and stop coalescing. |
+| `external_moves_pending` | A reference-folder scan queued one or more moves the owner made outside PixlStash for reconciliation (v1.11 Phase 5) | — (no count; the queue is reclassified live, so a number on the wire could already be stale) | Debounced (3s) re-fetch of `GET /moves/pending`, so a burst of scans settling around the same time re-fetches once |
 | `snapshot_created` / `snapshot_deleted` | Vault snapshot created or deleted | snapshot info (id, kind, …) | Refresh the snapshots panel |
 | `restore_started` / `restore_completed` / `restore_failed` | Vault restore lifecycle | restore info | Drive the restore progress/result UI |
 
@@ -2135,6 +2137,97 @@ There is no event for "a picture became due a layout check", and there should
 not be: the check is debounced by design, almost always decides nothing, and a
 client that drew a spinner for it would be drawing one for every membership edit
 in the product.
+
+## 24. Move Reconciliation API (v1.11, Phase 5)
+
+The mirror of §23: that surface moves a file when an assignment change makes
+its folder untrue; this one reads a file the owner already moved outside
+PixlStash and says whether an assignment should change to match. Backend
+design is `docs/backend_architecture.md` §27; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 5.
+
+### Routes
+
+All three `owner_only`, vault-wide like `/operations` — none of it is
+boundable to a single resource-scoped grant.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/api/v1/moves/pending` | — | `{unambiguous, ambiguous, off_layout}` |
+| `POST` | `/api/v1/moves/apply` | `{"review_ids": [int, ...]}` | `{applied_picture_ids, skipped_review_ids}` |
+| `POST` | `/api/v1/moves/dismiss` | `{"review_ids": [int, ...]}` | `{dismissed_review_ids}` |
+
+Each item in a bucket:
+
+```jsonc
+{
+  "review_id": 42,
+  "picture_id": 1001,
+  "old_path": "/library/refs/2024 Shoots/mira.png",
+  "new_path": "/library/refs/Client · Nordvik/mira.png",
+  "removals": [{"facet": "project", "name": "2024 Shoots"}],
+  "additions": [{"facet": "project", "name": "Client · Nordvik"}],
+  // ambiguous bucket only — the picture's own current names for each facet a
+  // removal is ambiguous about, i.e. why leaving one folder does not say
+  // which the owner meant:
+  "current": {"project": ["2024 Shoots", "Client · Nordvik"]}
+}
+```
+
+`facet` is one of `"project"` \| `"set"` \| `"person"` — the same three
+`Facet` values §23's layout builder uses, minus `"tag"` (deliberately
+unreconciled; `docs/backend_architecture.md` §27).
+
+**Four contract points the client must hold to.**
+
+1. **There is no cache to invalidate, on either side.** Every `GET` is
+   reclassified live against current assignments and the current layout —
+   the same "Look again" shape as `GET /insights` (§21). A row that no longer
+   implies anything is quietly dropped rather than returned; the client
+   should not expect a `review_id` it saw once to still be there.
+2. **`apply` recomputes fresh too, never trusting an earlier `GET`.** Passing
+   every currently-unambiguous `review_id` is how the client requests "apply
+   the whole bucket" — it is not submitting a decision the server already
+   made, it is asking the server to decide again, right now, and act. A
+   picture whose memberships changed in the gap is applied against what is
+   true at that moment, which may differ from what the `GET` said.
+3. **A single `review_id` sent to `apply` is how an ambiguous row is
+   resolved** — the ambiguity gate only blocks the *bulk* "apply every
+   unambiguous row" action, never a caller naming one row explicitly.
+   `dismiss` on the same id ("Keep both") changes nothing and only clears the
+   queue. The resolve button's own label is derived client-side from `current`
+   and `removals`, not sent by the server — see
+   `docs/frontend_architecture.md` §9.4 for why it must name the destination
+   rather than a generic verb.
+4. **`applied_picture_ids` and `skipped_review_ids` are disjoint, and neither
+   implies the row is still in the queue.** Every `review_id` the caller sent
+   is cleared once acted on, whether or not anything changed. A `review_id`
+   lands in `skipped_review_ids` when it had a genuine removal or addition to
+   make but the entity name it needed could not be resolved uniquely (§27) —
+   the client must not read an empty `applied_picture_ids` as "nothing was
+   asked for" without also checking whether anything was skipped.
+
+**`off_layout` carries no decision.** Every item in it already has its path
+followed (the scan already updated `Picture.file_path`); the bucket exists so
+the client can say so, not so the client can act on it. Both endpoints accept
+any `review_id` and clear the row either way, so applying or dismissing an
+`off_layout` one is never an error — but it is not guaranteed to be a pure
+no-op, because `apply` reclassifies fresh (contract point 2, above): if a
+matching entity was created in the gap between the `GET` and the click, the
+row may no longer be `off_layout` by the time `apply` acts on it, and it is
+applied against what is true then. The client's own `off_layout` bucket
+carries no button for this reason — the row is not offered as something to
+apply, only as something to dismiss along with the rest of the queue, and it
+never persists past `RETENTION_S` regardless (§27).
+
+### Events
+
+`external_moves_pending` (§8) is the only event on this surface, and it
+carries no picture ids or counts — see the table entry above. There is no
+"reconciled" event: applying and dismissing are both client-initiated `POST`s
+the caller already has the result of, and `CHANGED_PICTURES` (with
+`change_kind: "updated"`) is emitted separately for the pictures an `apply`
+actually changed, the same envelope every other membership write uses.
 
 ---
 
