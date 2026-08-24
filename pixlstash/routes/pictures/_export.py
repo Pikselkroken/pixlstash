@@ -133,9 +133,10 @@ def register_routes(router, server):
         description=(
             "Queues an asynchronous export task that writes pictures straight "
             "into a folder on the machine running PixlStash, then opens that "
-            "folder in the host file manager. Local owner, on that machine, "
-            "only — see POST /pictures/export for a ZIP you can download from "
-            "anywhere instead."
+            "folder in the host file manager. The destination must be an "
+            "empty, writable, existing directory. Local owner, on that "
+            "machine, only — see POST /pictures/export for a ZIP you can "
+            "download from anywhere instead."
         ),
         response_model=ExportStartResponse,
     )
@@ -172,9 +173,22 @@ def register_routes(router, server):
             raise HTTPException(status_code=400, detail=validation_error)
         if not os.path.isdir(resolved_destination):
             raise HTTPException(status_code=404, detail="Destination folder not found.")
-        if not os.access(resolved_destination, os.W_OK):
+        # Creating/replacing entries in a directory needs its execute (search)
+        # bit as well as its write bit on POSIX — W_OK alone can pass here and
+        # still fail on every actual write in the background task.
+        if not os.access(resolved_destination, os.W_OK | os.X_OK):
             raise HTTPException(
                 status_code=403, detail="Destination folder is not writable."
+            )
+        # A folder export writes plain files, unlike a ZIP: a name that
+        # collides with something already in the destination is silently
+        # overwritten (shutil.copy2 / open(..., "w") don't refuse). Requiring
+        # an empty destination turns that into a refusal up front instead of a
+        # data-loss surprise; the picker already offers "New folder" for this.
+        if os.listdir(resolved_destination):
+            raise HTTPException(
+                status_code=409,
+                detail="Destination folder is not empty. Choose or create an empty folder.",
             )
 
         task_id = str(uuid.uuid4())

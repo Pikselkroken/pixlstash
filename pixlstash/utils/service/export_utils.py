@@ -439,6 +439,9 @@ class ExportUtils:
                     "export_type",
                     "resolution",
                     "use_original_file_names",
+                    "destination",
+                    "tag_format",
+                    "bbox_mode",
                 },
             )
             if ordered_ids:

@@ -8180,15 +8180,19 @@ async function exportCurrentViewToFolder(options = {}) {
     }
 
     const count = exportProgress.processed;
+    // The server resolves the destination (realpath) before writing to it and
+    // opening it, so what it actually used can differ from the raw string the
+    // picker returned (a symlink, a trailing slash, a `..`) — show that one.
+    const resolvedDestination = completedBody.destination || destination;
     if (completedBody.opened === false) {
       noticeStore.warning(
-        `Exported ${count} picture${count === 1 ? "" : "s"} to ${destination}, ` +
+        `Exported ${count} picture${count === 1 ? "" : "s"} to ${resolvedDestination}, ` +
           `but couldn't open it — no desktop file manager found on the machine running PixlStash.`,
         { key: "export-folder" },
       );
     } else {
       noticeStore.success(
-        `Exported ${count} picture${count === 1 ? "" : "s"} to ${destination}.`,
+        `Exported ${count} picture${count === 1 ? "" : "s"} to ${resolvedDestination}.`,
         { key: "export-folder" },
       );
     }
@@ -8207,7 +8211,9 @@ async function exportCurrentViewToFolder(options = {}) {
         ? "Exporting to a folder only works from the machine running PixlStash itself."
         : status === 404
           ? "That folder isn't available on the machine running PixlStash. Pick a different destination."
-          : `Export failed. ${errorDetail(e)}`;
+          : status === 409
+            ? "That folder isn't empty. Pick or create an empty folder to export into."
+            : `Export failed. ${errorDetail(e)}`;
     noticeStore.error(message, { key: "export-folder" });
     setTimeout(() => {
       exportProgress.visible = false;

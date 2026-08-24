@@ -586,6 +586,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                  |
 | GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                    |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                   |
+| POST   | /api/v1/pictures/export/folder                                                | pictures        | Start picture export-to-folder job                          |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                       |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                     |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                          |

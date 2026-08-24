@@ -269,6 +269,29 @@ def test_pictures_export_folder_rejects_missing_destination():
         gc.collect()
 
 
+def test_pictures_export_folder_rejects_non_empty_destination():
+    """A folder export writes plain files and silently overwrites a same-named
+    one already there (unlike a ZIP, which tolerates duplicate members) — a
+    non-empty destination must be refused rather than risk overwriting
+    something that isn't part of this export."""
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "destination")
+        os.makedirs(destination, exist_ok=True)
+        with open(os.path.join(destination, "already-here.txt"), "w") as f:
+            f.write("not part of this export")
+
+        resp = client.post(
+            "/pictures/export/folder", params={"destination": destination}
+        )
+        assert resp.status_code == 409
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_pictures_export_folder_resolves_symlink_before_blocklist_check():
     """The blocklist must run on the RESOLVED path, not the string the caller
     sent: a symlink to a restricted directory must not pass just because its
