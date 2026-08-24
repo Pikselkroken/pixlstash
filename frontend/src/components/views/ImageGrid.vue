@@ -493,7 +493,17 @@
           </div>
         </div>
       </div>
-      <div v-if="showEmptyState" class="empty-state">
+      <!-- All three routes reuse wiring App.vue already had: `local-import`
+           reaches `SideBar.startLocalImport`, `open-settings` reaches
+           `SideBar.openSettingsDialog`, and `choose-folder` is the one new
+           signal, for the reference-folder editor the sidebar owns. -->
+      <LibraryEmptyState
+        v-if="showLibraryEmptyState"
+        @choose-folder="emit('choose-folder')"
+        @connect-comfyui="emit('open-settings', 'workflows')"
+        @add-files="importChosenFiles"
+      />
+      <div v-else-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
             <img
@@ -1174,6 +1184,8 @@ import { useRoute, useRouter } from "vue-router";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import LibraryEmptyState from "./LibraryEmptyState.vue";
+import { isSupportedImportFile } from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1389,6 +1401,9 @@ const emit = defineEmits([
   "open-import",
   "local-import",
   "confirm-export-zip",
+  // The empty library's folder route. The reference-folder editor is the
+  // sidebar's, and App.vue already holds the ref that reaches it.
+  "choose-folder",
 ]);
 
 // Props
@@ -5785,6 +5800,7 @@ const {
 const {
   imagesLoading,
   totalAllPicturesCount,
+  totalAllPicturesCountLoaded,
   totalCurrentCategoryCount,
   gridReady,
   lastFetchError,
@@ -6741,6 +6757,65 @@ const canShowAllPicturesButton = computed(() => {
   return totalAllPicturesCount.value > 0;
 });
 
+// The library holds nothing at all, as opposed to "the filter matched nothing"
+// or "the scrap heap is empty". Those are different questions with different
+// answers and keep the card they had; this one is the first screen of an
+// install, and it gets the three routes out.
+//
+// Two guards beyond the count, because the count alone is not the claim:
+//
+//   * `totalAllPicturesCountLoaded` — the count starts at 0 and its fetch
+//     swallows failures, so an unanswered request looks exactly like an empty
+//     library. Saying "This library is empty" over a backend that did not reply
+//     is worse than saying nothing, and this screen says it with three buttons.
+//   * `!isReadOnly` — a share recipient is not the owner of anything here.
+//     Every route out leads somewhere they cannot go (two open the owner's
+//     sidebar dialogs; the importer refuses a read-only token outright), and
+//     the count they get is the one the summary route refused them, not a fact
+//     about the library. They keep the plain card.
+const showLibraryEmptyState = computed(
+  () =>
+    showEmptyState.value &&
+    totalAllPicturesCountLoaded.value &&
+    totalAllPicturesCount.value === 0 &&
+    !isReadOnly.value &&
+    !isScrapheapView.value &&
+    !isSetOverlapView.value,
+);
+
+/**
+ * Files chosen through the empty library's "Add files…".
+ *
+ * The same filter and the same notice the two drop paths use
+ * (`useGridDragDrop`, `useWindowFileImport`) — an OS picker's `accept` is
+ * advisory, so a button that skipped this would be the one import route that
+ * accepts anything and says nothing. The project comes from App.vue, which
+ * defaults it to the one being looked at.
+ */
+function importChosenFiles(chosen) {
+  // `Array.from` rather than a bare `.filter`: the one caller emits a real
+  // Array today, but the natural thing to hand a function named this is the
+  // `FileList` off an `<input>`, which has no `.filter` and would throw here
+  // rather than anywhere near the mistake. It also gives `offered` a length to
+  // compare against below, so nothing reads the argument twice.
+  const offered = Array.from(chosen ?? []);
+  const files = offered.filter((file) => isSupportedImportFile(file));
+  if (!files.length) {
+    noticeStore.warning(
+      "None of those files are a supported image, video or archive.",
+      { key: "import-unsupported-files" },
+    );
+    return;
+  }
+  if (files.length !== offered.length) {
+    noticeStore.warning(
+      "Some of those files are not a supported image, video or archive, and were skipped.",
+      { key: "import-unsupported-files" },
+    );
+  }
+  emit("local-import", { files });
+}
+
 const emptyStateTitle = computed(() => {
   if (isSetOverlapView.value) {
     return "No overlap";
@@ -6748,9 +6823,10 @@ const emptyStateTitle = computed(() => {
   if (isScrapheapView.value) {
     return "No pictures in the scrap heap";
   }
-  return totalAllPicturesCount.value > 0
-    ? "No pictures match the current filters"
-    : "No pictures in the database.";
+  // The `totalAllPicturesCount === 0` arm is what `LibraryEmptyState` now
+  // answers; this branch is only reached for a view that has its own empty
+  // question (scrap heap, set overlap) or a filter that matched nothing.
+  return "No pictures match the current filters";
 });
 
 const emptyStateSubtitle = computed(() => {
@@ -6760,9 +6836,7 @@ const emptyStateSubtitle = computed(() => {
   if (isScrapheapView.value) {
     return "Are all your pictures that good?";
   }
-  return totalAllPicturesCount.value > 0
-    ? "Try clearing filters, adjusting your search, or switching sets."
-    : "Add pictures by dragging them here.";
+  return "Try clearing filters, adjusting your search, or switching sets.";
 });
 
 const emptyStateImage = computed(() => {

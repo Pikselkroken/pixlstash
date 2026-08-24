@@ -493,6 +493,7 @@ jobs:
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_folder_structure_read.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py
           tests/test_hub_model_shelf_schema.py
@@ -513,6 +514,7 @@ jobs:
           tests/test_library_backup.py
           tests/test_library_generation_coordinator.py
           tests/test_library_insights.py
+          tests/test_library_layout.py
           tests/test_library_restore_cli.py
           tests/test_library_settings.py
           tests/test_library_switch.py
@@ -548,10 +550,12 @@ jobs:
           tests/test_pictures_stream.py
           tests/test_plugin_create.py
           tests/test_plugin_install.py
+          tests/test_plugin_lifecycle_gaps.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
+          tests/test_reference_folder_moves.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
           tests/test_reviews_api.py
@@ -581,6 +585,7 @@ jobs:
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py
           tests/test_telemetry_sender.py
+          tests/test_views_links.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py

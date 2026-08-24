@@ -237,7 +237,7 @@ class LibrarySwitchService:
             target = registry.by_uuid(library_uuid)
             if target is None or not target.attached:
                 raise LibraryNotFoundError(
-                    f"No attached library with id {library_uuid}."
+                    f"No attached library with uuid {library_uuid}."
                 )
             if target.is_active:
                 logger.info("Library %s is already active; nothing to do", target.name)

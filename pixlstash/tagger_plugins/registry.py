@@ -168,6 +168,25 @@ class TaggerPluginManager:
         with self._lock:
             return list(self._plugins.values())
 
+    def unload_all(self) -> None:
+        """Call ``unload()`` on every registered plugin that reports loaded.
+
+        Each plugin is guarded on its own: one that raises must not leave the
+        rest of the library resident. Does not load the registry — a plugin
+        that was never imported is holding nothing.
+        """
+        with self._lock:
+            plugins = list(self._plugins.values())
+        for plugin in plugins:
+            name = getattr(plugin, "name", type(plugin).__name__)
+            try:
+                if not plugin.is_loaded():
+                    continue
+                plugin.unload()
+                logger.debug("Released tagger plugin '%s'.", name)
+            except Exception as exc:
+                logger.warning("Tagger plugin '%s' failed to unload: %s", name, exc)
+
     def get_plugin(self, name: str) -> TaggerPlugin | None:
         """Return the plugin with the given name, or ``None`` if not found.
 
@@ -468,6 +487,33 @@ def user_plugin_dir() -> str:
 
 _manager: TaggerPluginManager | None = None
 _manager_lock = Lock()
+
+
+def unload_loaded_tagger_plugins() -> None:
+    """Release every loaded plugin in the process-wide registry.
+
+    The one caller is :meth:`~pixlstash.vault.Vault._maybe_aggressive_unload`,
+    the *Keep models in memory = off* sweep, which runs only once every worker
+    is idle. That is deliberate on both counts:
+
+    * The registry is process-wide, and the vault's engine is the one its
+      plugins are bound to (``Vault._bind_engine_services``). Hanging this off
+      ``InferenceEngine.close()`` instead would mean reaping a throwaway CPU
+      spillover engine — which ``DescriptionTask`` and ``TagTask`` do on the
+      hot path, before every batch — unloading the GPU engine's models.
+    * A plugin's ``unload()`` may arrive while its own load is in flight, which
+      is memory-unsafe rather than merely wrong (``tests/test_model_unload_race.py``).
+      The built-in services hold one lock across load and unload; a third-party
+      plugin may not, and waiting for idle is what keeps that window shut.
+
+    Never triggers a load: a registry nothing has built holds nothing resident,
+    and importing every plugin module in order to free memory would be the
+    opposite of the thing being asked for.
+    """
+    manager = _manager
+    if manager is None or not manager._loaded:
+        return
+    manager.unload_all()
 
 
 def get_tagger_plugin_manager() -> TaggerPluginManager:

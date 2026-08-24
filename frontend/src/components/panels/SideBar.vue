@@ -3991,6 +3991,16 @@ function openCurrentSelectionEditor() {
 defineExpose({
   refreshSidebar,
   openSettingsDialog,
+  // Reached from the empty library's "Choose a folder…", which is the first
+  // thing pointing anyone at reference folders — they have always worked and
+  // were a sidebar accessory nobody was sent to.
+  //
+  // The reference editor DIRECTLY, not `openAddFolderTypeDialog`. That chooser
+  // offers "Import folder — watch for new files and import them
+  // automatically", which copies files in; the button that gets here promises
+  // "Nothing is moved" one screen earlier, so routing through the chooser would
+  // have the release's headline claim falsified by the next click.
+  openReferenceFolderEditor,
   startLocalImport,
   currentProjectId,
   openCurrentSelectionEditor,

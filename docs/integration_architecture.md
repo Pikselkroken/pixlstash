@@ -27,7 +27,8 @@
 17. [Integration Pitfalls](#17-integration-pitfalls)
 18. [Integration Diagrams](#18-integration-diagrams)
 19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
-20. [About your library (v1.11)](#20-about-your-library-v111)
+20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
+21. [About your library (v1.11)](#21-about-your-library-v111)
 
 ---
 
@@ -421,6 +422,80 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 
 ---
 
+### 2.3 The `/libraries` contract (v1.11)
+
+Six routes, and the split between them is a locality split rather than a
+read/write one.
+
+| Route | Tier | Shape |
+|---|---|---|
+| `GET /libraries` | `owner_only` | `{ libraries[], can_manage, in_docker, cli_hint }` |
+| `GET /libraries/inspect?path=` | `local_owner_only` | one verdict (below) |
+| `POST /libraries` | `local_owner_only` | `{ path, name? }` → the library, `201` |
+| `PATCH /libraries/{library_uuid}` | `local_owner_only` | `{ name }` → the library |
+| `DELETE /libraries/{library_uuid}` | `local_owner_only` | `{ status, library, inert_share_links }` |
+| `POST /libraries/active` | `local_owner_only` | `{ uuid }` → the library |
+
+**`can_manage` is the single gate the frontend reads.** The listing is
+`owner_only` so the Settings tab renders for any owner; every management verb is
+`local_owner_only` because four of the five take or write a host path and the
+other two exercise authority over other principals' state. Rather than have each
+control guess, `GET /libraries` answers `can_manage` from the same predicate the
+authz gate applies, and `LibrariesSection` hides the whole management surface —
+the Add button and the per-row `⋯` menu — when it is false. A remote session is
+given a visible reason instead of controls that each fail.
+
+**`inspect` returns one of five verdicts**, and the client branches only on
+`can_add`:
+
+| `verdict` | `can_add` | Means |
+|---|---|---|
+| `attached` | `false` | This exact folder is a registered library (`library` names it) |
+| `overlaps` | `false` | A registered library contains it, or it contains one (`library` names it) |
+| `vault` | `true` | A vault nothing is using — `POST /libraries` attaches it |
+| `pictures` | `true` | Pictures, no vault — `POST /libraries` starts a library over them |
+| `empty` | `true` | Neither — `POST /libraries` starts a fresh one |
+
+`headline` and `detail` are written server-side and rendered verbatim, so the
+sentence naming the library that covers a folder exists once, where the rule
+lives; only the button label is the client's. `picture_count_capped` is `true`
+when the recursive count stopped at its entry cap, so `picture_count` is a floor
+and the copy says "at least".
+
+**The verdict is advisory.** `POST /libraries` re-inspects the path itself and
+answers `409` with the same sentence if the folder became covered in between, so
+a client cannot skip the rule by not asking. It requires the folder to exist
+(`404` otherwise) and creates no directory: the picker makes one with `POST
+/filesystem/folders`, which it already used.
+
+Both path-taking routes answer `400` for a relative path or one resolving into a
+blocklisted system directory (resolved **then** checked, so a symlink cannot
+smuggle one past), and `403` for a path outside `filesystem_roots` when that is
+configured. `POST` also accepts an optional `name`; without one the server uses
+the folder's own, and **the picker sends one** — library names are unique among
+attached libraries, so two folders both called `2024` would otherwise be
+unaddable from the dialog.
+
+**`DELETE` removes no file.** The registry clears the attached flag and keeps
+the row, so the `inert_share_links` it reports stop working rather than being
+revoked, and adding the same folder again revives the row — same uuid, same
+tokens live again. The active library is refused (`409`); switch away first.
+
+`PATCH` and `DELETE` take the **uuid only**, and only of an **attached**
+library. The registry's `get` also accepts a row id and a name, which is right
+for a CLI a person types at; over HTTP the handlers resolve through `by_uuid`,
+because a client left open across a detach and attach would name a different
+library by row id. `by_uuid` does return detached rows — that is how a uuid stays
+meaningful for the tokens stamped with it — so the handlers filter them: a
+library already forgotten is a `404`, not a second `200`.
+
+`DELETE` answers `503` while a library switch is in flight. The other three do
+not: these routes are hub-only and deliberately keep answering when no vault is
+open, which is the state an owner recovers from. Detach is the exception because
+it reads which library is active, and mid-swap that is the one thing moving.
+
+---
+
 
 ## 3. API Client ([apiClient.js](../frontend/src/utils/apiClient.js))
 
@@ -811,6 +886,48 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 - Updates use `PATCH` against the user-config endpoint with **partial** payloads (only changed fields).
 - The SPA applies updates **optimistically** to local refs and reconciles on response. Failed updates revert and surface a toast.
 - Hidden tags, sort, columns, theme, watermark settings, smart-score penalised tags, etc. are all part of this object — keep the field names identical on both sides.
+
+### 12.1 PixlStash Views (`/server-config/views`)
+
+Views is **not** part of the user-config object: the folder holds *this library's*
+sets, people and projects, so it lives in `library_settings` and has its own
+topic endpoint, reached through `frontend/src/api/serverConfig.js`.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/server-config/views` | — | `{views_root, kinds, available_kinds}` — `views_root` is `null` when views are off |
+| `PATCH` | `/server-config/views` | `{views_root, kinds}` | the same, plus `last_publish` |
+
+Three contract points the client depends on:
+
+- **Saving is rebuilding, and the re-derive is total.** There is no separate
+  rebuild verb: a PATCH with the current values republishes, which is what the
+  pane's *Rebuild now* sends. Every kind folder is cleared, including the ones
+  *not* in `kinds` — switching a kind off removes its folder rather than leaving
+  it behind full of links nothing will refresh — so `kinds: []` really does leave
+  an empty tree.
+- **`views_root: null` turns views off**, removing the published tree and leaving
+  the folder itself alone.
+- **A refused folder changes nothing.** The 400's `detail` names the reason —
+  inside this library or another registered one, inside a reference folder,
+  cloud-synced, or a filesystem with no links — and the recorded settings are untouched, so the pane must
+  re-read rather than keep showing the root that was tried. `available_kinds` is
+  the server's list, in display order, so the UI can never offer a kind the PATCH
+  would drop.
+
+`last_publish` is what actually landed, not what was asked for:
+`{link_mode: "symlink"|"hardlink", folders, links, skipped_missing,
+skipped_unlinkable, kept_by_owner}`. Two of those name a partial result and the
+UI must show both, because the alternative is a tree that reads as complete and
+is not:
+
+- `skipped_unlinkable` — view folders where **at least one** picture could not be
+  linked. The folder exists and is incomplete; it is not absent. A hard link
+  cannot span two drives, which is what a library split across disks looks like.
+- `kept_by_owner` — entries the rebuild refused to delete because they were not
+  links: the owner's own files, sitting in a view folder. A rebuild removes only
+  a symlink or a file that has another hard link elsewhere, so a file whose only
+  copy is in a view folder is reported and left alone, never deleted.
 
 ---
 
@@ -1396,9 +1513,290 @@ There is **no deletion route** anywhere in v1.9. A stack is a grouping row plus 
 cover pointer; dropping it restores the flat grid exactly. Any UI copy implying
 files are removed would be wrong.
 
+## 20. Folder-Structure Read API (v1.11, Phase 2)
+
+The two-minute pass behind the mapping screen (`MapTree`). It reads a folder tree
+on disk and proposes **what each level is** — Project, Set, Person, Tag, or just a
+folder. Backend design is `docs/backend_architecture.md` §24; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 2.
+
+**Three rules the client must hold to.**
+
+1. **It reads. It never writes.** No `Picture`, `Project`, `PictureSet`,
+   `Character` or `Tag` row is created, and no file is opened for writing, moved
+   or renamed. The result is a proposal the owner edits on the mapping screen and
+   Phase 3 commits — or does not.
+2. **A proposal without evidence does not exist.** Every `kind` a row carries
+   comes with the `evidence` that produced it. A signal that cannot state its
+   reason returns nothing rather than a guess, so `kind: null` with
+   `evidence: []` is the normal answer for an ordinary folder name and must
+   render as *"This one is…"*, never as a low-confidence pick.
+3. **Narrowed is not decided.** Where the signals only rule things *out*, the row
+   comes back with `kind: null` and two or more `candidates`. The UI offers those
+   ("one of these: Project, Set") and the owner picks. Collapsing `candidates`
+   to `candidates[0]` would invent a decision the backend deliberately refused to
+   make.
+
+### The four signals
+
+All deterministic, all local, **no LLM** — a folder name is a string and `Mira`
+could be a person, a project or a client.
+
+| `signal` | Reads | Proposes | Scope |
+|---|---|---|---|
+| `cardinality` | how many distinct names a level has, over how many parents | `tag`, or *not* `tag` | one whole level |
+| `sidecars` | a caption `.txt`/`.caption` beside every picture (case-insensitive) | `set` | one folder |
+| `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
+| `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
+
+`faces` is the only expensive one and the only sampled one:
+**`sampled_per_folder` pictures per folder, never the whole folder**, which is
+what makes this two minutes rather than an hour. The number is in the response
+rather than hardcoded in the client, and the evidence string says what it was
+(`"one face, 19 of 20"`). The full pass runs later as ordinary background work
+and can only *add* people — it never revises a row the owner has accepted.
+
+A fifth `signal` value, `level_vote`, can appear on a **level** proposal: it
+means the level took its rows' answer as its own, and its `text` says the count
+(`"31 of 149 folders read as Set"`).
+
+### `POST /api/v1/folder-structure/read`
+
+Body `{"path": "/absolute/path/to/library"}`. Returns `{"task_id": "…"}` and
+starts the read in the background.
+
+`local_owner_only`: it takes a caller-supplied host path (§16.3 host-capability
+tier). The blocklist (`validate_reference_folder_path`) runs on the
+**realpath**, not on the string the caller sent — deliberately stricter than
+`GET /filesystem/browse`, which checks the raw path only: browse lists one
+level, this walks a subtree and decodes files out of it, so a symlink to a
+restricted directory must not get through. `filesystem_roots` containment is the
+same as browse's, and applies only when the owner has configured roots.
+
+| Status | When |
+|---|---|
+| **400** | not absolute, resolves into a restricted system directory, or unusable as a path |
+| **403** | outside the configured `filesystem_roots`, or Docker mode |
+| **404** | the resolved path is not a directory |
+| **409** | a read is already running — there is one at a time, and the screen only ever shows one |
+
+**Starting a read discards the previous one.** There is a single slot, so once a
+new `POST` succeeds the earlier `task_id` returns 404 from both the status and
+the cancel route. A client holding a completed result should keep it rather than
+expect to re-fetch it.
+
+**No inference engine is not an error.** With no GPU task runner the read still
+runs and the other three signals still answer; only `faces` stays silent, so no
+folder comes back as a Person. The result says which happened
+(`face_signal_ran`) — without that field the same tree answers differently
+depending on whether models had loaded, and neither the client nor the owner
+could tell that from a library with nobody in it.
+
+### `GET /api/v1/folder-structure/read/status?task_id=…`
+
+Polled per §11's task-id branch. `result` is `null` until the read has **settled**
+(`completed`, `cancelled` or `failed`); a `failed` read carries `error` and a
+`null` result.
+
+```jsonc
+{
+  "task_id": "0f1c…",
+  "status": "running",        // queued | running | completed | failed | cancelled
+  "stage": "faces",           // walking | faces | done
+  "processed": 149,           // folders whose face sample has been read
+  "total": 352,               // folders that will get one; 0 until `walking` ends
+  "progress": 42.3,           // percent, 0.0 while total is 0
+  "error": null,              // set only when status is "failed"
+  "result": null
+}
+```
+
+`stage` is what the progress bar names — "the bar names what it is buying". There
+are only two working stages: `walking` (the tree is being collected, and the
+sidecar signal is counted from the same listing) and `faces`. The counters only
+mean folders during `faces`; during `walking` `total` is `0` and `processed`
+counts folders found so far, which is why the client must render `walking` as an
+indeterminate bar rather than 0%.
+
+### The result
+
+```jsonc
+{
+  "root": {"path": "/home/me/Generations", "name": "Generations",
+           "picture_count": 28412},
+  "sampled_per_folder": 20,
+  "folder_count": 352,
+  "picture_count": 28412,
+  "truncated": false,           // true = the walk hit max_folders and stopped
+  "max_folders": 20000,
+  "unreadable_folders": 0,      // folders skipped because they could not be read
+  "skipped_folders": {          // folders deliberately not walked
+    "hidden": 0,                //   dot-folders: a vault's own caches
+    "restricted": 0             //   below the root and on the system blocklist
+  },
+  "face_signal_ran": true,      // false = no inference engine; nobody is a Person
+  "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
+}
+```
+
+Two fields the screen must not ignore, because both mean *this map is not the
+whole library*:
+
+- **`truncated: true`** — the tree was bigger than the walk's bound and the
+  levels describe a prefix of it.
+- **`unreadable_folders > 0`** — that many folders could not be opened
+  (permissions, a broken mount) and are **absent from `levels` entirely**. A
+  read that omits a subtree and presents itself as complete is worse than one
+  that refuses.
+- **`skipped_folders`** — folders deliberately not walked, as opposed to ones
+  that failed. `hidden` counts dot-folders (a vault's own caches and sidecar
+  directories); `restricted` counts directories on the system blocklist found
+  *below* the root, because the walk re-checks the blocklist per directory
+  rather than only on the path the caller named. Both are ordinary and neither
+  needs to interrupt the screen, but they are counted rather than dropped in
+  silence, for the same reason `unreadable_folders` is.
+
+A **level**:
+
+```jsonc
+{
+  "depth": 3,                   // 1 = the root folder itself
+  "folder_count": 149,
+  "direct_picture_count": 26734,  // pictures directly in these folders, NOT
+                                  // recursive — summing recursive counts would
+                                  // count a picture once per ancestor
+  "proposal": {
+    "kind": null,               // project|set|person|tag|folder|null
+    // Names used once each rule Tag OUT and rule nothing in, so this level
+    // comes back narrowed, never empty. `candidates: []` here would mean
+    // something else entirely — see the shape table below.
+    "candidates": ["project", "set", "person"],
+    "match": null,
+    "evidence": [{"signal": "cardinality",
+                  "text": "149 names under 14 parents, used once each, so not labels"}]
+  },
+  "folders": [ /* every folder at this depth — see below */ ]
+}
+```
+
+A level's `proposal` is the read *of the level as a whole*, which is what the
+level header shows and what the digit keys 1–4/0 assign. It is the only place
+`cardinality` can speak, because cardinality is a property of a level and not of
+a folder. Level 1 is always the single root folder and never carries a
+cardinality reading.
+
+A **folder row**:
+
+```jsonc
+{
+  "id": "3/57",                 // stable for the life of this read; the handle
+                                // every per-row override addresses
+  "parent_id": "2/4",           // null at level 1
+  "depth": 3,
+  "name": "mira",
+  "relative_path": "2024 Shoots/mira",   // POSIX separators, relative to root
+  "picture_count": 2914,        // recursive, this folder and everything under it
+  "direct_picture_count": 118,  // files directly in it — what `faces` sampled from
+  "child_count": 3,
+  "proposal": {
+    "kind": "person",
+    "candidates": [],
+    "match": {"entity_type": "character", "id": 41, "name": "Mira"},
+    "evidence": [
+      {"signal": "faces", "text": "one face, 19 of 20",
+       "sampled": 20, "matched": 19},
+      {"signal": "name_match", "text": "matches the person Mira"}
+    ]
+  }
+}
+```
+
+**`relative_path`, never an absolute one.** The rows are for a screen, and the
+absolute path is already in `root.path`; joining is the client's job. This keeps
+a screenshot of the mapping screen from carrying the owner's home directory.
+
+**`id` is `"<depth>/<walk-index>"` and belongs to one read.** The index is the
+folder's position in the whole walk, **not within its level** — so a level's ids
+are sparse and out of order, and `id`s must be treated as opaque strings rather
+than sorted or indexed on. It is not a database id (nothing here is in the
+database yet) and it is not stable across two reads of the same folder. Persist
+an override against `relative_path`, never against `id`.
+
+`match` is present only for `name_match`, and it is a **lookup, not an
+inference**: `entity_type` is one of `project`, `set`, `character`, `tag`, and
+`id` is that row's real primary key. When `match` is non-null the row's `kind` is
+that entity's kind, and accepting the row should attach to the existing entity
+rather than create a second one with the same name. **`tag` is the exception and
+carries `id: null`** — a tag in this vault is a string on a picture, not a row of
+its own (`Tag.tag`), so there is no id to hand back and the name *is* the handle.
+
+Two ways `name_match` declines to hand back a `match`, and both are deliberate:
+
+- **Two entities of the same kind share the name** (`PictureSet.name` is not
+  unique, and a real vault has duplicates on day one). The `kind` is still known
+  and is returned; `match` is `null` and the evidence says
+  `"matches 2 existing sets"`. Returning whichever row the query happened to
+  order first, under a field this section calls a real primary key, would send
+  Phase 3's attach at an arbitrary set.
+- **Two *kinds* of entity share the name** (a project *and* a person both called
+  `Mira`). That is a narrowing, not a match: `kind: null`, `match: null`,
+  `candidates: ["project", "person"]`, with the evidence saying so.
+
+### Evidence
+
+`evidence` is an ordered list, strongest signal first, and every entry carries a
+`signal` (the table above) and a display-ready `text`. Entries may carry extra
+per-signal numbers — `sampled`/`matched` for `faces`, `pictures`/`with_sidecar`
+for `sidecars`, `names`/`parents` for `cardinality` — and the client is free to
+ignore them and render `text`. **`text` is the contract; the numbers are a
+convenience.** New signals add new `signal` values, so treat an unrecognised one
+as "render the text, offer no special affordance" rather than an error.
+
+The three ways a proposal comes back, and all three are legitimate:
+
+| Shape | Means | Screen |
+|---|---|---|
+| `kind` set, `evidence` non-empty | a signal answered | the row is filled, with its reason under it |
+| `kind: null`, `candidates` 2+ | signals ruled things out, nothing in | "one of these: …" |
+| `kind: null`, `candidates: []` | nothing had anything to say | "This one is… ▾" |
+
+`kind: "folder"` — **"just a folder"** — is in the enum because the *owner* can
+choose it on the mapping screen and Phase 3 will send it back. **No signal ever
+proposes it**, because no signal can prove that a string means nothing. A row the
+backend had nothing to say about comes back as `kind: null`, not as `"folder"`.
+
+**The other four `kind` values are the layout's facets**, `Facet` in
+`pixlstash/utils/library_layout.py` (v1.11 Phase 4a) — `project`, `person`,
+`set`, `tag` — and the read sources them from that enum rather than spelling
+them again, so the two cannot drift. `folder` is the one addition and is
+deliberately not a facet: it is the *absence* of one. A client can treat a
+`kind` other than `folder` as a facet name the layout will accept.
+
+### `DELETE /api/v1/folder-structure/read?task_id=…`
+
+Asks a running read to stop. Returns `{"status": "cancelled"}`, or **404** if the
+task-id is unknown (including an id evicted by a later read). A read that has
+already settled is **not** cancelled and reports what it actually is —
+`{"status": "completed"}` — rather than claiming a cancel the client cannot check.
+
+Cancel stays live for the whole two minutes, per the release plan's risk table,
+and a cancelled read keeps its partial `result` so the screen can still show what
+was found. It takes effect **at the next folder boundary**, so a cancel issued
+while a folder's face batch is in flight lands when that batch returns rather
+than instantly.
+
+### Not in this API
+
+- **No commit.** Nothing here writes. The accept path is Phase 3.
+- **No per-row re-read.** A single read answers the whole tree; there is no
+  "re-run faces on this one folder" route.
+- **No language reading of folder names.** Explicitly out (release plan §5): no
+  LLM ships with PixlStash, and `name_match` is a string comparison against rows
+  the vault already has, not a semantic one.
+
 ---
 
-## 20. About your library (v1.11)
+## 21. About your library (v1.11)
 
 ### `GET /insights`
 

@@ -277,6 +277,36 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "deleter), so the §16.3 host-capability tiers do not apply."
         ),
     ),
+    ("GET", "/api/v1/server-config/views"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 reads back a host path this library publishes its Views tree "
+            "to, and is the control surface of the PATCH beside it — the tier "
+            "that alone may publish the tree is the tier that may see where it "
+            "went. Sibling of GET /model-moves for that reason; owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/views"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 takes a caller-supplied host path and writes a folder tree of "
+            "links into it, removing and rebuilding the subtrees it owns — the "
+            "POST /model-folders class for the path it accepts and the POST "
+            "/model-moves class for the filesystem it writes. It creates only "
+            "links; the ONLY thing it unlinks is a name that is not the last "
+            "one (a symlink, or a regular file with st_nlink > 1), so no file "
+            "whose sole copy is in the tree can be removed by it — anything "
+            "else is reported as kept_by_owner and left alone. Each destination "
+            "is resolved with resolve_path_within against its kind folder and "
+            "each kind folder against the root, and a symlink standing where a "
+            "kind folder goes is unlinked as a link rather than descended, so "
+            "the rebuild cannot be steered outside the views root. owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
@@ -296,6 +326,42 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "hint) is omitted for a non-local caller by the handler instead of "
             "the whole route being denied. Returns no per-object data."
         ),
+    ),
+    # The lifecycle verbs (v1.11 "Your existing library", plan §Phase 1). All
+    # four are HUB_ONLY: they read and write the registry, never the active
+    # vault, so they need no library lease.
+    #
+    # HUB_ONLY also exempts them from the switch's 503, and that is deliberate
+    # rather than incidental: the registry has to stay answerable when there is
+    # no open vault, which is the state an owner recovers from by attaching or
+    # switching. `DELETE` is the one that cannot take the exemption — it reads
+    # `is_active`, and mid-swap that flag is moving — so its handler refuses
+    # while a switch is in flight, in its own words.
+    #
+    # `library_independent` is a different knob and is left at its safe default
+    # False: it governs the token PIN, not the 503, so an ALL token stamped for
+    # another library is refused here exactly as it is on a data route. A route
+    # is pinned by omission as an undeclared one is denied by omission, and none
+    # of these four needs the exemption `GET /libraries` needs.
+    ("GET", "/api/v1/libraries/inspect"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 takes a caller-supplied host path and walks it to say what the folder is — the same host-filesystem read authority as GET /filesystem/browse, through the same validate_reference_folder_path chokepoint; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/libraries"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 takes a caller-supplied host path and, for a folder with no vault, writes a SQLite database into it and restricts the folder to the owner (0700) — write authority inside a host folder, alongside POST /filesystem/folders which is already on this tier. It creates no directory: the folder must already exist, which is what keeps its authority to one named folder. Attaching moves, renames and copies nothing, and never reads the incoming vault's user/user_token rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PATCH", "/api/v1/libraries/{library_uuid}"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 tier by consistency, not by capability: renaming writes one hub column, takes no host path and renames nothing on disk. It sits with its siblings because the Settings pane gates the whole management menu on the same can_manage locality answer, and a looser tier here would give that pane two rules to explain while buying no reachability the owner does not already have",
+    ),
+    ("DELETE", "/api/v1/libraries/{library_uuid}"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3 tier for the POST /libraries/active reason rather than the path-authority one: it takes a registry uuid, never a host path, and removes no file — it clears the attached flag and keeps the row. What it exercises is authority over other principals' state, because every share link pointing at that library stops working until the folder is added again. The active library is refused by the registry; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/libraries/active"): RoutePolicy(
         _LOCAL,
@@ -554,6 +620,19 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/filesystem/folders"): RoutePolicy(
         _LOCAL,
         justification="§16.3 host FS mkdir; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",
+    ),
+    # ── folder_structure.py (§16.3 host-capability; v1.11 Phase 2) ──────────
+    ("POST", "/api/v1/folder-structure/read"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 host FS read: takes a caller-supplied host path and walks it RECURSIVELY, decoding pictures off the disk, so it is GET /filesystem/browse's path-authority class and then some (browse lists one directory) and must not be a second, weaker way to ask what is on the disk. The blocklist runs on the realpath, not the string the caller sent (the same correction GET /libraries/inspect landed), AND again on every directory the walk descends into — a root-only check is a check on one string, and POST {path:'/'} names no restricted directory while walking every one of them. It writes nothing — no row is created, no file is moved or renamed — but what it RETURNS is a map of the owner's folder names and picture counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/folder-structure/read/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: carries the read's RESULT, which is the folder map itself — the same host information the POST is tiered for, so polling must not be a lower bar than starting; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/folder-structure/read"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: cancels the owner's in-flight read — authority over another principal's operation, on the same tier as the route that starts it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (

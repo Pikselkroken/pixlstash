@@ -236,7 +236,21 @@ class TaggerPlugin(ABC):
         """Estimate VRAM (MB) required for *image_count* images.
 
         Used by workflows for sequential VRAM budgeting (max over plugins).
-        Return 0 for CPU-only models.
+        The description workflow asks the active description plugin before it
+        schedules a batch, with *image_count* already capped at
+        :meth:`effective_batch_size`.
+
+        **0 is ambiguous, and the host resolves it against you.** It is both
+        "this model needs no VRAM" and what this default returns for a plugin
+        that never overrode the method, and the two cannot be told apart. On a
+        CUDA engine a 0 is therefore read as *no answer*: the host charges the
+        Florence-2 figure instead, which is not your model's. That is a
+        deliberate over-charge for a CPU-only plugin (harmless — it may delay
+        your batch, never break it) and a serious **under**-charge for a GPU
+        model that returned 0 because it was not resident yet, which is the
+        OOM this budget exists to prevent. So: return a real figure whenever
+        your model will occupy the card, cold start included, and reserve 0
+        for a model that genuinely holds nothing on it.
 
         Args:
             image_count: Number of images to be processed.

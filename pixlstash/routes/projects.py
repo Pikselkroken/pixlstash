@@ -767,11 +767,9 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.require_user_id(request)
         token_scope = getattr(request.state, "token_scope", None)
-        if (
-            token_scope is not None
-            and token_scope.scope == "READ"
-            and not token_scope.include_attachments
-        ):
+        # Every scoped token, not only a READ one: the attachment opt-in is a
+        # property of the grant, so a scope that is not READ must not skip it.
+        if token_scope is not None and not token_scope.include_attachments:
             include_attachments = False
 
         def _safe(name: str) -> str:
@@ -996,11 +994,9 @@ def create_router(server) -> APIRouter:
     def list_attachments(request: Request, project_id: int):
         server.auth.require_user_id(request)
         token_scope = getattr(request.state, "token_scope", None)
-        if (
-            token_scope is not None
-            and token_scope.scope == "READ"
-            and not token_scope.include_attachments
-        ):
+        # Every scoped token, not only a READ one: the attachment opt-in is a
+        # property of the grant, so a scope that is not READ must not skip it.
+        if token_scope is not None and not token_scope.include_attachments:
             raise HTTPException(
                 status_code=403,
                 detail="This token does not allow access to project attachments",
@@ -1122,11 +1118,9 @@ def create_router(server) -> APIRouter:
     def download_attachment(request: Request, project_id: int, attachment_id: int):
         server.auth.require_user_id(request)
         token_scope = getattr(request.state, "token_scope", None)
-        if (
-            token_scope is not None
-            and token_scope.scope == "READ"
-            and not token_scope.include_attachments
-        ):
+        # Every scoped token, not only a READ one: the attachment opt-in is a
+        # property of the grant, so a scope that is not READ must not skip it.
+        if token_scope is not None and not token_scope.include_attachments:
             raise HTTPException(
                 status_code=403,
                 detail="This token does not allow access to project attachments",

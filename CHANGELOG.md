@@ -1,3 +1,47 @@
+# [1.11.0]
+
+- Settings → Libraries adds, renames and removes libraries, so the command line
+  is no longer the only way. `+ Add a library…` takes one folder and works out
+  what it is: a library you already made is added as it is, with its tags,
+  scores and people; a folder of pictures is counted and brought in; an empty
+  folder starts a fresh library. Nothing in that folder is moved, renamed or
+  copied. A folder already covered by another library is refused, and says which
+  one.
+- Each row's ⋯ menu opens, renames or stops using that library. Stopping using
+  one removes no file: PixlStash forgets it, everything inside the folder stays
+  where it is, and adding the folder again brings back its tags and its share
+  links. The library you have open has no Stop using this — switch away first.
+- Two libraries can no longer be given the same name, which used to break every
+  command-line verb that takes one for both of them.
+- Managing libraries is available on the machine running PixlStash, or over your
+  local network or Tailscale, because it points the server at folders on that
+  machine. A session from further away is told so rather than shown controls
+  that fail.
+- The first screen of a new library now offers three ways to fill it instead of
+  one, and leads with the one that moves nothing: point PixlStash at a folder
+  you already have and it reads it where it sits. Dropping pictures in and
+  connecting ComfyUI are the other two. It no longer talks about a "database".
+- **PixlStash Views** — publish your sets, people and projects as folders of
+  links, in Settings → Libraries. They are links, not copies: nothing is
+  duplicated, no original moves, and deleting the whole folder loses no picture.
+  One picture in three projects appears in three view folders while its one real
+  file stays where you put it. Views are *additional* to the folders you already
+  keep, never a replacement for them.
+- A view folder is an ordinary folder, so if you put a file of your own in one,
+  PixlStash leaves it exactly where it is. A rebuild removes links and nothing
+  else — never a file whose only copy is there — and tells you which files it
+  kept. Switching a kind off removes its folder, so nothing stale is left behind.
+- Views checks the folder you pick before writing anything, and says why when it
+  cannot use one: inside your library (it would break backups), inside a
+  reference folder (every link would be re-imported as a second copy), a folder
+  your cloud client syncs (it would upload the pictures again instead of the
+  links), or a drive with no link support at all — exFAT and FAT drives have
+  neither kind, and on Windows symbolic links need administrator rights or
+  Developer Mode, in which case PixlStash uses hard links instead. Hard links
+  cannot span two drives, so a library split across disks gets the folders it
+  can make and a list of the ones it could not, rather than a silently
+  incomplete tree.
+
 # [1.10.1]
 
 - Add missing dependency to docker images

@@ -105,6 +105,9 @@ from pixlstash.routes.import_folders import (
     create_router as create_import_folders_router,
 )
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
+from pixlstash.routes.folder_structure import (
+    create_router as create_folder_structure_router,
+)
 from pixlstash.routes.libraries import create_router as create_libraries_router
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
@@ -657,6 +660,11 @@ class Server(
 
         # Temporary storage for import tasks
         self.import_tasks = {}
+        # The one in-flight folder-structure read (v1.11 Phase 2). A single slot
+        # rather than a dict: the mapping screen only ever shows one read, and a
+        # second concurrent one would fight the first for the same GPU queue.
+        self.folder_structure_read = None
+        self.folder_structure_lock = threading.Lock()
         # Temporary storage for async streaming-import staging sessions (#459).
         # Keyed by staging_id; each records the on-disk staging dir, the streamed
         # files, the declared file count, and (after the safe handoff) the
@@ -1205,25 +1213,20 @@ class Server(
         return server_config
 
     def _add_cors_exception_handler(self):
-        @self.api.exception_handler(HTTPException)
-        async def cors_exception_handler(request, exc):
-            origin = request.headers.get("origin")
-            headers = {
-                "Access-Control-Allow-Credentials": "true",
-            }
-            if origin and (
-                origin in self.allow_origins
-                or (
-                    self.allow_origin_regex
-                    and re.match(self.allow_origin_regex, origin)
-                )
-            ):
-                headers["Access-Control-Allow-Origin"] = origin
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-                headers=headers,
-            )
+        # No HTTPException handler here on purpose. One used to rebuild every
+        # HTTPException as a fresh JSONResponse to re-add the CORS pair, and in
+        # doing so dropped exc.headers — so no route's Retry-After ever reached
+        # a client (#1097). It was never needed: FastAPI's default handler
+        # already forwards exc.headers, and CORSMiddleware sits outside
+        # ExceptionMiddleware, so it stamps Access-Control-Allow-Origin and
+        # Vary: Origin on the result anyway. Measured identical on an allowed
+        # origin, a disallowed one and no origin at all.
+        #
+        # The Exception handler below is *not* redundant in the same way: a
+        # 500 is answered by ServerErrorMiddleware, which sits outside
+        # CORSMiddleware and so never gets stamped. The validation handler
+        # probably is redundant, but it takes no headers from its exception,
+        # so it is left alone rather than widened into this fix.
 
         @self.api.exception_handler(Exception)
         async def generic_exception_handler(request, exc):
@@ -1618,6 +1621,12 @@ class Server(
         )
         self.api.include_router(
             create_filesystem_router(self),
+            prefix=API_V1_PREFIX,
+            include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_folder_structure_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
             dependencies=gate,

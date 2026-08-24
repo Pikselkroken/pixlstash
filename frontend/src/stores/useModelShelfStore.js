@@ -222,6 +222,18 @@ function modelCount(n) {
   return `${Number(n).toLocaleString()} ${n === 1 ? "model" : "models"}`;
 }
 
+// Ceiling on one bulk thumbnail set, mirroring the clear route's
+// `MAX_MODELS_PER_CLEAR` (`pixlstash/routes/model_icons.py`). The set route is
+// per-model, so no server cap can see the gesture: Ctrl+A on a long shelf is
+// one keystroke, and this is where it stops being one.
+const MAX_MODELS_PER_ICON_SET = 500;
+
+// How many of those uploads are in the air at once. A browser gives ~6 sockets
+// per origin, so a wider fan-out only queues — and a queued request still burns
+// the client's own 60 s timeout, which would report as failed writes the server
+// had committed. It also leaves sockets for the row thumbnails.
+const ICON_SET_CONCURRENCY = 6;
+
 /** What each curated column is called in a receipt. */
 const FIELD_WORDS = {
   display_name: "name",
@@ -1818,47 +1830,90 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Give one model an icon.
+   * Give every selected model the same icon.
    *
-   * Single-row by nature, and gated that way in the bar: an icon answers
-   * "which one is this?", so giving forty rows the same mark would remove the
-   * only thing telling them apart. (Two models legitimately SHARING a logo is
-   * different — that is the owner setting each one, and the content-addressed
-   * store then keeps one file.)
+   * Addressed off `selectedModelIds`, never `selectedRows`: a fully-ticked
+   * stack is ONE row whose `id` is the cover's, so iterating rows would mark
+   * the cover and silently skip the other eleven versions. This is the same
+   * expansion `clearIconsOnSelected` uses, and set and clear have to agree
+   * about what a selection is.
    *
-   * No confirmation: setting an icon is reconstructable by setting it again.
+   * One upload per model rather than one bulk route: the icon store is
+   * content-addressed, so identical bytes collapse to one file on disk however
+   * many times they are posted, and this reuses the write path all three ways
+   * of choosing an icon already share. Windowed rather than fired all at once,
+   * for the socket reason above.
    *
-   * **Refuses a selection that is not exactly one**, rather than taking the
-   * first row. The bar disables the button, but a UI state is not an invariant:
-   * any other caller would silently mark whichever row happened to sort first,
-   * which is the surprise this verb can least afford.
+   * The caller confirms a bulk set that would REPLACE existing marks; this
+   * writes.
    *
    * @param {File|Blob} file
-   * @returns {Promise<boolean>} true when the icon landed; false if it was
-   *   refused or the request failed.
+   * @returns {Promise<boolean>} true when at least one icon landed.
    */
   async function setIconOnSelected(file) {
     const notices = useNoticeStore();
-    if (selectedRows.value.length !== 1 || !file) return false;
-    const row = selectedRows.value[0];
-    try {
-      await setModelIcon(row.id, file);
-      await fetchRows();
-      notices.push({
-        level: "success",
-        // A row in the `needs-a-name` state has no name to say, by design —
-        // its `text` is empty so the shelf can draw it as a field. The receipt
-        // still has to name something the reader can recognise.
-        text: `Set the thumbnail on ${row.name.text || row.filename || "the model"}.`,
-      });
-      return true;
-    } catch (err) {
+    const ids = selectedModelIds.value;
+    if (!ids.length || !file) return false;
+    if (ids.length > MAX_MODELS_PER_ICON_SET) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not set that thumbnail.",
+        text: `At most ${MAX_MODELS_PER_ICON_SET} models in one thumbnail set.`,
       });
       return false;
     }
+
+    // Captured before the writes: `fetchRows()` below replaces the rows, and
+    // the receipt names the model the reader pointed at.
+    const only = ids.length === 1 ? selectedRows.value[0] : null;
+
+    const failed = [];
+    let done = 0;
+    for (let i = 0; i < ids.length; i += ICON_SET_CONCURRENCY) {
+      const batch = ids.slice(i, i + ICON_SET_CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map((id) => setModelIcon(id, file)),
+      );
+      results.forEach((result, offset) => {
+        if (result.status === "rejected") {
+          failed.push([batch[offset], result.reason]);
+        } else {
+          done += 1;
+        }
+      });
+    }
+
+    if (failed.length) {
+      // The ids as well as the reasons: the receipt can only say how many
+      // failed, and without this there is nothing anywhere saying WHICH — and
+      // the only recourse is otherwise to redo the whole selection.
+      console.warn(
+        `[modelShelf] ${failed.length} thumbnail write(s) failed:`,
+        failed.map(([id, reason]) => `${id}: ${errorDetail(reason) || reason}`),
+      );
+    }
+    await fetchRows();
+    if (!done) {
+      notices.push({
+        level: "error",
+        text: errorDetail(failed[0]?.[1]) || "Could not set that thumbnail.",
+      });
+      return false;
+    }
+    const notes = failed.length
+      ? ` ${modelCount(failed.length)} could not be written.`
+      : "";
+    notices.push({
+      level: failed.length ? "warning" : "success",
+      // A row in the `needs-a-name` state has no name to say, by design — its
+      // `text` is empty so the shelf can draw it as a field. The receipt still
+      // has to name something the reader can recognise. Named only when the
+      // selection was one model: which of a partly failed batch landed is not
+      // known here.
+      text: only
+        ? `Set the thumbnail on ${only.name?.text || only.filename || "the model"}.${notes}`
+        : `Set the thumbnail on ${modelCount(done)}.${notes}`,
+    });
+    return true;
   }
 
   /**

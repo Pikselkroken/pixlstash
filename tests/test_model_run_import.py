@@ -395,7 +395,9 @@ def test_a_checkpoint_whose_step_has_no_previews_gets_no_samples_folder(shelf):
     assert not (shelf["destination_dir"] / "Clementine_000000900_samples").exists()
 
 
-def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(shelf):
+def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(
+    shelf,
+):
     """The ordering that makes this a data-loss fix rather than a feature.
 
     Asserted at the seam rather than after the fact: an import that copied the

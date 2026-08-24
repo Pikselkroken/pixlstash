@@ -170,3 +170,39 @@ def reconcile_settings_fingerprint(vault_db, salt: str, penalised_tags: dict) ->
             "recomputed in the background."
         )
     return changed
+
+
+# ---------------------------------------------------------------------------
+# PixlStash Views (v1.11 Phase 7)
+# ---------------------------------------------------------------------------
+
+
+def get_views_config(vault_db) -> tuple[Optional[str], list[str]]:
+    """Return ``(views_root, kinds)`` for this library.
+
+    Stored per library rather than per user because the folder holds *this*
+    library's people and sets: two libraries publishing into one folder would
+    overwrite each other's tree.
+    """
+
+    def _read(session: Session) -> tuple[Optional[str], list[str]]:
+        row = _row(session)
+        raw = row.views_kinds or ""
+        return row.views_root, [kind for kind in raw.split(",") if kind]
+
+    return vault_db.run_immediate_read_task(_read)
+
+
+def set_views_config(vault_db, root: Optional[str], kinds: list[str]) -> None:
+    """Record where this library publishes views and which kinds it publishes."""
+    serialised = ",".join(kinds)
+
+    def _write(session: Session):
+        row = _row(session)
+        if row.views_root != root or (row.views_kinds or "") != serialised:
+            row.views_root = root
+            row.views_kinds = serialised
+            session.add(row)
+            session.commit()
+
+    vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)

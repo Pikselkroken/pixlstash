@@ -369,9 +369,95 @@ The core image display engine. Responsibilities:
 - **Segment (object detection)**: the context menu's "Segment" item emits `segment`; `ImageGrid` opens a small dialog for an optional label phrase and `POST`s `/pictures/detect` with the selected ids (empty phrase → dense detection). Progress shows in the task manager; the overlay refreshes on the resulting `changed_pictures` event.
 - Image scoring (guest and authenticated star rating).
 - Drag-and-drop reordering within sets (via `useGridDragDrop`).
-- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
+- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `LibraryEmptyState`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
+
+##### The empty library is a different question from an empty grid
+
+`ImageGrid` has three empty states and they are not variants of one screen.
+A filter that matched nothing and an empty scrap heap keep the card they had —
+"No pictures match the current filters", "Are all your pictures that good?" —
+because those are questions with their own answers.
+
+The third, `totalAllPicturesCount === 0`, is **the first screen of every
+install**, and it gets `LibraryEmptyState.vue`. It used to read *"No pictures in
+the database. Add pictures by dragging them here."* Two things were wrong with
+that. **"Database"** is our word: the owner has pictures, and the thing holding
+them is an implementation detail they were never introduced to. And **dragging
+is one route of three**, offered as though it were the only one — PixlStash can
+also read a folder you already have, in place, moving nothing, and it can
+generate straight into the library. Someone arriving with an organised folder
+tree was being told to take it apart and drag it back in, which is the v1.11
+diagnosis in a single sentence of copy.
+
+So: three routes, folder first, and only that one carries the accent. Ordering
+plus a single primary is the whole of how "none of them is more official than
+the others" is said; two primaries would make it a choice between two official
+answers. The folder route leads because it is the case the release exists for
+and the one that was invisible — reference folders have always worked and were a
+sidebar accessory nobody was pointed at.
+
+**Every route reuses wiring App.vue already had.** `local-import` reaches
+`SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
+(with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
+new signal, for `SideBar.openReferenceFolderEditor`.
+
+**Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
+chooser's other option is an import folder — *"watch for new files and import
+them automatically"* — which copies files in, and the button that reaches it
+promises "Nothing is moved" one screen earlier. Routing through the chooser
+would have the release's headline claim falsified by the very next click, and
+the probe would measure the opposite of what it is for.
+
+The component is presentational: it holds a hidden file input, clears its
+`value` after each `change` so the same files can be chosen twice in a row, and
+hands the chosen files up **unfiltered**. `ImageGrid.importChosenFiles` drops
+what PixlStash cannot read, against the same `isSupportedImportFile` and under
+the same `import-unsupported-files` notice key the two drop paths use — an OS
+picker's `accept` is advisory, so a button that skipped it would be the one
+import route that took anything silently. It normalises with `Array.from`
+before filtering, so a caller handing it an `<input>`'s `FileList` gets an
+import rather than a `TypeError` raised a long way from the mistake.
+
+**`accept` is one constant, `IMPORT_FILE_ACCEPT` in `utils/media.js`, for all
+three import inputs** (this card, `PhotosImportDialog`, `TbImportPanel`). It has
+to agree with `isSupportedImportFile`, and it did not: this card shipped as
+`image/*,video/*`, which greyed out the zip and caption-file imports the app
+supports and left them reachable only through the picker's "All Files". Advisory
+or not, `accept` is what the route *looks like it takes*, so a narrow one hides
+a feature rather than rejecting a file. `media.test.js` asserts the offer
+against the predicate in **both** directions — every named extension is one the
+importer takes, and every type the importer takes is named or covered by a
+wildcard — because a subset check alone stays green when a supported type is
+dropped from the offer, which is the drift that matters.
+
+**A `:accept` bound to a name the `<script setup>` never imported renders no
+`accept` at all**, so the picker silently offers every file on the disk while
+the markup still reads correctly. This shipped in review: two of the three
+inputs were pointed at the shared constant without importing it. Two guards now
+close it — `vue/no-undef-properties` is an **error** in `eslint.config.js`
+(repo-wide, for every undeclared name a template references, not just this one),
+and `TbImportPanel.test.js` asserts the *rendered* attribute rather than the
+binding.
+
+**Three conditions stop it appearing, and two are about not lying:**
+
+- `totalAllPicturesCountLoaded` — the count starts at `0` and
+  `fetchAllPicturesCount` swallows its failure, so an unanswered request is
+  indistinguishable from an empty library. Saying "This library is empty" over a
+  backend that did not reply is worse than saying nothing, and this screen says
+  it with three buttons under it.
+- `!isReadOnly` — a share recipient owns nothing here. Two routes open the
+  owner's sidebar dialogs and the third dead-ends in the importer's read-only
+  refusal, and the zero they were handed is the count `GET
+  /characters/{ALL}/summary` refused them, not a fact about the library.
+- the scrap-heap and set-overlap views, which have their own questions.
+
+`ImageGridLibraryEmptyState.test.js` mounts the real grid for all of it. The
+component's own suite passes with the feature disconnected from the app
+entirely — that was measured, not assumed — so the integration file is where
+"does it render" and "does a button reach anything" actually live.
 
 ##### Who owns a card's thumbnail URL
 
@@ -614,7 +700,46 @@ asserted in `UserSettingsDialog.test.js`.
 `LibrariesSection` reads the shared registry
 store, shows host paths and deployment-specific CLI commands only when the
 server supplied them, and always offers the public documentation link as the
-remote-safe fallback. The switch confirmation is the global
+remote-safe fallback.
+
+It owns the whole lifecycle from v1.11: `+ Add a library…`, and a per-row `⋯`
+menu holding `Open this library`, `Rename…` and `Stop using this…`. **The active
+library's menu has no `Stop using this…`** — the registry refuses detaching it,
+so the item could only ever fail, and switching away first is what the other
+rows' `Switch` buttons are for. **A remote session gets no menu and no Add
+button at all**, because every verb behind them is `LOCAL_OWNER_ONLY`; the
+visible note under the list says so, rather than four items that each fail.
+Renaming stays open on a name the server refused, with the server's reason — it
+names the library already holding that name, which is the one thing that tells
+the owner what to type instead.
+
+`AddLibraryDialog.vue` is the picker: one path field, `Browse…` (reusing
+`FolderBrowser`, including its `New folder`, since `POST /libraries` creates no
+directory), and one card rendering the `GET /libraries/inspect` verdict. Every
+word in that card is the server's `headline` and `detail`; the component decides
+only the icon, the border and whether there is a button, branching on `can_add`
+and nothing else. It adds the path the **server resolved**, not the one typed,
+and an inspection still on the wire when the path changes is discarded by epoch.
+A refusal from `POST /libraries` — the server re-inspects, so a folder that
+became covered since the verdict is refused there — re-asks and then shows the
+message, so the card and the error agree.
+
+A `Call it` field sits inside the addable card, prefilled from the verdict's
+`suggested_name` and left alone once the owner edits it. It is not decoration:
+library names are unique among attached libraries, so without it two folders
+both named `2024` are unaddable from this dialog and the owner is sent to the
+command line — the thing the feature removes.
+
+**`inspect` is a no-op for the path it last answered, and that is what makes the
+button work.** A browser orders `mousedown → blur → click`; `@blur` re-inspects,
+and without the guard it cleared the verdict synchronously, so the click that
+followed found `canAdd` false and did nothing at all — a button that silently
+failed on its first press, every time. `AddLibraryDialog.test.js` reproduces it
+with a *slow* inspect mock on purpose: with one that settles inside the blur's
+own `nextTick` the test passes either way, which is how such a bug survives
+being "covered".
+
+The switch confirmation is the global
 `ConfirmDialog.vue` host for `useConfirm`: it focuses the primary action, handles
 Enter/Escape through `AppDialog`, restores invoking focus on cancel, and names
 outgoing live share links before any switch request is sent. After acceptance,
@@ -2960,8 +3085,9 @@ and at the pointer with them.
 - **The verbs are ICONS with their words in the tooltip and in the menu.** Nine
   labelled buttons was a sentence to re-read on every selection. Tests address
   them by `data-verb`, not by label text.
-- **The two single-item verbs ride along disabled** past one selection rather
-  than disappearing, so the row of buttons never reflows under the pointer.
+- **Rename, the one single-item verb, rides along disabled** past one selection
+  rather than disappearing, so the row of buttons never reflows under the
+  pointer. Set thumbnail used to sit beside it and is now bulk.
 - **Right-click follows the file-manager rule**: right-clicking a row that is
   not selected selects it and acts on it alone; right-clicking one that IS
   selected leaves the selection alone, so a menu opened on any of forty selected
@@ -3232,13 +3358,37 @@ group, and the shelf already treats "not set" as a value rather than an absence.
 The mark is `aria-hidden`: the row's accessible name already says which model it
 is, and a mark announcing "FL" would be the same fact twice, less usefully.
 
-**Set is single-row, clear is bulk.** An icon answers "which one is this?", so
-giving forty rows one mark would remove the only thing telling them apart — Set
-thumbnail is gated to a selection of one, shown-and-disabled like Rename. Clear
-appears only when something in the selection has one. Setting or clearing a
-single row prompts for nothing (both are reconstructable by doing them again); a
-**bulk** clear is not and confirms, the same test the bulk base-model overwrite
-falls on.
+**Both set and clear are bulk.** Set was originally gated to a selection of one,
+on the argument that giving forty rows one mark removes the only thing telling
+them apart; in practice the owner's common case is the opposite — a base model's
+whole family of adapters wearing its logo — and the shelf is where a selection is
+made. So the verb takes whatever is selected. Clear appears only when something
+in the selection has one.
+
+`setIconOnSelected` posts the same bytes once per **model** rather than calling a
+bulk route: the icon store is content-addressed, so N identical uploads collapse
+to one file on disk, and this reuses the single write path all three ways of
+choosing an icon already share (`POST /models/{id}/icon`). It addresses
+`selectedModelIds`, not `selectedRows` — a fully ticked run is one row wearing
+the cover's id, and iterating rows would mark the cover and skip the other
+eleven versions. Set and clear have to agree about what a selection is.
+
+Because the route is per-model, no server cap can see the gesture, so the client
+carries both bounds: `MAX_MODELS_PER_ICON_SET` (500, the clear route's figure)
+refuses the write outright, and the uploads go out six at a time. A wider
+fan-out only queues behind the browser's ~6 sockets per origin while still
+burning the client's own 60 s timeout, which would report as failed writes the
+server had committed. The receipt counts, and names the model only when the
+selection was one — which of a partly failed batch landed is not known
+client-side, so the ids go to `console.warn` beside their reasons.
+
+Setting or clearing a single row prompts for nothing (both are reconstructable
+by doing them again). A **bulk** clear is not reconstructable and confirms, the
+same test the bulk base-model overwrite falls on — and so does a bulk set **over
+rows that already have a mark**: the images survive in the shared store, but
+which model wore which is recorded nowhere else. The prompt is counted on those
+rows only (a selection of forty bare rows loses nothing) and is asked *before*
+the picker opens, so nobody is made to choose a picture and then defend it.
 
 **The verb is `Set Thumbnail…`, and the field is still `icon`.** The vocabulary
 change (workflow plan §3 S3) aligns the user-facing verb with the word the code

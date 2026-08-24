@@ -181,23 +181,42 @@ truth between calls — the settings table polls it.
 | `setup(device)` | optional | **Yes** — via `hasattr`, just before `init()`. The only way to learn the device (`"cuda"`, `"cpu"`, …), so implement it if you use a GPU. |
 | `init(parameters)` | yes | **Yes**, before every batch. Return early when already loaded. |
 | `is_loaded()` | yes | **Yes** — the settings table, and `plugin_schema()`. |
-| `unload()` | yes (abstract) | **No.** See below. |
-| `estimated_vram_mb(image_count, parameters)` | no | **No.** See below. |
-| `effective_batch_size(parameters)` | no | **No** (for description plugins). |
+| `unload()` | yes (abstract) | **Yes** — when the workers go idle with "Keep models in memory" off. See below. |
+| `estimated_vram_mb(image_count, parameters)` | no | **Yes** for a description plugin, before its batch is scheduled. Not yet for a tag plugin. See below. |
+| `effective_batch_size(parameters)` | no | **Yes** — it caps the `image_count` your VRAM estimate is asked about, and sizes a tag batch. |
 
-**Know what the host does not yet do for you.** These are honest gaps in the plugin API
-as it stands, not things to design around:
+**Two of these arrive from outside your batch**, so they are worth reading before you
+implement them (issue #967 wired both; older guides say they are never called):
 
-- **Nothing calls `unload()` on a third-party plugin.** The idle-unload path
-  (`ModelLifecycleManager`) knows the four built-in *services* by name and does not walk
-  the plugin registry. `unload()` is still abstract, so implement it — but a model your
-  plugin loads stays resident for the life of the process, and "Keep models in memory =
-  off" will not free it. If that matters for your model, manage it yourself inside
-  `generate_descriptions`.
-- **Nothing calls `estimated_vram_mb()` on a third-party plugin.** `DescriptionWorkflow`
-  charges the VRAM budget for Florence-2 only. Overriding it is harmless and forward-
-  looking, but it will not currently stop PixlStash scheduling another model alongside
-  yours, so keep your own footprint modest.
+- **`unload()` is called when the user turns "Keep models in memory" off and every worker
+  has gone idle.** The host unloads its own services first and then walks the plugin
+  registry, calling `unload()` on every plugin whose `is_loaded()` returns true. It runs
+  on the sweep's thread, not yours. The idle condition means it will not normally land
+  mid-batch, but it is not a guarantee you should lean on: **serialise unload against
+  load** — the built-in services hold one lock across both — rather than freeing memory
+  another thread is still writing into, which is a segfault and not an exception. A raise
+  here is logged and contained; it will not stop the other plugins being released.
+- **`estimated_vram_mb()` is asked before a description batch runs**, when your plugin is
+  the active description plugin. (A *tag* plugin is not asked yet — `TaggingWorkflow`
+  still bills its own constants.) `image_count` is already capped at your
+  `effective_batch_size(parameters)`.
+
+  **0 has two meanings and the host has to guess.** `TaggerPlugin.estimated_vram_mb`
+  documents 0 as "CPU-only", and 0 is also what the default returns for a plugin that
+  never overrode the method. On a CUDA engine the host cannot distinguish them, so it
+  reads any 0 as *no answer* and charges the Florence-2 figure instead — around 900 MB
+  for `base`, 2.6 GB for `large-ft`. Which way that hurts depends on which you meant:
+
+  | You return | You meant | What actually happens |
+  |---|---|---|
+  | 0 (no override) | "I haven't thought about it" | Billed the Florence figure. Fine for a small model, badly wrong for a big one. |
+  | 0 (CPU-only model) | "I need no VRAM" | Billed the Florence figure anyway. Harmless over-charge: your batch may wait, it will not break. |
+  | 0 (GPU model, not loaded yet) | "nothing is resident *right now*" | **The dangerous one.** Billed ~1 GB for the several you are about to allocate, and another model is scheduled alongside you. |
+  | a real figure | "this is what I will occupy" | Budgeted correctly. |
+
+  So charge for the **cold start** as well as the warm one — `JoyCaptionPlugin` bills its
+  full 8 GB footprint until its weights are actually sitting on the CPU — and keep 0 for
+  a model that genuinely holds nothing on the card.
 
 ## 5. Inference
 

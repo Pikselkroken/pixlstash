@@ -163,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_31_local_6_loopback():
+def test_host_capability_tier_split_is_40_local_6_loopback():
     """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 37
-    routes carry a locality tier = 31 local + 6 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 46
+    routes carry a locality tier = 40 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -287,6 +287,70 @@ def test_host_capability_tier_split_is_31_local_6_loopback():
     a caller who may not fetch a preview is not handed a list of them. The
     loopback count is unchanged: both are reads, and neither spawns anything.
 
+    41 = 35 + 6 with the four v1.11 library-lifecycle routes, and they land on
+    this tier for three different reasons rather than one. ``GET
+    /libraries/inspect`` and ``POST /libraries`` are the plain path-authority
+    case: both take a caller-supplied host path through the same
+    ``validate_reference_folder_path`` chokepoint as the folder picker, the
+    first walking it to say what the folder is and the second writing a vault
+    into it and restricting it to the owner. Neither creates a directory —
+    ``POST /filesystem/folders``, already on this tier, is what the picker's
+    ``New folder`` uses — so the authority stays bounded to the one folder the
+    owner named. ``DELETE /libraries/{library_uuid}`` is the ``POST
+    /libraries/active`` argument again and **not** the path one: it takes a
+    registry uuid, removes no file, and is here because every share link
+    pointing at that library stops working, which is authority over other
+    principals' state. ``PATCH /libraries/{library_uuid}`` is the weakest of the
+    four and is here by consistency rather than capability — it writes one hub
+    column and renames nothing on disk — because the Settings pane gates its
+    whole management menu on one ``can_manage`` locality answer, and splitting
+    the rename onto a looser tier would give that pane two rules to explain
+    while buying a remote owner nothing they could act on. The loopback count is
+    unchanged: none of the four spawns anything.
+
+    43 = 37 + 6 with the two ``/server-config/views`` routes, PixlStash Views
+    (v1.11 Phase 7): the library's sets, people and projects published as folders
+    of **links** to the files the owner already keeps. The PATCH takes a
+    caller-supplied host path and writes a folder tree into it, which is the
+    ``POST /model-folders`` class for what it accepts and the ``POST
+    /model-moves`` class for the filesystem it drives — so it is the third route
+    here for both reasons at once. It is on this tier for the authority and not
+    for the destruction: it creates only links, and the one thing it unlinks is
+    a name that is not the last one — a symlink, or a regular file with
+    ``st_nlink > 1``. ``shutil.rmtree`` is deliberately not used, because it is
+    not link-aware and would delete a file the owner had dropped into a view
+    folder; anything that is not a link is reported back as ``kept_by_owner``
+    and left standing. A folder that already holds content and carries no
+    ``.pixlstash-views`` marker is refused rather than adopted, so a views root
+    aimed at a folder of real pictures never becomes one. The GET is the control surface argument that put ``GET
+    /model-moves`` here rather than one tier down: it names the host folder the
+    tree went to, and the tier that alone may publish it is the tier that may see
+    where it landed. It is also on ``READ_BLOCKED_GET_PATHS``, so the documented
+    ``AUTHZ_GATE_ENFORCING = False`` rollback does not hand that path back to
+    every share token. The loopback count is unchanged: neither route spawns
+    anything.
+
+    46 = 40 + 6 with the folder-structure read's three routes (v1.11 Phase 2):
+    ``POST``, ``GET .../status`` and ``DELETE /folder-structure/read``. The POST
+    is ``GET /filesystem/browse``'s class and then some — it takes a
+    caller-supplied host path, walks it *recursively* and decodes pictures out
+    of it, where browse lists one directory — so it must not be a second,
+    weaker way to ask what is on the disk. It is the ``GET /libraries/inspect``
+    lesson above applied one route later, and then once more: the blocklist runs
+    after ``realpath`` (validating the string the caller sent lets a symlink hand
+    ``/etc`` to a route that walks it) **and again on every directory the walk
+    descends into**, because a root-only check is a check on one string — ``/``
+    names no restricted directory and contains all of them. Measured: 391 of 400
+    folders came out of ``/etc``, ``/proc`` and ``/root`` before that second
+    check, and 0 after. The GET is the deliberate
+    one, for the reason ``GET /model-moves`` is on this tier: what it carries
+    *is* the answer, a map of the owner's folder names, tree shape and picture
+    counts, so polling cannot be a lower bar than starting. The DELETE is the
+    POST's authority from the other end. None of the three writes anything —
+    no row is created, no file is moved — which is why the tier follows the
+    disclosure and the path, not a destructive verb. The loopback count is
+    unchanged: nothing here spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -300,7 +364,7 @@ def test_host_capability_tier_split_is_31_local_6_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 6, sorted(loopback)
-    assert len(local) == 31, sorted(local)
+    assert len(local) == 40, sorted(local)
 
 
 # ===========================================================================

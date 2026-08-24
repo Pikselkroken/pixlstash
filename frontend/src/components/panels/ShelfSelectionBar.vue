@@ -154,10 +154,10 @@
       <v-icon size="19">mdi-folder-move-outline</v-icon>
     </button>
 
-    <!-- The two single-item verbs ride along DISABLED rather than disappearing:
-         a row of buttons that reflows as the selection grows is a row you have
-         to re-read, and a disabled button with its reason in the tooltip
-         teaches where the verb lives. -->
+    <!-- Rename rides along DISABLED rather than disappearing: a row of buttons
+         that reflows as the selection grows is a row you have to re-read, and a
+         disabled button with its reason in the tooltip teaches where the verb
+         lives. -->
     <button
       class="selbar-btn"
       type="button"
@@ -175,7 +175,6 @@
       type="button"
       data-verb="set-icon"
       aria-label="Set thumbnail"
-      :disabled="!single"
       :title="iconTitle"
       @click="emit('set-icon')"
     >
@@ -396,10 +395,12 @@ const renameTitle = computed(() =>
   single.value ? "Rename this model" : "Select one model to rename it",
 );
 
+// Counted off `selectedModelIds` rather than the rows, the way the write is: a
+// ticked run is one row and twelve models.
 const iconTitle = computed(() =>
-  single.value
+  store.selectedModelIds.length === 1
     ? "Give this model a picture"
-    : "Select one model to give it a picture",
+    : `Give the same picture to all ${store.selectedModelIds.length} models`,
 );
 
 const withIcons = computed(() =>
@@ -941,19 +942,17 @@ const VerbMenu = (props) => {
           kbd: "F2",
         })
       : null,
-    props.single
-      ? item("mdi-image-outline", "Set thumbnail…", {
-          on: () => props.onVerb("set-icon"),
-          title: props.iconTitle,
-        })
-      : null,
+    item("mdi-image-outline", "Set thumbnail…", {
+      on: () => props.onVerb("set-icon"),
+      title: props.iconTitle,
+    }),
     props.hasIcons
       ? item("mdi-image-off-outline", "Clear thumbnail", {
           on: () => props.onVerb("clear-icons"),
           title: props.clearIconTitle,
         })
       : null,
-    props.single || props.hasIcons ? sep() : null,
+    sep(),
     item("mdi-cube-outline", "Set base model…", {
       on: () => props.onVerb("set-base-model"),
     }),
