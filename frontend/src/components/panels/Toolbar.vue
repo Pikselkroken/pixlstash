@@ -469,7 +469,10 @@
               <v-icon size="20">mdi-tray-arrow-down</v-icon>
             </button>
           </template>
-          <TbExportPanel @confirm-export="emit('confirm-export-zip')" />
+          <TbExportPanel
+            @confirm-export="emit('confirm-export-zip')"
+            @confirm-export-folder="emit('confirm-export-folder', $event)"
+          />
         </v-menu>
         <!-- ── Toolbar: Import (icon trigger → import menu popover) ────── -->
         <v-menu
@@ -674,6 +677,7 @@ const emit = defineEmits([
   "expand-all-stacks",
   "collapse-all-stacks",
   "confirm-export-zip",
+  "confirm-export-folder",
   "open-import",
   "local-import",
   "open-settings",

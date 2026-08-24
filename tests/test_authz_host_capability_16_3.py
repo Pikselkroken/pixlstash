@@ -57,7 +57,7 @@ API = "/api/v1"
 # absent-route probe below asserts 404/405 and is unaffected (non-2xx only).
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
-# The 6 red-line routes on the stricter loopback-only tier. FOUR of them spawn a
+# The 7 red-line routes on the stricter loopback-only tier. FIVE of them spawn a
 # host GUI process (os.startfile / open / xdg-open); server/restart re-execs the
 # process and spawns nothing, which the comment here counted as a GUI spawn from
 # 2026-07-21 until #933 came to add a real one. server-config/open was a
@@ -65,9 +65,13 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 # Condition 1) and is reclassified here; the model shelf's `Open in file manager`
 # (#933) is the fourth spawn and the first to reach it through the shared
 # pixlstash/utils/host_open.py, which reads the opener's exit status where the
-# three inline copies discard it.
+# three inline copies discard it. Export-to-folder (#291) is the fifth spawn and
+# the second to reach it through host_open.py — it writes the exported pictures
+# onto the host disk first and then opens the destination, so the tier follows
+# the same write-then-open shape as the shelf's `Open in file manager` follows a
+# move, not a bare disclosure.
 #
-# The sixth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
+# The seventh is the e2e test hook. It spawns nothing, but it synthesises arbitrary
 # WebSocket grid events broadcast to every connected client — a capability over
 # OTHER clients' state rather than over the caller's own data — and it is mounted
 # only by the e2e backend, which binds 127.0.0.1 and is driven from the same
@@ -79,6 +83,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/pictures/{id}/open-location"),
     ("POST", "/api/v1/models/{model_id}/open-location"),
     ("POST", "/api/v1/server-config/open"),
+    ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
 }
 
@@ -163,10 +168,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_40_local_6_loopback():
-    """The loopback tier is the 4 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 46
-    routes carry a locality tier = 40 local + 6 loopback.
+def test_host_capability_tier_split_is_40_local_7_loopback():
+    """The loopback tier is the 5 file-manager spawns, the process restart and
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 47
+    routes carry a locality tier = 40 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -351,6 +356,18 @@ def test_host_capability_tier_split_is_40_local_6_loopback():
     disclosure and the path, not a destructive verb. The loopback count is
     unchanged: nothing here spawns anything.
 
+    47 = 46 + 7 with ``POST /pictures/export/folder`` (#291), export-to-folder:
+    a local owner already has the destination mounted, so the ZIP-and-download
+    round trip in ``POST /pictures/export`` is pure overhead, and this route
+    writes the exported pictures straight into a caller-named destination
+    instead. It takes a caller-supplied host path exactly like the filesystem
+    picker's routes, which alone would be ``LOCAL_OWNER_ONLY`` — but once every
+    picture is written it opens the destination in the host file manager
+    through the shared ``pixlstash/utils/host_open.py``, the same spawn as
+    ``pictures/{id}/open-location`` and the shelf's `Open in file manager`, and
+    that is the stricter tier the write-then-open pair as a whole is on. The
+    local count is unchanged: nothing else here moved.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -363,7 +380,7 @@ def test_host_capability_tier_split_is_40_local_6_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 6, sorted(loopback)
+    assert len(loopback) == 7, sorted(loopback)
     assert len(local) == 40, sorted(local)
 
 
@@ -714,7 +731,7 @@ def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
     ], templated_gap
 
 
-# ---- LOOPBACK_OWNER_ONLY (5) — the flag-immune red line --------------------
+# ---- LOOPBACK_OWNER_ONLY (7) — the flag-immune red line --------------------
 
 
 def test_loopback_owner_only_allows_loopback():
@@ -757,6 +774,61 @@ def test_loopback_owner_only_public_403():
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, False):
             r = owner.post(_OPEN_LOCATION, headers=_xff("8.8.8.8"))
+            assert _is_loopback_403(r), (
+                f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
+            )
+
+
+# ---- pictures/export/folder — the export-to-folder red line (#291) --------
+
+# A destination that cannot exist, so the gate's pass is provable: the handler
+# past it 404s on "not a directory" rather than actually writing anything or
+# spawning a file manager.
+_EXPORT_FOLDER = (
+    f"{API}/pictures/export/folder?destination=/nonexistent-291-export-destination"
+)
+
+
+def test_export_folder_loopback_owner_only_allows_loopback():
+    """A loopback owner reaches the red-line route (the gate passes; the handler
+    then 404s on the bogus destination — never a locality/loopback 403)."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server):
+            r = owner.post(_EXPORT_FOLDER)
+            assert not _is_loopback_403(r), (
+                f"loopback owner must reach the red-line route; got {r.status_code}: {r.text}"
+            )
+            assert r.status_code == 404, (
+                f"expected the handler's destination-not-found 404 past the "
+                f"gate, got {r.status_code}: {r.text}"
+            )
+
+
+def test_export_folder_loopback_owner_only_rfc1918_403_even_with_flag_on():
+    """THE CARVE-OUT: an RFC1918 LAN owner is 403'd on the red-line route EVEN
+    with ``allow_remote_host_ops=True`` — the flag can never loosen this tier."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.post(_EXPORT_FOLDER, headers=_xff(LAN_IPV4))
+            assert _is_loopback_403(r), (
+                f"RFC1918 must be 403'd on a LOOPBACK_OWNER_ONLY route even with "
+                f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+            )
+            r = owner.post(_EXPORT_FOLDER, headers=_xff("100.64.0.5"))
+            assert _is_loopback_403(r), (
+                f"Tailscale must be 403'd on the red line even with the flag on; "
+                f"got {r.status_code}: {r.text}"
+            )
+
+
+def test_export_folder_loopback_owner_only_public_403():
+    """A public remote owner is 403'd on the red-line route (flag off)."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            r = owner.post(_EXPORT_FOLDER, headers=_xff("8.8.8.8"))
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
             )

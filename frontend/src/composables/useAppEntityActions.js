@@ -123,6 +123,20 @@ export function useAppEntityActions({
     exportStore.exportMenuOpen = false;
   }
 
+  function confirmExportFolder(destination) {
+    gridContainer.value?.exportCurrentViewToFolder({
+      destination,
+      exportType: exportStore.exportType,
+      captionMode: exportStore.exportCaptionMode,
+      tagFormat: exportStore.exportTagFormat,
+      includeCharacterName: exportStore.exportIncludeCharacterName,
+      useOriginalFileNames: exportStore.exportUseOriginalFileNames,
+      resolution: exportStore.exportResolution,
+      bboxMode: exportStore.exportBboxMode,
+    });
+    exportStore.exportMenuOpen = false;
+  }
+
   // --- Review tags overlay ---
   // Visibility lives in the store so the grid toolbar can open it directly.
 
@@ -184,6 +198,7 @@ export function useAppEntityActions({
     handleFacesAssignedToCharacter,
     refreshExportCount,
     confirmExportZip,
+    confirmExportFolder,
     handleClearSearch,
     handleResetToAll,
   };
