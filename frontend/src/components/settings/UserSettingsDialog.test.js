@@ -32,7 +32,6 @@ vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
-vi.mock("./ViewsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./WorkflowsSection.vue", () => ({ default: sectionStub }));
 
 import UserSettingsDialog from "./UserSettingsDialog.vue";
