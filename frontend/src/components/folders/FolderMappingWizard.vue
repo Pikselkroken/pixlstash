@@ -157,7 +157,6 @@ function onCommitted(result) {
     :open="open"
     :title="title"
     :width="step === 'choose' ? 560 : 960"
-    :fullscreen="step === 'mapping' || step === 'preview'"
     :persistent="committing"
     @close="organiseLater"
   >

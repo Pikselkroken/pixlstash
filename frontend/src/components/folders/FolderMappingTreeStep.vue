@@ -390,6 +390,9 @@ function next() {
   flex-direction: column;
 }
 
+/* A separator per row and a whole-row hover, because the name is on the left
+   and its control is on the right: with neither, the eye cannot carry a line
+   across the gap and you cannot tell which dropdown belongs to which folder. */
 .map-tree__row {
   display: flex;
   align-items: center;
@@ -397,6 +400,15 @@ function next() {
   padding: var(--space-2) var(--space-2);
   border-radius: var(--radius-sm);
   border-left: 2px solid transparent;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.6);
+}
+
+.map-tree__row:last-child {
+  border-bottom-color: transparent;
+}
+
+.map-tree__row:hover {
+  background: var(--hover-wash);
 }
 
 .map-tree__row:focus-visible {

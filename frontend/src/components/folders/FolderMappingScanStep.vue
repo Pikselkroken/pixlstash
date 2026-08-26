@@ -270,8 +270,11 @@ onUnmounted(() => {
 }
 
 .scan-step__stat-value {
-  font-family: var(--font-pixel);
+  /* NOT --font-pixel. Tiny5 is a 5-pixel display face: "11,886" came out as
+     unreadable blocks (visual-language.md — brand-only, never reading text). */
   font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
 
 .scan-step__stat-label {
