@@ -68,6 +68,7 @@ from pixlstash.services.project_membership_service import (
     set_character_projects,
     set_picture_set_projects,
 )
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
@@ -555,6 +556,19 @@ def _link_pictures(
     place the two callers' pictures actually differ.
     """
     by_path = {a.relative_path: a for a in assignments}
+
+    # `apply_local_mapping` is handed pictures that may already have been
+    # indexed before the wizard ran, so some can sit in a locked set. Skip
+    # those rather than failing the whole commit — the rest of the library
+    # still gets filed. (`apply_mapping`'s pictures are new, so it is a no-op
+    # there.)
+    frozen = locked_picture_ids(session, [p.id for p in pictures if p.id is not None])
+    if frozen:
+        logger.info(
+            "Folder-mapping commit skipping %d picture(s) frozen by a locked set",
+            len(frozen),
+        )
+        pictures = [p for p in pictures if p.id not in frozen]
 
     # Group by containing folder first: every picture in the same folder
     # resolves to the same (project, person, set, tags), so the ancestor

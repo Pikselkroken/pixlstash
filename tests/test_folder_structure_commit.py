@@ -487,3 +487,54 @@ def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
     body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=30.0)
     assert body["status"] == "failed", body
     assert "library's own folder" in body["error"], body
+
+
+def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
+    """`local_import` may be handed pictures indexed before the wizard ran, so
+    some can already sit in a locked set. Those are skipped; the rest of the
+    folder is still filed."""
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
+    from pixlstash.db_models.tag import Tag
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        CommitResult,
+        _link_pictures,
+    )
+    from sqlmodel import select
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+
+    def scenario(session):
+        frozen = Picture(file_path="locked-set-skip/gallery/frozen.jpg")
+        free = Picture(file_path="locked-set-skip/gallery/free.jpg")
+        session.add(frozen)
+        session.add(free)
+        session.flush()
+        locked_set = PictureSet(name="frozen-by-a-lock", locked=True)
+        session.add(locked_set)
+        session.flush()
+        session.add(PictureSetMember(set_id=locked_set.id, picture_id=frozen.id))
+        session.flush()
+
+        _link_pictures(
+            session,
+            [frozen, free],
+            [Assignment(relative_path="gallery", kind="tag")],
+            os.path.join(image_root, "locked-set-skip"),
+            image_root,
+            CommitResult(),
+        )
+        session.commit()
+
+        tagged = set(
+            session.exec(
+                select(Tag.picture_id).where(Tag.picture_id.in_([frozen.id, free.id]))
+            ).all()
+        )
+        return frozen.id, free.id, tagged
+
+    frozen_id, free_id, tagged = server.vault.db.run_task(scenario)
+    assert free_id in tagged, "an unlocked picture must still be filed"
+    assert frozen_id not in tagged, "a picture frozen by a locked set must be skipped"
