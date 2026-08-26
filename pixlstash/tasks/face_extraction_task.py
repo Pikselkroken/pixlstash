@@ -495,6 +495,13 @@ class FaceExtractionTask(BaseTask):
                 )
         return results
 
+    #: A batch slower than this logs its own timing breakdown at INFO, without
+    #: anyone having had to set PIXLSTASH_FEATURE_TIMING in advance. Well above
+    #: a healthy batch (a hundred JPEGs run in ~1-2 s on a warm GPU) so an
+    #: ordinary library never sees it, and well below the "is it stuck?"
+    #: threshold of a person watching a log.
+    SLOW_BATCH_LOG_S = 5.0
+
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
     # Minimum pixel dimension (width or height) required for InsightFace to run
@@ -906,8 +913,15 @@ class FaceExtractionTask(BaseTask):
                 )
             thumb_gen_s += time.time() - _thumb_gen_start
 
-        if profile_enabled:
-            elapsed = time.time() - batch_start
+        elapsed = time.time() - batch_start
+        # Always say why a slow batch was slow. The breakdown existed but only
+        # behind an env var nobody sets before they need it, so the log of a
+        # library that felt stalled showed a burst of sentinel warnings, minutes
+        # of silence, and no way to tell whether that silence was work (a
+        # hundred HEIC frames decoded, a video seeked three times) or the
+        # planner idling between batches. One line per slow batch answers that,
+        # and a fast batch stays quiet.
+        if profile_enabled or elapsed >= self.SLOW_BATCH_LOG_S:
             logger.info(
                 "[FEATURE_TIMING] batch=%s processed=%s updates=%s faces=%s elapsed=%.3fs semaphore_wait=%.3fs preload_wait=%.3fs init=%.3fs setup=%.3fs batch_infer=%.3fs loop=%.3fs(precheck=%.3fs load=%.3fs infer=%.3fs) thumb_gen=%.3fs thumb_write=%.3fs",
                 len(pics),
