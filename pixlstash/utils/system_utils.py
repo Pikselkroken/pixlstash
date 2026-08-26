@@ -403,9 +403,11 @@ def describe_storage_device(path: str) -> Optional[StorageDevice]:
 
 
 def default_max_vram_gb() -> float:
-    """Return default VRAM budget in GB: min(6GB, 50% of available VRAM).
+    """Return default VRAM budget in GB: max(4GB, 50% of total VRAM).
 
-    Falls back to 6GB when VRAM cannot be detected.
+    Card-aware so a large card is not starved: 16GB on a 32GB card, 6GB on
+    12GB, 4GB on 8GB. Falls back to 6GB when VRAM cannot be detected or
+    nvidia-smi reports 0.
     """
     try:
         output = subprocess.check_output(
@@ -427,7 +429,7 @@ def default_max_vram_gb() -> float:
         if total_mb <= 0:
             return 6.0
         half_gb = (total_mb / 1024.0) / 2.0
-        return round(min(6.0, half_gb), 2)
+        return round(max(4.0, half_gb), 2)
     except Exception:
         # nvidia-smi absent/failing is normal on CPU-only hosts; the documented
         # 6GB default IS the answer, so logging it would be routine noise.
