@@ -8,6 +8,7 @@ import time
 from sqlalchemy.exc import IntegrityError
 
 from PIL import Image as PILImage
+from PIL import ImageOps
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
@@ -235,7 +236,26 @@ class TagTask(BaseTask):
                     file_path,
                 )
             else:
-                return file_path, PILImage.open(file_path).convert("RGB"), False
+                # exif_transpose, because everything this image is measured
+                # against is already transposed. Face bboxes come from
+                # `load_image_bgr_reduced`, which transposes: a phone photo with
+                # orientation 6 is 4608x2592 on disk and 2592x4608 to anyone
+                # looking at it, so a recorded bbox at y=3699 lands past the
+                # bottom of the frame this loader used to return.
+                # `expand_bbox_to_square` then clamped one edge and not the
+                # other, and PIL refused the crop ("Coordinate 'lower' is less
+                # than 'upper'").
+                #
+                # The refusal was the loud half. The quiet half is worse: with
+                # the face nearer the top the box stayed valid and the crop came
+                # out of the wrong part of a sideways picture — and the
+                # whole-image tagging pass ran on that same sideways image, for
+                # every rotated photo in the library.
+                return (
+                    file_path,
+                    ImageOps.exif_transpose(PILImage.open(file_path)).convert("RGB"),
+                    False,
+                )
         except Exception as exc:
             if _is_transient_load_error(exc):
                 logger.warning(
