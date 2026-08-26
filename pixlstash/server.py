@@ -7,6 +7,7 @@ import re
 import socket
 import asyncio
 import threading
+import time
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from platformdirs import user_config_dir
@@ -406,6 +407,19 @@ class Server(
         # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
         gc.collect()
 
+        # Boot-time instrumentation (issue: v1.11.0 startup latency). Local,
+        # operator-visible stage timings only — no telemetry, nothing leaves
+        # the process. Same perf_counter-and-log shape TaskRunner already uses
+        # for per-task timing (pixlstash/task_runner.py).
+        _boot_t0 = time.perf_counter()
+        _stage_t = _boot_t0
+
+        def _log_stage(name: str) -> None:
+            nonlocal _stage_t
+            now = time.perf_counter()
+            logger.info("[boot] %s: %.3fs", name, now - _stage_t)
+            _stage_t = now
+
         self._server_config_path = server_config_path
         self.path_mapper = PathMapper(path_map)
 
@@ -422,6 +436,7 @@ class Server(
             server_config_path=self._server_config_path,
             logger=logger,
         ).run()
+        _log_stage("startup checks (disk/VRAM/CUDA/SSL)")
         write_json_atomic(server_config_path, self._server_config)
 
         # Internal loopback transport (Electron desktop shell).
@@ -486,6 +501,7 @@ class Server(
         # services/managed_model_store.py for why it is `managed` rather than a
         # seeded `user` folder nobody is allowed to remove.
         ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
+        _log_stage("hub bootstrap (open/migrate hub.db)")
         # The three roots PixlStash's models live in, declared rather than
         # scanned. Off in the test suite: they are machine-global, so a Server
         # on a temp config dir would otherwise describe whichever engines the
@@ -532,6 +548,7 @@ class Server(
                         label,
                         exc,
                     )
+        _log_stage("model shelf declarations (builtin/insightface/huggingface)")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
@@ -549,6 +566,7 @@ class Server(
             self.library_registry.by_uuid(self._hub_bootstrap.library.uuid)
             or self._hub_bootstrap.library
         )
+        _log_stage("vault opened (VaultDatabase open/migrate + task-runner wiring)")
 
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
@@ -596,6 +614,7 @@ class Server(
         self.apply_user_settings_to_vault(self.vault)
         self.reconcile_library_settings(self.vault)
         self.vault.start()
+        _log_stage("auth wired + background workers started")
 
         # Owns replacing the vault when the active library changes, and the
         # state requests are refused in while that is happening.
@@ -658,6 +677,7 @@ class Server(
         # Added last so Starlette makes it outermost: its lease begins before
         # authentication and ends only after the final ASGI body frame.
         self.api.add_middleware(LibraryAdmissionMiddleware, server=self)
+        _log_stage("FastAPI app built (middleware + routes + authz gate)")
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -682,6 +702,9 @@ class Server(
         self.staging_sessions = {}
         self._shutdown_on_lifespan = False
         self._telemetry_thread = None
+        logger.info(
+            "[boot] Server.__init__ total: %.3fs", time.perf_counter() - _boot_t0
+        )
 
     def _maybe_send_telemetry_ping(self) -> None:
         """Send the daily install ping, if the owner has turned it on.

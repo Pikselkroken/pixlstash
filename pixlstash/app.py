@@ -5,6 +5,7 @@ import sys
 import json
 import getpass
 import shlex
+import time
 
 from platformdirs import user_config_dir
 from passlib.hash import bcrypt
@@ -431,6 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    _boot_t0 = time.perf_counter()
     _force_utf8_streams()
     args = build_parser().parse_args()
 
@@ -510,7 +512,16 @@ def main():
         vault.db.run_task(clear_embeddings, priority=1)
         return None
 
+    _t_engine = time.perf_counter()
     server.vault.ensure_ready()
+    logger.info(
+        "[boot] inference engine ready (models loaded): %.3fs",
+        time.perf_counter() - _t_engine,
+    )
+    logger.info(
+        "[boot] total before serving (config + Server() + engine warm-up): %.3fs",
+        time.perf_counter() - _boot_t0,
+    )
     server.run()
     return 0
 
