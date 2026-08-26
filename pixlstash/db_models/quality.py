@@ -5,8 +5,6 @@ import time
 from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship
 from typing import List, Optional, TYPE_CHECKING
 
-from scipy.ndimage import median_filter
-
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
@@ -343,6 +341,15 @@ class Quality(SQLModel, table=True):
     @staticmethod
     def _calculate_noise_level(image: np.ndarray) -> float:
         # Optimised: grayscale and quarter resolution
+
+        # Local import: scipy.ndimage costs ~120ms to import (it pulls in its
+        # numpy array-API compat layer) and this static method is the only
+        # user of it in the whole codebase. Importing it here instead of at
+        # module scope keeps that cost off every server boot (this module is
+        # reached from pixlstash.db_models at startup) and off every test
+        # that merely imports the model, paying it only when a quality score
+        # is actually calculated (a background task).
+        from scipy.ndimage import median_filter
 
         # Convert to grayscale
         if image.ndim == 3:
