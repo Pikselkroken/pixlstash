@@ -4,12 +4,25 @@ folder a human could plausibly have organized by hand, for testing reference
 folders against realistic data instead of a clean synthetic fixture.
 
 Reads an existing library's ``vault.db`` **read-only** (plain SELECTs, no
-migrations, no writes) and copies each picture's real bytes into
-``<dest>/<year>/<year-month-day>/<name>``, using the picture's own
-``original_file_name`` where one was recorded and its ``created_at`` for the
-date folders — the same information a camera or phone would have given the
-file in the first place. Safe to run against a library a server is currently
-using.
+migrations, no writes) and copies each picture's real bytes into a folder tree
+using the picture's own ``original_file_name`` where one was recorded. Safe to
+run against a library a server is currently using.
+
+``--organize-by`` picks the folder scheme:
+
+* ``date`` (default): ``<year>/<year-month-day>/<name>``, the same information
+  a camera or phone would have given the file in the first place.
+* ``people``: one folder per tagged Character, ``<Name>/<name>``. A picture
+  with no tagged face falls back to the date scheme, same as a real owner who
+  only got around to naming some of the faces.
+* ``sets``: one folder per PictureSet, the same fallback for a picture in no
+  set.
+* ``mixed``: people first, then sets, for whichever picture each already
+  belongs to; the rest fall back to date. Whenever the person or set has a
+  Project, its folder is nested one level under the project's own name —
+  since only some real characters/sets are actually in a project, this alone
+  produces a library where some things sit inside a project folder and others
+  don't, without any extra flag for it.
 
 With ``--messiness`` above 0, some pictures get a plausible human mistake
 instead of the tidy path: dumped in a flat "Camera Uploads" folder, filed
@@ -20,6 +33,8 @@ duplicate. ``--seed`` makes a given ``--messiness`` reproducible.
 Usage:
     python scripts/export_plausible_user_library.py \\
         ~/.config/pixlstash/images /tmp/messy-user-library --messiness 0.15
+    python scripts/export_plausible_user_library.py \\
+        ~/.config/pixlstash/images /tmp/people-library --organize-by people
 """
 
 from __future__ import annotations
@@ -39,9 +54,30 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from pixlstash.db_models.entity_project import (  # noqa: E402
+    CharacterProjectMember,
+    PictureSetProjectMember,
+)
 from pixlstash.db_models.picture import Picture  # noqa: E402
+from pixlstash.db_models.project import Project  # noqa: E402
+from pixlstash.services import views_service  # noqa: E402
 from pixlstash.services.views_service import safe_component  # noqa: E402
 from pixlstash.utils.image_processing.image_utils import ImageUtils  # noqa: E402
+
+#: Which project-membership join table backs each collect_in_session() kind.
+_PROJECT_MEMBER_BY_KIND = {
+    "people": (CharacterProjectMember, CharacterProjectMember.character_id),
+    "sets": (PictureSetProjectMember, PictureSetProjectMember.set_id),
+}
+
+#: --organize-by value -> the kinds it draws folders from, in claim order
+#: (a picture in more than one gets the first kind's folder).
+_ORGANIZE_KINDS = {
+    "date": (),
+    "people": ("people",),
+    "sets": ("sets",),
+    "mixed": ("people", "sets"),
+}
 
 # Filenames a careless human actually reuses, over and over, across folders.
 _GENERIC_NAMES = (
@@ -110,12 +146,49 @@ def _unique_path(dest_dir: Path, filename: str, taken: set[str]) -> Path:
     return dest_dir / candidate
 
 
+def _entity_folders(
+    session: Session, kinds: tuple[str, ...]
+) -> dict[int, tuple[str, ...]]:
+    """Return ``{picture_id: folder_parts}`` for every picture an entity of
+    *kinds* claims, nested under that entity's Project when it has one.
+
+    Reuses ``views_service.collect_in_session`` — the same grouping the Views
+    feature already does — rather than re-deriving it. First kind, then first
+    entity within it, wins a picture that belongs to more than one; the
+    fallback for everything unclaimed is the caller's job.
+    """
+    collected = views_service.collect_in_session(session, kinds)
+    project_by_entity: dict[tuple[str, int], Optional[str]] = {}
+    claimed: dict[int, tuple[str, ...]] = {}
+    for kind in kinds:
+        member_model, id_col = _PROJECT_MEMBER_BY_KIND[kind]
+        for entity_id, name, pictures in collected.get(kind, []):
+            key = (kind, entity_id)
+            if key not in project_by_entity:
+                project_by_entity[key] = session.exec(
+                    select(Project.name)
+                    .join(member_model, member_model.project_id == Project.id)
+                    .where(id_col == entity_id)
+                ).first()
+            project_name = project_by_entity[key]
+            entity_folder = safe_component(name, f"{kind} {entity_id}")
+            parts = (
+                (safe_component(project_name, entity_folder), entity_folder)
+                if project_name
+                else (entity_folder,)
+            )
+            for picture in pictures:
+                claimed.setdefault(picture.id, parts)
+    return claimed
+
+
 def export_library(
     source_root: Path,
     dest_root: Path,
     messiness: float,
     seed: int,
     limit: Optional[int],
+    organize_by: str = "date",
 ) -> dict:
     db_path = source_root / "vault.db"
     if not db_path.is_file():
@@ -131,6 +204,7 @@ def export_library(
         if limit:
             query = query.limit(limit)
         pictures = session.exec(query).all()
+        entity_folders = _entity_folders(session, _ORGANIZE_KINDS[organize_by])
 
     for picture in pictures:
         source = ImageUtils.resolve_picture_path(str(source_root), picture.file_path)
@@ -138,7 +212,7 @@ def export_library(
             stats["skipped_missing"] += 1
             continue
 
-        folder = _dated_folder(picture.created_at)
+        folder = entity_folders.get(picture.id) or _dated_folder(picture.created_at)
         name = picture.original_file_name or _fallback_name(picture.id, source)
         name = safe_component(name, _fallback_name(picture.id, source))
 
@@ -186,13 +260,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--limit", type=int, default=None, help="Cap the number of pictures."
     )
+    parser.add_argument(
+        "--organize-by",
+        choices=sorted(_ORGANIZE_KINDS),
+        default="date",
+        help="Folder scheme: date (default), people, sets, or mixed.",
+    )
     args = parser.parse_args(argv)
 
     if not 0.0 <= args.messiness <= 1.0:
         parser.error("--messiness must be between 0 and 1")
 
     stats = export_library(
-        args.source, args.dest, args.messiness, args.seed, args.limit
+        args.source, args.dest, args.messiness, args.seed, args.limit, args.organize_by
     )
     print(f"copied:           {stats['copied']}")
     print(f"  with a mistake: {stats['messy']}")
