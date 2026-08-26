@@ -45,7 +45,11 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.library_layout import Facet
-from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
+from pixlstash.utils.media_files import (
+    SUPPORTED_IMAGE_EXTS,
+    is_pixlstash_thumbnail,
+    is_supported_media_file,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
 )
@@ -123,12 +127,15 @@ KINDS = tuple(f.value for f in Facet) + (JUST_A_FOLDER,)
 #: Kinds a level can narrow to once cardinality has ruled Tag out.
 _NON_TAG_KINDS = (Facet.PROJECT.value, Facet.SET.value, Facet.PERSON.value)
 
-#: The one copy, shared with the filesystem picker, the reference-folder scanner
-#: and the library picker. A folder the picker calls "1,200 pictures" has to be
-#: the folder this read samples from, or the two screens disagree about the same
-#: tree. Videos are deliberately excluded here — this signal decodes what it
-#: samples and a video frame is not what the face pass is built on — so the
-#: image half is imported rather than `is_supported_media_file`.
+#: What the face pass may SAMPLE. Videos are deliberately excluded — this
+#: signal decodes what it samples and a video frame is not what the face pass is
+#: built on — so the image half is imported rather than `is_supported_media_file`.
+#:
+#: **This is not what the read COUNTS.** Those were the same list until a real
+#: import reported a total that matched nothing: the commit indexes every
+#: supported media file, videos included, so a library of holiday clips came out
+#: with more pictures than the dialog had promised. Counting is
+#: `is_supported_media_file`, sampling is this — see `_Folder.direct_media`.
 _IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 #: Lower-cased and compared lower-cased: a `.TXT` beside every picture is a
 #: caption file, and a dataset exported on Windows is the obvious victim of
@@ -221,7 +228,12 @@ class _Folder:
     abs_path: str
     rel_path: str
     parent_index: Optional[int]
+    #: Images only, thumbnails excluded — the face pass's sample source, and
+    #: what the sidecar signal counts caption files against.
     direct_pictures: list[str] = field(default_factory=list)
+    #: Everything in this folder the commit will index: images AND videos, our
+    #: own thumbnails excluded. What the owner is shown and promised.
+    direct_media: int = 0
     with_sidecar: int = 0
     child_count: int = 0
     picture_count: int = 0  # recursive; filled after the walk
@@ -418,11 +430,22 @@ class FolderStructureRead:
                 child_count=len(dirnames),
             )
             lowered = {f.lower() for f in filenames}
+            # `is_supported_media_file` drops our own `_thumb.webp` files, which
+            # a library that has been indexed before is full of, sitting beside
+            # every original. Counting them made the total grow on every re-read
+            # of the same folder — the "different number each time" — and
+            # sampling them spent the face pass on 96px thumbnails.
+            folder.direct_media = sum(
+                1
+                for f in filenames
+                if not f.startswith(".") and is_supported_media_file(f)
+            )
             folder.direct_pictures = sorted(
                 f
                 for f in filenames
                 if os.path.splitext(f)[1].lower() in _IMAGE_EXTS
                 and not f.startswith(".")
+                and not is_pixlstash_thumbnail(f)
             )
             for picture in folder.direct_pictures:
                 lowered_name = picture.lower()
@@ -448,7 +471,7 @@ class FolderStructureRead:
         justification is that the partial result is showable.
         """
         for folder in self._folders:
-            folder.picture_count = len(folder.direct_pictures)
+            folder.picture_count = folder.direct_media
         for folder in sorted(self._folders, key=lambda f: f.depth, reverse=True):
             if folder.parent_index is not None:
                 self._folders[folder.parent_index].picture_count += folder.picture_count
@@ -522,9 +545,7 @@ class FolderStructureRead:
                     "folder_count": len(folders),
                     # Direct only, and named so: summing the recursive counts of
                     # a level would count every picture once per ancestor.
-                    "direct_picture_count": sum(
-                        len(f.direct_pictures) for f in folders
-                    ),
+                    "direct_picture_count": sum(f.direct_media for f in folders),
                     "proposal": self._level_proposal(folders, rows_by_depth[depth]),
                     "folders": rows_by_depth[depth],
                 }
@@ -581,7 +602,7 @@ class FolderStructureRead:
             "name": folder.name,
             "relative_path": folder.rel_path,
             "picture_count": folder.picture_count,
-            "direct_picture_count": len(folder.direct_pictures),
+            "direct_picture_count": folder.direct_media,
             "child_count": folder.child_count,
             "proposal": self._folder_proposal(folder),
         }

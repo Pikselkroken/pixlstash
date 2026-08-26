@@ -369,3 +369,112 @@ def test_finder_to_thumbnail_task_round_trip_on_detached_pictures(tmp_path):
         for index in range(len(picture_ids)):
             thumb = ImageUtils.get_thumbnail_path(vault.db.image_root, f"p{index}.png")
             assert thumb and Image.open(thumb).size == (width, height)
+
+
+# ── the face finder's candidate window ──────────────────────────────────────
+
+
+class _StubEngine:
+    """Only what `MissingFaceExtractionFinder` reads off the engine."""
+
+    def __init__(self, keep_models_in_memory: bool = False):
+        self.keep_models_in_memory = keep_models_in_memory
+
+
+def test_the_face_finder_can_fill_every_slot_it_says_it_has(tmp_path):
+    """`max_inflight_tasks() == 3` was a promise one batch of candidates broke.
+
+    A picture keeps matching ``~faces.any()`` until its task finishes, so with a
+    candidate window of exactly one batch the second sweep re-read the same
+    hundred rows, found all of them claimed, and returned None — which the
+    planner answers with a backoff that grows 1.8x a time. Two idle slots and a
+    lengthening sleep, on a library with thousands of pictures left to do.
+    """
+    from pixlstash.tasks.missing_face_extraction_finder import (
+        FACE_EXTRACTION_BATCH_LIMIT,
+        MissingFaceExtractionFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        _seed(
+            vault,
+            tmp_path,
+            count=FACE_EXTRACTION_BATCH_LIMIT + 5,
+            with_faces=False,
+        )
+        finder = MissingFaceExtractionFinder(vault.db, lambda: _StubEngine())
+
+        first = finder.find_task()
+        assert first is not None
+        assert len(first.params["picture_ids"]) == FACE_EXTRACTION_BATCH_LIMIT
+
+        # Nothing has completed, so every id in `first` is still claimed AND
+        # still faceless. The next sweep must reach past them.
+        second = finder.find_task()
+        assert second is not None, (
+            "the finder starved itself: a full batch in flight left it "
+            "returning None while 5 pictures still had no faces"
+        )
+        assert len(second.params["picture_ids"]) == 5
+        assert not set(first.params["picture_ids"]) & set(second.params["picture_ids"])
+
+
+def test_undecodable_pictures_cannot_wedge_the_face_finder(tmp_path):
+    """A window's worth of suppressed rows used to be a permanent stall.
+
+    They are filtered *after* the query by ``_filter_and_claim``, so a run of
+    them long enough to fill the candidate window handed back a list that
+    claimed nothing — every sweep, forever, with real work sitting behind them.
+    """
+    from pixlstash.tasks.missing_face_extraction_finder import (
+        FACE_EXTRACTION_BATCH_LIMIT,
+        MissingFaceExtractionFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed(
+            vault,
+            tmp_path,
+            count=FACE_EXTRACTION_BATCH_LIMIT + 3,
+            with_faces=False,
+        )
+        for picture_id in ids[:FACE_EXTRACTION_BATCH_LIMIT]:
+            vault.db.unprocessable_images.mark_unprocessable(
+                picture_id,
+                str(tmp_path / f"p{picture_id}.png"),
+                reason="test: undecodable",
+            )
+        finder = MissingFaceExtractionFinder(vault.db, lambda: _StubEngine())
+
+        task = finder.find_task()
+        assert task is not None, "the three good pictures behind the bad ones"
+        assert set(task.params["picture_ids"]) == set(ids[FACE_EXTRACTION_BATCH_LIMIT:])
+
+
+def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
+    """The setting exists to stop exactly this reload, so it has to win here."""
+    from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+    from pixlstash.tasks.missing_face_extraction_finder import (
+        MissingFaceExtractionFinder,
+    )
+
+    released = []
+    with Vault(image_root=str(tmp_path)) as vault:
+        finder = MissingFaceExtractionFinder(
+            vault.db, lambda: _StubEngine(keep_models_in_memory=True)
+        )
+        original = FaceExtractionTask.release_detection_models
+        FaceExtractionTask.release_detection_models = classmethod(
+            lambda cls: released.append(True)
+        )
+        try:
+            finder.on_all_tasks_complete()
+            assert released == [], "the owner asked for the models to stay resident"
+
+            dropping = MissingFaceExtractionFinder(
+                vault.db, lambda: _StubEngine(keep_models_in_memory=False)
+            )
+            dropping.on_all_tasks_complete()
+            assert released == [True], "and to be dropped when they did not"
+        finally:
+            FaceExtractionTask.release_detection_models = original
