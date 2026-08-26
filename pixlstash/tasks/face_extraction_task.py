@@ -164,7 +164,7 @@ class FaceExtractionTask(BaseTask):
                     if ext not in self._VIDEO_EXTS:
                         return None, None, 1.0
                     try:
-                        return file_path, self._read_video_frames(file_path), 1.0
+                        return (file_path, *self._read_video_frames(file_path))
                     except Exception as exc:
                         logger.warning(
                             "Video preload failed for %s (%s: %s); "
@@ -540,9 +540,15 @@ class FaceExtractionTask(BaseTask):
     _FLUSH_CHUNK_SIZE = 100
 
     @staticmethod
-    def _read_video_frames(file_path: str) -> list[tuple[int, np.ndarray]]:
-        """Return the ``(frame_index, bgr_frame)`` pairs face detection samples.
+    def _read_video_frames(
+        file_path: str,
+    ) -> tuple[list[tuple[int, np.ndarray]], float]:
+        """Return ``(frames, inv_scale)`` — the frames face detection samples.
 
+        ``frames`` is ``(frame_index, bgr_frame)`` pairs, each reduced so its
+        longest side is at most ``INFERENCE_MAX_SIDE`` (as stills are);
+        ``inv_scale`` maps a reduced-frame coordinate back to source pixels and
+        is one number per clip because every frame shares the clip's size.
         Frame 0 plus every ``max(1, frame_count // 3)``-th frame after it, read
         by seeking. Sequential decode was measured against this on real HEVC
         clips: ~25 % faster on clips under ~100 frames, but linear in clip
@@ -555,12 +561,24 @@ class FaceExtractionTask(BaseTask):
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if frame_count < 1:
                 logger.warning("No frames found in video: %s", file_path)
-                return []
+                return [], 1.0
             frames: list[tuple[int, np.ndarray]] = []
+            inv_scale = 1.0
+
+            def reduced(frame: np.ndarray) -> np.ndarray:
+                nonlocal inv_scale
+                h, w = frame.shape[:2]
+                if max(h, w) <= FaceExtractionTask.INFERENCE_MAX_SIDE:
+                    return frame
+                scale = FaceExtractionTask.INFERENCE_MAX_SIDE / float(max(h, w))
+                new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+                inv_scale = w / float(new_w)
+                return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = cap.read()
             if ret and frame is not None:
-                frames.append((0, frame))
+                frames.append((0, reduced(frame)))
             step = max(1, frame_count // 3)
             for frame_index in range(step, frame_count, step):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -572,8 +590,8 @@ class FaceExtractionTask(BaseTask):
                         file_path,
                     )
                     continue
-                frames.append((frame_index, frame))
-            return frames
+                frames.append((frame_index, reduced(frame)))
+            return frames, inv_scale
         finally:
             cap.release()
 
@@ -756,12 +774,12 @@ class FaceExtractionTask(BaseTask):
                 if need_faces:
                     preloaded_entry = preloaded.get(file_path)
                     if preloaded_entry is not None:
-                        frames = preloaded_entry[0]
+                        frames, inv_scale = preloaded_entry
                     else:
                         # Not preloaded (cancelled, or decode failed in the
                         # pool — already logged): read on the worker thread.
                         read_start = time.time()
-                        frames = self._read_video_frames(file_path)
+                        frames, inv_scale = self._read_video_frames(file_path)
                         image_load_s += time.time() - read_start
                     first_frame = None
                     first_bboxes = []
@@ -800,7 +818,11 @@ class FaceExtractionTask(BaseTask):
                                     frame_index,
                                 )
                             if frame_index == 0:
+                                # Loaded-frame space, matching first_frame.
                                 first_bboxes.append(expanded_bbox)
+                            # Scale bbox from loaded-frame space to source pixels.
+                            if inv_scale != 1.0 and expanded_bbox:
+                                expanded_bbox = [v * inv_scale for v in expanded_bbox]
                             face_objects.append(
                                 Face(
                                     picture_id=pic.id,
@@ -814,7 +836,13 @@ class FaceExtractionTask(BaseTask):
                             )
                     if first_frame is not None and first_bboxes:
                         pending_thumb_work.append(
-                            (pic.id, pic.file_path, first_frame, first_bboxes, 1.0)
+                            (
+                                pic.id,
+                                pic.file_path,
+                                first_frame,
+                                first_bboxes,
+                                inv_scale,
+                            )
                         )
             else:
                 logger.warning(

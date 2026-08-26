@@ -351,9 +351,22 @@ def test_video_face_rows_identical_with_and_without_preload():
                 size,
             )
             _write_video(os.path.join(image_root, "blank.mp4"), [blank] * 30, size)
+            # A clip wider than INFERENCE_MAX_SIDE with the face pasted at a
+            # known place, so the source-space bbox can be checked.
+            big_size = (1280, 720)
+            region = (800, 300, 1056, 500)  # x0, y0, x1, y1 in source pixels
+            big = np.full((big_size[1], big_size[0], 3), blank, dtype=np.uint8)
+            big[region[1] : region[3], region[0] : region[2]] = cv2.resize(
+                face_a, (region[2] - region[0], region[3] - region[1])
+            )
+            _write_video(os.path.join(image_root, "big.mp4"), [big] * 30, big_size)
 
             def add_pictures(session):
-                pics = [Picture(file_path="faces.mp4"), Picture(file_path="blank.mp4")]
+                pics = [
+                    Picture(file_path="faces.mp4"),
+                    Picture(file_path="blank.mp4"),
+                    Picture(file_path="big.mp4"),
+                ]
                 for pic in pics:
                     session.add(pic)
                 session.commit()
@@ -362,7 +375,7 @@ def test_video_face_rows_identical_with_and_without_preload():
                 return pics
 
             pictures = server.vault.db.run_task(add_pictures)
-            faces_id, blank_id = pictures[0].id, pictures[1].id
+            faces_id, blank_id, big_id = (p.id for p in pictures)
 
             def rows(task):
                 _updates, bulk_faces, _crops = task._extract_features(pictures)
@@ -388,7 +401,16 @@ def test_video_face_rows_identical_with_and_without_preload():
             assert set(preloaded_task._preloaded_images) == {
                 os.path.join(image_root, "faces.mp4"),
                 os.path.join(image_root, "blank.mp4"),
+                os.path.join(image_root, "big.mp4"),
             }
+            big_frames, big_inv_scale = preloaded_task._preloaded_images[
+                os.path.join(image_root, "big.mp4")
+            ]
+            assert big_inv_scale == 1280 / FaceExtractionTask.INFERENCE_MAX_SIDE
+            assert all(
+                max(f.shape[:2]) <= FaceExtractionTask.INFERENCE_MAX_SIDE
+                for _, f in big_frames
+            )
             preloaded_rows = rows(preloaded_task)
 
             sync_task = FaceExtractionTask(server.vault.db, engine, pictures)
@@ -411,6 +433,16 @@ def test_video_face_rows_identical_with_and_without_preload():
             assert [r[1:4] for r in preloaded_rows if r[0] == blank_id] == [
                 (0, -1, None)
             ]
+
+            # The big clip's bboxes are written in SOURCE pixels: one face per
+            # sampled frame, centred on the pasted region, expanded by 1.25.
+            big_rows = [r for r in preloaded_rows if r[0] == big_id]
+            assert [r[1] for r in big_rows] == [0, 10, 20]
+            for _pid, _frame, _idx, bbox, _emb in big_rows:
+                cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+                assert region[0] < cx < region[2] and region[1] < cy < region[3], bbox
+                assert bbox[2] - bbox[0] < 1.3 * (region[2] - region[0]) + 8, bbox
+                assert bbox[3] - bbox[1] < 1.3 * (region[3] - region[1]) + 8, bbox
 
             # And each frame's faces match the old one-frame-at-a-time call. The
             # clip's frames now share one recogniser call, so the embedding is
