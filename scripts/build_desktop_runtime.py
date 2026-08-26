@@ -266,8 +266,22 @@ def compile_bytecode(py: Path, python_dir: Path, target_os: str) -> None:
         else python_dir / "lib" / f"python{major_minor}"
     )
     log(f"precompiling bytecode (compileall): {target}")
+    # -s strips the build-time prefix from the paths baked into the .pyc, so
+    # tracebacks quote runtime-relative paths instead of the CI checkout the
+    # tree was built in. The runtime is relocated at install time, so the
+    # absolute build path was never resolvable at runtime anyway.
     subprocess.run(
-        [str(py), "-m", "compileall", "-q", "-j", "0", str(target)],
+        [
+            str(py),
+            "-m",
+            "compileall",
+            "-q",
+            "-j",
+            "0",
+            "-s",
+            str(python_dir),
+            str(target),
+        ],
         check=True,
     )
 
