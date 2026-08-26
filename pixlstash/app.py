@@ -200,6 +200,39 @@ def _prompt_legacy_identity_migration(library) -> bool:
     return answer in {"y", "yes"}
 
 
+def _prompt_library_switch(library, reason: str, alternatives: list):
+    """Offer the attached libraries that open when the active one does not.
+
+    Nothing else can offer this. The Settings pane that changes the active
+    library needs the server that is failing to start, and the CLI has no verb
+    for it, so without this prompt a vault deleted or replaced outside
+    PixlStash is a start-up that can never succeed again. Electron and a
+    non-interactive launch get the same list in the error text instead; the
+    choice is never made for them, because silently opening a different library
+    is how an import lands in the wrong one.
+    """
+    is_electron = (
+        os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron"
+    )
+    if is_electron or not getattr(sys.stdin, "isatty", lambda: False)():
+        return None
+
+    print(
+        f"\nPixlStash cannot open its library {library.name} ({library.path}):"
+        f"\n  {reason}\n\nThese attached libraries do open:",
+        file=sys.stderr,
+    )
+    for index, candidate in enumerate(alternatives, start=1):
+        print(f"  {index}. {candidate.name} ({candidate.path})", file=sys.stderr)
+    try:
+        answer = input("Open which one instead? [number, or Enter to stop] ").strip()
+    except EOFError:
+        return None
+    if not answer.isdigit() or not 1 <= int(answer) <= len(alternatives):
+        return None
+    return alternatives[int(answer) - 1]
+
+
 def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
     if force:
         return True
@@ -466,6 +499,7 @@ def main():
             server_config_path=args.server_config,
             path_map=path_map,
             legacy_identity_prompt=_prompt_legacy_identity_migration,
+            library_switch_prompt=_prompt_library_switch,
         )
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")

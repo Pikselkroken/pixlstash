@@ -1263,6 +1263,94 @@ class TestCrashSafeOrdering:
             )
 
 
+class TestAVanishedVault:
+    """The active library's vault deleted from under a still-stamped hub.
+
+    A desktop install and a source install keep separate hubs but share one
+    library folder, so removing a vault in one leaves the other's registration
+    pointing at nothing.
+    """
+
+    @staticmethod
+    def _stamped(folder, fingerprint):
+        make_vault(folder)
+        conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+        conn.execute("UPDATE library_settings SET library_uuid = ?", (fingerprint,))
+        conn.commit()
+        conn.close()
+        return folder
+
+    @pytest.fixture
+    def two_libraries(self, tmp_path):
+        """A hub whose active library's vault has just been deleted."""
+        hub_path = str(tmp_path / "hub.db")
+        kept = self._stamped(
+            str(tmp_path / "kept"), "00000000-0000-4000-8000-0000000000aa"
+        )
+        gone = self._stamped(
+            str(tmp_path / "gone"), "00000000-0000-4000-8000-0000000000bb"
+        )
+        hub = HubDatabase(hub_path)
+        registry = LibraryRegistry(hub)
+        registry.attach(kept, "Kept")
+        registry.attach(gone, "Gone")
+        registry.set_active("Gone")
+        hub.close()
+        os.remove(os.path.join(gone, "vault.db"))
+        return hub_path, kept, gone
+
+    def test_the_deleted_vault_is_not_recreated_and_the_alternative_is_named(
+        self, two_libraries
+    ):
+        hub_path, kept, gone = two_libraries
+
+        with pytest.raises(HubBootstrapError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert "Kept" in str(raised.value) and kept in str(raised.value)
+        # The whole point of validating read-only first: an empty vault.db here
+        # would turn a missing database into an unrecognisable one for good.
+        assert not os.path.exists(os.path.join(gone, "vault.db"))
+
+    def test_the_offered_library_becomes_active(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+        offered = []
+
+        def prompt(library, reason, alternatives):
+            offered.append((library.name, [lib.name for lib in alternatives]))
+            return alternatives[0]
+
+        result = bootstrap_hub(kept, hub_path, library_switch_prompt=prompt)
+        try:
+            assert offered == [("Gone", ["Kept"])]
+            assert result.library.path == kept
+            assert result.library.is_active
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_declining_the_offer_keeps_the_active_library(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+
+        with pytest.raises(HubBootstrapError):
+            bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: None)
+
+        hub = HubDatabase(hub_path)
+        try:
+            assert LibraryRegistry(hub).active_library().path == gone
+        finally:
+            hub.close()
+
+    def test_an_unreadable_alternative_is_never_offered(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+        os.remove(os.path.join(kept, "vault.db"))
+
+        with pytest.raises(HubBootstrapError) as raised:
+            bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: "no")
+
+        assert "Kept" not in str(raised.value)
+
+
 class TestLosingTheHub:
     def test_a_deleted_hub_is_recreated_and_the_server_still_starts(self, paths):
         """Hub loss must degrade, never block startup.
