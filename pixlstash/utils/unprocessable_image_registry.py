@@ -4,8 +4,8 @@ GitHub issue #585 ("Invalid Images break tasks"): the background pipeline is
 data-driven — every ``Missing*Finder`` re-selects any picture whose target
 column is still unset. When a picture points at a corrupt/undecodable file the
 task can never produce a value, nothing durably marks the row as done (the
-image-embedding task even writes an *empty* blob that ``fetch_work`` still treats
-as missing), so the same picture is picked up on every sweep forever.
+image-embedding task leaves the embedding NULL on failure, which ``fetch_work``
+treats as missing), so the same picture is picked up on every sweep forever.
 
 The reporter explicitly accepts that such a file may be "ignored for the
 remaining duration of the server process lifetime, or until it is modified". This

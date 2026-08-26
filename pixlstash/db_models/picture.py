@@ -581,6 +581,21 @@ class Picture(SQLModel, table=True):
             "id",
             sqlite_where=text("text_embedding IS NULL"),
         ),
+        # ImageEmbeddingTask.fetch_work: image_embedding IS NULL OR
+        # aesthetic_score IS NULL. One partial index per arm; SQLite takes a
+        # MULTI-INDEX OR over the pair. Same shape as the text-embedding one.
+        Index(
+            "ix_picture_image_embedding_missing",
+            "image_embedding",
+            "id",
+            sqlite_where=text("image_embedding IS NULL"),
+        ),
+        Index(
+            "ix_picture_aesthetic_score_missing",
+            "aesthetic_score",
+            "id",
+            sqlite_where=text("aesthetic_score IS NULL"),
+        ),
     )
 
     class Config:

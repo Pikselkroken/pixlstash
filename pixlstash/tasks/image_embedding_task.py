@@ -201,10 +201,9 @@ class ImageEmbeddingTask(BaseTask):
         if aesthetic_disabled is None:
             aesthetic_disabled = cls._is_aesthetic_disabled()
 
-        missing_embedding = or_(
-            Picture.image_embedding.is_(None),
-            func.length(Picture.image_embedding) == 0,
-        )
+        # Each arm has its own partial index (ix_picture_image_embedding_missing,
+        # ix_picture_aesthetic_score_missing); SQLite serves the OR from both.
+        missing_embedding = Picture.image_embedding.is_(None)
         if aesthetic_disabled:
             condition = missing_embedding
         else:
@@ -237,10 +236,9 @@ class ImageEmbeddingTask(BaseTask):
         if aesthetic_disabled is None:
             aesthetic_disabled = cls._is_aesthetic_disabled()
 
-        missing_embedding = or_(
-            Picture.image_embedding.is_(None),
-            func.length(Picture.image_embedding) == 0,
-        )
+        # Each arm has its own partial index (ix_picture_image_embedding_missing,
+        # ix_picture_aesthetic_score_missing); SQLite serves the OR from both.
+        missing_embedding = Picture.image_embedding.is_(None)
         if aesthetic_disabled:
             condition = missing_embedding
         else:
@@ -260,17 +258,18 @@ class ImageEmbeddingTask(BaseTask):
         cls._aesthetic_model = None
 
     def _build_failure_updates(self, pids: set[int]):
-        empty_emb = np.array([], dtype=np.float32).tobytes()
+        # NULL embedding = "select me again next sweep"; the registry, not the
+        # column, is what keeps an undecodable picture out of the finder.
         score = None if self._is_aesthetic_disabled() else -1.0
-        return [(pid, empty_emb, score, None) for pid in pids]
+        return [(pid, None, score, None) for pid in pids]
 
     def _mark_decode_failures(self, pids: set[int], batch_files: dict) -> None:
         """Suppress pictures that genuinely could not be decoded (issue #585).
 
         Only the pids whose image failed to open/decode are passed here — never a
-        transient inference failure (CLIP/GPU OOM), which must keep retrying. The
-        empty-blob 'failed' marker this task writes is treated as still-missing by
-        ``fetch_work``, so without this a corrupt image is re-selected every sweep.
+        transient inference failure (CLIP/GPU OOM), which must keep retrying. A
+        failed picture keeps a NULL embedding, which ``fetch_work`` treats as
+        still-missing, so without this a corrupt image is re-selected every sweep.
         """
         registry = getattr(self._db, "unprocessable_images", None)
         if registry is None or not pids:

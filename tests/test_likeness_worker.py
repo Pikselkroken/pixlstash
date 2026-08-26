@@ -126,7 +126,6 @@ def test_likeness_worker():
                         Picture.perceptual_hash,
                     ).where(
                         (Picture.image_embedding.is_(None))
-                        | (func.length(Picture.image_embedding) == 0)
                         | (Picture.likeness_parameters.is_(None))
                         | (Picture.perceptual_hash.is_(None))
                     )
@@ -134,7 +133,7 @@ def test_likeness_worker():
                 return [
                     {
                         "id": int(r[0]),
-                        "image_embedding_missing": r[1] is None or len(r[1]) == 0,
+                        "image_embedding_missing": r[1] is None,
                         "likeness_parameters_missing": r[2] is None,
                         "perceptual_hash_missing": r[3] is None,
                     }
