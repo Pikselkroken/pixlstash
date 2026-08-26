@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import cv2
+import numpy as np
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import NO_VALUE
@@ -141,11 +142,14 @@ class FaceExtractionTask(BaseTask):
         self._preload_thread.start()
 
     def _preload_images(self) -> None:
-        """Load every still image in the batch from disk into memory (background thread).
+        """Load every picture in the batch from disk into memory (background thread).
 
-        Only handles still images; videos are skipped here and loaded
-        synchronously in _extract_features because cv2.VideoCapture is not
-        thread-safe.
+        Stills are stored as ``(bgr_image, inv_scale)``; videos as
+        ``(frames, 1.0)`` where ``frames`` is the ``(frame_index, bgr_frame)``
+        list :meth:`_read_video_frames` selects. Each call opens its own
+        ``cv2.VideoCapture`` — the thread-safety concern is sharing one capture,
+        not decoding in parallel. A video that fails to decode here gets no
+        entry, so the batch loop reads it synchronously instead.
         """
 
         def _load_one(pic):
@@ -157,7 +161,19 @@ class FaceExtractionTask(BaseTask):
                 )
                 ext = os.path.splitext(file_path)[1].lower()
                 if ext not in self._IMAGE_EXTS:
-                    return file_path, None, 1.0  # video — skip
+                    if ext not in self._VIDEO_EXTS:
+                        return None, None, 1.0
+                    try:
+                        return (file_path, *self._read_video_frames(file_path))
+                    except Exception as exc:
+                        logger.warning(
+                            "Video preload failed for %s (%s: %s); "
+                            "falling back to synchronous decode",
+                            file_path,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        return None, None, 1.0
                 img, inv_scale = ImageUtils.load_image_bgr_reduced(
                     file_path, FaceExtractionTask.INFERENCE_MAX_SIDE
                 )
@@ -523,6 +539,62 @@ class FaceExtractionTask(BaseTask):
     # recognition calls but longer gaps between visible DB progress ticks.
     _FLUSH_CHUNK_SIZE = 100
 
+    @staticmethod
+    def _read_video_frames(
+        file_path: str,
+    ) -> tuple[list[tuple[int, np.ndarray]], float]:
+        """Return ``(frames, inv_scale)`` — the frames face detection samples.
+
+        ``frames`` is ``(frame_index, bgr_frame)`` pairs, each reduced so its
+        longest side is at most ``INFERENCE_MAX_SIDE`` (as stills are);
+        ``inv_scale`` maps a reduced-frame coordinate back to source pixels and
+        is one number per clip because every frame shares the clip's size.
+        Frame 0 plus every ``max(1, frame_count // 3)``-th frame after it, read
+        by seeking. Sequential decode was measured against this on real HEVC
+        clips: ~25 % faster on clips under ~100 frames, but linear in clip
+        length (12 s for a 14k-frame clip against 0.17 s seeking), and it
+        returns different pixels on HEVC than the seek does. Seeking keeps the
+        frames the detector has always received.
+        """
+        cap = cv2.VideoCapture(file_path)
+        try:
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if frame_count < 1:
+                logger.warning("No frames found in video: %s", file_path)
+                return [], 1.0
+            frames: list[tuple[int, np.ndarray]] = []
+            inv_scale = 1.0
+
+            def reduced(frame: np.ndarray) -> np.ndarray:
+                nonlocal inv_scale
+                h, w = frame.shape[:2]
+                if max(h, w) <= FaceExtractionTask.INFERENCE_MAX_SIDE:
+                    return frame
+                scale = FaceExtractionTask.INFERENCE_MAX_SIDE / float(max(h, w))
+                new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+                inv_scale = w / float(new_w)
+                return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frames.append((0, reduced(frame)))
+            step = max(1, frame_count // 3)
+            for frame_index in range(step, frame_count, step):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    logger.warning(
+                        "Could not read frame %s from video: %s",
+                        frame_index,
+                        file_path,
+                    )
+                    continue
+                frames.append((frame_index, reduced(frame)))
+            return frames, inv_scale
+        finally:
+            cap.release()
+
     def _extract_features(
         self, pics, *, semaphore_wait_s: float = 0.0, preload_wait_s: float = 0.0
     ) -> List[tuple]:
@@ -700,110 +772,78 @@ class FaceExtractionTask(BaseTask):
 
             elif ext in self._VIDEO_EXTS:
                 if need_faces:
-                    read_start = time.time()
-                    cap = cv2.VideoCapture(file_path)
-                    image_load_s += time.time() - read_start
-                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    if frame_count < 1:
-                        logger.warning("No frames found in video: %s", file_path)
-                        cap.release()
+                    preloaded_entry = preloaded.get(file_path)
+                    if preloaded_entry is not None:
+                        frames, inv_scale = preloaded_entry
                     else:
-                        first_frame = None
-                        first_bboxes = []
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = cap.read()
-                        if ret and frame is not None:
+                        # Not preloaded (cancelled, or decode failed in the
+                        # pool — already logged): read on the worker thread.
+                        read_start = time.time()
+                        frames, inv_scale = self._read_video_frames(file_path)
+                        image_load_s += time.time() - read_start
+                    first_frame = None
+                    first_bboxes = []
+                    if frames:
+                        _infer_start = time.time()
+                        per_frame_faces = runner.run_batch([f for _, f in frames])
+                        inference_s += time.time() - _infer_start
+                    else:
+                        per_frame_faces = []
+                    face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
+                    for (frame_index, frame), frame_faces in zip(
+                        frames, per_frame_faces
+                    ):
+                        if frame_index == 0:
                             first_frame = frame
-                            _infer_start = time.time()
-                            frame_faces = runner.run_batch([frame])[0]
-                            inference_s += time.time() - _infer_start
-                            detected_faces_total += len(frame_faces)
-                            face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox,
-                                    frame.shape[1],
-                                    frame.shape[0],
-                                    face_expand_fraction,
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
-                                    logger.warning(
-                                        "Face embedding missing for face in video %s, frame 0",
-                                        file_path,
-                                    )
-                                first_bboxes.append(expanded_bbox)
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=0,
-                                        features=features_bytes,
-                                        model_pack=model_pack,
-                                    )
-                                )
-                        step = max(1, frame_count // 3)
-                        for frame_index in range(step, frame_count, step):
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                            ret, frame = cap.read()
-                            if not ret or frame is None:
-                                logger.warning(
-                                    "Could not read frame %s from video: %s",
-                                    frame_index,
-                                    file_path,
-                                )
-                                continue
-                            _infer_start = time.time()
-                            frame_faces = runner.run_batch([frame])[0]
-                            inference_s += time.time() - _infer_start
-                            detected_faces_total += len(frame_faces)
-                            face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox,
-                                    frame.shape[1],
-                                    frame.shape[0],
-                                    face_expand_fraction,
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
-                                    logger.warning(
-                                        "Face embedding missing for face in video %s, frame %s",
-                                        file_path,
-                                        frame_index,
-                                    )
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=frame_index,
-                                        features=features_bytes,
-                                        model_pack=model_pack,
-                                    )
-                                )
-                        cap.release()
-                        if first_frame is not None and first_bboxes:
-                            pending_thumb_work.append(
-                                (pic.id, pic.file_path, first_frame, first_bboxes, 1.0)
+                        detected_faces_total += len(frame_faces)
+                        for face in frame_faces:
+                            expanded_bbox = Face.expand_face_bbox(
+                                face.bbox,
+                                frame.shape[1],
+                                frame.shape[0],
+                                face_expand_fraction,
                             )
+                            features_bytes = None
+                            if (
+                                hasattr(face, "embedding")
+                                and face.embedding is not None
+                            ):
+                                features_bytes = face.embedding.astype(
+                                    "float32"
+                                ).tobytes()
+                            else:
+                                logger.warning(
+                                    "Face embedding missing for face in video %s, frame %s",
+                                    file_path,
+                                    frame_index,
+                                )
+                            if frame_index == 0:
+                                # Loaded-frame space, matching first_frame.
+                                first_bboxes.append(expanded_bbox)
+                            # Scale bbox from loaded-frame space to source pixels.
+                            if inv_scale != 1.0 and expanded_bbox:
+                                expanded_bbox = [v * inv_scale for v in expanded_bbox]
+                            face_objects.append(
+                                Face(
+                                    picture_id=pic.id,
+                                    face_index=-1,
+                                    bbox=expanded_bbox,
+                                    character_id=None,
+                                    frame_index=frame_index,
+                                    features=features_bytes,
+                                    model_pack=model_pack,
+                                )
+                            )
+                    if first_frame is not None and first_bboxes:
+                        pending_thumb_work.append(
+                            (
+                                pic.id,
+                                pic.file_path,
+                                first_frame,
+                                first_bboxes,
+                                inv_scale,
+                            )
+                        )
             else:
                 logger.warning(
                     "Unsupported file extension for feature extraction: %s",
