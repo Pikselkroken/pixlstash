@@ -453,11 +453,6 @@ _LABEL_SINK_EXEMPT = {
     ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
         "builds NEW picture rows during a reference-folder scan"
     ),
-    ("pixlstash/services/folder_structure_commit_service.py", "commit"): (
-        "v1.11 Phase 3: tags pictures the reference-folder scan just created "
-        "in this same commit (new pics) — a not-yet-imported picture cannot "
-        "be in a locked set"
-    ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"
     ),
