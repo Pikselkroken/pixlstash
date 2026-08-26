@@ -21,7 +21,7 @@ from sqlmodel import Session, delete, select
 from pixlstash.db_models import Picture, User, UserToken
 from pixlstash.server import Server
 from pixlstash.hub.registry import VAULT_FILENAME, LibraryExistsError
-from pixlstash.utils.media_files import count_media_files
+from pixlstash.utils.media_files import count_media_files, is_supported_media_file
 
 API = "/api/v1"
 
@@ -1270,6 +1270,23 @@ class TestCountingMediaFiles:
             _write_picture(tmp_path / f"{index}.jpg")
 
         assert count_media_files(str(tmp_path)) == (3, False)
+
+    def test_our_own_thumbnails_are_never_counted_as_pictures(self, tmp_path):
+        """One indexed thumbnail earns a thumbnail, and that one earns another.
+
+        Found four generations deep in a real library (``x_thumb_thumb_thumb_
+        thumb.webp``) after its folder was re-indexed in place.
+        """
+        _write_picture(tmp_path / "IMG_1231.PNG")
+        _write_picture(tmp_path / "IMG_1231_thumb.webp")
+        _write_picture(tmp_path / "IMG_1231_thumb_thumb.webp")
+        _write_picture(tmp_path / "holiday.webp")
+
+        assert is_supported_media_file("IMG_1231.PNG")
+        assert is_supported_media_file("holiday.webp"), "a real .webp still counts"
+        assert not is_supported_media_file("IMG_1231_thumb.webp")
+        assert not is_supported_media_file("a/b/IMG_1231_THUMB.WEBP")
+        assert count_media_files(str(tmp_path)) == (2, False)
 
 
 class TestTheRequestContract:
