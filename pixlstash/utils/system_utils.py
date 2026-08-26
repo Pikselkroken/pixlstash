@@ -4,10 +4,11 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Optional
+
+from pixlstash.utils.vram_utils import query_total_vram_mb
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,10 @@ _RAM_FSTYPES = frozenset({"ramfs", "tmpfs"})
 # it is running on.
 TRASH_NAME = "Recycle Bin" if sys.platform == "win32" else "Trash"
 
-# Hard upper bound for the VRAM budget setting. Applies both to the UI slider
-# maximum and to backend validation. Keep in sync with the frontend constant.
+# Upper bound for the VRAM budget setting when the card cannot be read (no
+# nvidia-smi, a CPU-only host). With a card present the bound is the card: see
+# `max_vram_budget_gb`. This used to be the bound for every card, which meant
+# a 32 GB card was offered a 16 GB default it could never be set back to.
 MAX_VRAM_BUDGET_GB: float = 12.0
 
 
@@ -406,34 +409,25 @@ def default_max_vram_gb() -> float:
     """Return default VRAM budget in GB: max(4GB, 50% of total VRAM).
 
     Card-aware so a large card is not starved: 16GB on a 32GB card, 6GB on
-    12GB, 4GB on 8GB. Falls back to 6GB when VRAM cannot be detected or
-    nvidia-smi reports 0.
+    12GB, 4GB on 8GB. Falls back to 6GB when VRAM cannot be detected.
     """
-    try:
-        output = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        totals_mb = []
-        for line in output.splitlines():
-            value = line.strip()
-            if not value:
-                continue
-            totals_mb.append(int(float(value)))
-        total_mb = sum(totals_mb)
-        if total_mb <= 0:
-            return 6.0
-        half_gb = (total_mb / 1024.0) / 2.0
-        return round(max(4.0, half_gb), 2)
-    except Exception:
-        # nvidia-smi absent/failing is normal on CPU-only hosts; the documented
-        # 6GB default IS the answer, so logging it would be routine noise.
+    total_gb = query_total_vram_mb() / 1024.0
+    if total_gb <= 0:
         return 6.0
+    return round(max(4.0, total_gb / 2.0), 2)
+
+
+def max_vram_budget_gb() -> float:
+    """Return the largest budget a user may set: the card itself.
+
+    The TaskRunner already clamps a budget to the installed total, so the
+    validator refusing less than that only ever refused a value the runtime
+    would have honoured. Falls back to `MAX_VRAM_BUDGET_GB` without a card.
+    """
+    total_gb = query_total_vram_mb() / 1024.0
+    if total_gb <= 0:
+        return MAX_VRAM_BUDGET_GB
+    return round(total_gb, 2)
 
 
 # The same 10 % as ``model_mover._SPACE_HEADROOM``, and deliberately the same
