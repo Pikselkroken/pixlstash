@@ -516,3 +516,259 @@ def test_a_tag_drain_leaves_wd14_to_the_idle_sweep(tmp_path):
             assert unloads == ["sweep"], "and the idle sweep frees them when idle"
         finally:
             vault._engine = original_engine
+
+
+# ── per-row stage dependencies (throughput plan §7 step 4) ──────────────────
+
+
+def _add_rows(vault, rows) -> None:
+    """Insert already-built ORM rows (Face / Tag / Quality) and commit."""
+
+    def add(session: Session):
+        session.add_all(rows)
+        session.commit()
+
+    vault.db.run_task(add)
+
+
+def test_image_embedding_needs_nothing_upstream(tmp_path):
+    """CLIP reads only the file: a picture with no faces and tags still pending
+    is embedded now, not after those stages drain (the old ``depends_on``).
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_image_embedding_finder import (
+        MissingImageEmbeddingFinder,
+    )
+
+    class _Clip:
+        def suggested_batch_size(self):
+            return 4
+
+    class _Engine:
+        clip_embedding_workflow = _Clip()
+
+    with Vault(image_root=str(tmp_path)) as vault:
+
+        def seed(session: Session):
+            picture = Picture(
+                file_path=_write_image(tmp_path, "p0.png"),
+                format="png",
+                width=400,
+                height=300,
+                deleted=False,
+            )
+            session.add(picture)
+            session.flush()
+            session.add(Tag(picture_id=picture.id, tag=make_tag_sentinel()))
+            session.commit()
+            return picture.id
+
+        picture_id = vault.db.run_task(seed)
+        finder = MissingImageEmbeddingFinder(vault.db, lambda: _Engine())
+        assert finder.depends_on() == []
+
+        task = finder.find_task()
+        assert task is not None, "an untagged, faceless picture is CLIP work"
+        assert task.params["picture_ids"] == [picture_id]
+
+
+_TAG_PROBE = "picture.id in (select tag.picture_id"
+
+
+def test_tag_probe_is_served_by_the_tag_index(tmp_path):
+    """The pending-sentinel range drives the probe through ``ix_tag_tag``.
+
+    The old ``tags.any(tag LIKE '\\_\\_tag%' ESCAPE '\\')`` could not use an index
+    (SQLite's LIKE optimisation is off with ESCAPE), so it was ``SCAN picture``.
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed(vault, tmp_path, count=3, with_faces=True)
+        _add_rows(vault, [Tag(picture_id=ids[0], tag=make_tag_sentinel())])
+
+        with _StatementRecorder(vault.db._engine, _TAG_PROBE) as rec:
+            vault.db.run_immediate_read_task(
+                lambda s: MissingTagFinder._fetch_missing_tags(s, 64)
+            )
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert any("ix_tag_tag" in line for line in plan), plan
+        # The outer loop is a rowid lookup fed by the tag index, not a scan.
+        assert plan[0].startswith("SEARCH picture USING INTEGER PRIMARY KEY"), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+
+
+def test_tagging_starts_per_picture_as_soon_as_its_faces_are_known(tmp_path):
+    """A picture whose face row exists is tagged while its neighbour, still in
+    the face stage, is not — and a no-face sentinel row counts as known.
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        with_face, no_face_sentinel, faces_pending = _seed(
+            vault, tmp_path, count=3, with_faces=False
+        )
+        _add_rows(
+            vault,
+            [
+                Face(picture_id=with_face, face_index=0, bbox=[1, 1, 9, 9]),
+                Face(picture_id=no_face_sentinel, face_index=-1),
+                Tag(picture_id=with_face, tag=make_tag_sentinel()),
+                Tag(picture_id=no_face_sentinel, tag=make_tag_sentinel("wd14")),
+                Tag(picture_id=faces_pending, tag=make_tag_sentinel()),
+            ],
+        )
+
+        selected = {
+            p.id
+            for p in vault.db.run_immediate_read_task(
+                lambda s: MissingTagFinder._fetch_missing_tags(s, 64)
+            )
+        }
+        assert with_face in selected
+        assert no_face_sentinel in selected, "a no-face sentinel is 'faces known'"
+        assert faces_pending not in selected, "its face stage has not run yet"
+
+
+_TEXT_PROBE = "picture.text_embedding is null"
+
+
+class _TextEngine:
+    def __init__(self, **tagger_settings):
+        self.tagger_settings = tagger_settings or None
+
+
+def _text_candidates(vault, engine) -> set[int]:
+    from pixlstash.tasks.missing_text_embedding_finder import (
+        MissingTextEmbeddingFinder,
+    )
+
+    finder = MissingTextEmbeddingFinder(vault.db, lambda: engine)
+    rows = vault.db.run_immediate_read_task(finder._fetch_candidates, 64)
+    return {p.id for p in rows}
+
+
+def _seed_text_stage(vault, tmp_path):
+    """Four pictures, none embedded: described / tags pending / undescribed /
+    description still a sentinel. Returns their ids in that order."""
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_description_sentinel, make_tag_sentinel
+
+    ids = _seed(vault, tmp_path, count=4, with_faces=False)
+
+    def describe(session: Session):
+        for pid, text_ in zip(
+            ids, ("a cat", "a dog", None, make_description_sentinel())
+        ):
+            session.get(Picture, pid).description = text_
+        session.add(Tag(picture_id=ids[1], tag=make_tag_sentinel()))
+        session.commit()
+
+    vault.db.run_task(describe)
+    return ids
+
+
+def test_text_probe_is_served_by_its_partial_index(tmp_path):
+    with Vault(image_root=str(tmp_path)) as vault:
+        _seed_text_stage(vault, tmp_path)
+        engine = _TextEngine(active_tag_plugin="wd14", active_description_plugin="x")
+
+        with _StatementRecorder(vault.db._engine, _TEXT_PROBE) as rec:
+            _text_candidates(vault, engine)
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert any("ix_picture_text_embedding_missing" in line for line in plan), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+        for column in ("image_embedding", "likeness_parameters", "features"):
+            assert column not in rec.only, rec.only
+
+
+def test_text_embedding_waits_per_picture_for_tags_and_description(tmp_path):
+    with Vault(image_root=str(tmp_path)) as vault:
+        described, tags_pending, undescribed, sentinel = _seed_text_stage(
+            vault, tmp_path
+        )
+        both_on = _TextEngine(active_tag_plugin="wd14", active_description_plugin="x")
+        assert _text_candidates(vault, both_on) == {described}
+
+        # A stage that is off never delivers, so it is not waited for.
+        tags_off = _TextEngine(active_tag_plugin=None, active_description_plugin="x")
+        assert _text_candidates(vault, tags_off) == {described, tags_pending}
+        descriptions_off = _TextEngine(active_tag_plugin="wd14")
+        assert _text_candidates(vault, descriptions_off) == {
+            described,
+            undescribed,
+            sentinel,
+        }
+        # No tagger_settings at all: tagger off, Florence-2 captioning on.
+        assert _text_candidates(vault, _TextEngine()) == {described, tags_pending}
+
+
+_LIKENESS_PROBE = "picture.size_bin_index is null"
+
+
+def _likeness_candidates(vault) -> set[int]:
+    from pixlstash.tasks.likeness_parameters_task import LikenessParametersTask
+    from pixlstash.utils.likeness.likeness_parameter_utils import (
+        LikenessParameterUtils,
+    )
+
+    rows = vault.db.run_immediate_read_task(
+        LikenessParameterUtils.find_next_work, LikenessParametersTask.SCAN_LIMIT
+    )
+    return {pid for pid, _w, _h in (rows or [])}
+
+
+def test_likeness_parameter_probe_is_served_by_the_size_bin_index(tmp_path):
+    """``size_bin_index IS NULL`` walks ``ix_picture_size_bin_index`` in rowid
+    order, so no partial index and no sort are needed; the per-picture quality
+    check is an ``ix_quality_picture_id`` lookup."""
+    from pixlstash.db_models import Quality
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed(vault, tmp_path, count=3, with_faces=False)
+        _add_rows(vault, [Quality(picture_id=ids[0], sharpness=0.4)])
+
+        with _StatementRecorder(vault.db._engine, _LIKENESS_PROBE) as rec:
+            _likeness_candidates(vault)
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert plan[0].startswith(
+            "SEARCH picture USING INDEX ix_picture_size_bin_index"
+        ), plan
+        assert any("ix_quality_picture_id" in line for line in plan), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+
+
+def test_likeness_parameters_wait_per_picture_for_quality(tmp_path):
+    """A picture with its quality row is offered while its neighbours -- no
+    Quality row, or a row not yet filled in -- are not (no stage-wide gate)."""
+    from pixlstash.db_models import Quality
+    from pixlstash.tasks.missing_likeness_parameters_finder import (
+        MissingLikenessParametersFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        done, no_row, unfilled = _seed(vault, tmp_path, count=3, with_faces=False)
+        _add_rows(
+            vault,
+            [
+                Quality(picture_id=done, sharpness=0.4, brightness=0.5),
+                Quality(picture_id=unfilled, sharpness=None),
+            ],
+        )
+        assert _likeness_candidates(vault) == {done}
+
+        finder = MissingLikenessParametersFinder(vault.db)
+        assert finder.depends_on() == []
+        task = finder.find_task()
+        assert task is not None and task.params["picture_ids"] == [done], (
+            "the finder must not wait for the other two pictures' quality"
+        )
+        assert no_row not in _likeness_candidates(vault)
