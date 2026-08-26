@@ -46,6 +46,7 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 from sqlmodel import Session
 
 from pixlstash.db_models import Face, Picture
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
 from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
 from pixlstash.tasks.smart_score_task import SmartScoreTask
@@ -571,6 +572,41 @@ def test_image_embedding_needs_nothing_upstream(tmp_path):
         task = finder.find_task()
         assert task is not None, "an untagged, faceless picture is CLIP work"
         assert task.params["picture_ids"] == [picture_id]
+
+
+_IMAGE_EMBEDDING_PROBE = "where picture.image_embedding is null"
+
+
+def _image_embedding_plan(vault, aesthetic_disabled: bool) -> list[str]:
+    with _StatementRecorder(vault.db._engine, _IMAGE_EMBEDDING_PROBE) as rec:
+        vault.db.run_immediate_read_task(
+            lambda session: ImageEmbeddingTask.fetch_work(
+                session, aesthetic_disabled=aesthetic_disabled, limit=8
+            )
+        )
+    for column in _BLOB_COLUMNS:
+        assert f"picture.{column}," not in rec.only, rec.only
+    return _explain(vault, rec.only, rec.parameters[0])
+
+
+def test_image_embedding_probe_is_served_by_its_partial_indexes(tmp_path):
+    """Both OR arms resolve through their own partial index (MULTI-INDEX OR).
+
+    Before 0112 the ``length(image_embedding) = 0`` arm forced ``SCAN picture``
+    on every planner sweep.
+    """
+    with Vault(image_root=str(tmp_path)) as vault:
+        _seed(vault, tmp_path, count=3, with_faces=False, done=2)
+
+        plan = _image_embedding_plan(vault, aesthetic_disabled=False)
+        assert any("ix_picture_image_embedding_missing" in line for line in plan), plan
+        assert any("ix_picture_aesthetic_score_missing" in line for line in plan), plan
+        assert not any("SCAN picture" in line for line in plan), plan
+
+        plan = _image_embedding_plan(vault, aesthetic_disabled=True)
+        assert any("ix_picture_image_embedding_missing" in line for line in plan), plan
+        assert not any("aesthetic_score" in line for line in plan), plan
+        assert not any("SCAN picture" in line for line in plan), plan
 
 
 _TAG_PROBE = "picture.id in (select tag.picture_id"

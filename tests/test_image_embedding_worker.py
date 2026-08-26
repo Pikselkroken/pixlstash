@@ -4,7 +4,7 @@ from datetime import datetime
 
 import numpy as np
 
-from sqlmodel import Session
+from sqlmodel import Session, text
 
 from pixlstash.db_models import Picture
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
@@ -13,8 +13,13 @@ from pixlstash.vault import Vault
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
 
 
-def test_fetch_work_includes_empty_embedding_blob(tmp_path):
-    """Empty embedding blobs should be treated as missing and reprocessed."""
+def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
+    """A failed picture is stored as NULL and re-selected by ``fetch_work``.
+
+    The empty-blob marker older releases wrote is no longer matched (the
+    ``length()`` arm defeated the probe's partial index); migration 0112 resets
+    those rows to NULL once, after which they are ordinary missing work.
+    """
     # Copy real images so MissingFilePurgeTask doesn't delete these records
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "missing.jpg")
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "empty.jpg")
@@ -60,28 +65,34 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
             session.add(empty)
             session.add(done)
             session.commit()
+            return missing.id, empty.id
 
-        vault.db.run_task(seed)
+        missing_id, empty_id = vault.db.run_task(seed)
 
-        work = vault.db.run_task(
-            lambda session: ImageEmbeddingTask.fetch_work(
-                session,
-                aesthetic_disabled=True,
+        def fetch(session: Session):
+            work = ImageEmbeddingTask.fetch_work(session, aesthetic_disabled=True)
+            remaining = ImageEmbeddingTask.count_remaining(
+                session, aesthetic_disabled=True
             )
-        )
-        remaining = int(
-            vault.db.run_task(
-                lambda session: ImageEmbeddingTask.count_remaining(
-                    session,
-                    aesthetic_disabled=True,
+            return {pid for pid, _ in work}, int(remaining or 0)
+
+        assert vault.db.run_task(fetch) == ({missing_id}, 1)
+
+        # The task itself now stores NULL for a failure, never an empty blob.
+        task = ImageEmbeddingTask(database=vault.db, clip_workflow=None, batch=[])
+        assert task._build_failure_updates({empty_id})[0][1] is None
+
+        def reset(session: Session):  # the 0112 one-time NULL-reset
+            session.execute(
+                text(
+                    "UPDATE picture SET image_embedding = NULL "
+                    "WHERE image_embedding IS NOT NULL AND length(image_embedding) = 0"
                 )
             )
-            or 0
-        )
-        work_ids = {pid for pid, _ in work}
+            session.commit()
 
-        assert len(work_ids) == 2
-        assert remaining == 2
+        vault.db.run_task(reset)
+        assert vault.db.run_task(fetch) == ({missing_id, empty_id}, 2)
 
 
 def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
