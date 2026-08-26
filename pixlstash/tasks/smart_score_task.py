@@ -1,3 +1,4 @@
+import logging
 import time
 
 from sqlalchemy import bindparam, desc, func, update
@@ -43,6 +44,9 @@ class SmartScoreTask(BaseTask):
     """
 
     BATCH_SIZE = 64
+    #: A batch slower than this logs its [SMART_SCORE_TIMING] line at INFO
+    #: instead of DEBUG. Same threshold as FaceExtractionTask.SLOW_BATCH_LOG_S.
+    SLOW_BATCH_LOG_S = 5.0
 
     def __init__(self, vault, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -58,7 +62,7 @@ class SmartScoreTask(BaseTask):
         self._pictures = pictures or []
 
     def _run_task(self):
-        start = time.time()
+        start = time.perf_counter()
         pics = self._pictures
         if not pics:
             return {"changed_count": 0}
@@ -73,6 +77,7 @@ class SmartScoreTask(BaseTask):
         owner_penalised_tags = resolve_penalised_tag_weights(
             getattr(self._vault, "auth_service", None)
         )
+        fetch_start = time.perf_counter()
         good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
                 self._fetch_score_data,
@@ -81,6 +86,7 @@ class SmartScoreTask(BaseTask):
                 owner_penalised_tags,
             )
         )
+        fetch_s = time.perf_counter() - fetch_start
 
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
             good_anchors, bad_anchors, candidates
@@ -90,26 +96,40 @@ class SmartScoreTask(BaseTask):
             logger.debug("SmartScoreTask: no valid candidates in batch, skipping.")
             return {"changed_count": 0}
 
+        inference_start = time.perf_counter()
         scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
             cand_list,
             good_list,
             bad_list,
             config=scorer_config,
         )
+        inference_s = time.perf_counter() - inference_start
 
         id_to_score = {cand_ids[i]: float(scores[i]) for i in range(len(cand_ids))}
 
+        db_start = time.perf_counter()
         persisted_ids = self._db.run_task(
             self._persist_scores,
             id_to_score,
             before_signature,
             priority=DBPriority.LOW,
         )
+        db_s = time.perf_counter() - db_start
 
-        logger.debug(
-            "SmartScoreTask completed in %.2fs with %s updates",
-            time.time() - start,
-            len(persisted_ids),
+        total_s = time.perf_counter() - start
+        n = len(persisted_ids)
+        # The scorer is numpy on the host, whatever queue the task rides on.
+        logger.log(
+            logging.INFO if total_s >= self.SLOW_BATCH_LOG_S else logging.DEBUG,
+            "[SMART_SCORE_TIMING] task_id=%s n=%d device=cpu preload_wait_s=0.000 "
+            "fetch_s=%.3f inference_s=%.3f db_s=%.3f total_s=%.3f throughput=%.1f/s",
+            self.id,
+            n,
+            fetch_s,
+            inference_s,
+            db_s,
+            total_s,
+            n / total_s if total_s > 0 else 0.0,
         )
         # ``persisted_ids`` is the *actually-written* subset — ids the CAS in
         # ``_persist_scores`` skipped (anomaly signature drifted mid-scoring) are left
