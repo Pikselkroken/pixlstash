@@ -226,6 +226,9 @@ class FolderStructureRead:
         progress: Called as ``(stage, processed, total)`` whenever either moves.
         deadline_s: Wall-clock budget for the whole read. Past it the read stops
             where it is and returns what it has, exactly as a cancel does.
+        exclude: Absolute paths the walk must not descend into, matched on
+            realpath. Used for the library's own ``snapshots/`` tree, which is
+            not the owner's pictures.
     """
 
     def __init__(
@@ -236,8 +239,10 @@ class FolderStructureRead:
         existing_entities: Optional[list[tuple[str, Optional[int], str]]] = None,
         progress: Optional[Callable[[str, int, int], None]] = None,
         deadline_s: float = DEFAULT_DEADLINE_S,
+        exclude: Optional[set[str]] = None,
     ) -> None:
         self._root = root
+        self._exclude = {os.path.realpath(p) for p in (exclude or ())}
         self._detect_faces = detect_faces
         self._progress = progress or (lambda stage, processed, total: None)
         self._cancel = threading.Event()
@@ -352,6 +357,13 @@ class FolderStructureRead:
                     self._skipped_hidden += 1
                     continue
                 child = os.path.join(dirpath, name)
+                if os.path.realpath(child) in self._exclude:
+                    # The library's own snapshots/ tree. Not the owner's
+                    # pictures, so it is not theirs to map — and creating it
+                    # later instead would only move the problem: a GFS or
+                    # safety snapshot can land at any time, including before a
+                    # second run of the wizard on the same root.
+                    continue
                 if validate_reference_folder_path(os.path.realpath(child)):
                     # The route validates the ROOT. That is not containment for a
                     # recursive walk: `POST {"path": "/"}` names no restricted

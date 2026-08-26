@@ -1240,3 +1240,23 @@ def test_a_read_rooted_at_a_filesystem_root_still_has_a_name(monkeypatch):
         assert FolderStructureRead(root + os.sep).run()["root"]["name"] == (
             "Generations"
         )
+
+
+def test_the_librarys_own_snapshots_tree_is_never_offered_for_mapping():
+    """A snapshot can land at any time, so excluding beats creating it later."""
+    with _tree(
+        {
+            "": [],
+            "Holiday": ["a.jpg"],
+            "snapshots": [],
+            "snapshots/2026/08/26": [],
+        }
+    ) as root:
+        result = FolderStructureRead(
+            root, exclude={os.path.join(root, "snapshots")}
+        ).run()
+
+    names = {row["name"] for level in result["levels"] for row in level["folders"]}
+    assert "Holiday" in names
+    assert "snapshots" not in names
+    assert "26" not in names, "the whole subtree, not just its top"
