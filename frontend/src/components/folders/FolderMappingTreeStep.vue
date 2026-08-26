@@ -68,8 +68,11 @@ function resolvedMatch(folder) {
 }
 
 function kindLabel(folder) {
+  // No resolved kind IS "Just a folder": `buildAssignments` and `summary` both
+  // drop a null kind and a "folder" kind by the same test, so the control has
+  // to say the thing the commit will do rather than a prompt to choose.
   const kind = resolvedKind(folder);
-  return kind ? kindByValue(kind)?.label ?? kind : "This one is…";
+  return kindByValue(kind)?.label ?? kind ?? JUST_A_FOLDER_KIND.label;
 }
 
 function setLevelDefault(level, kindValue) {
