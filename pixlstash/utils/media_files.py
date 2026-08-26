@@ -9,6 +9,7 @@ folder the scanner is about to index.
 import os
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.image_utils import THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
@@ -32,8 +33,33 @@ SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
 DEFAULT_ENTRY_CAP = 200_000
 
 
+#: What ``ImageUtils.get_thumbnail_path`` writes beside a managed picture.
+THUMBNAIL_SUFFIX = f"_thumb{THUMBNAIL_EXTENSION}"
+
+
+def is_pixlstash_thumbnail(name_or_path: str) -> bool:
+    """True when this file is a thumbnail PixlStash itself wrote.
+
+    Managed pictures keep their thumbnail *beside* the original as
+    ``<name>_thumb.webp``, so a walk of a library's own folder finds them, and
+    ``.webp`` is a supported extension. Indexing one makes it a picture, which
+    earns it a thumbnail of its own — ``<name>_thumb_thumb.webp`` — which the
+    next walk indexes in turn. That is not a slow leak: it is a generation per
+    pass, and it was found four deep in a real library.
+    """
+    return name_or_path.lower().endswith(THUMBNAIL_SUFFIX)
+
+
 def is_supported_media_file(name_or_path: str) -> bool:
-    """True when *name_or_path* names an image or video PixlStash can index."""
+    """True when *name_or_path* names an image or video PixlStash can index.
+
+    The one chokepoint for that question, so the count a folder picker shows,
+    the count a library card shows, and the files an import actually indexes
+    cannot disagree — including about our own thumbnails, which none of them
+    should ever count as pictures.
+    """
+    if is_pixlstash_thumbnail(name_or_path):
+        return False
     ext = os.path.splitext(name_or_path)[1].lower()
     if ext in SUPPORTED_IMAGE_EXTS:
         return True
