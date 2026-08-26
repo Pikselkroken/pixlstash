@@ -596,3 +596,77 @@ def test_tagging_starts_per_picture_as_soon_as_its_faces_are_known(tmp_path):
         assert with_face in selected
         assert no_face_sentinel in selected, "a no-face sentinel is 'faces known'"
         assert faces_pending not in selected, "its face stage has not run yet"
+
+
+_TEXT_PROBE = "picture.text_embedding is null"
+
+
+class _TextEngine:
+    def __init__(self, **tagger_settings):
+        self.tagger_settings = tagger_settings or None
+
+
+def _text_candidates(vault, engine) -> set[int]:
+    from pixlstash.tasks.missing_text_embedding_finder import (
+        MissingTextEmbeddingFinder,
+    )
+
+    finder = MissingTextEmbeddingFinder(vault.db, lambda: engine)
+    rows = vault.db.run_immediate_read_task(finder._fetch_candidates, 64)
+    return {p.id for p in rows}
+
+
+def _seed_text_stage(vault, tmp_path):
+    """Four pictures, none embedded: described / tags pending / undescribed /
+    description still a sentinel. Returns their ids in that order."""
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_description_sentinel, make_tag_sentinel
+
+    ids = _seed(vault, tmp_path, count=4, with_faces=False)
+
+    def describe(session: Session):
+        for pid, text_ in zip(
+            ids, ("a cat", "a dog", None, make_description_sentinel())
+        ):
+            session.get(Picture, pid).description = text_
+        session.add(Tag(picture_id=ids[1], tag=make_tag_sentinel()))
+        session.commit()
+
+    vault.db.run_task(describe)
+    return ids
+
+
+def test_text_probe_is_served_by_its_partial_index(tmp_path):
+    with Vault(image_root=str(tmp_path)) as vault:
+        _seed_text_stage(vault, tmp_path)
+        engine = _TextEngine(active_tag_plugin="wd14", active_description_plugin="x")
+
+        with _StatementRecorder(vault.db._engine, _TEXT_PROBE) as rec:
+            _text_candidates(vault, engine)
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert any("ix_picture_text_embedding_missing" in line for line in plan), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+        for column in ("image_embedding", "likeness_parameters", "features"):
+            assert column not in rec.only, rec.only
+
+
+def test_text_embedding_waits_per_picture_for_tags_and_description(tmp_path):
+    with Vault(image_root=str(tmp_path)) as vault:
+        described, tags_pending, undescribed, sentinel = _seed_text_stage(
+            vault, tmp_path
+        )
+        both_on = _TextEngine(active_tag_plugin="wd14", active_description_plugin="x")
+        assert _text_candidates(vault, both_on) == {described}
+
+        # A stage that is off never delivers, so it is not waited for.
+        tags_off = _TextEngine(active_tag_plugin=None, active_description_plugin="x")
+        assert _text_candidates(vault, tags_off) == {described, tags_pending}
+        descriptions_off = _TextEngine(active_tag_plugin="wd14")
+        assert _text_candidates(vault, descriptions_off) == {
+            described,
+            undescribed,
+            sentinel,
+        }
+        # No tagger_settings at all: tagger off, Florence-2 captioning on.
+        assert _text_candidates(vault, _TextEngine()) == {described, tags_pending}

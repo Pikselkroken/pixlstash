@@ -572,6 +572,15 @@ class Picture(SQLModel, table=True):
             "id",
             sqlite_where=text("workflow_hash_version IS NULL"),
         ),
+        # MissingTextEmbeddingFinder: text_embedding IS NULL. No ``deleted``
+        # term because that probe does not filter on it; trailing ``id`` keeps
+        # its ORDER BY free.
+        Index(
+            "ix_picture_text_embedding_missing",
+            "text_embedding",
+            "id",
+            sqlite_where=text("text_embedding IS NULL"),
+        ),
     )
 
     class Config:
