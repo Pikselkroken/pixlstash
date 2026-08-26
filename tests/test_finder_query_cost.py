@@ -478,3 +478,58 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
             assert released == [True], "and to be dropped when they did not"
         finally:
             FaceExtractionTask.release_detection_models = original
+
+
+# ── per-row stage dependencies (throughput plan §7 step 4) ──────────────────
+
+
+def _add_rows(vault, rows) -> None:
+    """Insert already-built ORM rows (Face / Tag / Quality) and commit."""
+
+    def add(session: Session):
+        session.add_all(rows)
+        session.commit()
+
+    vault.db.run_task(add)
+
+
+def test_image_embedding_needs_nothing_upstream(tmp_path):
+    """CLIP reads only the file: a picture with no faces and tags still pending
+    is embedded now, not after those stages drain (the old ``depends_on``).
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_image_embedding_finder import (
+        MissingImageEmbeddingFinder,
+    )
+
+    class _Clip:
+        def suggested_batch_size(self):
+            return 4
+
+    class _Engine:
+        clip_embedding_workflow = _Clip()
+
+    with Vault(image_root=str(tmp_path)) as vault:
+
+        def seed(session: Session):
+            picture = Picture(
+                file_path=_write_image(tmp_path, "p0.png"),
+                format="png",
+                width=400,
+                height=300,
+                deleted=False,
+            )
+            session.add(picture)
+            session.flush()
+            session.add(Tag(picture_id=picture.id, tag=make_tag_sentinel()))
+            session.commit()
+            return picture.id
+
+        picture_id = vault.db.run_task(seed)
+        finder = MissingImageEmbeddingFinder(vault.db, lambda: _Engine())
+        assert finder.depends_on() == []
+
+        task = finder.find_task()
+        assert task is not None, "an untagged, faceless picture is CLIP work"
+        assert task.params["picture_ids"] == [picture_id]
