@@ -10,6 +10,8 @@ import tempfile
 import os
 from types import SimpleNamespace
 
+from pixlstash.inference.vram_budget import VramBudget
+
 import cv2
 import numpy as np
 import pytest
@@ -332,6 +334,9 @@ def test_video_face_rows_identical_with_and_without_preload():
             insightface_model_pack=DEFAULT_MODEL_PACK,
             force_cpu=bool(Server.DEFAULT_FORCE_CPU),
             keep_models_in_memory=True,
+            # The InsightFace init bounds each ORT arena from the engine's
+            # budget; a real engine always has one.
+            vram_budget=VramBudget("cuda" if not Server.DEFAULT_FORCE_CPU else "cpu"),
         )
         with Server(server_config_path) as server:
             image_root = server.vault.image_root
