@@ -223,10 +223,11 @@ onUnmounted(() => {
 }
 
 .preview-step__title {
+  /* NOT --font-pixel: a step heading is chrome. Tiny5 is the wordmark, a brand
+     moment and an empty-state headline — nothing a person reads a sentence in. */
   margin: 0;
-  font-family: var(--font-pixel);
   font-size: var(--text-xl);
-  font-weight: var(--weight-regular);
+  font-weight: var(--weight-semibold);
 }
 
 .preview-step__lead {
