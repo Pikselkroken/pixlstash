@@ -18,26 +18,34 @@ export function markStart(name) {
 /** Finish timing `name` and log its duration. No-op if `markStart` wasn't called. */
 export function markEnd(name) {
   if (!DEV || typeof performance === "undefined") return;
-  try {
-    performance.mark(`${name}-end`);
-    const { duration } = performance.measure(name, `${name}-start`, `${name}-end`);
-    console.debug(`[perf] ${name}: ${duration.toFixed(1)}ms`);
-  } catch {
-    // The start mark is missing (e.g. a hot-reload landed mid-flight) —
-    // nothing meaningful to report.
+  // The start mark can be missing (e.g. a hot-reload landed mid-flight) —
+  // check explicitly rather than relying on measure() to throw, so a real
+  // User Timing error isn't silently swallowed alongside it.
+  if (performance.getEntriesByName(`${name}-start`, "mark").length === 0) {
+    return;
   }
+  performance.mark(`${name}-end`);
+  const { duration } = performance.measure(name, `${name}-start`, `${name}-end`);
+  console.debug(`[perf] ${name}: ${duration.toFixed(1)}ms`);
+  // Clear this pair's entries so devtools' timeline doesn't accumulate
+  // unbounded marks/measures over a long dev session.
+  performance.clearMarks(`${name}-start`);
+  performance.clearMarks(`${name}-end`);
+  performance.clearMeasures(name);
 }
 
 /**
  * Wrap a click/interaction handler so its duration is timed under `name`.
- * Works for both sync and async (promise-returning) handlers.
+ * Works for both sync and async (promise-returning) handlers, including a
+ * non-native thenable (wrapped through Promise.resolve so `.finally` is
+ * always available).
  */
 export function measureInteraction(name, fn) {
   return function measured(...args) {
     markStart(name);
     const result = fn.apply(this, args);
     if (result && typeof result.then === "function") {
-      return result.finally(() => markEnd(name));
+      return Promise.resolve(result).finally(() => markEnd(name));
     }
     markEnd(name);
     return result;
