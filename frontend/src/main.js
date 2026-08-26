@@ -11,8 +11,13 @@ import { createVuetify } from "vuetify";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import router from "./router/index.js";
+import { markEnd, markStart } from "./utils/perfMarks.js";
 
 import Root from "./Root.vue";
+
+// Startup timing: see docs/frontend_architecture.md §3 for the boot sequence
+// this brackets (main.js -> Root.vue's auth gate -> App.vue's mount).
+markStart("pixlstash:boot");
 
 // Tag the document when running inside the Electron desktop shell so CSS can
 // apply native-app chrome (thin scrollbars, no text-selection on chrome)
@@ -212,3 +217,6 @@ const vuetify = createVuetify({
 });
 
 createApp(Root).use(createPinia()).use(vuetify).use(router).mount("#app");
+// Marks the synchronous mount only (Root.vue's own auth check is async and
+// timed separately, see Root.vue) — this is "first paint of *something*".
+markEnd("pixlstash:boot");

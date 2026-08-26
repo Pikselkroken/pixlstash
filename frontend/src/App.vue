@@ -47,6 +47,7 @@ import { useViewportLayout } from "./composables/useViewportLayout";
 import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
 import { libraryDocumentTitle } from "./utils/libraryChrome";
+import { markEnd, markStart } from "./utils/perfMarks";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -426,6 +427,7 @@ watch(
 
 // --- Lifecycle ---
 onMounted(async () => {
+  markStart("pixlstash:app-mounted-to-interactive");
   // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
   // stats-sidebar light) are live everywhere, not only while the Tasks tab is
   // open. The store self-throttles when idle and pauses on a hidden tab.
@@ -444,11 +446,17 @@ onMounted(async () => {
       }
     })
     .catch(() => {});
-  await fetchConfig();
+  // fetchConfig() (GET /users/me/config) and librariesStore.refresh() (GET
+  // /libraries) are independent reads with no shared state — each already
+  // handles its own errors internally. Awaiting them one after another used
+  // to serialize two network round trips in front of refreshSidebar() and
+  // connectUpdatesSocket() below for no reason; fire them and move on so the
+  // sidebar/grid/WebSocket start immediately instead of queuing behind them.
+  fetchConfig();
   // Snapshots are owner-only (full unscoped access); READ / share sessions
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
-    await librariesStore.refresh();
+    librariesStore.refresh();
     snapshotsStore.fetchSnapshots();
     // Seed the undo stack so the toolbar control is correctly enabled on the
     // first frame. This read establishes the "already seen" watermark, so the
@@ -499,6 +507,11 @@ onMounted(async () => {
       mainAreaResizeObserver.observe(gridWrapperRef.value);
     }
   }
+  // Everything above that the app shell needs to be usable (sidebar refresh,
+  // WebSocket connect, layout measurement) has now been kicked off; the
+  // remaining config/library/undo-history fetches finish in the background
+  // and update reactively when they land.
+  markEnd("pixlstash:app-mounted-to-interactive");
 });
 
 onBeforeUnmount(() => {
