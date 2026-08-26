@@ -135,6 +135,9 @@ def bootstrap_hub(
     configured_image_root: str,
     hub_path: Optional[str] = None,
     legacy_identity_prompt: Optional[Callable[[Library], bool]] = None,
+    library_switch_prompt: Optional[
+        Callable[[Library, str, list[Library]], Optional[Library]]
+    ] = None,
 ) -> HubBootstrap:
     """Open the hub and perform only the pre-vault-open part of migration.
 
@@ -158,6 +161,10 @@ def bootstrap_hub(
     call :func:`prepare_legacy_identity` at all, and that call is still
     tolerated if it loses the race anyway: a startup that was just told the
     thing it wanted has already happened must not abort over it.
+
+    ``library_switch_prompt``, when given, is offered the attached libraries
+    that still open whenever the active one does not — see
+    :func:`_offer_a_usable_library`.
     """
     hub = HubDatabase(hub_path or default_hub_path())
     registry = LibraryRegistry(hub)
@@ -168,6 +175,7 @@ def bootstrap_hub(
     # carried no fingerprint would otherwise conflict forever with whatever
     # stamped it first.
     library = registry.adopt_vault_fingerprint(library)
+    library = _offer_a_usable_library(registry, library, library_switch_prompt)
 
     if (
         legacy_identity_prompt is not None
@@ -408,6 +416,78 @@ def prevalidate_library_fingerprint(library: Library) -> None:
             f"contains {observed or 'no fingerprint'}, but the hub expects "
             f"{expected}. The vault was not opened or migrated."
         )
+
+
+def _library_opens(library: Library) -> bool:
+    """True when this library's vault is present and still the one recorded."""
+    if not library.is_reachable:
+        return False
+    try:
+        prevalidate_library_fingerprint(library)
+    except HubBootstrapError as exc:
+        logger.warning(
+            "Library %s at %s would not open (%s); not offering it.",
+            library.name,
+            library.path,
+            exc,
+        )
+        return False
+    return True
+
+
+def _alternatives_note(alternatives: list[Library]) -> str:
+    if not alternatives:
+        return ""
+    listed = "\n".join(f"    {lib.name} ({lib.path})" for lib in alternatives)
+    return (
+        "\n  These attached libraries do open. Start PixlStash in an "
+        f"interactive terminal to be offered them:\n{listed}"
+    )
+
+
+def _offer_a_usable_library(
+    registry: LibraryRegistry,
+    library: Library,
+    prompt: Optional[Callable[[Library, str, list[Library]], Optional[Library]]],
+) -> Library:
+    """Recover, before the vault is opened, from an active library that is gone.
+
+    Two failures are folded into one recovery here because start-up itself is
+    what makes the first one permanent. Opening a vault *creates* the file, so a
+    vault deleted outside PixlStash — a desktop install and a source install
+    keep separate hubs but share one folder on disk — is a missing database on
+    the next start-up and an *unrecognisable* one on every start-up after that.
+    Validating read-only first leaves the folder untouched.
+
+    That still leaves nowhere to go: the Settings pane that changes the active
+    library needs the server this failure is preventing, and the CLI has no verb
+    for it. So the attached libraries that do open are offered instead, and the
+    error names them when nobody can be asked. Never chosen automatically — an
+    import landing in a library the owner did not pick is worse than a refusal.
+    """
+    try:
+        prevalidate_library_fingerprint(library)
+        return library
+    except HubBootstrapError as exc:
+        reason = str(exc)
+
+    alternatives = [
+        other
+        for other in registry.list_libraries()
+        if other.uuid != library.uuid and _library_opens(other)
+    ]
+    chosen = prompt(library, reason, alternatives) if prompt and alternatives else None
+    if chosen is None:
+        raise HubBootstrapError(f"{reason}{_alternatives_note(alternatives)}")
+    logger.warning(
+        "%s could not be opened (%s); the active library is now %s at %s, as "
+        "chosen at start-up.",
+        library.path,
+        reason,
+        chosen.name,
+        chosen.path,
+    )
+    return registry.set_active(chosen.id)
 
 
 def _opened_execute(connection, sql: str, params: tuple = ()):

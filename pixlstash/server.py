@@ -390,6 +390,7 @@ class Server(
         server_config_path,
         path_map: dict[str, str] | None = None,
         legacy_identity_prompt=None,
+        library_switch_prompt=None,
     ):
         """
         Initialize the Server instance.
@@ -402,6 +403,9 @@ class Server(
                 to :func:`bootstrap_hub`, asked to authorize a detected but
                 unprepared legacy vault instead of requiring
                 ``pixlstash-cli libraries prepare-legacy-identity`` first.
+            library_switch_prompt: Optional callable passed straight through to
+                :func:`bootstrap_hub`, offered the attached libraries that still
+                open when the active one's vault has gone missing.
         """
         # Boot-time instrumentation (issue: v1.11.0 startup latency). Local,
         # operator-visible stage timings only — no telemetry, nothing leaves
@@ -495,6 +499,7 @@ class Server(
             self._server_config["image_root"],
             hub_path,
             legacy_identity_prompt=legacy_identity_prompt,
+            library_switch_prompt=library_switch_prompt,
         )
         self.hub = self._hub_bootstrap.hub
         self.library_registry = LibraryRegistry(self.hub)
