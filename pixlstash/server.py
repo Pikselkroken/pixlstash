@@ -403,14 +403,12 @@ class Server(
                 unprepared legacy vault instead of requiring
                 ``pixlstash-cli libraries prepare-legacy-identity`` first.
         """
-        # Ensure garbage collection before starting server to free up memory.
-        # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
-        gc.collect()
-
         # Boot-time instrumentation (issue: v1.11.0 startup latency). Local,
         # operator-visible stage timings only — no telemetry, nothing leaves
         # the process. Same perf_counter-and-log shape TaskRunner already uses
-        # for per-task timing (pixlstash/task_runner.py).
+        # for per-task timing (pixlstash/task_runner.py). Started before the
+        # gc.collect() below so GC time is counted as its own stage rather
+        # than silently excluded from "Server.__init__ total".
         _boot_t0 = time.perf_counter()
         _stage_t = _boot_t0
 
@@ -419,6 +417,11 @@ class Server(
             now = time.perf_counter()
             logger.info("[boot] %s: %.3fs", name, now - _stage_t)
             _stage_t = now
+
+        # Ensure garbage collection before starting server to free up memory.
+        # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
+        gc.collect()
+        _log_stage("gc.collect()")
 
         self._server_config_path = server_config_path
         self.path_mapper = PathMapper(path_map)
