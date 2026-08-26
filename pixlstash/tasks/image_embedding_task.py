@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -29,6 +30,9 @@ class ImageEmbeddingTask(BaseTask):
 
     BATCH_SIZE = 128
     BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
+    #: A batch slower than this logs its [EMBED_TIMING] line at INFO instead of
+    #: DEBUG. Same threshold as FaceExtractionTask.SLOW_BATCH_LOG_S.
+    SLOW_BATCH_LOG_S = 5.0
 
     # `filename`, not `path`. This table used to hold absolute paths built at
     # import time from a second copy of the download folder's location, which is
@@ -427,15 +431,33 @@ class ImageEmbeddingTask(BaseTask):
         if not self._batch:
             return {"changed_count": 0, "changed": []}
 
+        started_at = time.perf_counter()
         preloaded = self._wait_for_preload()
-        changed = self._process_preloaded(preloaded)
+        preload_wait_s = time.perf_counter() - started_at
+        changed = self._process_preloaded(
+            preloaded, started_at=started_at, preload_wait_s=preload_wait_s
+        )
         return {"changed_count": len(changed), "changed": changed}
 
-    def _process_preloaded(self, preloaded: list) -> list:
+    def _process_preloaded(
+        self,
+        preloaded: list,
+        *,
+        started_at: float | None = None,
+        preload_wait_s: float = 0.0,
+    ) -> list:
         """Process a list of ``(pid, file_path, PIL.Image | None)`` triples.
+
+        Args:
+            preloaded: The batch, one triple per picture.
+            started_at: ``time.perf_counter()`` when the task started running;
+                ``total_s`` in the timing line is measured from it.
+            preload_wait_s: How long the task blocked on the preload thread.
 
         Returns a list of (model, pic_id, field, value) change tuples.
         """
+        if started_at is None:
+            started_at = time.perf_counter()
         flat_images = []
         flat_pids = []
         flat_hashes = []
@@ -475,6 +497,7 @@ class ImageEmbeddingTask(BaseTask):
             return changed
 
         embeddings = None
+        inference_start = time.perf_counter()
         clip_ready = self._ensure_clip_ready()
 
         if clip_ready:
@@ -524,6 +547,7 @@ class ImageEmbeddingTask(BaseTask):
                     aesthetic_scores = scores
             except Exception as exc:
                 logger.error("ImageEmbeddingTask: Aesthetic scoring failed: %s", exc)
+        inference_s = time.perf_counter() - inference_start
 
         if embeddings is None:
             logger.error(
@@ -570,10 +594,28 @@ class ImageEmbeddingTask(BaseTask):
         if failed_pids:
             updates.extend(self._build_failure_updates(failed_pids))
 
+        db_start = time.perf_counter()
         updated_ids = self._db.run_task(
             self._save_results, updates, priority=DBPriority.LOW
         )
+        db_s = time.perf_counter() - db_start
         changed = [(Picture, pid, "image_embedding", None) for pid in updated_ids]
+
+        total_s = time.perf_counter() - started_at
+        n = len(processed_pids)
+        logger.log(
+            logging.INFO if total_s >= self.SLOW_BATCH_LOG_S else logging.DEBUG,
+            "[EMBED_TIMING] task_id=%s n=%d device=%s preload_wait_s=%.3f "
+            "inference_s=%.3f db_s=%.3f total_s=%.3f throughput=%.1f/s",
+            self.id,
+            n,
+            getattr(self._clip_workflow, "device", "unknown"),
+            preload_wait_s,
+            inference_s,
+            db_s,
+            total_s,
+            n / total_s if total_s > 0 else 0.0,
+        )
 
         if failed_pids:
             failed_files = [batch_files.get(pid) for pid in failed_pids]

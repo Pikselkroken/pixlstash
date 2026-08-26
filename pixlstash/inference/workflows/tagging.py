@@ -63,6 +63,17 @@ class TaggingWorkflow:
         """Return the quality-crop image size expected by the PixlStash tagger."""
         return int(self._engine.pixlstash_tagger_service._image_size_quality_crop)
 
+    def active_plugin_name(self, engine_override: str | None = None) -> str:
+        """The plugin :meth:`tag_images` runs for the full-image pass.
+
+        *engine_override* wins when given (``""`` means no tagging); otherwise
+        ``tagger_settings['active_tag_plugin']``, defaulting to
+        ``'pixlstash_tagger'``.
+        """
+        if engine_override is not None:
+            return engine_override
+        return self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
+
     # ------------------------------------------------------------------
     # Public inference methods
     # ------------------------------------------------------------------
@@ -97,11 +108,7 @@ class TaggingWorkflow:
         Returns:
             ``{path: [tag, ...]}`` mapping.
         """
-        active = (
-            engine_override
-            if engine_override is not None
-            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
-        )
+        active = self.active_plugin_name(engine_override)
 
         if not active:
             return {}
@@ -277,11 +284,7 @@ class TaggingWorkflow:
             engine_override: If given, pre-load this specific plugin instead
                 of the configured ``active_tag_plugin``.
         """
-        active = (
-            engine_override
-            if engine_override is not None
-            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
-        )
+        active = self.active_plugin_name(engine_override)
         if not active:
             return
 

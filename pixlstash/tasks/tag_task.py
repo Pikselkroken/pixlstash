@@ -765,6 +765,7 @@ class TagTask(BaseTask):
                 # image resolution can still be detected.
                 crop_inference_s = 0.0
                 crop_fetch_s = 0.0
+                crop_build_s = 0.0
                 try:
                     crop_fetch_start = time.perf_counter()
                     pic_ids = [p.id for p in batch]
@@ -780,6 +781,10 @@ class TagTask(BaseTask):
                     # Paths whose crop is the faceless centre-crop fallback; these are
                     # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
                     centre_crop_paths: set = set()
+                    # CPU work, and it sits between the two GPU timers: PIL
+                    # crops and resizes, plus a decode for any picture the
+                    # preload missed.
+                    crop_build_start = time.perf_counter()
                     for pic in batch:
                         built = self._build_quality_crop(
                             pic,
@@ -794,6 +799,7 @@ class TagTask(BaseTask):
                         key_to_path[key] = file_path
                         if is_centre_crop:
                             centre_crop_paths.add(file_path)
+                    crop_build_s = time.perf_counter() - crop_build_start
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
@@ -952,18 +958,34 @@ class TagTask(BaseTask):
                         if device is not None
                         else "unknown"
                     )
+                    # The full-image pass runs exactly one plugin, so
+                    # `inference_s` is all WD14 or all PixlStash tagger; the
+                    # crop pass is always the PixlStash tagger. Split so the
+                    # two models and the CPU crop build are separate numbers.
+                    full_pass = active_workflow.active_plugin_name(
+                        self._engine_override
+                    )
+                    wd14_s = inference_s if full_pass == "wd14" else 0.0
+                    pixlstash_tagger_s = (
+                        inference_s if full_pass == "pixlstash_tagger" else 0.0
+                    ) + crop_inference_s
                     logger.info(
                         "[TAG_TIMING] task_id=%s n=%d device=%s "
-                        "preload_wait_s=%.3f inference_s=%.3f "
-                        "crop_fetch_s=%.3f crop_inference_s=%.3f "
+                        "preload_wait_s=%.3f full_pass=%s inference_s=%.3f "
+                        "wd14_s=%.3f pixlstash_tagger_s=%.3f "
+                        "crop_fetch_s=%.3f crop_build_s=%.3f crop_inference_s=%.3f "
                         "db_tags_s=%.3f db_resolve_s=%.3f db_pred_s=%.3f "
                         "total_s=%.3f gpu_throughput=%.1f/s wall_throughput=%.1f/s",
                         self.id,
                         n,
                         device,
                         preload_wait_s,
+                        full_pass,
                         inference_s,
+                        wd14_s,
+                        pixlstash_tagger_s,
                         crop_fetch_s,
+                        crop_build_s,
                         crop_inference_s,
                         db_tags_s,
                         db_resolve_s,
