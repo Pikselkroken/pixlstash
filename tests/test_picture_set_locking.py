@@ -1229,10 +1229,12 @@ def test_finders_exclude_stack_sibling_of_locked_member():
         _add_member_directly(server, set_id, member_pic)
         _set_locked(client, set_id, True)
 
-        # Every picture carries pending work for both finders.
+        # Every picture carries pending work for both finders, and the face
+        # stage the tag finder now waits for per picture has already run.
         def seed_work(session):
             for pid in (member_pic, sibling_pic, free_pic):
                 session.add(Tag(picture_id=pid, tag=make_tag_sentinel()))
+                session.add(Face(picture_id=pid, face_index=-1))
                 pic = session.get(Picture, pid)
                 pic.description = None
                 session.add(pic)

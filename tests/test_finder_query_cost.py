@@ -533,3 +533,66 @@ def test_image_embedding_needs_nothing_upstream(tmp_path):
         task = finder.find_task()
         assert task is not None, "an untagged, faceless picture is CLIP work"
         assert task.params["picture_ids"] == [picture_id]
+
+
+_TAG_PROBE = "picture.id in (select tag.picture_id"
+
+
+def test_tag_probe_is_served_by_the_tag_index(tmp_path):
+    """The pending-sentinel range drives the probe through ``ix_tag_tag``.
+
+    The old ``tags.any(tag LIKE '\\_\\_tag%' ESCAPE '\\')`` could not use an index
+    (SQLite's LIKE optimisation is off with ESCAPE), so it was ``SCAN picture``.
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed(vault, tmp_path, count=3, with_faces=True)
+        _add_rows(vault, [Tag(picture_id=ids[0], tag=make_tag_sentinel())])
+
+        with _StatementRecorder(vault.db._engine, _TAG_PROBE) as rec:
+            vault.db.run_immediate_read_task(
+                lambda s: MissingTagFinder._fetch_missing_tags(s, 64)
+            )
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert any("ix_tag_tag" in line for line in plan), plan
+        # The outer loop is a rowid lookup fed by the tag index, not a scan.
+        assert plan[0].startswith("SEARCH picture USING INTEGER PRIMARY KEY"), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+
+
+def test_tagging_starts_per_picture_as_soon_as_its_faces_are_known(tmp_path):
+    """A picture whose face row exists is tagged while its neighbour, still in
+    the face stage, is not — and a no-face sentinel row counts as known.
+    """
+    from pixlstash.db_models import Tag
+    from pixlstash.db_models.tag import make_tag_sentinel
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        with_face, no_face_sentinel, faces_pending = _seed(
+            vault, tmp_path, count=3, with_faces=False
+        )
+        _add_rows(
+            vault,
+            [
+                Face(picture_id=with_face, face_index=0, bbox=[1, 1, 9, 9]),
+                Face(picture_id=no_face_sentinel, face_index=-1),
+                Tag(picture_id=with_face, tag=make_tag_sentinel()),
+                Tag(picture_id=no_face_sentinel, tag=make_tag_sentinel("wd14")),
+                Tag(picture_id=faces_pending, tag=make_tag_sentinel()),
+            ],
+        )
+
+        selected = {
+            p.id
+            for p in vault.db.run_immediate_read_task(
+                lambda s: MissingTagFinder._fetch_missing_tags(s, 64)
+            )
+        }
+        assert with_face in selected
+        assert no_face_sentinel in selected, "a no-face sentinel is 'faces known'"
+        assert faces_pending not in selected, "its face stage has not run yet"
