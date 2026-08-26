@@ -37,7 +37,6 @@ const pluginInstallHelpOpen = ref(false);
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
 const VRAM_BUDGET_STEP_GB = 2;
-const VRAM_BUDGET_MAX_GB = 12;
 const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbLoading = ref(false);
@@ -54,7 +53,9 @@ function deriveMaxVramSliderMax(totalVramGb) {
   const available = total - 2;
   const stepped =
     Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
-  return Math.min(VRAM_BUDGET_MAX_GB, Math.max(VRAM_BUDGET_MIN_GB, stepped));
+  // No fixed ceiling: the backend validates against the card too, and a 32 GB
+  // card now defaults to 16 GB — a slider capped at 12 could not show it.
+  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
 }
 
 function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {

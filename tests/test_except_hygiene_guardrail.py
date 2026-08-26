@@ -157,14 +157,6 @@ _SILENT_SWALLOW_ALLOWLIST = {
         "metadata key IS correct, not an error"
     ),
     (
-        "pixlstash/utils/system_utils.py",
-        "default_max_vram_gb",
-        "Exception",
-    ): (
-        "nvidia-smi absent/failing is normal on CPU-only hosts; the documented 6GB "
-        "default IS the answer, so logging it would be routine noise"
-    ),
-    (
         "pixlstash/utils/vram_utils.py",
         "query_total_vram_mb",
         "Exception",
