@@ -64,10 +64,21 @@ export async function cancelFolderStructureRead(taskId) {
  *   one entry per folder the owner accepted as something; a folder left "just
  *   a folder" is simply absent.
  * @param {string} [label] - defaults to the folder's own name.
+ * @param {"reference"|"local_import"} [mode] - `"reference"` (default)
+ *   registers the scanned root as an external reference folder, indexed in
+ *   place. `"local_import"` instead imports its pictures as ordinary managed
+ *   pictures of the active library — only valid when the scanned root is
+ *   inside that library's own image root (v1.11 Phase 3, "Bring them in" on
+ *   a freshly created library).
  * @returns {Promise<Object>} `{ task_id }`.
  */
-export async function startFolderStructureCommit(taskId, assignments, label) {
-  const body = { task_id: taskId, assignments };
+export async function startFolderStructureCommit(
+  taskId,
+  assignments,
+  label,
+  mode = "reference",
+) {
+  const body = { task_id: taskId, assignments, mode };
   if (label) body.label = label;
   return unwrap(apiClient.post(COMMIT_URL, body));
 }

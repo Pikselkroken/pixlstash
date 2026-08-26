@@ -16,11 +16,27 @@
  * Browsing reuses `FolderBrowser`, including its `New folder` — the add route
  * deliberately creates no directory, so making one is the picker's job and it
  * already had a button for it.
+ *
+ * The "pictures" verdict promises the folder-mapping wizard ("Bring them in
+ * and name what your folders mean"), but that library is empty until it is
+ * ACTIVE — switching is what makes its own pictures visible to scan. So this
+ * dialog creates the library as usual and then, for "pictures" only, starts
+ * the same switch-and-reload `LibrariesSection.switchTo()` uses
+ * (`useLibrarySwitchStore`), first saving a `useFolderMappingStore` entry
+ * pointed at the new library's own root with `mode: "local_import"` and an
+ * empty `taskId` — that entry survives the reload (it is `localStorage`
+ * backed) and is what `SideBar` auto-opens `FolderMappingWizard` from on the
+ * other side, already at the "scan" step, in `local_import` mode.
  */
 import { computed, nextTick, ref, watch } from "vue";
 
 import { addLibrary, inspectLibraryPath } from "../../api/libraries";
 import { errorDetail } from "../../utils/apiError";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "../../stores/useLibrariesStore";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -37,6 +53,10 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "added"]);
+
+const mappingStore = useFolderMappingStore();
+const librariesStore = useLibrariesStore();
+const switchStore = useLibrarySwitchStore();
 
 // What each addable verdict calls its button. Pure labels — every word that
 // carries a fact about this folder comes from the server.
@@ -148,6 +168,25 @@ async function add() {
   adding.value = true;
   try {
     const library = await addLibrary(inspectedPath.value, name.value.trim());
+    if (verdict.value?.verdict === "pictures") {
+      // The library exists but is empty until it is active — save the intent
+      // to organise its own root before switching, so it survives the reload
+      // switching does. No task has been started yet, hence the empty
+      // taskId — see the header comment and useFolderMappingStore's own.
+      mappingStore.save({
+        taskId: "",
+        path: inspectedPath.value,
+        label: name.value.trim() || library.name || "",
+        mode: "local_import",
+      });
+      emit("close");
+      // Reuses the same switch-then-reload flow LibrariesSection's own
+      // "Switch" button starts. No confirmation prompt: pressing "Bring them
+      // in" already said what the owner wants, unlike an ordinary switch away
+      // from a library already in use.
+      await switchStore.begin(library, librariesStore.activeLibrary, null);
+      return;
+    }
     emit("added", library);
     emit("close");
   } catch (error) {

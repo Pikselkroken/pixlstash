@@ -19,6 +19,14 @@ import { onSessionReset } from "../utils/apiClient";
  * of it may survive into a different credential's session, and any scan
  * being waited on is abandoned with it — the server thread carries on, but
  * this session no longer has standing to poll for it.
+ *
+ * `taskId` can be the empty string: "Add a library" saves an entry here
+ * *before* any read has started, for a "pictures" verdict's switch-then-reload
+ * — `mode: "local_import"` and an empty `taskId` mean "start scanning this
+ * known path fresh", which `FolderMappingWizard`'s `resume` handling already
+ * treats correctly (an empty `resumeTaskId` is falsy, so the scan step starts
+ * a new read rather than reattaching to one). `mode` defaults to `"reference"`
+ * when absent, for entries saved before this field existed.
  */
 const STORAGE_KEY = "pixlstash.pendingFolderMapping";
 
@@ -40,7 +48,7 @@ function readStorage() {
 export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
 
-  /** @param {{taskId: string, path: string, label?: string}} entry */
+  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import"}} entry */
   function save(entry) {
     pending.value = entry;
     try {

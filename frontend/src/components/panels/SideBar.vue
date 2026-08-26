@@ -558,6 +558,19 @@ async function folderMappingWizardCommitted() {
   _startFolderStatusPoll();
 }
 
+// "Add a library"'s "pictures" verdict saves a `local_import` entry and
+// switches the active library before this component even exists — reopening
+// this same wizard is therefore this session's ONLY chance to pick up that
+// intent, unlike the ordinary reference-folder "Finish organising…" row below,
+// which only ever needs a click because its scan is already running
+// server-side either way. `mappingStore.pending` is left untouched by this
+// auto-open, so if the owner cancels, the row still offers it again.
+onMounted(() => {
+  if (!isReadOnly.value && mappingStore.pending?.mode === "local_import") {
+    openFolderMappingWizard(mappingStore.pending);
+  }
+});
+
 function pathParent(path) {
   const raw = String(path || "");
   if (!raw || raw === "/") return "/";
@@ -5287,28 +5300,6 @@ defineExpose({
             </button>
           </div>
 
-          <!-- "About your library" in the dock. Icon-only, so the title is the
-               accessible name and must carry the whole label. -->
-          <div :class="['sidebar-collapsed-row', { active: isInsightsView }]">
-            <button
-              type="button"
-              class="sidebar-collapsed-item sidebar-destination-btn"
-              :class="{
-                active: isInsightsView,
-                'sidebar-collapsed-item--unavailable': isReadOnly,
-              }"
-              :aria-current="isInsightsView ? 'page' : undefined"
-              :aria-disabled="isReadOnly || undefined"
-              aria-label="About your library"
-              :title="
-                isReadOnly ? READ_ONLY_INSIGHTS_HINT : 'About your library'
-              "
-              @click="isReadOnly || emit('select-insights')"
-            >
-              <v-icon>mdi-lightbulb-on-outline</v-icon>
-            </button>
-          </div>
-
           <!-- Moves in the dock: reachable whenever the queue holds anything
                at all (movesStore.hasAnyPending), never shown-and-disabled the
                way the three permanent destinations above are — see the
@@ -5455,7 +5446,11 @@ defineExpose({
             <div
               v-if="mappingStore.pending"
               class="sidebar-folder-row sidebar-mapping-resume-row"
-              title="The scan is kept — reopening this does not re-scan"
+              :title="
+                mappingStore.pending.taskId
+                  ? 'The scan is kept — reopening this does not re-scan'
+                  : 'Reopening this starts scanning that folder'
+              "
               @click="openFolderMappingWizard(mappingStore.pending)"
             >
               <v-icon size="15" class="sidebar-mapping-resume-icon"
@@ -5844,32 +5839,6 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
-              </button>
-            </div>
-
-            <!-- "About your library" — a destination, and deliberately one
-                 without a count. Every row on it is a finding rather than a
-                 to-do, and half of them say there is nothing to do; a badge
-                 here would turn a screen that reports into a screen that
-                 nags. Inert-not-hidden for a READ session, same as the two
-                 rows above. -->
-            <div class="sidebar-all-pictures-row">
-              <button
-                type="button"
-                class="sidebar-list-item sidebar-destination-btn"
-                :class="{
-                  active: isInsightsView,
-                  'sidebar-list-item--unavailable': isReadOnly,
-                }"
-                :aria-current="isInsightsView ? 'page' : undefined"
-                :aria-disabled="isReadOnly || undefined"
-                :title="isReadOnly ? READ_ONLY_INSIGHTS_HINT : undefined"
-                @click="isReadOnly || emit('select-insights')"
-              >
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-lightbulb-on-outline</v-icon></span
-                >
-                <span class="sidebar-list-label">About your library</span>
               </button>
             </div>
 
@@ -6947,6 +6916,25 @@ defineExpose({
         </span>
       </div>
       <template v-if="sidebarCtxAllPictures">
+        <!-- "About your library" moved here from its own permanent sidebar
+             destination: it reads the whole library rather than acting on
+             All Pictures specifically, but All Pictures is the one row that
+             already means "the whole library" everywhere else in this
+             sidebar, so its context menu is where owners now find it. -->
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          :title="isReadOnly ? READ_ONLY_INSIGHTS_HINT : undefined"
+          @click="
+            emit('select-insights');
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-lightbulb-on-outline</v-icon
+          >
+          About your library
+        </button>
         <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"

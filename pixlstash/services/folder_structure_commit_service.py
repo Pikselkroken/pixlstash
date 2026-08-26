@@ -5,14 +5,35 @@
 ``folder_structure_service.py``) only ever proposes; this module is the one
 place anything from the mapping screen is written.
 
-**No file is moved, renamed or copied, at any stage.** The scanned root is
-registered as an ordinary :class:`~pixlstash.db_models.reference_folder.ReferenceFolder`
-— indexed in place by the existing, already-shipped
-:class:`~pixlstash.tasks.reference_folder_scan_task.ReferenceFolderScanTask`,
-which is the only filesystem-reading step here and writes nothing but the
-vault database and its own thumbnail cache. Once that scan's first pass has
-run, every newly-indexed picture is linked to whichever accepted ancestor
-folder names it — a database row, never a filesystem write.
+**No file is moved, renamed or copied, at any stage, in either commit mode.**
+
+- ``mode="reference"`` (the default): the scanned root is registered as an
+  ordinary :class:`~pixlstash.db_models.reference_folder.ReferenceFolder` —
+  indexed in place by the existing, already-shipped
+  :class:`~pixlstash.tasks.reference_folder_scan_task.ReferenceFolderScanTask`,
+  which is the only filesystem-reading step here and writes nothing but the
+  vault database and its own thumbnail cache. Right for a folder *external* to
+  the library's own storage.
+- ``mode="local_import"``: for a root that IS the active library's own
+  ``image_root`` (or a folder inside it) — the "Add a library" flow's
+  "pictures" verdict, where the folder a fresh vault was just created in
+  already held loose files. Those pictures already live where the library
+  keeps its own, so they become ordinary MANAGED pictures (relative
+  ``file_path``, same shape as any other import) rather than reference-folder
+  ones. Routing this case through ``mode="reference"`` instead would either
+  bypass or have to reimplement the exact conflict guard
+  ``routes.reference_folders._validate_reference_folder_conflicts`` already
+  enforces — a reference folder may never equal or contain ``image_root`` —
+  which is the proof the two need to stay two commit modes, not one.
+  ``local_import_pictures`` does the read this mode's own filesystem step
+  (there is no already-shipped scan task for "index my own image_root in
+  place"); ``apply_local_mapping`` then reuses the same entity-resolution code
+  ``apply_mapping`` uses, via the shared ``_link_pictures`` helper, so the two
+  modes cannot answer "who does this folder belong to" differently.
+
+Once a mode's filesystem step has run, every newly-indexed picture is linked
+to whichever accepted ancestor folder names it — a database row, never a
+filesystem write.
 
 An assignment names a folder, not a picture: two folders that resolve to the
 same kind and the same name (a project called ``Mira`` appearing twice in the
@@ -23,11 +44,15 @@ collapse to one path component as the same folder.
 
 from __future__ import annotations
 
+import concurrent.futures
+import io
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
+from PIL import Image
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -37,19 +62,29 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
-from pixlstash.db_models.tag import Tag
+from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.project_membership_service import (
     set_character_projects,
     set_picture_set_projects,
 )
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
+from pixlstash.utils.media_files import is_supported_media_file
+from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
     validate_reference_folder_path,
 )
 
 logger = get_logger(__name__)
+
+#: `local_import`'s own "hash + thumbnail many files" step — mirrors
+#: `ReferenceFolderScanTask`'s `_BUILD_CHUNK_SIZE` / `_MAX_BUILD_WORKERS`,
+#: the established shape for this exact piece of work, rather than a new one.
+_BUILD_CHUNK_SIZE = 128
+_MAX_BUILD_WORKERS = 8
 
 #: How long the commit waits for the reference folder's first scan pass
 #: before giving up. The release plan measured 28,412 files well inside this;
@@ -92,7 +127,9 @@ class Assignment:
 
 @dataclass
 class CommitResult:
-    reference_folder_id: int
+    #: ``None`` for a `local_import` commit — there is no reference folder;
+    #: the pictures are managed ones, indexed directly under `image_root`.
+    reference_folder_id: Optional[int] = None
     pictures_indexed: int = 0
     projects_created: int = 0
     projects_matched: int = 0
@@ -251,6 +288,204 @@ def register_reference_folder(
     return rf
 
 
+def validate_local_import_root(server, root_path: str) -> None:
+    """Refuse a `local_import` commit whose root is not the library's own tree.
+
+    `local_import` turns pictures already on disk into ordinary MANAGED
+    pictures — the mirror image of `register_reference_folder`, which
+    `routes.reference_folders._validate_reference_folder_conflicts` already
+    refuses for exactly this path (a reference folder may never equal or
+    contain `image_root`). This is the same rule read the other way: a folder
+    outside `image_root` must never be walked by `local_import`, only ever
+    registered as a reference folder.
+
+    Raises:
+        CommitError: *root_path* is not `image_root` itself or a folder
+            inside it.
+    """
+    image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
+    root_path = os.path.normpath(root_path)
+    if not image_root or not path_is_within(root_path, image_root):
+        raise CommitError(
+            f"{root_path} is not this library's own folder ({image_root or 'unset'}) "
+            "or inside it — local_import only applies to pictures the library "
+            "already owns."
+        )
+
+
+def _build_managed_picture(
+    abs_path: str, relative_path: str, image_root: str
+) -> Picture:
+    """Build a managed Picture for a file already sitting under *image_root*.
+
+    Mirrors ``ReferenceFolderScanTask._build_picture`` — same hash, metadata
+    and thumbnail steps — with the two differences that matter for a MANAGED
+    picture: ``file_path`` is stored RELATIVE (to *image_root*) rather than
+    absolute, and no ``reference_folder_id`` is set. No bytes are written or
+    moved for the picture itself; only the thumbnail is generated, exactly as
+    the reference-folder path does — the source file already lives where it
+    is going to stay.
+    """
+    pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
+    with open(abs_path, "rb") as fh:
+        image_bytes = fh.read()
+
+    created_at = ImageUtils.extract_created_at_from_metadata(
+        image_bytes, fallback_file_path=abs_path
+    )
+
+    width = height = None
+    img_format = None
+    thumbnail_bytes = None
+    thumb_cols: dict = {}
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img_format = img.format or "PNG"
+            width, height = img.size
+            rendered = ImageUtils.render_thumbnail(img)
+            if rendered is not None:
+                thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                thumb_cols = {
+                    "thumbnail_width": bmp_w,
+                    "thumbnail_height": bmp_h,
+                    "square_crop_x": crop["x"],
+                    "square_crop_y": crop["y"],
+                    "square_crop_side": crop["side"],
+                }
+    except Exception:
+        # Not fatal: PIL cannot open a video, and a corrupt image just means
+        # no thumbnail yet. Same swallow reference_folder_scan_task makes —
+        # the Picture row is still built and MissingThumbnailFinder can
+        # retry later.
+        logger.warning(
+            "Local import: failed to process image file %s for thumbnail.",
+            abs_path,
+        )
+
+    if thumbnail_bytes:
+        ImageUtils.write_thumbnail_bytes(image_root, relative_path, thumbnail_bytes)
+
+    pic = Picture(
+        file_path=relative_path,
+        pixel_sha=pixel_sha,
+        format=img_format,
+        width=width,
+        height=height,
+        size_bytes=os.path.getsize(abs_path),
+        imported_at=datetime.now(timezone.utc),
+        original_file_name=os.path.basename(abs_path),
+        is_video=VideoUtils.is_video_file(abs_path),
+        **thumb_cols,
+    )
+    if created_at:
+        pic.created_at = created_at
+    return pic
+
+
+def local_import_pictures(
+    server,
+    root_path: str,
+    *,
+    expected_pictures: int,
+    on_progress=None,
+) -> list[int]:
+    """Import every supported file under *root_path* as a managed Picture.
+
+    The `local_import` counterpart to `register_reference_folder` +
+    `ReferenceFolderScanTask`'s scan pass: there is no already-shipped task
+    for "index my own `image_root` in place", so this module does that one
+    filesystem read itself.
+
+    Idempotent by `file_path`, the same spirit as `register_reference_folder`
+    checking for a row that already exists before creating one: a file
+    already indexed (an overlapping earlier `local_import`, or an ordinary
+    import that landed here independently) is reused by id, never
+    reimported as a second row.
+
+    Args:
+        expected_pictures: The read's own count, shown as the progress total.
+        on_progress: ``(processed, total) -> None``, called as files are
+            resolved — both the already-indexed ones (counted immediately)
+            and the newly-built ones (counted as each chunk commits).
+
+    Returns:
+        Every matching file's Picture id, existing and newly-created alike.
+    """
+    image_root = os.path.normpath(server.vault.image_root)
+
+    # Prune dot-folders exactly as the Phase 2 read does (`folder_structure_
+    # service.py`): a vault's own caches — `.ref_thumbs/`, `.pixlstash`
+    # sidecars — sit *inside* image_root, and root_path is commonly
+    # image_root itself. Without this prune, local_import would re-import
+    # every reference-folder thumbnail already sitting in `.ref_thumbs/` as
+    # if it were a picture of its own (`.webp` is a supported extension).
+    file_paths: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        for name in filenames:
+            if not name.startswith(".") and is_supported_media_file(name):
+                file_paths.append(os.path.join(dirpath, name))
+    rel_by_abs = {
+        path: os.path.relpath(path, image_root).replace(os.sep, "/")
+        for path in file_paths
+    }
+    total = expected_pictures or len(file_paths)
+
+    def load_existing(session: Session) -> dict[str, int]:
+        rows = session.exec(
+            select(Picture.file_path, Picture.id).where(
+                Picture.file_path.in_(rel_by_abs.values())
+            )
+        ).all()
+        return {rel: pid for rel, pid in rows}
+
+    existing_by_rel = server.vault.db.run_immediate_read_task(load_existing)
+
+    picture_ids: list[int] = list(existing_by_rel.values())
+    to_build = [path for path in file_paths if rel_by_abs[path] not in existing_by_rel]
+    processed = len(picture_ids)
+    if on_progress is not None:
+        on_progress(processed, total)
+
+    def _build(abs_path: str) -> Optional[Picture]:
+        try:
+            return _build_managed_picture(abs_path, rel_by_abs[abs_path], image_root)
+        except Exception as exc:
+            logger.warning(
+                "Local import: failed to build picture for %s: %s", abs_path, exc
+            )
+            return None
+
+    for start in range(0, len(to_build), _BUILD_CHUNK_SIZE):
+        chunk = to_build[start : start + _BUILD_CHUNK_SIZE]
+        max_workers = min(_MAX_BUILD_WORKERS, max(1, len(chunk)))
+        if max_workers <= 1:
+            built = [pic for pic in (_build(path) for path in chunk) if pic is not None]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                built = [pic for pic in ex.map(_build, chunk) if pic is not None]
+
+        def insert(session: Session, built=built) -> list[int]:
+            session.add_all(built)
+            session.commit()
+            for pic in built:
+                session.refresh(pic)
+            session.add_all(
+                Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL) for pic in built
+            )
+            session.commit()
+            return [pic.id for pic in built]
+
+        picture_ids.extend(
+            server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
+        )
+        processed += len(chunk)
+        if on_progress is not None:
+            on_progress(processed, total)
+
+    return picture_ids
+
+
 def wait_for_first_scan(
     server,
     reference_folder_id: int,
@@ -299,6 +534,142 @@ def wait_for_first_scan(
         time.sleep(_POLL_INTERVAL_S)
 
 
+def _link_pictures(
+    session: Session,
+    pictures: list[Picture],
+    assignments: list[Assignment],
+    root_path: str,
+    image_root: str,
+    result: CommitResult,
+) -> None:
+    """Create the accepted entities and link *pictures* to them.
+
+    Shared by `apply_mapping` (a reference folder's indexed set, absolute
+    `file_path`) and `apply_local_mapping` (`local_import_pictures`'s managed
+    pictures, `file_path` relative to *image_root*) — the one place the
+    Facet-handling (create-or-match project/person/set, nearest-ancestor-wins,
+    every Tag ancestor) is written, so the two commit modes cannot answer "who
+    does this folder belong to" differently.
+    `ImageUtils.resolve_picture_path` normalises either `file_path` shape to
+    an absolute path before the folder grouping below, which is the only
+    place the two callers' pictures actually differ.
+    """
+    by_path = {a.relative_path: a for a in assignments}
+
+    # Group by containing folder first: every picture in the same folder
+    # resolves to the same (project, person, set, tags), so the ancestor
+    # walk runs once per folder rather than once per picture.
+    by_folder: dict[str, list[Picture]] = {}
+    for pic in pictures:
+        absolute = ImageUtils.resolve_picture_path(image_root, pic.file_path) or ""
+        folder_abs = os.path.dirname(absolute)
+        rel = os.path.relpath(folder_abs, root_path).replace(os.sep, "/")
+        rel = "" if rel == "." else rel
+        by_folder.setdefault(rel, []).append(pic)
+
+    project_cache: dict[tuple[str, str], int] = {}
+    character_cache: dict[tuple[str, str], int] = {}
+    set_cache: dict[tuple[str, str], int] = {}
+
+    def get_project(assignment: Assignment) -> int:
+        name = os.path.basename(assignment.relative_path) or assignment.relative_path
+        key = (
+            ("id", str(assignment.match_id)) if assignment.match_id else ("name", name)
+        )
+        if key in project_cache:
+            return project_cache[key]
+        if assignment.match_id:
+            project = session.get(Project, assignment.match_id)
+            if project is None:
+                raise CommitError(f"Project {assignment.match_id} not found")
+            result.projects_matched += 1
+        else:
+            project = Project(name=name)
+            session.add(project)
+            session.flush()
+            result.projects_created += 1
+        project_cache[key] = project.id
+        return project.id
+
+    def get_character(assignment: Assignment, project_id: Optional[int]) -> int:
+        name = os.path.basename(assignment.relative_path) or assignment.relative_path
+        key = (
+            ("id", str(assignment.match_id)) if assignment.match_id else ("name", name)
+        )
+        if key in character_cache:
+            return character_cache[key]
+        if assignment.match_id:
+            character = session.get(Character, assignment.match_id)
+            if character is None:
+                raise CommitError(f"Person {assignment.match_id} not found")
+            result.people_matched += 1
+        else:
+            character = Character(name=name)
+            session.add(character)
+            session.flush()
+            if project_id is not None:
+                set_character_projects(session, character, [project_id])
+            result.people_created += 1
+        character_cache[key] = character.id
+        return character.id
+
+    def get_set(assignment: Assignment, project_id: Optional[int]) -> int:
+        name = os.path.basename(assignment.relative_path) or assignment.relative_path
+        key = (
+            ("id", str(assignment.match_id)) if assignment.match_id else ("name", name)
+        )
+        if key in set_cache:
+            return set_cache[key]
+        if assignment.match_id:
+            picture_set = session.get(PictureSet, assignment.match_id)
+            if picture_set is None:
+                raise CommitError(f"Set {assignment.match_id} not found")
+            result.sets_matched += 1
+        else:
+            picture_set = PictureSet(name=name)
+            session.add(picture_set)
+            session.flush()
+            if project_id is not None:
+                set_picture_set_projects(session, picture_set, [project_id])
+            result.sets_created += 1
+        set_cache[key] = picture_set.id
+        return picture_set.id
+
+    tag_created: set[str] = set()
+
+    for folder_relpath, folder_pictures in by_folder.items():
+        project_a, person_a, set_a, tag_as = _resolve_folder(folder_relpath, by_path)
+        project_id = get_project(project_a) if project_a else None
+        character_id = get_character(person_a, project_id) if person_a else None
+        set_id = get_set(set_a, project_id) if set_a else None
+        tag_names = []
+        for tag_a in tag_as:
+            tag_name = os.path.basename(tag_a.relative_path) or tag_a.relative_path
+            tag_names.append(tag_name)
+            if tag_name not in tag_created:
+                tag_created.add(tag_name)
+                result.tags_created += 1
+
+        for pic in folder_pictures:
+            if project_id is not None:
+                pic.project_id = project_id
+                session.add(
+                    PictureProjectMember(picture_id=pic.id, project_id=project_id)
+                )
+            if character_id is not None:
+                # Deferred, exactly as the character-assignment endpoint
+                # defers when face extraction has not run yet for a
+                # picture: FaceExtractionTask clears this and assigns the
+                # best face once it has. A folder-derived person is not a
+                # detection, so there is no face row to attach to yet.
+                pic.pending_character_id = character_id
+            if set_id is not None:
+                session.add(PictureSetMember(set_id=set_id, picture_id=pic.id))
+            for tag_name in tag_names:
+                session.add(Tag(picture_id=pic.id, tag=tag_name))
+            session.add(pic)
+
+
 def apply_mapping(
     server,
     reference_folder_id: int,
@@ -313,141 +684,46 @@ def apply_mapping(
     already-recorded path, which is what makes this step a pile of database
     writes and not a second walk.
     """
-    by_path = {a.relative_path: a for a in assignments}
-    result = CommitResult(reference_folder_id=reference_folder_id)
+    image_root = os.path.normpath(server.vault.image_root)
 
     def commit(session: Session) -> CommitResult:
         pictures = session.exec(
             select(Picture).where(Picture.reference_folder_id == reference_folder_id)
         ).all()
-        result.pictures_indexed = len(pictures)
+        result = CommitResult(
+            reference_folder_id=reference_folder_id, pictures_indexed=len(pictures)
+        )
+        _link_pictures(session, pictures, assignments, root_path, image_root, result)
+        session.commit()
+        return result
 
-        # Group by containing folder first: every picture in the same folder
-        # resolves to the same (project, person, set, tags), so the ancestor
-        # walk runs once per folder rather than once per picture.
-        by_folder: dict[str, list[Picture]] = {}
-        for pic in pictures:
-            folder_abs = os.path.dirname(pic.file_path or "")
-            rel = os.path.relpath(folder_abs, root_path).replace(os.sep, "/")
-            rel = "" if rel == "." else rel
-            by_folder.setdefault(rel, []).append(pic)
+    return server.vault.db.run_task(commit, priority=DBPriority.IMMEDIATE)
 
-        project_cache: dict[tuple[str, str], int] = {}
-        character_cache: dict[tuple[str, str], int] = {}
-        set_cache: dict[tuple[str, str], int] = {}
 
-        def get_project(assignment: Assignment) -> int:
-            name = (
-                os.path.basename(assignment.relative_path) or assignment.relative_path
-            )
-            key = (
-                ("id", str(assignment.match_id))
-                if assignment.match_id
-                else ("name", name)
-            )
-            if key in project_cache:
-                return project_cache[key]
-            if assignment.match_id:
-                project = session.get(Project, assignment.match_id)
-                if project is None:
-                    raise CommitError(f"Project {assignment.match_id} not found")
-                result.projects_matched += 1
-            else:
-                project = Project(name=name)
-                session.add(project)
-                session.flush()
-                result.projects_created += 1
-            project_cache[key] = project.id
-            return project.id
+def apply_local_mapping(
+    server,
+    picture_ids: list[int],
+    assignments: list[Assignment],
+    root_path: str,
+) -> CommitResult:
+    """The `local_import` counterpart to `apply_mapping`.
 
-        def get_character(assignment: Assignment, project_id: Optional[int]) -> int:
-            name = (
-                os.path.basename(assignment.relative_path) or assignment.relative_path
-            )
-            key = (
-                ("id", str(assignment.match_id))
-                if assignment.match_id
-                else ("name", name)
-            )
-            if key in character_cache:
-                return character_cache[key]
-            if assignment.match_id:
-                character = session.get(Character, assignment.match_id)
-                if character is None:
-                    raise CommitError(f"Person {assignment.match_id} not found")
-                result.people_matched += 1
-            else:
-                character = Character(name=name)
-                session.add(character)
-                session.flush()
-                if project_id is not None:
-                    set_character_projects(session, character, [project_id])
-                result.people_created += 1
-            character_cache[key] = character.id
-            return character.id
+    Links the pictures `local_import_pictures` just imported (or found
+    already indexed) to the accepted projects, people, sets and tags — same
+    entity-resolution code as `apply_mapping` via `_link_pictures`, sourced
+    from an explicit id list rather than a `reference_folder_id` foreign key,
+    since a managed picture carries no such column.
+    """
+    image_root = os.path.normpath(server.vault.image_root)
 
-        def get_set(assignment: Assignment, project_id: Optional[int]) -> int:
-            name = (
-                os.path.basename(assignment.relative_path) or assignment.relative_path
-            )
-            key = (
-                ("id", str(assignment.match_id))
-                if assignment.match_id
-                else ("name", name)
-            )
-            if key in set_cache:
-                return set_cache[key]
-            if assignment.match_id:
-                picture_set = session.get(PictureSet, assignment.match_id)
-                if picture_set is None:
-                    raise CommitError(f"Set {assignment.match_id} not found")
-                result.sets_matched += 1
-            else:
-                picture_set = PictureSet(name=name)
-                session.add(picture_set)
-                session.flush()
-                if project_id is not None:
-                    set_picture_set_projects(session, picture_set, [project_id])
-                result.sets_created += 1
-            set_cache[key] = picture_set.id
-            return picture_set.id
-
-        tag_created: set[str] = set()
-
-        for folder_relpath, folder_pictures in by_folder.items():
-            project_a, person_a, set_a, tag_as = _resolve_folder(
-                folder_relpath, by_path
-            )
-            project_id = get_project(project_a) if project_a else None
-            character_id = get_character(person_a, project_id) if person_a else None
-            set_id = get_set(set_a, project_id) if set_a else None
-            tag_names = []
-            for tag_a in tag_as:
-                tag_name = os.path.basename(tag_a.relative_path) or tag_a.relative_path
-                tag_names.append(tag_name)
-                if tag_name not in tag_created:
-                    tag_created.add(tag_name)
-                    result.tags_created += 1
-
-            for pic in folder_pictures:
-                if project_id is not None:
-                    pic.project_id = project_id
-                    session.add(
-                        PictureProjectMember(picture_id=pic.id, project_id=project_id)
-                    )
-                if character_id is not None:
-                    # Deferred, exactly as the character-assignment endpoint
-                    # defers when face extraction has not run yet for a
-                    # picture: FaceExtractionTask clears this and assigns the
-                    # best face once it has. A folder-derived person is not a
-                    # detection, so there is no face row to attach to yet.
-                    pic.pending_character_id = character_id
-                if set_id is not None:
-                    session.add(PictureSetMember(set_id=set_id, picture_id=pic.id))
-                for tag_name in tag_names:
-                    session.add(Tag(picture_id=pic.id, tag=tag_name))
-                session.add(pic)
-
+    def commit(session: Session) -> CommitResult:
+        pictures = (
+            list(session.exec(select(Picture).where(Picture.id.in_(picture_ids))).all())
+            if picture_ids
+            else []
+        )
+        result = CommitResult(pictures_indexed=len(pictures))
+        _link_pictures(session, pictures, assignments, root_path, image_root, result)
         session.commit()
         return result
 

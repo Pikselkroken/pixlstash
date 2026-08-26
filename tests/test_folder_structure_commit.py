@@ -363,3 +363,127 @@ def test_an_unsettled_read_is_refused(owner_env):
 def test_an_unknown_commit_status_task_id_is_a_404(owner_env):
     r = owner_env["owner"].get(_COMMIT_STATUS, params={"task_id": "nope"})
     assert r.status_code == 404, r.text
+
+
+def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
+    """`mode="local_import"`: the "Add a library" bugfix. Pictures already
+    inside the library's own `image_root` become ordinary MANAGED pictures —
+    no reference folder — with the same entity-assignment semantics as
+    `mode="reference"`."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "local-import-library")
+    _make_tree(root, {"2027/nova": ["a.jpg", "b.jpg"], "2027/raw": ["c.jpg"]})
+    before = _snapshot(root)
+    assert len(before) == 3
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    read_task_id = started.json()["task_id"]
+    _drain_read(owner, read_task_id)
+
+    before_refs = owner.get(f"{API}/reference-folders").json()["folders"]
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "assignments": [
+                {"relative_path": "2027", "kind": "project"},
+                {"relative_path": "2027/nova", "kind": "person"},
+                {"relative_path": "2027/raw", "kind": "tag"},
+            ],
+        },
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "completed", body
+    result = body["result"]
+    assert result["reference_folder_id"] is None, (
+        "local_import must not use a ref folder"
+    )
+    assert result["pictures_indexed"] == 3
+    assert result["projects_created"] == 1
+    assert result["people_created"] == 1
+    assert result["tags_created"] == 1
+
+    after_refs = owner.get(f"{API}/reference-folders").json()["folders"]
+    assert after_refs == before_refs, (
+        "local_import must not register a reference folder"
+    )
+
+    projects = owner.get(f"{API}/projects").json()
+    assert any(p["name"] == "2027" for p in projects)
+    characters = owner.get(f"{API}/characters").json()
+    assert any(c["name"] == "nova" for c in characters)
+
+    # The originals are untouched — no move, rename or copy — but a sibling
+    # `_thumb.webp` per image is expected: for a MANAGED picture (unlike a
+    # reference-folder one) the thumbnail lands next to the source file, same
+    # as any other ordinary import. `_snapshot` doesn't distinguish; filter
+    # it back out before comparing.
+    after = _snapshot(root)
+    after_originals = {k: v for k, v in after.items() if not k.endswith("_thumb.webp")}
+    assert after_originals == before, (
+        "local_import must move, rename or copy zero files"
+    )
+    new_thumbs = [k for k in after if k.endswith("_thumb.webp")]
+    assert len(new_thumbs) == 3, "each imported image should get its own thumbnail"
+
+
+def test_local_import_skips_dot_folders(owner_env):
+    """A vault's own caches (`.ref_thumbs/`, `.pixlstash` sidecars) can sit
+    right inside `image_root`, which `local_import`'s root commonly IS. A
+    `.webp` thumbnail in one of those is a supported extension — without the
+    same dot-folder prune the Phase 2 read already does, local_import would
+    walk straight into it and import PixlStash's own cache files as if they
+    were the owner's pictures."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "dot-folder-prune")
+    _make_tree(root, {"visible": ["a.jpg"]})
+    hidden_dir = os.path.join(root, ".ref_thumbs")
+    os.makedirs(hidden_dir, exist_ok=True)
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), (1, 2, 3)).save(os.path.join(hidden_dir, "cached.webp"))
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    task_id = started.json()["task_id"]
+    _drain_read(owner, task_id)
+
+    commit_started = owner.post(
+        _COMMIT, json={"task_id": task_id, "mode": "local_import", "assignments": []}
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=30.0)
+    assert body["status"] == "completed", body
+    assert body["result"]["pictures_indexed"] == 1, (
+        "the hidden folder's file must not be imported"
+    )
+
+
+def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
+    """local_import must never be reachable against an external folder — that
+    is exactly what mode="reference" (register_reference_folder) is for, and
+    routes.reference_folders already refuses the opposite direction (a
+    reference folder that equals or contains image_root)."""
+    owner = owner_env["owner"]
+    root = os.path.join(owner_env["tmp"], "outside-image-root-for-local-import")
+    _make_tree(root, {"": ["a.jpg"]})
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    task_id = started.json()["task_id"]
+    _drain_read(owner, task_id)
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={"task_id": task_id, "mode": "local_import", "assignments": []},
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=30.0)
+    assert body["status"] == "failed", body
+    assert "library's own folder" in body["error"], body

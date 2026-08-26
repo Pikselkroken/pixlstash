@@ -17,7 +17,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -91,6 +91,19 @@ class FolderStructureCommitRequest(BaseModel):
     task_id: str
     assignments: list[FolderStructureAssignmentPayload] = []
     label: Optional[str] = None
+    mode: Literal["reference", "local_import"] = "reference"
+    """``reference`` (default): register the scanned root as an ordinary
+    reference folder, indexed in place — right for a folder external to the
+    library's own storage.
+
+    ``local_import``: the scanned root IS the active library's own
+    `image_root` (or a folder inside it) — the "Add a library" flow's
+    "pictures" verdict, where the folder a fresh vault was just created in
+    already held loose files. Those pictures become ordinary MANAGED pictures
+    (relative `file_path`) instead of reference-folder ones. The commit fails
+    (`status: "failed"`, polled via `GET .../commit/status`) if the root is
+    not actually inside `image_root`. See integration_architecture.md §22.
+    """
 
 
 class FolderStructureCommitStartResponse(BaseModel):
@@ -417,26 +430,50 @@ def create_router(server) -> APIRouter:
         expected_pictures: int,
         assignments: list,
         label: Optional[str],
+        mode: str,
     ) -> None:
         with server.folder_structure_commit_lock:
             state = server.folder_structure_commit
             if state and state["task_id"] == task_id:
                 state["status"] = "running"
         try:
-            rf = commit_service.register_reference_folder(
-                server, root_path, label=label
-            )
-            _commit_progress(task_id, "indexing", 0, expected_pictures)
-            commit_service.wait_for_first_scan(
-                server,
-                rf.id,
-                expected_pictures=expected_pictures,
-                on_progress=lambda processed, total: _commit_progress(
-                    task_id, "indexing", processed, total
-                ),
-            )
-            _commit_progress(task_id, "assigning", expected_pictures, expected_pictures)
-            result = commit_service.apply_mapping(server, rf.id, assignments, root_path)
+            if mode == "local_import":
+                # No reference folder to register — the "registering" stage
+                # is simply skipped, straight into "indexing".
+                commit_service.validate_local_import_root(server, root_path)
+                picture_ids = commit_service.local_import_pictures(
+                    server,
+                    root_path,
+                    expected_pictures=expected_pictures,
+                    on_progress=lambda processed, total: _commit_progress(
+                        task_id, "indexing", processed, total
+                    ),
+                )
+                _commit_progress(
+                    task_id, "assigning", expected_pictures, expected_pictures
+                )
+                result = commit_service.apply_local_mapping(
+                    server, picture_ids, assignments, root_path
+                )
+            else:
+                rf = commit_service.register_reference_folder(
+                    server, root_path, label=label
+                )
+                _commit_progress(task_id, "indexing", 0, expected_pictures)
+                commit_service.wait_for_first_scan(
+                    server,
+                    rf.id,
+                    expected_pictures=expected_pictures,
+                    on_progress=lambda processed, total: _commit_progress(
+                        task_id, "indexing", processed, total
+                    ),
+                )
+                _commit_progress(
+                    task_id, "assigning", expected_pictures, expected_pictures
+                )
+                result = commit_service.apply_mapping(
+                    server, rf.id, assignments, root_path
+                )
         except commit_service.CommitError as exc:
             logger.error("Folder-structure commit %s failed: %s", task_id, exc)
             with server.folder_structure_commit_lock:
@@ -483,11 +520,15 @@ def create_router(server) -> APIRouter:
         "/folder-structure/commit",
         summary="Commit an accepted folder-structure mapping",
         description=(
-            "Registers the read's root folder for in-place indexing — no file "
-            "is moved, renamed or copied — then creates the accepted "
-            "projects, people, sets and tags and links every picture the scan "
-            "finds to them. Returns a task id to poll; see "
-            "integration_architecture.md §22."
+            "mode=reference (default): registers the read's root folder for "
+            "in-place indexing. mode=local_import: imports the pictures "
+            "already under the ACTIVE library's own image_root as ordinary "
+            "managed pictures instead — for the 'Add a library' flow's "
+            "'pictures' verdict, refused unless the root is image_root itself "
+            "or inside it. Either way no file is moved, renamed or copied; "
+            "then the accepted projects, people, sets and tags are created "
+            "and every picture found is linked to them. Returns a task id to "
+            "poll; see integration_architecture.md §22."
         ),
         response_model=FolderStructureCommitStartResponse,
         tags=["folders"],
@@ -579,7 +620,14 @@ def create_router(server) -> APIRouter:
 
         threading.Thread(
             target=_run_commit,
-            args=(task_id, root_path, expected_pictures, assignments, payload.label),
+            args=(
+                task_id,
+                root_path,
+                expected_pictures,
+                assignments,
+                payload.label,
+                payload.mode,
+            ),
             daemon=True,
             name="folder-structure-commit",
         ).start()

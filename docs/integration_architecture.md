@@ -1936,10 +1936,14 @@ confirmed over a §20 read and writes it. Backend design is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 3.
 
 **One rule the client must hold to, same as §20's first: it moves, renames and
-copies zero files.** The scanned root is registered as an ordinary reference
-folder — the same mechanism `POST /reference-folders` already ships, indexed in
-place — and every picture it finds is linked to the accepted projects, people,
-sets and tags by writing database rows. Nothing on disk changes.
+copies zero files, in either commit mode.** `mode: "reference"` (the default)
+registers the scanned root as an ordinary reference folder — the same
+mechanism `POST /reference-folders` already ships, indexed in place. `mode:
+"local_import"` (v1.11.x, the "Add a library" fix) instead imports the pictures
+as ordinary MANAGED ones — no reference folder at all. Either way every
+picture found is linked to the accepted projects, people, sets and tags by
+writing database rows. Nothing on disk changes except the new thumbnail each
+newly-indexed picture gets, exactly as any other import produces.
 
 ### `POST /api/v1/folder-structure/commit`
 
@@ -1947,6 +1951,7 @@ sets and tags by writing database rows. Nothing on disk changes.
 {
   "task_id": "…",              // the settled read's task_id (§20)
   "label": "Generations",       // optional; defaults to the folder's own name
+  "mode": "reference",          // "reference" (default) | "local_import"
   "assignments": [
     // One entry per folder the owner accepted as something. A folder left
     // "just a folder" or undecided is simply absent — there is nothing here
@@ -1984,6 +1989,36 @@ this route is the write that follows from it.
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 
+### `mode: "local_import"`
+
+For the read's root when it IS the active library's own `image_root`, or a
+folder inside it — the "Add a library" flow's "pictures" verdict, where the
+folder a fresh vault was just created in already held loose files before the
+owner ever pointed PixlStash at it. `label` is ignored in this mode: there is
+no reference folder to name.
+
+**Every picture the walk finds becomes an ordinary MANAGED picture** (relative
+`file_path`, exactly as anything else imported into this library), not a
+reference-folder one. Routing this case through `mode: "reference"` instead
+would collide with the rule `POST /reference-folders` already enforces the
+other direction — a reference folder may never equal or contain `image_root`
+(`409 "Path conflicts with the PixlStash data folder."`) — so the two stay two
+modes, never one. Import is **idempotent by `file_path`**: a file already
+indexed under this path (an overlapping earlier `local_import`, or an ordinary
+import that reached it independently) is reused by id, never re-imported as a
+second row — same spirit as `mode: "reference"`'s own "don't redo what already
+happened" rule for a resumed commit (§25).
+
+**The root must be inside `image_root` or the commit fails.** There is no
+separate error status for this — the check runs inside the background commit,
+same as every other commit-time refusal, and surfaces as `status: "failed"`
+with `error` set once the client polls `GET .../commit/status` (see below),
+not as a synchronous 4xx on the `POST`. A client offering `local_import` in its
+UI should therefore only ever construct the request against the active
+library's own folder — this is a server-side backstop, not something the
+mapping screen is expected to let the owner trigger by hand against an
+arbitrary path.
+
 ### `GET /api/v1/folder-structure/commit/status?task_id=…`
 
 Polled per §11's task-id branch, same shape as §20's read status:
@@ -2001,25 +2036,34 @@ Polled per §11's task-id branch, same shape as §20's read status:
 }
 ```
 
-**A commit is never `cancelled`.** Once the reference folder is registered its
-scan runs to completion regardless of what the screen does next — the
-in-place indexing this route starts is not something a "Cancel and organise
-later" on a *later* screen can safely stop mid-write, and it is also the whole
-reason the mapping screen stays reachable from the sidebar afterwards: the
-scan and the mapping are two different steps, and abandoning the second does
-not undo the first.
+**A commit is never `cancelled`.** In `mode: "reference"`, once the reference
+folder is registered its scan runs to completion regardless of what the screen
+does next — the in-place indexing this route starts is not something a
+"Cancel and organise later" on a *later* screen can safely stop mid-write, and
+it is also the whole reason the mapping screen stays reachable from the
+sidebar afterwards: the scan and the mapping are two different steps, and
+abandoning the second does not undo the first. `mode: "local_import"` has no
+separate scan to keep running, but the same rule applies for the same
+underlying reason: there is no cancel route on this API in either mode, so a
+commit once started always runs to `completed` or `failed`.
 
 `stage` progresses `registering` (creating the reference folder row) →
-`indexing` (waiting for its first scan pass — `processed`/`total` are pictures
-indexed so far, out of the read's own `picture_count`) → `assigning` (creating
-the accepted entities and linking pictures — no filesystem work happens here at
-all) → `done`.
+`indexing` → `assigning` (creating the accepted entities and linking pictures
+— no filesystem work happens here at all) → `done`. In `mode: "reference"`,
+`indexing` means waiting for the reference folder's first scan pass;
+`processed`/`total` are pictures indexed so far, out of the read's own
+`picture_count`. In `mode: "local_import"` there is no reference folder to
+register, so `stage` goes straight from `registering` (the commit's initial
+state, before its background thread has reported anything) to `indexing`,
+where `processed`/`total` instead count files as `local_import_pictures`
+resolves them — both the ones already indexed (an idempotent hit, counted
+immediately) and the newly-imported ones (counted as each batch commits).
 
 The result, once `status` is `completed`:
 
 ```jsonc
 {
-  "reference_folder_id": 7,
+  "reference_folder_id": 7,     // null for mode: "local_import" — no ref folder
   "pictures_indexed": 28412,
   "projects_created": 12, "projects_matched": 1,
   "people_created": 114, "people_matched": 4,

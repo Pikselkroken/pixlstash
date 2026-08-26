@@ -22,6 +22,11 @@ const props = defineProps({
   assignments: { type: Array, required: true },
   label: { type: String, default: "" },
   pictureCount: { type: Number, default: 0 },
+  // "reference" registers the scanned root as an external reference folder;
+  // "local_import" imports its pictures as ordinary managed pictures of the
+  // active library instead (v1.11 Phase 3, "Bring them in" on a freshly
+  // created library — integration_architecture.md §22).
+  mode: { type: String, default: "reference" },
 });
 
 const emit = defineEmits(["back", "cancel", "committed", "update:committing"]);
@@ -52,6 +57,18 @@ const grouped = computed(() => {
   }
   return byKind;
 });
+
+// "No folder is created inside your library" is the reference-folder framing:
+// the scanned root stays external and the library's own directory is
+// untouched. For a local import the scanned root already IS the library's own
+// root (that is the only case the server allows it), so the fact worth
+// stating instead is what these pictures become — ordinary library pictures,
+// not an external reference folder the owner could later "stop using".
+const lastFact = computed(() =>
+  props.mode === "local_import"
+    ? "these pictures become ordinary pictures of this library, not an external reference folder"
+    : "no folder is created inside your library",
+);
 
 const ungroupedCount = computed(() => {
   const named = new Set();
@@ -95,6 +112,7 @@ async function commit() {
       props.readTaskId,
       props.assignments,
       props.label,
+      props.mode,
     );
     poll(started.task_id);
   } catch (error) {
@@ -158,7 +176,7 @@ onUnmounted(() => {
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
-          no folder is created inside your library
+          {{ lastFact }}
         </div>
       </div>
     </div>

@@ -11,6 +11,16 @@
  * reopens this same wizard with `resume` set and picks up where it left off.
  * Only a completed commit clears that saved entry, because only then is
  * there nothing left to resume.
+ *
+ * `mode` ("reference" default, or "local_import") decides what the Preview
+ * step's commit does with the scanned pictures — see integration_architecture.md
+ * §22. "Add a library"'s "pictures" verdict drives `local_import`: it saves a
+ * `resume` entry with an empty `taskId` and `mode: "local_import"` *before*
+ * switching the active library and reloading, so the sidebar's own resume
+ * mechanism reopens this wizard already pointed at the new library's root —
+ * an empty `taskId` in `resume` is not "reattach", it is "start scanning this
+ * known path fresh" (`FolderMappingScanStep` already treats a falsy
+ * `resumeTaskId` that way).
  */
 import { computed, ref, watch } from "vue";
 
@@ -28,6 +38,10 @@ const props = defineProps({
   registeredPaths: { type: Array, default: () => [] },
   // Resume a previously started, not-yet-committed read.
   resume: { type: Object, default: null },
+  // What the Preview step's commit does with the scan — ignored (in favour of
+  // `resume.mode`) when resuming, since the mode was fixed the moment the
+  // saved entry was created.
+  mode: { type: String, default: "reference" },
 });
 
 const emit = defineEmits(["close", "committed"]);
@@ -42,6 +56,7 @@ const readTaskId = ref("");
 const resumeTaskId = ref("");
 const readResult = ref(null);
 const assignments = ref([]);
+const currentMode = ref(props.mode);
 // Mirrors FolderMappingPreviewStep's own `committing`. A commit, once
 // started, runs to completion server-side and cannot be un-started, so while
 // this is true the dialog must not be dismissable by Escape or a backdrop
@@ -57,12 +72,16 @@ watch(
       label.value = props.resume.label || "";
       resumeTaskId.value = props.resume.taskId;
       readTaskId.value = props.resume.taskId;
+      // Absent on entries saved before `mode` existed — those were always
+      // reference-folder reads.
+      currentMode.value = props.resume.mode || "reference";
       step.value = "scan";
     } else {
       path.value = "";
       label.value = "";
       resumeTaskId.value = "";
       readTaskId.value = "";
+      currentMode.value = props.mode;
       step.value = "choose";
       browserOpen.value = true;
     }
@@ -95,7 +114,12 @@ function chooseFolder(selected) {
 
 function onTaskStarted(taskId) {
   readTaskId.value = taskId;
-  mappingStore.save({ taskId, path: path.value, label: label.value });
+  mappingStore.save({
+    taskId,
+    path: path.value,
+    label: label.value,
+    mode: currentMode.value,
+  });
 }
 
 function onScanReady({ taskId, result }) {
@@ -187,6 +211,7 @@ function onCommitted(result) {
       :read-task-id="readTaskId"
       :assignments="assignments"
       :label="label"
+      :mode="currentMode"
       :picture-count="readResult?.picture_count || 0"
       @back="step = 'mapping'"
       @cancel="organiseLater"

@@ -4,10 +4,16 @@
 // mean, so what is worth pinning is that it renders the SERVER's words for all
 // five verdicts, that the two refusals offer no button, and that an answer for
 // a folder the owner has since navigated away from cannot be acted on.
+//
+// The "pictures" verdict is its own thing: adding it also starts a switch to
+// the new (freshly empty) library and reload, with a `useFolderMappingStore`
+// entry saved first so `FolderMappingWizard` reopens on the other side already
+// pointed at the new library's own root, in `local_import` mode.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
+import { createPinia, setActivePinia } from "pinia";
 
 // The real VDialog needs Vuetify's defaults instance; render the slot inline,
 // as LibrariesSection.test.js does.
@@ -26,17 +32,48 @@ vi.mock("vuetify/components", () => ({
 }));
 
 import AddLibraryDialog from "./AddLibraryDialog.vue";
-import { addLibrary, inspectLibraryPath } from "../../api/libraries";
+import {
+  addLibrary,
+  inspectLibraryPath,
+  setActiveLibrary,
+} from "../../api/libraries";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "../../stores/useLibrariesStore";
+import { reloadPage } from "../../utils/reloadPage";
 
 vi.mock("../../api/libraries", () => ({
   inspectLibraryPath: vi.fn(),
   addLibrary: vi.fn(),
+  setActiveLibrary: vi.fn(),
 }));
 
 vi.mock("../../api/folders", () => ({
   browseFilesystem: vi.fn().mockResolvedValue({ path: "/", entries: [] }),
   createFilesystemFolder: vi.fn(),
 }));
+
+// Matches LibrariesSection.test.js: the switch flow ends in a real page
+// reload in production, which jsdom cannot do and this suite has no reason to
+// exercise.
+vi.mock("../../utils/reloadPage", () => ({ reloadPage: vi.fn() }));
+
+// Addable, but NOT the "pictures" verdict — the default for every test that
+// is about the ask/inspect/add mechanics rather than about what "pictures"
+// specifically does once added.
+const VAULT = {
+  verdict: "vault",
+  path: "/home/me/Pictures/Generations",
+  can_add: true,
+  headline: "A library you already made",
+  detail: "PixlStash attaches it. Nothing inside it changes.",
+  suggested_name: "Generations",
+  picture_count: 0,
+  picture_count_capped: false,
+  library: null,
+};
 
 const PICTURES = {
   verdict: "pictures",
@@ -50,10 +87,13 @@ const PICTURES = {
   library: null,
 };
 
+let pinia;
+
 function mountDialog(props = {}) {
   return mount(AddLibraryDialog, {
     props: { open: true, ...props },
     global: {
+      plugins: [pinia],
       stubs: {
         // Its own suite covers it; here it is a path source, and mounting it
         // for real drags in Vuetify components this file has no reason to mock.
@@ -88,9 +128,13 @@ function actionButton(wrapper) {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  pinia = createPinia();
+  setActivePinia(pinia);
   vi.clearAllMocks();
-  inspectLibraryPath.mockResolvedValue(structuredClone(PICTURES));
+  inspectLibraryPath.mockResolvedValue(structuredClone(VAULT));
   addLibrary.mockResolvedValue({ uuid: "uuid-new", name: "Generations" });
+  setActiveLibrary.mockResolvedValue({ status: "ok" });
 });
 
 describe("asking the folder", () => {
@@ -107,12 +151,12 @@ describe("asking the folder", () => {
     "renders the server's words for %s and offers its own verb",
     async (verdict, headline, label) => {
       inspectLibraryPath.mockResolvedValue({
-        ...structuredClone(PICTURES),
+        ...structuredClone(VAULT),
         verdict,
         headline,
         detail: "whatever the server said",
       });
-      const wrapper = await typePath(mountDialog(), PICTURES.path);
+      const wrapper = await typePath(mountDialog(), VAULT.path);
 
       expect(wrapper.text()).toContain(headline);
       expect(wrapper.text()).toContain("whatever the server said");
@@ -135,7 +179,7 @@ describe("asking the folder", () => {
     "offers no button for %s and shows the reason",
     async (verdict, headline, detail) => {
       inspectLibraryPath.mockResolvedValue({
-        ...structuredClone(PICTURES),
+        ...structuredClone(VAULT),
         verdict,
         can_add: false,
         headline,
@@ -194,7 +238,7 @@ describe("adding it", () => {
     addLibrary.mockRejectedValue({
       response: { data: { detail: '"Generations" covers this folder.' } },
     });
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    const wrapper = await typePath(mountDialog(), VAULT.path);
     inspectLibraryPath.mockClear();
 
     await actionButton(wrapper).trigger("click");
@@ -217,11 +261,11 @@ describe("adding it", () => {
     // blur's own `nextTick` this passes either way, which is exactly how the
     // bug survived being "covered": the click has to land while the re-ask is
     // still in flight, as it does in a browser.
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    const wrapper = await typePath(mountDialog(), VAULT.path);
     inspectLibraryPath.mockImplementation(
       () =>
         new Promise((resolve) =>
-          setTimeout(() => resolve(structuredClone(PICTURES)), 20),
+          setTimeout(() => resolve(structuredClone(VAULT)), 20),
         ),
     );
 
@@ -233,7 +277,7 @@ describe("adding it", () => {
   });
 
   it("sends a name the owner typed over the one the folder suggested", async () => {
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    const wrapper = await typePath(mountDialog(), VAULT.path);
 
     await wrapper
       .find(".add-library__name .app-input__field")
@@ -241,17 +285,17 @@ describe("adding it", () => {
     await actionButton(wrapper).trigger("click");
     await settle(wrapper);
 
-    expect(addLibrary).toHaveBeenCalledWith(PICTURES.path, "2024 client");
+    expect(addLibrary).toHaveBeenCalledWith(VAULT.path, "2024 client");
   });
 
   it("stops overwriting the name once the owner has set one", async () => {
     // Two folders both called `2024` are only addable because of this: the
     // second verdict must not put the basename back over what was typed.
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    const wrapper = await typePath(mountDialog(), VAULT.path);
     await wrapper.find(".add-library__name .app-input__field").setValue("Mine");
 
     inspectLibraryPath.mockResolvedValue({
-      ...structuredClone(PICTURES),
+      ...structuredClone(VAULT),
       path: "/home/me/Pictures/Other",
       suggested_name: "Other",
     });
@@ -274,14 +318,14 @@ describe("adding it", () => {
     await typePath(wrapper, "/home/me/Pictures/Slow");
 
     inspectLibraryPath.mockResolvedValue({
-      ...structuredClone(PICTURES),
+      ...structuredClone(VAULT),
       path: "/home/me/Pictures/Fast",
     });
     await typePath(wrapper, "/home/me/Pictures/Fast");
 
     // The first answer lands last, naming a folder nobody is looking at.
     releaseFirst({
-      ...structuredClone(PICTURES),
+      ...structuredClone(VAULT),
       path: "/home/me/Pictures/Slow",
     });
     await settle(wrapper);
@@ -296,7 +340,7 @@ describe("adding it", () => {
   });
 
   it("clears the previous answer when the dialog is reopened", async () => {
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    const wrapper = await typePath(mountDialog(), VAULT.path);
     expect(wrapper.find(".add-library__verdict").exists()).toBe(true);
 
     await wrapper.setProps({ open: false });
@@ -312,7 +356,7 @@ describe("adding it", () => {
     inspectLibraryPath.mockImplementationOnce(() => new Promise(() => {}));
     const wrapper = mountDialog();
     await settle(wrapper);
-    await typePath(wrapper, PICTURES.path);
+    await typePath(wrapper, VAULT.path);
     expect(wrapper.text()).toContain("Reading that folder…");
 
     await wrapper.setProps({ open: false });
@@ -320,6 +364,87 @@ describe("adding it", () => {
     await settle(wrapper);
 
     expect(wrapper.text()).not.toContain("Reading that folder…");
+  });
+});
+
+describe("a 'pictures' verdict", () => {
+  function seedActiveLibrary() {
+    const librariesStore = useLibrariesStore();
+    librariesStore.libraries = [
+      {
+        uuid: "uuid-current",
+        name: "Family Photos",
+        is_active: true,
+        is_reachable: true,
+        path: "/home/me/Pictures/Family",
+        active_share_links: 0,
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    inspectLibraryPath.mockResolvedValue(structuredClone(PICTURES));
+    addLibrary.mockResolvedValue({ uuid: "uuid-new", name: "Generations" });
+  });
+
+  it("saves a local_import intent and starts the switch, instead of closing plainly", async () => {
+    seedActiveLibrary();
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    const mappingStore = useFolderMappingStore();
+    expect(mappingStore.pending).toEqual({
+      taskId: "",
+      path: PICTURES.path,
+      label: "Generations",
+      mode: "local_import",
+    });
+
+    expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
+    expect(reloadPage).toHaveBeenCalled();
+
+    const switchStore = useLibrarySwitchStore();
+    expect(switchStore.targetLibrary).toEqual({
+      uuid: "uuid-new",
+      name: "Generations",
+    });
+    expect(switchStore.currentLibrary?.name).toBe("Family Photos");
+
+    // Unlike the other verdicts, this dialog does not announce "Added" —
+    // the page is about to reload into the new library entirely.
+    expect(wrapper.emitted("added")).toBeFalsy();
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("saves the owner-typed name, defaulting to the library's own", async () => {
+    seedActiveLibrary();
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+    await wrapper
+      .find(".add-library__name .app-input__field")
+      .setValue("2024 client");
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    const mappingStore = useFolderMappingStore();
+    expect(mappingStore.pending.label).toBe("2024 client");
+  });
+
+  it("does not switch when the create itself fails", async () => {
+    seedActiveLibrary();
+    addLibrary.mockRejectedValue({
+      response: { data: { detail: '"Generations" covers this folder.' } },
+    });
+    const wrapper = await typePath(mountDialog(), PICTURES.path);
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(setActiveLibrary).not.toHaveBeenCalled();
+    const mappingStore = useFolderMappingStore();
+    expect(mappingStore.pending).toBeNull();
   });
 });
 

@@ -4433,8 +4433,10 @@ the library rather than showing it, so it has no selection to express and the
 grid's fetches go quiet while it is open. Like the shelf, the predicate is
 gated on `isReadOnly` and the route bounces (`useAppNavigation`): `GET
 /insights` is owner-only, so mounting it for a READ session would only fire a
-request the credential can never satisfy (issue #1014). The sidebar row is
-inert-not-hidden there, and says why.
+request the credential can never satisfy (issue #1014). It has no permanent
+sidebar row of its own — it is reached from All Pictures' right-click menu
+(`SideBar.vue`, `sidebarCtxAllPictures`), inert-not-hidden for a READ session
+there, and says why.
 
 Three rules carry the screen, and the first is the reason it exists:
 
