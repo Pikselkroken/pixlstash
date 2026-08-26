@@ -549,6 +549,8 @@ jobs:
           tests/test_picture_sets_query_cost.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
+          tests/test_pipeline_stage_contracts.py
+          tests/test_pipeline_throughput_verification.py
           tests/test_plugin_create.py
           tests/test_plugin_install.py
           tests/test_plugin_lifecycle_gaps.py
