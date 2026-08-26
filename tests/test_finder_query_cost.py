@@ -478,3 +478,41 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
             assert released == [True], "and to be dropped when they did not"
         finally:
             FaceExtractionTask.release_detection_models = original
+
+
+def test_a_tag_drain_leaves_wd14_to_the_idle_sweep(tmp_path):
+    """The drain used to tear the WD14 session down; with per-row dependencies
+    a finder drains many times per pass, so the session now outlives the drain
+    and only the idle sweep frees it — and only when models are not kept."""
+    from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+
+    unloads = []
+
+    class _Engine:
+        def __init__(self, keep: bool):
+            self.keep_models_in_memory = keep
+
+        def unload_tagger_session(self):
+            unloads.append("drain")
+
+        def aggressive_unload(self):
+            unloads.append("sweep")
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        for keep in (True, False):
+            MissingTagFinder(vault.db, lambda: _Engine(keep)).on_all_tasks_complete()
+        assert unloads == [], "a drain must not reload the model on the next batch"
+
+        original_engine = vault._engine
+        vault._engine = _Engine(True)
+        vault._keep_models_in_memory = True
+        vault._last_aggressive_unload_at = 0.0
+        try:
+            vault._maybe_aggressive_unload({})
+            assert unloads == [], "the owner asked for the models to stay resident"
+
+            vault._keep_models_in_memory = False
+            vault._maybe_aggressive_unload({})
+            assert unloads == ["sweep"], "and the idle sweep frees them when idle"
+        finally:
+            vault._engine = original_engine

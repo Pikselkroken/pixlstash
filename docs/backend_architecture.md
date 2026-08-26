@@ -904,7 +904,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
-**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
+**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
 
 ### Registered tasks
 

@@ -149,22 +149,3 @@ class ModelLifecycleManager:
         empty_cuda_cache()
         gc.collect()
         trim_process_memory()
-
-    def unload_wd14_session(self, wd14_service) -> None:
-        """Release the WD14 ONNX inference session and its CUDA memory arena.
-
-        ORT's BFC allocator holds the full activation workspace for the session
-        lifetime.  Deleting the session object frees that CUDA memory so that
-        subsequent GPU pipelines (embeddings, descriptions) start with a clean
-        VRAM budget.  The session is rebuilt lazily on next tagging.
-
-        Args:
-            wd14_service: :class:`WD14Service` instance.
-        """
-        if wd14_service.is_loaded():
-            wd14_service.unload()
-            logger.info(
-                "ModelLifecycleManager: WD14 ONNX session unloaded (CUDA arena freed)."
-            )
-            gc.collect()
-            empty_cuda_cache()

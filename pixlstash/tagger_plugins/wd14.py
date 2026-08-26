@@ -15,6 +15,7 @@ import onnxruntime as ort
 import torch
 from tqdm import tqdm
 
+from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
@@ -52,8 +53,13 @@ class WD14Service:
         model_dir: str,
         batch_size_fn,
         silent: bool = True,
+        vram_budget: VramBudget | None = None,
     ):
         self._device = device
+        # The engine's budget, so a session built after a settings change
+        # reads the new ceiling; a service built without one gets the arena
+        # strategies and no limit.
+        self._vram_budget = vram_budget or VramBudget(device)
         self._model_location = os.path.join(model_dir, WD14_HF_REPO.replace("/", "_"))
         self._batch_size_fn = batch_size_fn
         self._silent = silent
@@ -272,22 +278,14 @@ class WD14Service:
                     provider_options=[{"device_type": "GPU", "precision": "FP32"}],
                 )
             else:
+                cuda_options = self._vram_budget.ort_cuda_provider_options(
+                    ORT_ARENA_SHARE["wd14"]
+                )
+                logger.debug("WD14 CUDA provider options: %s", cuda_options)
                 self._ort_sess = ort.InferenceSession(
                     onnx_path,
                     providers=(
-                        [
-                            (
-                                "CUDAExecutionProvider",
-                                {
-                                    # Use same-as-requested arena growth so ORT does
-                                    # not round up allocations to the next power of two.
-                                    # This prevents the default "double on each growth"
-                                    # behaviour without imposing a hard memory cap that
-                                    # would OOM inference for larger models like WD14.
-                                    "arena_extend_strategy": "kSameAsRequested",
-                                },
-                            )
-                        ]
+                        [("CUDAExecutionProvider", cuda_options)]
                         if "CUDAExecutionProvider" in ort.get_available_providers()
                         else [("ROCMExecutionProvider", {})]
                         if "ROCMExecutionProvider" in ort.get_available_providers()

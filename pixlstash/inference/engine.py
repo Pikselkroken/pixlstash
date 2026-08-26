@@ -363,10 +363,6 @@ class InferenceEngine:
             pixlstash_tagger_service=self.pixlstash_tagger_service,
         )
 
-    def unload_tagger_session(self) -> None:
-        """Release the WD14 ONNX inference session to free VRAM."""
-        self.lifecycle.unload_wd14_session(self.wd14_service)
-
     # ------------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------------
@@ -547,6 +543,9 @@ class InferenceEngine:
                 pixlstash_tagger_service._model_path,
             )
 
+        vram_budget = VramBudget(device)
+        vram_budget.set_budget_gb(max_vram_gb)
+
         wd14_service = WD14Service(
             device=device,
             model_dir=model_dir,
@@ -556,6 +555,7 @@ class InferenceEngine:
                 else 1
             ),
             silent=True,
+            vram_budget=vram_budget,
         )
         if wd14_service.needs_download():
             # Best-effort, mirroring the PixlStash tagger above: a transient
@@ -571,8 +571,6 @@ class InferenceEngine:
             logger.warning("WD14 tagger model not found in %s, disabling.", model_dir)
             wd14_enabled = False
 
-        vram_budget = VramBudget(device)
-        vram_budget.set_budget_gb(max_vram_gb)
         lifecycle = ModelLifecycleManager(device)
 
         # Create engine without florence_service first (chicken-and-egg: Florence
