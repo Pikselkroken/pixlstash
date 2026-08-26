@@ -243,6 +243,35 @@ def strip_env(python_dir: Path) -> None:
     log(f"removed {removed} cache/test directories")
 
 
+def compile_bytecode(py: Path, python_dir: Path, target_os: str) -> None:
+    """Precompile the stdlib + site-packages tree to .pyc.
+
+    The runtime installs read-only in practice (e.g. root-owned under
+    /opt for the .deb), so the interpreter can never write a bytecode
+    cache on first launch either -- without this, EVERY launch pays to
+    parse and compile the full dependency tree (pixlstash + FastAPI +
+    torch + everything else, 10k+ modules) from source. Measured on a
+    real installed .deb's bundled runtime: ~2.2s to import pixlstash.app
+    with no cache vs ~0.7s precompiled -- most of the app's cold-boot time.
+
+    Scoped to the stdlib/site-packages tree rather than the whole
+    ``python_dir`` -- python-build-standalone also vendors legacy Tcl/Tk
+    extras (e.g. a Tix8.4.3 demo script with mixed tabs/spaces) that fail
+    to compile under Python 3 and are never imported by the app anyway.
+    """
+    major_minor = ".".join(PYTHON_VERSION.split(".")[:2])
+    target = (
+        python_dir / "Lib"
+        if target_os == "win"
+        else python_dir / "lib" / f"python{major_minor}"
+    )
+    log(f"precompiling bytecode (compileall): {target}")
+    subprocess.run(
+        [str(py), "-m", "compileall", "-q", "-j", "0", str(target)],
+        check=True,
+    )
+
+
 # Longest path allowed inside the runtime, relative to the python/ root. Windows
 # caps a classic (non-\\?\-prefixed) path at 259 usable characters, and neither
 # NSIS nor electron-builder's installer/uninstaller are long-path aware. The
@@ -398,6 +427,12 @@ def main() -> int:
         py = interpreter(python_dir, args.os)
         populate_env(py, args.wheel, args.accel, cache_dir)
         strip_env(python_dir)
+
+    # Both branches: ship a complete bytecode cache so the interpreter never
+    # recompiles from source at launch (strip_env, above, drops whatever
+    # partial cache pip's install left; this rebuilds it deliberately for
+    # 100% coverage, including stdlib).
+    compile_bytecode(py, python_dir, args.os)
 
     # Both branches, Windows only: a runtime must never ship over-long paths
     # (MAX_PATH breaks installs/updates — see flatten_deep_license_trees).
