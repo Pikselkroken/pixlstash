@@ -41,6 +41,15 @@ class FaceResult:
     embedding: np.ndarray | None = field(default=None)
 
 
+# Faces per recogniser call. The arena of an ORT session is capped at
+# ``ORT_ARENA_SHARE["insightface_session"]`` of the VRAM budget and the
+# recogniser's activations are ~20 MB a face at 112 px (~650 MB for 16, which
+# fits the 6 GB default budget's cap with room); per-face throughput was flat
+# from 16 to 64, so a bigger chunk buys nothing and a face-dense batch of
+# stills would push one unchunked call past any cap.
+RECOGNITION_CHUNK = 16
+
+
 class BatchedFaceRunner:
     """Drop-in replacement for repeated ``FaceAnalysis.get()`` calls.
 
@@ -107,7 +116,12 @@ class BatchedFaceRunner:
         if crop_refs:
             all_crops = [crop for _, _, crop in crop_refs]
             # get_feat() accepts a list of BGR crops and returns (M, 512)
-            all_embeddings: np.ndarray = self._rec_model.get_feat(all_crops)
+            all_embeddings: np.ndarray = np.concatenate(
+                [
+                    self._rec_model.get_feat(all_crops[i : i + RECOGNITION_CHUNK])
+                    for i in range(0, len(all_crops), RECOGNITION_CHUNK)
+                ]
+            )
             for (img_idx, face_i, _), emb in zip(crop_refs, all_embeddings):
                 embeddings_by_key[(img_idx, face_i)] = emb
 

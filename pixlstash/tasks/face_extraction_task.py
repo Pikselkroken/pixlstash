@@ -18,6 +18,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.inference.engine import InferenceEngine
+from pixlstash.inference.vram_budget import ORT_ARENA_SHARE
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
@@ -387,14 +388,32 @@ class FaceExtractionTask(BaseTask):
             if use_cuda
             else ["CPUExecutionProvider"]
         )
+        # One dict per provider; the CUDA one bounds each of the five ORT
+        # sessions' arenas so the pack can stay resident for a pass.
+        provider_options = (
+            [
+                engine.vram_budget.ort_cuda_provider_options(
+                    ORT_ARENA_SHARE["insightface_session"]
+                ),
+                {},
+            ]
+            if use_cuda
+            else [{}]
+        )
         logger.debug(
-            "Initialising InsightFace with providers=%s (ctx_id=%d, pack=%s, root=%s)",
+            "Initialising InsightFace with providers=%s options=%s (ctx_id=%d, pack=%s, root=%s)",
             providers,
+            provider_options,
             0 if use_cuda else -1,
             model_pack,
             root,
         )
-        app = FaceAnalysis(name=model_pack, root=root, providers=providers)
+        app = FaceAnalysis(
+            name=model_pack,
+            root=root,
+            providers=providers,
+            provider_options=provider_options,
+        )
         app.prepare(
             ctx_id=0 if use_cuda else -1,
             det_thresh=0.25,

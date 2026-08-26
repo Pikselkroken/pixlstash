@@ -41,17 +41,11 @@ class MissingTagFinder(BaseTaskFinder):
         # extraction has GPU priority and must not be starved by queued tagging.
         return [TaskType.FACE_EXTRACTION]
 
-    def on_all_tasks_complete(self) -> None:
-        """Unload the WD14 ONNX session once all tagging work is done.
-
-        ORT's CUDAExecutionProvider holds its entire activation arena inside the
-        session object.  Deleting the session returns that memory (often tens of
-        GB for large batches) so the next GPU pipeline stage starts with a clean
-        VRAM budget.  The session is rebuilt lazily on the next tagging cycle.
-        """
-        tagger = self._engine_getter()
-        if tagger is not None:
-            tagger.unload_tagger_session()
+    # No `on_all_tasks_complete`: the drain used to tear the WD14 session down,
+    # and with per-row dependencies a finder drains and refills many times per
+    # pass, so that was a reload storm. The session is bounded by its own
+    # `gpu_mem_limit` now, and `Vault._maybe_aggressive_unload` frees it once
+    # every worker has been idle — only under `keep_models_in_memory=False`.
 
     def find_task(self):
         engine = self._engine_getter()
