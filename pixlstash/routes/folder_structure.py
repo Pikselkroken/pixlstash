@@ -22,6 +22,10 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_ABANDONED,
+    STATE_DEFERRED,
+)
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import folder_structure_commit_service as commit_service
@@ -110,12 +114,23 @@ class FolderStructureCommitStartResponse(BaseModel):
     task_id: str
 
 
+class FolderStructureCommitStopResponse(BaseModel):
+    status: str
+    """``abandoned`` or ``deferred`` — the stop was accepted. As with the
+    read's cancel, accepted is not the same as stopped: the commit unwinds at
+    its next chunk boundary, so `status` legitimately still reports `running`
+    for a moment afterwards."""
+
+
 class FolderStructureCommitStatusResponse(BaseModel):
     task_id: str
     status: str
-    """``queued`` | ``running`` | ``completed`` | ``failed``. A commit is never
-    ``cancelled``: once the reference folder is registered the scan runs to
-    completion on its own regardless of what this screen does next."""
+    """``queued`` | ``running`` | ``completed`` | ``failed`` | ``abandoned`` |
+    ``deferred``. The last two are the owner's own two ways of stopping a
+    running commit (DELETE below): `abandoned` gives up on it, `deferred` is
+    "organise later" — indexing stands, the mapping was not applied. Neither
+    unwinds what is already indexed, and in reference mode the folder's scan
+    runs to completion on its own regardless of what this screen does next."""
 
     stage: str
     """``registering`` | ``indexing`` | ``assigning`` | ``done``."""
@@ -424,6 +439,14 @@ def create_router(server) -> APIRouter:
             state["processed"] = processed
             state["total"] = total
 
+    def _stop_requested(task_id: str):
+        """The owner's stop, or None. Read under the lock the writers use."""
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if not state or state["task_id"] != task_id:
+                return None
+            return state.get("stop")
+
     def _run_commit(
         task_id: str,
         root_path: str,
@@ -436,11 +459,13 @@ def create_router(server) -> APIRouter:
             state = server.folder_structure_commit
             if state and state["task_id"] == task_id:
                 state["status"] = "running"
+        should_stop = lambda: _stop_requested(task_id)  # noqa: E731
         try:
             if mode == "local_import":
                 # No reference folder to register — the "registering" stage
                 # is simply skipped, straight into "indexing".
                 commit_service.validate_local_import_root(server, root_path)
+                commit_service.record_commit_stage(server, task_id, "indexing")
                 picture_ids = commit_service.local_import_pictures(
                     server,
                     root_path,
@@ -448,18 +473,27 @@ def create_router(server) -> APIRouter:
                     on_progress=lambda processed, total: _commit_progress(
                         task_id, "indexing", processed, total
                     ),
+                    should_stop=should_stop,
                 )
                 _commit_progress(
                     task_id, "assigning", expected_pictures, expected_pictures
                 )
+                # Last look before the one irreversible step. "Organise later"
+                # pressed during indexing means exactly this: keep every
+                # picture that was indexed, apply none of the mapping.
+                stopped = should_stop()
+                if stopped:
+                    raise commit_service.CommitStopped(stopped)
+                commit_service.record_commit_stage(server, task_id, "assigning")
                 result = commit_service.apply_local_mapping(
-                    server, picture_ids, assignments, root_path
+                    server, picture_ids, assignments, root_path, task_id=task_id
                 )
             else:
                 rf = commit_service.register_reference_folder(
                     server, root_path, label=label
                 )
                 _commit_progress(task_id, "indexing", 0, expected_pictures)
+                commit_service.record_commit_stage(server, task_id, "indexing")
                 commit_service.wait_for_first_scan(
                     server,
                     rf.id,
@@ -467,14 +501,42 @@ def create_router(server) -> APIRouter:
                     on_progress=lambda processed, total: _commit_progress(
                         task_id, "indexing", processed, total
                     ),
+                    should_stop=should_stop,
                 )
                 _commit_progress(
                     task_id, "assigning", expected_pictures, expected_pictures
                 )
+                stopped = should_stop()
+                if stopped:
+                    raise commit_service.CommitStopped(stopped)
+                commit_service.record_commit_stage(server, task_id, "assigning")
                 result = commit_service.apply_mapping(
-                    server, rf.id, assignments, root_path
+                    server, rf.id, assignments, root_path, task_id=task_id
                 )
+        except commit_service.CommitStopped as exc:
+            # Not a failure. The durable record is settled here rather than in
+            # a transaction, because there is no transaction left to settle it
+            # in: the assigning step is exactly what did not run.
+            commit_service.settle_pending_commit(server, task_id, exc.state)
+            logger.info(
+                "Folder-structure commit %s stopped by the owner (%s); "
+                "everything already indexed stays",
+                task_id,
+                exc.state,
+            )
+            with server.folder_structure_commit_lock:
+                state = server.folder_structure_commit
+                if state and state["task_id"] == task_id:
+                    state["stage"] = "done"
+                    state["status"] = exc.state
+            return
         except commit_service.CommitError as exc:
+            # The durable record is deliberately LEFT PENDING. A failure here is
+            # usually transient — a scan that outran its timeout, a folder that
+            # was not mounted yet — and losing the intent is the thing this
+            # record exists to prevent, so the next start-up tries once more.
+            # A commit that keeps failing is stopped by the owner, not by us
+            # guessing which failures are permanent.
             logger.error("Folder-structure commit %s failed: %s", task_id, exc)
             with server.folder_structure_commit_lock:
                 state = server.folder_structure_commit
@@ -515,6 +577,69 @@ def create_router(server) -> APIRouter:
             task_id,
             result.pictures_indexed,
         )
+
+    def _resume_interrupted_commit() -> None:
+        """Finish a commit the last run of this process did not.
+
+        Called once, as the router is built at start-up. The two phases are
+        both safe to re-enter: indexing is idempotent by ``file_path``, and
+        assigning is a single transaction that settles its own record inside
+        itself, so a commit that got as far as writing entities has already
+        marked itself done and is not pending here at all.
+
+        The task id is kept, not minted, so a client that still remembers the
+        one it was polling reattaches to the resumed run rather than being
+        told 404 about work that is very much still happening.
+        """
+        if getattr(server.vault, "disable_background_workers", False):
+            # A read-only deployment does no background work at all; finishing
+            # somebody else's import would be the one exception, which is not
+            # a promise that flag should quietly break.
+            return
+        try:
+            record = commit_service.pending_commit(server)
+        except Exception:
+            # A start-up that raises here is a library that will not open, over
+            # work that is by definition already incomplete.
+            logger.exception("Could not read the pending folder-mapping commit")
+            return
+        if record is None:
+            return
+
+        task_id = record["task_id"]
+        with server.folder_structure_commit_lock:
+            server.folder_structure_commit = {
+                "task_id": task_id,
+                "status": "queued",
+                "stage": record["stage"],
+                "processed": 0,
+                "total": record["expected_pictures"],
+                "error": None,
+                "result": None,
+                "stop": None,
+            }
+        logger.info(
+            "Resuming the folder-mapping commit %s interrupted at stage %r "
+            "(%s, %d picture(s) expected under %s)",
+            task_id,
+            record["stage"],
+            record["mode"],
+            record["expected_pictures"],
+            record["root_path"],
+        )
+        threading.Thread(
+            target=_run_commit,
+            args=(
+                task_id,
+                record["root_path"],
+                record["expected_pictures"],
+                record["assignments"],
+                record["label"],
+                record["mode"],
+            ),
+            daemon=True,
+            name="folder-structure-commit-resume",
+        ).start()
 
     @router.post(
         "/folder-structure/commit",
@@ -616,7 +741,21 @@ def create_router(server) -> APIRouter:
                 "total": expected_pictures,
                 "error": None,
                 "result": None,
+                "stop": None,
             }
+
+        # Written before the thread starts, so the window this record exists
+        # for — the crash between "the owner pressed the button" and "the
+        # pictures are organised" — is covered from its first instant.
+        commit_service.record_pending_commit(
+            server,
+            task_id=task_id,
+            root_path=root_path,
+            mode=payload.mode,
+            label=payload.label,
+            expected_pictures=expected_pictures,
+            assignments=assignments,
+        )
 
         threading.Thread(
             target=_run_commit,
@@ -662,5 +801,48 @@ def create_router(server) -> APIRouter:
             "error": state["error"],
             "result": state["result"],
         }
+
+    @router.delete(
+        "/folder-structure/commit",
+        summary="Stop a running folder-structure commit",
+        description=(
+            "`stop=abort` gives up on the commit; `stop=defer` is 'organise "
+            "later' — the indexing already done stands and the mapping is not "
+            "applied. Neither un-indexes anything: no file is touched either "
+            "way, and every picture already indexed stays indexed. The commit "
+            "unwinds at its next chunk boundary, so a following status poll "
+            "can still report `running` briefly."
+        ),
+        response_model=FolderStructureCommitStopResponse,
+        tags=["folders"],
+    )
+    def stop_folder_structure_commit(
+        request: Request,
+        task_id: str = Query(...),
+        stop: Literal["abort", "defer"] = Query("abort"),
+    ):
+        wanted = STATE_ABANDONED if stop == "abort" else STATE_DEFERRED
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if not state or state["task_id"] != task_id:
+                raise HTTPException(status_code=404, detail="Task not found")
+            if state["status"] not in ("queued", "running"):
+                # Same honesty as the read's cancel: reporting the stop as
+                # accepted would be a claim the client cannot check, and this
+                # commit is already over.
+                return {"status": state["status"]}
+            state["stop"] = wanted
+        logger.info(
+            "Folder-structure commit %s asked to stop (%s) by the owner",
+            task_id,
+            wanted,
+        )
+        return {"status": wanted}
+
+    # Handed to the Server rather than called here: this factory runs from
+    # `_setup_routes`, which is EARLIER in `Server.__init__` than the commit
+    # slot and its lock are created, so calling it now reads attributes that
+    # do not exist yet. The Server calls it once those are up.
+    server.resume_folder_mapping_commit = _resume_interrupted_commit
 
     return router

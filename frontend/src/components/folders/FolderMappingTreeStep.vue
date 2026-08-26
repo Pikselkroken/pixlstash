@@ -171,7 +171,7 @@ function next() {
         <span v-if="summary.tag">{{ summary.tag }} {{ summary.tag === 1 ? "Tag" : "Tags" }}</span>
       </div>
       <AppButton variant="secondary" size="sm" @click="emit('back')">
-        Cancel and organise later
+        Cancel
       </AppButton>
     </div>
 
@@ -275,7 +275,7 @@ function next() {
 
     <div class="map-tree__actions">
       <AppButton variant="primary" @click="next">Review and import</AppButton>
-      <AppButton variant="secondary" @click="emit('back')">Cancel and organise later</AppButton>
+      <AppButton variant="secondary" @click="emit('back')">Cancel</AppButton>
     </div>
   </div>
 </template>

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import io
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -57,6 +58,11 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.character import Character
+from pixlstash.db_models.folder_mapping_commit import (
+    FolderMappingCommit,
+    STATE_DONE,
+    STATE_PENDING,
+)
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
@@ -103,6 +109,19 @@ class CommitError(Exception):
     """A refusal the route turns into an HTTP error."""
 
 
+class CommitStopped(Exception):
+    """The owner stopped a running commit; not a failure.
+
+    Carries which stop it was, because the two settle the durable record
+    differently: an abort abandons it, "organise later" finishes the indexing
+    and records that the mapping was deliberately left undone.
+    """
+
+    def __init__(self, state: str):
+        super().__init__(state)
+        self.state = state
+
+
 @dataclass(frozen=True)
 class Assignment:
     """One accepted folder from the mapping screen.
@@ -124,6 +143,14 @@ class Assignment:
     relative_path: str
     kind: str
     match_id: Optional[int] = None
+
+    def as_dict(self) -> dict:
+        """The wire form `parse_assignments` reads back, for the durable record."""
+        return {
+            "relative_path": self.relative_path,
+            "kind": self.kind,
+            "match_id": self.match_id,
+        }
 
 
 @dataclass
@@ -182,6 +209,131 @@ def parse_assignments(raw: list) -> list[Assignment]:
         seen.add(relative_path)
         parsed.append(Assignment(relative_path, kind, match_id))
     return parsed
+
+
+def record_pending_commit(
+    server,
+    *,
+    task_id: str,
+    root_path: str,
+    mode: str,
+    label: Optional[str],
+    expected_pictures: int,
+    assignments: list[Assignment],
+) -> None:
+    """Write the accepted mapping down before the commit thread starts.
+
+    Before, deliberately. A record written afterwards would not exist for the
+    window this whole mechanism is about — the crash that lands between "the
+    owner pressed the button" and "the pictures are organised".
+    """
+
+    def write(session: Session) -> None:
+        session.add(
+            FolderMappingCommit(
+                task_id=task_id,
+                root_path=root_path,
+                mode=mode,
+                label=label,
+                expected_pictures=expected_pictures,
+                assignments=json.dumps([a.as_dict() for a in assignments]),
+                stage="registering",
+                state=STATE_PENDING,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def pending_commit(server) -> Optional[dict]:
+    """The one unfinished commit for this library, or None.
+
+    Returns the recorded arguments in the shape `_run_commit` takes, with
+    ``assignments`` already parsed back into `Assignment` rows.
+    """
+
+    def read(session: Session) -> Optional[dict]:
+        row = session.exec(
+            select(FolderMappingCommit)
+            .where(FolderMappingCommit.state == STATE_PENDING)
+            .order_by(FolderMappingCommit.id.desc())
+        ).first()
+        if row is None:
+            return None
+        return {
+            "task_id": row.task_id,
+            "root_path": row.root_path,
+            "mode": row.mode,
+            "label": row.label,
+            "expected_pictures": row.expected_pictures,
+            "assignments": row.assignments,
+            "stage": row.stage,
+        }
+
+    record = server.vault.db.run_immediate_read_task(read)
+    if record is None:
+        return None
+    try:
+        record["assignments"] = parse_assignments(json.loads(record["assignments"]))
+    except (ValueError, CommitError) as exc:
+        # Unreadable is not resumable, and a start-up that raises here would
+        # be a library that cannot open at all. Say so and leave the row for
+        # a person; the pictures already indexed are unaffected.
+        logger.error(
+            "Cannot resume the folder-mapping commit %s: its recorded "
+            "assignments are unreadable (%s). Nothing was changed.",
+            record["task_id"],
+            exc,
+        )
+        return None
+    return record
+
+
+def settle_pending_commit(server, task_id: str, state: str) -> None:
+    """Mark a recorded commit finished, abandoned or deferred, out of band.
+
+    The success path does NOT come through here: it settles inside the
+    assigning transaction (`_settle_in_session`) so that a crash between the
+    two can never leave a committed mapping still marked pending, which would
+    make the next start-up apply it a second time and duplicate every entity
+    it created.
+    """
+
+    def write(session: Session) -> None:
+        _settle_in_session(session, task_id, state)
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def _settle_in_session(session: Session, task_id: str, state: str) -> None:
+    """Settle the record on an open session, without committing it."""
+    row = session.exec(
+        select(FolderMappingCommit).where(FolderMappingCommit.task_id == task_id)
+    ).first()
+    if row is None:
+        return
+    row.state = state
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(row)
+
+
+def record_commit_stage(server, task_id: str, stage: str) -> None:
+    """Note which phase a commit reached, for the record's own readability."""
+
+    def write(session: Session) -> None:
+        row = session.exec(
+            select(FolderMappingCommit).where(FolderMappingCommit.task_id == task_id)
+        ).first()
+        if row is None or row.state != STATE_PENDING:
+            return
+        row.stage = stage
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
 def _ancestors(relative_path: str) -> list[str]:
@@ -389,6 +541,7 @@ def local_import_pictures(
     *,
     expected_pictures: int,
     on_progress=None,
+    should_stop=None,
 ) -> list[int]:
     """Import every supported file under *root_path* as a managed Picture.
 
@@ -408,9 +561,17 @@ def local_import_pictures(
         on_progress: ``(processed, total) -> None``, called as files are
             resolved — both the already-indexed ones (counted immediately)
             and the newly-built ones (counted as each chunk commits).
+        should_stop: ``() -> str | None``, checked at each chunk boundary. A
+            returned state aborts the walk by raising `CommitStopped`.
+            Checked *between* chunks and never inside one, so a stop can never
+            tear a half-written chunk: every picture already inserted is
+            complete and stays indexed.
 
     Returns:
         Every matching file's Picture id, existing and newly-created alike.
+
+    Raises:
+        CommitStopped: The owner stopped it. Whatever was indexed remains.
     """
     image_root = os.path.normpath(server.vault.image_root)
 
@@ -458,6 +619,16 @@ def local_import_pictures(
             return None
 
     for start in range(0, len(to_build), _BUILD_CHUNK_SIZE):
+        stopped = should_stop() if should_stop is not None else None
+        if stopped:
+            logger.info(
+                "Local import stopped by the owner (%s) after %d of %d picture(s); "
+                "what is indexed stays indexed",
+                stopped,
+                processed,
+                total,
+            )
+            raise CommitStopped(stopped)
         chunk = to_build[start : start + _BUILD_CHUNK_SIZE]
         max_workers = min(_MAX_BUILD_WORKERS, max(1, len(chunk)))
         if max_workers <= 1:
@@ -493,6 +664,7 @@ def wait_for_first_scan(
     *,
     expected_pictures: int,
     on_progress=None,
+    should_stop=None,
     timeout_s: float = INDEX_TIMEOUT_S,
 ) -> None:
     """Block until the reference folder's first scan pass has completed.
@@ -505,6 +677,9 @@ def wait_for_first_scan(
     Raises:
         CommitError: The scan did not finish inside *timeout_s*, or the
             reference folder failed to mount.
+        CommitStopped: The owner stopped waiting. Only the *wait* stops — the
+            scan is an ordinary background task and carries on to the end,
+            which is exactly what "organise later" is asking for.
     """
 
     def read_state(session: Session):
@@ -518,6 +693,15 @@ def wait_for_first_scan(
 
     deadline = time.monotonic() + timeout_s
     while True:
+        stopped = should_stop() if should_stop is not None else None
+        if stopped:
+            logger.info(
+                "Waiting on the first scan of reference folder %d stopped by the "
+                "owner (%s); the scan itself continues",
+                reference_folder_id,
+                stopped,
+            )
+            raise CommitStopped(stopped)
         rf, indexed = server.vault.db.run_immediate_read_task(read_state)
         if rf is None:
             raise CommitError("The reference folder disappeared mid-scan.")
@@ -689,6 +873,7 @@ def apply_mapping(
     reference_folder_id: int,
     assignments: list[Assignment],
     root_path: str,
+    task_id: Optional[str] = None,
 ) -> CommitResult:
     """Create the accepted entities and link every indexed picture to them.
 
@@ -697,6 +882,12 @@ def apply_mapping(
     reads the filesystem again — folder membership is derived purely from that
     already-recorded path, which is what makes this step a pile of database
     writes and not a second walk.
+
+    Args:
+        task_id: The durable record to settle, in this same transaction. That
+            is what makes the whole commit exactly-once: nothing here creates
+            an entity twice, because a crash either rolls the entities back
+            *and* leaves the record pending, or commits both together.
     """
     image_root = os.path.normpath(server.vault.image_root)
 
@@ -708,6 +899,8 @@ def apply_mapping(
             reference_folder_id=reference_folder_id, pictures_indexed=len(pictures)
         )
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
+        if task_id:
+            _settle_in_session(session, task_id, STATE_DONE)
         session.commit()
         return result
 
@@ -719,6 +912,7 @@ def apply_local_mapping(
     picture_ids: list[int],
     assignments: list[Assignment],
     root_path: str,
+    task_id: Optional[str] = None,
 ) -> CommitResult:
     """The `local_import` counterpart to `apply_mapping`.
 
@@ -738,6 +932,8 @@ def apply_local_mapping(
         )
         result = CommitResult(pictures_indexed=len(pictures))
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
+        if task_id:
+            _settle_in_session(session, task_id, STATE_DONE)
         session.commit()
         return result
 

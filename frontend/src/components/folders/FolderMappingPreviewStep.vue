@@ -11,6 +11,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import {
   getFolderStructureCommitStatus,
   startFolderStructureCommit,
+  stopFolderStructureCommit,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
 import { FACET_KINDS } from "../../utils/folderMappingKinds";
@@ -40,6 +41,7 @@ const committing = ref(false);
 // committed a second time.
 watch(committing, (value) => emit("update:committing", value));
 const commitError = ref("");
+const commitTaskId = ref("");
 const stage = ref("");
 const processed = ref(0);
 const total = ref(0);
@@ -91,6 +93,14 @@ async function poll(taskId) {
       commitError.value = body.error || "The import failed.";
       return;
     }
+    if (body.status === "abandoned" || body.status === "deferred") {
+      // Neither is a failure and neither is a finished mapping, so this
+      // reports no result: the pictures indexed before the stop stay, and
+      // the wizard closes leaving the saved read for another day.
+      committing.value = false;
+      emit("cancel");
+      return;
+    }
     if (body.status === "completed") {
       committing.value = false;
       emit("committed", body.result);
@@ -104,20 +114,53 @@ async function poll(taskId) {
   }
 }
 
-async function commit() {
+async function commit(assignments = props.assignments) {
   committing.value = true;
   commitError.value = "";
   try {
     const started = await startFolderStructureCommit(
       props.readTaskId,
-      props.assignments,
+      assignments,
       props.label,
       props.mode,
     );
+    commitTaskId.value = started.task_id;
     poll(started.task_id);
   } catch (error) {
     committing.value = false;
     commitError.value = errorDetail(error) || "Could not start the import.";
+  }
+}
+
+/**
+ * "Organise later" — index everything now, decide what the folders mean some
+ * other day.
+ *
+ * Before the import starts this is a commit with NO assignments, which is the
+ * whole correction: closing the wizard instead used to leave a library that
+ * had been created and never filled, and an empty library is what "Cancel"
+ * means, not what "later" means. Once the import is running the same words
+ * mean the same thing — keep every picture already indexed, apply none of the
+ * mapping — which is what `stop=defer` does server-side.
+ */
+async function organiseLater() {
+  if (!committing.value) {
+    commit([]);
+    return;
+  }
+  try {
+    await stopFolderStructureCommit(commitTaskId.value, "defer");
+  } catch (error) {
+    commitError.value = errorDetail(error) || "Could not stop the import.";
+  }
+}
+
+/** Give up on the import. What was indexed before now stays indexed. */
+async function abort() {
+  try {
+    await stopFolderStructureCommit(commitTaskId.value, "abort");
+  } catch (error) {
+    commitError.value = errorDetail(error) || "Could not stop the import.";
   }
 }
 
@@ -194,16 +237,36 @@ onUnmounted(() => {
     </div>
 
     <div class="preview-step__actions">
-      <AppButton variant="primary" :loading="committing" @click="commit">
+      <AppButton v-if="!committing" variant="primary" @click="commit()">
         Yes, build this library
       </AppButton>
-      <AppButton variant="secondary" :disabled="committing" @click="emit('back')">
+      <AppButton v-if="!committing" variant="secondary" @click="emit('back')">
         Back to the mapping
       </AppButton>
-      <AppButton variant="ghost" :disabled="committing" @click="emit('cancel')">
-        Cancel and organise later
+      <!-- Organise later stays available WHILE the import runs: it is the
+           answer to "this is taking ages and I do not want to watch", and it
+           means the same thing at both moments — index it all, map it later. -->
+      <AppButton variant="secondary" @click="organiseLater">
+        Organise later
+      </AppButton>
+      <AppButton v-if="committing" variant="ghost" @click="abort">
+        Abort
+      </AppButton>
+      <AppButton v-else variant="ghost" @click="emit('cancel')">
+        Cancel
       </AppButton>
     </div>
+    <p class="preview-step__actions-note">
+      <template v-if="committing">
+        Organise later keeps every picture indexed so far and leaves the
+        folder mapping for another day. Abort gives up on the import — nothing
+        already indexed is removed, and no file is touched either way.
+      </template>
+      <template v-else>
+        Organise later brings the pictures in now and leaves naming the
+        folders until later. Cancel brings nothing in at all.
+      </template>
+    </p>
   </div>
 </template>
 
@@ -298,6 +361,12 @@ onUnmounted(() => {
 
 .preview-step__fact-mark--yes {
   color: rgb(var(--v-theme-success));
+}
+
+.preview-step__actions-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.65);
 }
 
 .preview-step__error {

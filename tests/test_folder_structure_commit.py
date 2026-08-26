@@ -538,3 +538,201 @@ def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
     frozen_id, free_id, tagged = server.vault.db.run_task(scenario)
     assert free_id in tagged, "an unlocked picture must still be filed"
     assert frozen_id not in tagged, "a picture frozen by a locked set must be skipped"
+
+
+# ===========================================================================
+# The durable record: a commit that is interrupted is finished, not lost
+# ===========================================================================
+
+
+def _records(server):
+    from sqlmodel import select
+
+    from pixlstash.db_models.folder_mapping_commit import FolderMappingCommit
+
+    return server.vault.db.run_immediate_read_task(
+        lambda session: [
+            {"task_id": r.task_id, "state": r.state, "stage": r.stage, "mode": r.mode}
+            for r in session.exec(
+                select(FolderMappingCommit).order_by(FolderMappingCommit.id)
+            ).all()
+        ]
+    )
+
+
+def _record_for(server, task_id):
+    return next((r for r in _records(server) if r["task_id"] == task_id), None)
+
+
+def test_a_finished_commit_settles_its_record_in_the_same_transaction(owner_env):
+    """`done` is written by the assigning transaction, not after it.
+
+    The whole exactly-once argument rests on this: a record still marked
+    pending after its entities were created would be resumed at the next
+    start-up and create every one of them a second time.
+    """
+    owner, server = owner_env["owner"], owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "settled-record")
+    _make_tree(root, {"Anna": ["a.jpg"], "Trips": ["b.jpg"]})
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    assert _drain_read(owner, read_task_id)["status"] == "completed"
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "assignments": [{"relative_path": "Anna", "kind": "person"}],
+        },
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    task_id = commit_started.json()["task_id"]
+    assert _drain_commit(owner, task_id, timeout_s=60.0)["status"] == "completed"
+
+    record = _record_for(server, task_id)
+    assert record is not None, "the commit was never written down"
+    assert record["state"] == "done"
+
+
+def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env):
+    """The record carries enough to finish the job without the read.
+
+    A restart has no read to go back to — the result only ever lived in server
+    memory — so everything the resume needs (root, mode, and the accepted
+    assignments themselves) has to be in the row.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "interrupted-record")
+    _make_tree(root, {"Anna": ["a.jpg"]})
+
+    svc.record_pending_commit(
+        server,
+        task_id="test-interrupted",
+        root_path=root,
+        mode="reference",
+        label="Interrupted",
+        expected_pictures=1,
+        assignments=svc.parse_assignments(
+            [{"relative_path": "Anna", "kind": "person"}]
+        ),
+    )
+    try:
+        pending = svc.pending_commit(server)
+        assert pending is not None, "an interrupted commit must survive the process"
+        assert pending["task_id"] == "test-interrupted"
+        assert pending["root_path"] == root
+        assert pending["mode"] == "reference"
+        assert [a.relative_path for a in pending["assignments"]] == ["Anna"]
+        assert [a.kind for a in pending["assignments"]] == ["person"]
+    finally:
+        svc.settle_pending_commit(server, "test-interrupted", "abandoned")
+
+    # By identity, not by "nothing is pending": a commit that FAILED
+    # deliberately leaves its own record pending so the next start-up retries
+    # it, and this module's shared server has run several by now.
+    assert _record_for(server, "test-interrupted")["state"] == "abandoned"
+    resumable = svc.pending_commit(server)
+    assert resumable is None or resumable["task_id"] != "test-interrupted", (
+        "a settled record is never resumed"
+    )
+
+
+def test_stopping_a_commit_that_is_over_reports_what_it_actually_is(owner_env):
+    """Same honesty as the read's cancel: no claim the client cannot check."""
+    owner, server = owner_env["owner"], owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "stop-after-the-fact")
+    _make_tree(root, {"Bea": ["a.jpg"]})
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    assert _drain_read(owner, read_task_id)["status"] == "completed"
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "assignments": [{"relative_path": "Bea", "kind": "person"}],
+        },
+    )
+    task_id = commit_started.json()["task_id"]
+    assert _drain_commit(owner, task_id, timeout_s=60.0)["status"] == "completed"
+
+    stopped = owner.request("DELETE", _COMMIT, params={"task_id": task_id})
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["status"] == "completed", "a finished commit is not stoppable"
+    assert _record_for(server, task_id)["state"] == "done", "and it stays done"
+
+
+def test_stopping_an_unknown_commit_is_a_404(owner_env):
+    response = owner_env["owner"].request(
+        "DELETE", _COMMIT, params={"task_id": "no-such-commit"}
+    )
+    assert response.status_code == 404
+
+
+def test_the_stop_route_is_a_real_route(owner_env):
+    assert_real_route(owner_env["server"].api, "DELETE", _COMMIT)
+
+
+def test_a_pending_commit_is_finished_by_the_next_start_up(tmp_path):
+    """The point of the whole record: a killed import finishes itself.
+
+    Its own ``Server`` pair rather than the module's shared one, because the
+    thing under test *is* the process boundary — the resume runs as the router
+    is built, so it cannot be provoked inside a server that is already up.
+    """
+    from sqlmodel import select
+
+    from pixlstash.db_models.character import Character
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    cfg = str(tmp_path / "server-config.json")
+    with open(cfg, "w") as fh:
+        json.dump({"port": 8000, "trusted_proxies": ["testclient"]}, fh)
+
+    with Server(cfg) as first:
+        image_root = first.vault.image_root
+        _make_tree(image_root, {"Anna": ["a.jpg", "b.jpg"]})
+        # Exactly the state a kill between the two phases leaves behind: the
+        # mapping accepted and written down, nothing indexed, nothing linked.
+        svc.record_pending_commit(
+            first,
+            task_id="killed-mid-import",
+            root_path=image_root,
+            mode="local_import",
+            label=None,
+            expected_pictures=2,
+            assignments=svc.parse_assignments(
+                [{"relative_path": "Anna", "kind": "person"}]
+            ),
+        )
+        assert (
+            first.vault.db.run_immediate_read_task(
+                lambda s: s.exec(select(Picture.id)).all()
+            )
+            == []
+        ), "nothing may be indexed yet, or this proves nothing"
+
+    with Server(cfg) as second:
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            record = _record_for(second, "killed-mid-import")
+            if record and record["state"] != "pending":
+                break
+            time.sleep(0.05)
+        assert record is not None and record["state"] == "done", (
+            f"start-up did not finish the interrupted commit: {record}"
+        )
+
+        def read(session):
+            return (
+                len(session.exec(select(Picture.id)).all()),
+                [c.name for c in session.exec(select(Character)).all()],
+            )
+
+        indexed, people = second.vault.db.run_immediate_read_task(read)
+        assert indexed == 2, "the pictures the killed import never got to index"
+        assert people == ["Anna"], "and the person its assignments named"

@@ -3,14 +3,22 @@
  * v1.11 Phase 3 — the import and mapping wizard: choose a folder, scan it
  * (Phase 2), name what its levels are, and review before anything commits.
  *
- * "Cancel and organise later" at every step. Once a read has started, its
- * task id is saved to `useFolderMappingStore` — the server keeps the read's
- * result in memory for the process's lifetime
- * (integration_architecture.md §20) — so closing this dialog before
- * committing does not lose the scan; the sidebar's "Finish organising…" entry
- * reopens this same wizard with `resume` set and picks up where it left off.
- * Only a completed commit clears that saved entry, because only then is
- * there nothing left to resume.
+ * **"Cancel" and "Organise later" are different offers, and used to be one
+ * button.** "Cancel and organise later" closed the dialog having imported
+ * nothing, which on the "Add a library" path left the owner looking at a
+ * library that had just been created and was completely empty — the outcome
+ * people expect from *Cancel*, under a label promising the opposite. So:
+ * Cancel brings nothing in, and Organise later (on the Preview step, and
+ * again while the import runs) indexes everything and leaves only the folder
+ * mapping for another day.
+ *
+ * Either way the read survives. Once a read has started, its task id is saved
+ * to `useFolderMappingStore` — the server keeps the read's result in memory
+ * for the process's lifetime (integration_architecture.md §20) — so closing
+ * this dialog before committing does not lose the scan; the sidebar's "Finish
+ * organising…" entry reopens this same wizard with `resume` set and picks up
+ * where it left off. Only a completed commit clears that saved entry, because
+ * only then is there nothing left to resume.
  *
  * `mode` ("reference" default, or "local_import") decides what the Preview
  * step's commit does with the scanned pictures — see integration_architecture.md
@@ -184,7 +192,7 @@ function onCommitted(result) {
           Continue
         </AppButton>
         <AppButton variant="secondary" @click="organiseLater">
-          Cancel and organise later
+          Cancel
         </AppButton>
       </div>
     </div>

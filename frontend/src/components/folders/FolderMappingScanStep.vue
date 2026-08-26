@@ -209,7 +209,7 @@ onUnmounted(() => {
           Set up my library
         </AppButton>
         <AppButton variant="secondary" :loading="cancelling" @click="cancel">
-          Cancel and organise later
+          Cancel
         </AppButton>
       </div>
     </div>
