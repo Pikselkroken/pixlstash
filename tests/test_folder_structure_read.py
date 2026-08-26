@@ -334,6 +334,23 @@ def test_a_folder_of_different_people_proposes_nothing():
     assert proposal["evidence"] == []
 
 
+def test_a_dated_folder_is_never_read_as_a_person():
+    """One day of one holiday is mostly one person. It is still a date.
+
+    Reported from a real library: `2009`/`2010` were mapped as Sets and the
+    `2006-09-08` level below them came back proposed as People.
+    """
+    with _tree({"": [], "2006-09-08": [f"{i:03d}.jpg" for i in range(40)]}) as root:
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+
+    proposal = _rows(result, 2)["2006-09-08"]["proposal"]
+    assert proposal["kind"] is None, "a date is not a name anybody has"
+    # No kind left, so no reason to state — the signal's standing contract.
+    assert proposal["evidence"] == []
+
+
 def test_the_face_signal_stays_silent_below_the_minimum_sample():
     """'One face, 2 of 3' is not evidence anyone should act on."""
     with _tree(_faces_spec(MIN_FACE_SAMPLE - 1)) as root:

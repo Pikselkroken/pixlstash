@@ -191,6 +191,26 @@ def normalise_name(name: str) -> str:
     return re.sub(r"[\W_]+", " ", stripped, flags=re.UNICODE).strip()
 
 
+#: A folder name that is nothing but a date: ``2009``, ``2006-09``,
+#: ``2006-09-08``, ``20060908``, and the ``_``/``.``/space spellings of those.
+#: Exactly the shape a camera, a phone and PixlStash's own dated layout produce.
+_DATE_ONLY_NAME = re.compile(
+    r"^(19|20)\d{2}"
+    r"(?:[-_. ]?(?:0[1-9]|1[0-2])"
+    r"(?:[-_. ]?(?:0[1-9]|[12]\d|3[01]))?)?$"
+)
+
+
+def reads_as_a_date(name: str) -> bool:
+    """True when this folder name is a date and nothing else.
+
+    Deliberately exact-match: ``2006-09-08 Anna's birthday`` is not covered.
+    A name that merely *starts* with a date could still be somebody's folder,
+    and this only has evidence about the bare form.
+    """
+    return bool(_DATE_ONLY_NAME.match(name.strip()))
+
+
 @dataclass
 class _Folder:
     """One folder found by the walk, before any signal has run."""
@@ -638,7 +658,14 @@ class FolderStructureRead:
                     "matched": folder.face_matched,
                 },
             )
-            if "person" not in kinds:
+            # The face signal alone never makes a dated folder a Person. One
+            # day of one holiday is mostly one person, so "one face, 34 of 40"
+            # fires on `2006-09-08` exactly as it does on `Anna` — and a level
+            # of date folders then clears the 60% vote and proposes People
+            # entire. The name is the stronger evidence: a date is not a name
+            # anybody has. The row then proposes nothing at all rather than
+            # something else — the owner still picks Person if they meant it.
+            if "person" not in kinds and not reads_as_a_date(folder.name):
                 kinds.append("person")
 
         pictures = len(folder.direct_pictures)
