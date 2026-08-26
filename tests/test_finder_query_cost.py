@@ -670,3 +670,67 @@ def test_text_embedding_waits_per_picture_for_tags_and_description(tmp_path):
         }
         # No tagger_settings at all: tagger off, Florence-2 captioning on.
         assert _text_candidates(vault, _TextEngine()) == {described, tags_pending}
+
+
+_LIKENESS_PROBE = "picture.size_bin_index is null"
+
+
+def _likeness_candidates(vault) -> set[int]:
+    from pixlstash.tasks.likeness_parameters_task import LikenessParametersTask
+    from pixlstash.utils.likeness.likeness_parameter_utils import (
+        LikenessParameterUtils,
+    )
+
+    rows = vault.db.run_immediate_read_task(
+        LikenessParameterUtils.find_next_work, LikenessParametersTask.SCAN_LIMIT
+    )
+    return {pid for pid, _w, _h in (rows or [])}
+
+
+def test_likeness_parameter_probe_is_served_by_the_size_bin_index(tmp_path):
+    """``size_bin_index IS NULL`` walks ``ix_picture_size_bin_index`` in rowid
+    order, so no partial index and no sort are needed; the per-picture quality
+    check is an ``ix_quality_picture_id`` lookup."""
+    from pixlstash.db_models import Quality
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed(vault, tmp_path, count=3, with_faces=False)
+        _add_rows(vault, [Quality(picture_id=ids[0], sharpness=0.4)])
+
+        with _StatementRecorder(vault.db._engine, _LIKENESS_PROBE) as rec:
+            _likeness_candidates(vault)
+
+        plan = _explain(vault, rec.only, rec.parameters[0])
+        assert plan[0].startswith(
+            "SEARCH picture USING INDEX ix_picture_size_bin_index"
+        ), plan
+        assert any("ix_quality_picture_id" in line for line in plan), plan
+        assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
+
+
+def test_likeness_parameters_wait_per_picture_for_quality(tmp_path):
+    """A picture with its quality row is offered while its neighbours -- no
+    Quality row, or a row not yet filled in -- are not (no stage-wide gate)."""
+    from pixlstash.db_models import Quality
+    from pixlstash.tasks.missing_likeness_parameters_finder import (
+        MissingLikenessParametersFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        done, no_row, unfilled = _seed(vault, tmp_path, count=3, with_faces=False)
+        _add_rows(
+            vault,
+            [
+                Quality(picture_id=done, sharpness=0.4, brightness=0.5),
+                Quality(picture_id=unfilled, sharpness=None),
+            ],
+        )
+        assert _likeness_candidates(vault) == {done}
+
+        finder = MissingLikenessParametersFinder(vault.db)
+        assert finder.depends_on() == []
+        task = finder.find_task()
+        assert task is not None and task.params["picture_ids"] == [done], (
+            "the finder must not wait for the other two pictures' quality"
+        )
+        assert no_row not in _likeness_candidates(vault)
