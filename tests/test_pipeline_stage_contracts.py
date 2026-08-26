@@ -234,17 +234,6 @@ def test_a_face_task_that_raises_leaves_its_pictures_to_the_face_stage(
         assert _tag_candidates(vault) == {sibling}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FaceExtractionTask._flush_to_db is fire-and-forget and the claims are "
-        "released on completion, so while the write queue is busy (a LOW tag or "
-        "CLIP write from the same pass) the next sweep re-selects the pictures "
-        "the task just finished: a second FaceExtractionTask re-runs detection "
-        "and its bulk insert then fails the (picture_id, frame_index, face_index) "
-        "unique constraint and skips the whole batch."
-    ),
-)
 def test_a_finished_face_batch_is_not_re_selected_while_its_rows_are_in_flight(
     tmp_path, monkeypatch
 ):
