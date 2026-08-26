@@ -85,8 +85,9 @@ export async function startFolderStructureCommit(
 
 /**
  * Poll a commit's progress. `result` is null until `status` is `completed`.
- * A commit is never `cancelled` — once the reference folder is registered its
- * scan runs to completion regardless of what the screen does next.
+ * `abandoned` and `deferred` are the owner's own two ways of stopping one —
+ * see `stopFolderStructureCommit`. In reference mode the folder's own scan
+ * runs to completion regardless of what the screen does next.
  *
  * @param {string} taskId
  * @returns {Promise<Object>} `{ task_id, status, stage, processed, total, progress, error, result }`.
@@ -94,5 +95,24 @@ export async function startFolderStructureCommit(
 export async function getFolderStructureCommitStatus(taskId) {
   return unwrap(
     apiClient.get(COMMIT_STATUS_URL, { params: { task_id: taskId } }),
+  );
+}
+
+/**
+ * Stop a running commit.
+ *
+ * Neither stop un-indexes anything: no file is touched either way and every
+ * picture already indexed stays indexed. The commit unwinds at its next chunk
+ * boundary, so a poll immediately afterwards can still say `running`.
+ *
+ * @param {string} taskId
+ * @param {"abort"|"defer"} [stop] - `"abort"` gives up on the import;
+ *   `"defer"` is "organise later": keep everything indexed, do not apply the
+ *   folder mapping.
+ * @returns {Promise<Object>} `{ status }`.
+ */
+export async function stopFolderStructureCommit(taskId, stop = "abort") {
+  return unwrap(
+    apiClient.delete(COMMIT_URL, { params: { task_id: taskId, stop } }),
   );
 }

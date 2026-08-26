@@ -667,6 +667,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("DELETE", "/api/v1/folder-structure/commit"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3: stops the owner's in-flight commit (abort, or 'organise later') — authority over another principal's operation, on the same tier as the route that starts it, exactly as DELETE .../read is to POST .../read; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
         "GET",

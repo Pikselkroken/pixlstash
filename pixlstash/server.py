@@ -703,6 +703,14 @@ class Server(
         # reference folder's scan.
         self.folder_structure_commit = None
         self.folder_structure_commit_lock = threading.Lock()
+        # An import killed between indexing and assigning left a library half
+        # made and no way to ask for the rest — the accepted mapping only ever
+        # lived in this slot. It is written to the vault now, so start-up can
+        # finish the job. Here rather than in the router factory that defines
+        # it, because that factory runs before the two lines above.
+        resume_mapping_commit = getattr(self, "resume_folder_mapping_commit", None)
+        if resume_mapping_commit is not None:
+            resume_mapping_commit()
         # Temporary storage for async streaming-import staging sessions (#459).
         # Keyed by staging_id; each records the on-disk staging dir, the streamed
         # files, the declared file count, and (after the safe handoff) the
