@@ -603,6 +603,7 @@ import { listTags } from "../../api/tags";
 import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
+import { markEnd, markStart } from "../../utils/perfMarks";
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -780,6 +781,9 @@ const gbFaceBboxFilterOptions = [
 ];
 
 function gbSetMinScore(n) {
+  // Times the synchronous store write that fires on every score-filter
+  // click; the grid's own reactive refetch is a separate, unmeasured cost.
+  markStart("pixlstash:interaction-apply-filter");
   const newMin = gbMinScoreFilter.value === n ? null : n;
   gbMinScoreFilter.value = newMin;
   if (
@@ -789,6 +793,7 @@ function gbSetMinScore(n) {
   ) {
     gbMaxScoreFilter.value = newMin;
   }
+  markEnd("pixlstash:interaction-apply-filter");
 }
 
 function gbSetMaxScore(n) {

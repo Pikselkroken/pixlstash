@@ -1204,6 +1204,7 @@ import {
   useBottomAnchor,
 } from "../../composables/useBottomAnchor";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
+import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
@@ -6384,12 +6385,14 @@ function handleOverlayChange(payload) {
 
 async function openOverlay(img) {
   if (!img || !img.id) return;
+  markStart("pixlstash:interaction-open-picture");
   overlayInitialExpandedStackIds.value = Array.from(
     expandedStackIds.value || [],
   );
   overlayImageId.value = img.id;
   overlayOpen.value = true;
   _pushOverlayRoute(img.id);
+  markEnd("pixlstash:interaction-open-picture");
 }
 
 function closeOverlay() {

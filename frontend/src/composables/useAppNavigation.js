@@ -13,6 +13,7 @@ import {
   SCRAPHEAP_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
 } from "../stores/useViewStore";
+import { markEnd, markStart } from "../utils/perfMarks";
 
 /**
  * The app's navigation handlers: the sidebar's entry clicks, and the route
@@ -77,6 +78,9 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   }
 
   async function handleSelectCharacter(payload) {
+    // Times a sidebar click through to the DOM update it causes (nextTick),
+    // i.e. click-to-visible-response for the app's most common navigation.
+    markStart("pixlstash:interaction-navigate");
     selectionStore.selectedFolderFilter = null;
     const {
       id: charId,
@@ -94,6 +98,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     if (charId == null) {
       selectionStore.selectedCharacter = null;
       await nextTick();
+      markEnd("pixlstash:interaction-navigate");
       return;
     }
     if (label) {
@@ -126,6 +131,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     await nextTick();
     onNavigated?.();
     pushRouteForCurrentSelection();
+    markEnd("pixlstash:interaction-navigate");
   }
 
   async function handleSelectSet(payload) {
