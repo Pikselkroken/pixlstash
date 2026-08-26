@@ -145,7 +145,16 @@ export const useTasksStore = defineStore("tasks", () => {
       .filter(([key, snapshot]) => {
         if (!snapshot) return false;
         if (suppressImportWorker && key === IMPORT_WORKER_KEY) return false;
-        if (typeof snapshot.active === "boolean") return snapshot.active;
+        // `active: true` is decisive. `active: false` is NOT — it only means
+        // nothing is in flight *this instant*, and a worker chewing through a
+        // library is idle between every batch: the planner submits, the batch
+        // runs, inflight drops to 0, and the next batch arrives up to a
+        // backoff later. This used to `return snapshot.active` for either
+        // value, which made the grace window below unreachable — the backend
+        // always sends the field — and the row vanished in every gap. Watching
+        // a face pass grind through twelve thousand pictures, the Tasks tab
+        // read "nothing running" most of the time.
+        if (snapshot.active === true) return true;
         const lastActiveAt = Number(lastActiveAtByWorker.get(key) || 0);
         const lastProgressAt = Number(lastProgressAtByWorker.get(key) || 0);
         const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);
