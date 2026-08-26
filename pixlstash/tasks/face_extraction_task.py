@@ -256,8 +256,22 @@ class FaceExtractionTask(BaseTask):
             # be several MB; a batch of 64 can be 500+ MB held unnecessarily.
             self._preloaded_images = {}
 
-            for bulk_faces, bulk_thumbnail_crops in pending_flushes:
+            flushes = [
                 self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
+                for bulk_faces, bulk_thumbnail_crops in pending_flushes
+            ]
+            # The task is not done until its rows are. Returning before the
+            # write lands releases the pictures' claims, and with the write
+            # queue busy (a LOW tag or CLIP write from the same pass, now
+            # that stages interleave) the next sweep re-offered the pictures
+            # this task had just finished: a second detection pass, then an
+            # IntegrityError on the unique face key that skipped the whole
+            # batch. Seen live as 7 face tasks for 12 pictures. The write is
+            # still submitted at HIGH priority, so this waits only for the
+            # write already on the writer thread plus our own.
+            for future in flushes:
+                if future is not None:
+                    self._db.result_or_throw(future)
 
             picture_ids = sorted(
                 {pic_id for _, pic_id, _, _ in all_changed if pic_id is not None}
@@ -1007,14 +1021,16 @@ class FaceExtractionTask(BaseTask):
         self,
         bulk_faces: list,
         bulk_thumbnail_crops: list,
-    ) -> None:
-        """Write accumulated face rows and thumbnail crops to the database.
+    ):
+        """Submit the face rows and thumbnail crops to the writer; return the future.
 
         Called AFTER releasing the inference semaphore so that the SQLite
-        commit does not block the next task from starting inference.
+        commit does not block the next task from starting inference. The
+        caller waits on the returned future before the task completes — see
+        `_run_task` for why that wait is load-bearing.
         """
         if not bulk_faces and not bulk_thumbnail_crops:
-            return
+            return None
 
         def bulk_write(session, faces, crops):
             for face in faces:
@@ -1045,10 +1061,8 @@ class FaceExtractionTask(BaseTask):
                 session.rollback()
                 logger.warning("Bulk thumbnail crop update failed: %s", exc)
 
-        # Fire-and-forget: submit to the DB queue without blocking the worker
-        # thread.  Errors are logged inside bulk_write.  Freeing the worker
-        # thread immediately lets it pick up the next queued task so inference
-        # can restart before the SQLite commit finishes (1-3 s for 512 rows).
-        self._db.submit_task(
+        # Errors are logged inside bulk_write. HIGH priority so the task's own
+        # completion is not queued behind the LOW writes of other stages.
+        return self._db.submit_task(
             bulk_write, bulk_faces, bulk_thumbnail_crops, priority=DBPriority.HIGH
         )
