@@ -196,6 +196,37 @@ def test_the_walk_numbers_levels_from_the_root_and_counts_pictures_recursively()
     assert _rows(result, 3)["mira"]["relative_path"] == "2024 Shoots/mira"
 
 
+def test_the_count_is_what_the_import_will_actually_index():
+    """Videos count. They are imported, and the total is a promise about that.
+
+    The read may only *sample* images — a video frame is not what the face pass
+    is built on — but the commit indexes every supported media file, so a
+    holiday folder of clips used to finish with more pictures in the library
+    than the dialog had said were there.
+    """
+    with _tree({"": [], "Trip": ["a.jpg", "b.jpg", "clip.mp4"]}) as root:
+        result = FolderStructureRead(root).run()
+
+    assert result["root"]["picture_count"] == 3, "the video is going to be imported"
+    assert _rows(result, 2)["Trip"]["direct_picture_count"] == 3
+
+
+def test_our_own_thumbnails_are_not_counted_or_sampled():
+    """Re-reading an already-indexed folder used to grow its own total.
+
+    Managed thumbnails sit beside the original as `<name>_thumb.webp`, and
+    `.webp` is a supported extension, so every import made the next read of the
+    same folder report a larger library than the one before it.
+    """
+    with _tree(
+        {"": [], "Trip": ["a.jpg", "a_thumb.webp", "b.jpg", "b_thumb.webp"]}
+    ) as root:
+        result = FolderStructureRead(root).run()
+
+    assert result["root"]["picture_count"] == 2, "two pictures and their thumbnails"
+    assert _rows(result, 2)["Trip"]["direct_picture_count"] == 2
+
+
 def test_a_row_never_carries_an_absolute_path():
     """The rows are for a screen. Publishing one must not publish a home dir."""
     with _tree({"": [], "a": ["x.jpg"]}) as root:
