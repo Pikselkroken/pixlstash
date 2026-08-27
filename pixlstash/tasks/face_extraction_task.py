@@ -625,9 +625,14 @@ class FaceExtractionTask(BaseTask):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    logger.warning(
-                        "Could not read frame %s from video: %s",
+                    # DEBUG, not WARNING: CAP_PROP_FRAME_COUNT is an estimate
+                    # for HEVC — a 47-frame iPhone clip reports 47 and cannot
+                    # read frame 45 — so the last sample often lands past the
+                    # end. The clip still gets its other frames.
+                    logger.debug(
+                        "Could not read frame %s of %s from video %s",
                         frame_index,
+                        frame_count,
                         file_path,
                     )
                     continue
