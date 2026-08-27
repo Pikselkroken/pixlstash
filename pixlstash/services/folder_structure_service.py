@@ -1,12 +1,12 @@
 """The folder-structure read: propose what each level of a folder tree is.
 
-v1.11 Phase 2 (``docs/plans/v1.11.0-existing-library.md`` §4). Four signals, all
-deterministic and local - a folder name is a string, so no LLM and no language
-reading of names:
+v1.11 Phase 2 (``docs/plans/v1.11.0-existing-library.md`` §4). Eight signals,
+all deterministic and local - a folder name is a string, so no LLM and no
+language reading of names:
 
 ``cardinality``
     Few names repeating under many parents is a facet, not a thing → Tag. A
-    property of a *level*, so it is the only signal that speaks at level scope.
+    property of a *level*, so it speaks at level scope.
 ``sidecars``
     A caption ``.txt``/``.caption`` beside every picture in a folder → Set. A
     filesystem fact.
@@ -17,6 +17,24 @@ reading of names:
 ``name_match``
     The folder name against entities the vault already has → that entity. A
     lookup, not an inference.
+``leaf``
+    ``MIN_LEAF_PICTURES`` or more pictures and no folders below → Set. A date
+    *with other words* (``2006-09-08 Anna wedding``) is a curated name and
+    strengthens it; a *bare* date (``2006-09-08``) is a date bucket - Lightroom,
+    phones and Google Photos exports all file by capture day whether or not the
+    pictures belong together - so it proposes nothing and says ``date_bucket``.
+``container``
+    Folders below mostly read as Sets, People or date buckets, and this folder
+    holds few pictures of its own → Project. The other level-scoped signal: it
+    needs the level below it read first.
+``capture_day``
+    EXIF capture dates from the same sample the face pass opens: one or two
+    distinct days → Set. Silent on and directly under bare-date folders, where
+    one day is true by construction.
+``batch_numbering``
+    Most direct pictures named ``<prefix><digits>`` with one prefix
+    (``IMG_0412``, ``DSC01234``) → Set. Additional evidence: it proposes only
+    where nothing else spoke and never contradicts another signal.
 
 Every proposal carries the evidence that produced it; a signal that cannot state
 its reason proposes nothing. Where the signals only narrow the answer the
@@ -37,6 +55,7 @@ import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Callable, Optional
 
 import cv2
@@ -72,6 +91,29 @@ MIN_FACE_SAMPLE = 5
 #: matters at level scope too: a level of one-picture folders would otherwise
 #: clear the 60% vote and be proposed as Set entire.
 MIN_SIDECAR_PICTURES = 3
+
+#: Below this many direct pictures the leaf and batch-numbering signals stay
+#: silent, for the reason `MIN_SIDECAR_PICTURES` does: two pictures and nothing
+#: below is a folder, not a Set anybody should be offered.
+MIN_LEAF_PICTURES = 3
+
+#: A folder with subfolders reads as a container only while its own direct
+#: pictures are at most this share of everything under it. A folder holding most
+#: of its pictures itself is a Set with a stray subfolder, not a Project.
+_CONTAINER_MAX_DIRECT_PCT = 10
+
+#: Share of a folder's direct picture stems that must share one
+#: `<prefix><digits>` shape for the folder to read as one numbered batch, and
+#: the shape itself: a non-digit prefix (possibly empty) and at least three
+#: digits. `IMG_0412`, `DSC01234`, `00017-1234`.
+_BATCH_SHARE_PCT = 80
+_BATCH_STEM = re.compile(r"^(\D*)\d{3,}")
+
+#: Distinct EXIF capture days at or below which a sampled folder reads as one
+#: Set, and the share of the sample that must carry a date before the days are
+#: counted at all - a folder where most pictures have no EXIF says nothing.
+_CAPTURE_MAX_DAYS = 2
+_CAPTURE_MIN_DATED_PCT = 50
 
 #: Share of the *sampled* pictures that must carry the same identity for the
 #: folder to read as one person. A whole percent compared with integer
@@ -126,6 +168,13 @@ KINDS = tuple(f.value for f in Facet) + (JUST_A_FOLDER,)
 
 #: Kinds a level can narrow to once cardinality has ruled Tag out.
 _NON_TAG_KINDS = (Facet.PROJECT.value, Facet.SET.value, Facet.PERSON.value)
+
+#: What a folder below a container may read as for the container to count it,
+#: plus `_DATE_BUCKET` for a bare-date folder, which proposes nothing itself but
+#: is still a group of pictures the folder above it holds together.
+_CONTAINED_KINDS = (Facet.SET.value, Facet.PERSON.value)
+_DATE_BUCKET = "date"
+_CONTAINABLE = set(_CONTAINED_KINDS) | {_DATE_BUCKET}
 
 #: What the face pass may SAMPLE. Videos are deliberately excluded - this
 #: signal decodes what it samples and a video frame is not what the face pass is
@@ -198,24 +247,41 @@ def normalise_name(name: str) -> str:
     return re.sub(r"[\W_]+", " ", stripped, flags=re.UNICODE).strip()
 
 
-#: A folder name that is nothing but a date: ``2009``, ``2006-09``,
-#: ``2006-09-08``, ``20060908``, and the ``_``/``.``/space spellings of those.
-#: Exactly the shape a camera, a phone and PixlStash's own dated layout produce.
-_DATE_ONLY_NAME = re.compile(
-    r"^(19|20)\d{2}"
+#: A date at the front of a folder name: ``2009``, ``2006-09``, ``2006-09-08``,
+#: ``20060908``, and the ``_``/``.``/space spellings of those. Exactly the shape
+#: a camera, a phone and PixlStash's own dated layout produce.
+_DATE_PREFIX = (
+    r"(19|20)\d{2}"
     r"(?:[-_. ]?(?:0[1-9]|1[0-2])"
-    r"(?:[-_. ]?(?:0[1-9]|[12]\d|3[01]))?)?$"
+    r"(?:[-_. ]?(?:0[1-9]|[12]\d|3[01]))?)?"
 )
+#: A name that is nothing but a date, an importer's ``_1``/``-2`` suffix allowed.
+_DATE_ONLY_NAME = re.compile(rf"^{_DATE_PREFIX}(?:[-_ ]\d{{1,3}})?$")
+#: A date followed by other words: ``2006-09-08 Anna wedding``, ``2024-03 Iceland``.
+_DATED_NAME = re.compile(rf"^{_DATE_PREFIX}[-_. ]+\S")
+#: A bare year, ``2009``: the one container shape this read refuses to pick.
+_YEAR_ONLY_NAME = re.compile(r"^(19|20)\d{2}$")
 
 
 def reads_as_a_date(name: str) -> bool:
-    """True when this folder name is a date and nothing else.
+    """True when this folder name is a date and nothing else - a date bucket.
 
-    Deliberately exact-match: ``2006-09-08 Anna's birthday`` is not covered.
-    A name that merely *starts* with a date could still be somebody's folder,
-    and this only has evidence about the bare form.
+    Lightroom, phones and Google Photos exports all file by capture day whether
+    or not the pictures belong together, so a bare date says *when*, never
+    *what*. ``2006-09-08_1``-style importer suffixes count as bare. A date with
+    other words after it is `reads_as_dated` instead.
     """
     return bool(_DATE_ONLY_NAME.match(name.strip()))
+
+
+def reads_as_dated(name: str) -> bool:
+    """True when this folder name starts with a date and then says more.
+
+    ``2006-09-08 Anna wedding`` is a name somebody chose, so it is evidence the
+    pictures belong together where the bare form is only evidence of a date.
+    """
+    stripped = name.strip()
+    return not _DATE_ONLY_NAME.match(stripped) and bool(_DATED_NAME.match(stripped))
 
 
 @dataclass
@@ -239,6 +305,11 @@ class _Folder:
     picture_count: int = 0  # recursive; filled after the walk
     face_sampled: int = 0
     face_matched: int = 0
+    #: The capture-day signal, from the same sample the face pass opened:
+    #: pictures opened, pictures that carried an EXIF date, distinct days.
+    capture_sampled: int = 0
+    capture_dated: int = 0
+    capture_days: int = 0
 
 
 class ReadCancelled(Exception):
@@ -284,6 +355,7 @@ class FolderStructureRead:
         self._skipped_hidden = 0
         self._skipped_restricted = 0
         self._faces_ran = False
+        self._date_levels: set[int] = set()
         self._deadline = time.monotonic() + deadline_s
         # key -> entity_type -> the rows of that type sharing the name.
         by_type: dict[str, dict[str, list[tuple[str, Optional[int], str]]]] = {}
@@ -316,14 +388,14 @@ class FolderStructureRead:
         return self._cancel.is_set()
 
     def run(self) -> dict[str, Any]:
-        """Walk, run the four signals, and return the §20 result document.
+        """Walk, sample, run the signals, and return the §20 result document.
 
         A cancel between stages stops the run and returns whatever the stages
         that did complete found - a partial read is still worth showing.
         """
         try:
             self._walk()
-            self._read_faces()
+            self._sample_folders()
         except ReadCancelled:
             logger.info(
                 "Folder-structure read cancelled after %d folders", len(self._folders)
@@ -476,34 +548,44 @@ class FolderStructureRead:
             if folder.parent_index is not None:
                 self._folders[folder.parent_index].picture_count += folder.picture_count
 
-    def _read_faces(self) -> None:
-        """Sample each folder's pictures and look for one identity across them."""
+    def _sample_folders(self) -> None:
+        """Open ``SAMPLED_PER_FOLDER`` pictures per folder, once, for both sampled
+        signals: the capture day comes out of the same open the face decode
+        needs, so with no inference engine the sample still runs and only the
+        faces are missing. The stage stays ``faces`` on the wire (§20)."""
         if self._detect_faces is None:
             logger.info(
                 "Folder-structure read: no inference engine, skipping the face "
                 "signal - no folder will be proposed as a Person"
             )
-            return
         candidates = [
             f for f in self._folders if len(f.direct_pictures) >= MIN_FACE_SAMPLE
         ]
         total = len(candidates)
-        self._faces_ran = True
+        self._faces_ran = self._detect_faces is not None
         self._progress("faces", 0, total)
         # One pool for the whole read, not one per folder: a fresh pool per
         # folder is 20,000 thread-pool creations for the same four threads.
         with ThreadPoolExecutor(max_workers=_PRELOAD_WORKERS) as pool:
             for done, folder in enumerate(candidates, start=1):
                 self._checkpoint()
-                self._read_folder_faces(folder, pool)
+                self._sample_folder(folder, pool)
                 self._progress("faces", done, total)
 
-    def _read_folder_faces(self, folder: _Folder, pool: ThreadPoolExecutor) -> None:
+    def _sample_folder(self, folder: _Folder, pool: ThreadPoolExecutor) -> None:
         paths = [
             os.path.join(folder.abs_path, name)
             for name in _evenly_spaced(folder.direct_pictures, SAMPLED_PER_FOLDER)
         ]
-        images = list(pool.map(_load_bgr, paths))
+        decode = self._detect_faces is not None
+        samples = list(pool.map(partial(_load_sample, decode=decode), paths))
+        days = [day for _image, day in samples if day]
+        folder.capture_sampled = len(paths)
+        folder.capture_dated = len(days)
+        folder.capture_days = len(set(days))
+        if not decode:
+            return
+        images = [image for image, _day in samples]
         try:
             per_image = self._detect_faces(images)
         except Exception as exc:  # noqa: BLE001 - one folder must not kill the read
@@ -532,9 +614,31 @@ class FolderStructureRead:
         for folder in self._folders:
             levels.setdefault(folder.depth, []).append(folder)
 
+        # A level of mostly bare-date folders is a date-bucketed level, which
+        # the capture-day signal must know about for the folders under it.
+        self._date_levels = {
+            depth
+            for depth, folders in levels.items()
+            if _clears_share(
+                sum(1 for f in folders if reads_as_a_date(f.name)),
+                len(folders),
+                _LEVEL_VOTE_SHARE_PCT,
+            )
+        }
+        # Deepest first: a folder reads as a container off what the level below
+        # it read as, so the rows below must exist before the rows above.
         rows_by_depth: dict[int, list[dict[str, Any]]] = {}
-        for depth, folders in levels.items():
-            rows_by_depth[depth] = [self._folder_row(f) for f in folders]
+        grouped: dict[int, list[set[str]]] = {}
+        for depth in sorted(levels, reverse=True):
+            folders = levels[depth]
+            rows_by_depth[depth] = [
+                self._folder_row(f, grouped.get(f.index)) for f in folders
+            ]
+            # depth > 2: the parents of these rows are at depth 2 or deeper, so
+            # the root - the library itself - never reads as a container.
+            grouped = (
+                _grouped_by_parent(folders, rows_by_depth[depth]) if depth > 2 else {}
+            )
 
         level_docs = []
         for depth in sorted(levels):
@@ -588,7 +692,9 @@ class FolderStructureRead:
             "levels": level_docs,
         }
 
-    def _folder_row(self, folder: _Folder) -> dict[str, Any]:
+    def _folder_row(
+        self, folder: _Folder, grouped: Optional[list[set[str]]]
+    ) -> dict[str, Any]:
         return {
             "id": f"{folder.depth}/{folder.index}",
             "parent_id": (
@@ -604,16 +710,22 @@ class FolderStructureRead:
             "picture_count": folder.picture_count,
             "direct_picture_count": folder.direct_media,
             "child_count": folder.child_count,
-            "proposal": self._folder_proposal(folder),
+            "proposal": self._folder_proposal(folder, grouped),
         }
 
-    def _folder_proposal(self, folder: _Folder) -> dict[str, Any]:
+    def _folder_proposal(
+        self, folder: _Folder, grouped: Optional[list[set[str]]]
+    ) -> dict[str, Any]:
         """Combine the per-folder signals into one proposal for this row.
 
-        Name match wins when it is unambiguous - it is a lookup and the other two
+        Name match wins when it is unambiguous - it is a lookup and the others
         are inferences - but every signal that fired still contributes its
         evidence, so a folder read as a person *and* named after a person says
         both. Two signals that disagree produce ``candidates``, never a pick.
+
+        ``grouped`` is what this folder's children read as, one set of kinds per
+        child, when the level below cleared the container bar; ``None`` when it
+        did not.
         """
         evidence: list[dict[str, Any]] = []
         kinds: list[str] = []
@@ -667,8 +779,20 @@ class FolderStructureRead:
             kinds.extend(_ENTITY_KIND[t] for t, _, _ in matches)
             evidence.append({"signal": "name_match", "text": f"matches {named}"})
 
-        if folder.face_sampled and _clears_share(
-            folder.face_matched, folder.face_sampled, FACE_MAJORITY_PCT
+        # The face signal alone never makes a dated folder a Person. One day
+        # of one holiday is mostly one person, so "one face, 34 of 40" fires on
+        # `2006-09-08` (and `2006-09-08 Anna wedding`) exactly as it does on
+        # `Anna` - and a level of date folders then clears the 60% vote and
+        # proposes People entire. The name is the stronger evidence: a date is
+        # not a name anybody has. The row says nothing about faces rather than
+        # something else - the owner still picks Person if they meant it.
+        dated = reads_as_a_date(folder.name) or reads_as_dated(folder.name)
+        if (
+            folder.face_sampled
+            and not dated
+            and _clears_share(
+                folder.face_matched, folder.face_sampled, FACE_MAJORITY_PCT
+            )
         ):
             evidence.insert(
                 0,
@@ -679,14 +803,7 @@ class FolderStructureRead:
                     "matched": folder.face_matched,
                 },
             )
-            # The face signal alone never makes a dated folder a Person. One
-            # day of one holiday is mostly one person, so "one face, 34 of 40"
-            # fires on `2006-09-08` exactly as it does on `Anna` - and a level
-            # of date folders then clears the 60% vote and proposes People
-            # entire. The name is the stronger evidence: a date is not a name
-            # anybody has. The row then proposes nothing at all rather than
-            # something else - the owner still picks Person if they meant it.
-            if "person" not in kinds and not reads_as_a_date(folder.name):
+            if "person" not in kinds:
                 kinds.append("person")
 
         pictures = len(folder.direct_pictures)
@@ -705,6 +822,11 @@ class FolderStructureRead:
             if "set" not in kinds:
                 kinds.append("set")
 
+        if folder.depth > 1:
+            # The root is the library itself, not a thing in it: no shape signal
+            # reads it. Name match and sidecars above still may.
+            self._read_shape(folder, grouped, kinds, evidence)
+
         if len(kinds) == 1:
             return {
                 "kind": kinds[0],
@@ -720,7 +842,124 @@ class FolderStructureRead:
                 "match": None,
                 "evidence": evidence,
             }
-        return {"kind": None, "candidates": [], "match": None, "evidence": []}
+        # No kind, but possibly a reason for the blank (`date_bucket`,
+        # `batch_numbering`): the tooltip explains it, the row proposes nothing.
+        return {"kind": None, "candidates": [], "match": None, "evidence": evidence}
+
+    def _read_shape(
+        self,
+        folder: _Folder,
+        grouped: Optional[list[set[str]]],
+        kinds: list[str],
+        evidence: list[dict[str, Any]],
+    ) -> None:
+        """The four shape signals: leaf, container, capture_day, batch_numbering.
+
+        Each appends its evidence and its kind to the caller's lists; kinds that
+        disagree become ``candidates`` in the caller, exactly as the older
+        signals do.
+        """
+        pictures = len(folder.direct_pictures)
+        bare_date = reads_as_a_date(folder.name)
+        if bare_date:
+            evidence.append({"signal": "date_bucket", "text": "filed by date"})
+
+        if pictures >= MIN_LEAF_PICTURES and not folder.child_count and not bare_date:
+            named = reads_as_dated(folder.name)
+            evidence.append(
+                {
+                    "signal": "leaf",
+                    "text": (
+                        "dated and named, pictures and no folders below"
+                        if named
+                        else "pictures and no folders below"
+                    ),
+                    "pictures": pictures,
+                }
+            )
+            if "set" not in kinds:
+                kinds.append("set")
+
+        if (
+            grouped
+            and folder.child_count
+            and folder.direct_media * 100
+            <= _CONTAINER_MAX_DIRECT_PCT * folder.picture_count
+        ):
+            read = [
+                _KIND_LABEL[k]
+                for k in _CONTAINED_KINDS
+                if any(k in child for child in grouped)
+            ]
+            parts = ["read as " + " or ".join(read)] if read else []
+            if any(_DATE_BUCKET in child for child in grouped):
+                parts.append("filed by date")
+            count = len(grouped)
+            evidence.append(
+                {
+                    "signal": "container",
+                    "text": f"groups {count} {'folder' if count == 1 else 'folders'} "
+                    + " or ".join(parts),
+                    "grouped": count,
+                }
+            )
+            if "project" not in kinds:
+                kinds.append("project")
+            if _YEAR_ONLY_NAME.match(folder.name.strip()) and "set" not in kinds:
+                # A bare year over Sets is not picked: the owner of the library
+                # this was built against files `2009`, `2010` as Sets, and a
+                # year is also the one container name that says nothing about
+                # what it groups. Both are offered.
+                kinds.append("set")
+
+        if (
+            folder.capture_sampled >= MIN_FACE_SAMPLE
+            and not bare_date
+            and (folder.depth - 1) not in self._date_levels
+            and 1 <= folder.capture_days <= _CAPTURE_MAX_DAYS
+            and _clears_share(
+                folder.capture_dated, folder.capture_sampled, _CAPTURE_MIN_DATED_PCT
+            )
+        ):
+            # Not on a date bucket, nor directly under a level of them: there
+            # "one day" is true by construction and says nothing.
+            evidence.append(
+                {
+                    "signal": "capture_day",
+                    "text": f"shot on {folder.capture_days} "
+                    f"{'day' if folder.capture_days == 1 else 'days'}",
+                    "sampled": folder.capture_sampled,
+                    "dated": folder.capture_dated,
+                    "days": folder.capture_days,
+                }
+            )
+            if "set" not in kinds:
+                kinds.append("set")
+
+        if pictures >= MIN_LEAF_PICTURES:
+            prefixes = Counter()
+            first_by_prefix: dict[str, str] = {}
+            for name in folder.direct_pictures:
+                stem = os.path.splitext(name)[0]
+                matched = _BATCH_STEM.match(stem)
+                if matched:
+                    prefixes[matched.group(1)] += 1
+                    first_by_prefix.setdefault(matched.group(1), stem)
+            if prefixes:
+                prefix, share = prefixes.most_common(1)[0]
+                if _clears_share(share, pictures, _BATCH_SHARE_PCT):
+                    # Additional evidence: it proposes Set only where nothing
+                    # else spoke, and never contradicts another signal's kind.
+                    evidence.append(
+                        {
+                            "signal": "batch_numbering",
+                            "text": f"numbered as one batch ({first_by_prefix[prefix]}…)",
+                            "pictures": pictures,
+                            "numbered": share,
+                        }
+                    )
+                    if not kinds and not bare_date:
+                        kinds.append("set")
 
     def _level_proposal(
         self, folders: list[_Folder], rows: list[dict[str, Any]]
@@ -814,6 +1053,24 @@ class FolderStructureRead:
                         }
                     ],
                 }
+
+        dated = sum(1 for f in folders if reads_as_a_date(f.name))
+        if _clears_share(dated, len(folders), _LEVEL_VOTE_SHARE_PCT):
+            # A level of date buckets. Its names are used once each too, but
+            # "not labels" is not the point here: the owner sets the whole
+            # level in one gesture if they do want a Set per day.
+            return {
+                "kind": None,
+                "candidates": [],
+                "match": None,
+                "evidence": [
+                    {
+                        "signal": "date_bucket",
+                        "text": f"{dated} of {len(folders)} folders filed by date",
+                        "dated": dated,
+                    }
+                ],
+            }
 
         if distinct == len(folders):
             # Every name used once, so they are not labels - which rules Tag out
@@ -913,10 +1170,66 @@ def _evenly_spaced(items: list[str], count: int) -> list[str]:
     return [items[int(i * step)] for i in range(count)]
 
 
-def _load_bgr(path: str):
-    """Decode one picture to a downscaled BGR array, or ``None`` if unreadable."""
+def _grouped_by_parent(
+    folders: list[_Folder], rows: list[dict[str, Any]]
+) -> dict[int, list[set[str]]]:
+    """What each parent's children read as, when this level clears the container bar.
+
+    A child counts when its row's kind - or every one of its ``candidates`` -
+    is a Set or a Person, or when it is a bare-date bucket: whichever of those
+    the owner settles on, the folder above holds groups of pictures together.
+    Empty when fewer than ``_LEVEL_VOTE_SHARE_PCT`` of the level count.
+    """
+    contained = []
+    for folder, row in zip(folders, rows):
+        proposal = row["proposal"]
+        if reads_as_a_date(folder.name):
+            kinds = {_DATE_BUCKET}
+        elif proposal["kind"] is not None:
+            kinds = {proposal["kind"]}
+        else:
+            kinds = set(proposal["candidates"])
+        contained.append(kinds if kinds and kinds <= _CONTAINABLE else set())
+    read = sum(1 for kinds in contained if kinds)
+    if not _clears_share(read, len(folders), _LEVEL_VOTE_SHARE_PCT):
+        return {}
+    grouped: dict[int, list[set[str]]] = {}
+    for folder, kinds in zip(folders, contained):
+        if kinds and folder.parent_index is not None:
+            grouped.setdefault(folder.parent_index, []).append(kinds)
+    return grouped
+
+
+def _capture_day(exif) -> Optional[str]:
+    """``YYYY:MM:DD`` from EXIF DateTimeOriginal, else DateTime, else ``None``."""
+    value = exif.get_ifd(0x8769).get(36867) or exif.get(306)
+    if isinstance(value, str) and len(value) >= 10:
+        return value[:10]
+    return None
+
+
+def _load_sample(path: str, decode: bool):
+    """One sampled picture: ``(bgr, capture_day)`` from a single open.
+
+    ``bgr`` is the downscaled array the face pass detects on, ``None`` when the
+    file is unreadable or ``decode`` is off (no inference engine - the EXIF
+    read is the only reason to open the file then).
+    """
     try:
         with Image.open(path) as img:
+            try:
+                day = _capture_day(img.getexif())
+            except Exception as exc:  # noqa: BLE001 - bad EXIF must not cost the face
+                logger.warning(
+                    "Folder-structure read: unreadable EXIF in %s (%s: %s) - "
+                    "sampled as undated",
+                    os.path.basename(path),
+                    type(exc).__name__,
+                    exc,
+                )
+                day = None
+            if not decode:
+                return None, day
             img.draft("RGB", (_INFERENCE_MAX_SIDE, _INFERENCE_MAX_SIDE))
             img = img.convert("RGB")
             longest = max(img.size)
@@ -925,15 +1238,16 @@ def _load_bgr(path: str):
                 img = img.resize(
                     (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
                 )
-            return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR), day
     except Exception as exc:  # noqa: BLE001 - a corrupt file is not a failed read
         logger.warning(
-            "Folder-structure read: could not decode %s (%s: %s) - sampled as no-face",
+            "Folder-structure read: could not decode %s (%s: %s) - sampled as "
+            "no-face and undated",
             os.path.basename(path),
             type(exc).__name__,
             exc,
         )
-        return None
+        return None, None
 
 
 def _largest_face(faces) -> Optional[np.ndarray]:
