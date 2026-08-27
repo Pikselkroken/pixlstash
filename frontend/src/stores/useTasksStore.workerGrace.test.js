@@ -66,6 +66,46 @@ describe("a worker row between batches", () => {
     expect(store.hasActiveTasks).toBe(true);
   });
 
+  it("gives no grace to a worker with nothing to do", async () => {
+    const store = useTasksStore();
+    getWorkerProgress.mockResolvedValueOnce({
+      workers: {
+        MissingFilePurgeTask: {
+          label: "files_purged",
+          current: 0,
+          total: 0,
+          remaining: 0,
+          status: "running",
+          running: true,
+          active: true,
+        },
+      },
+    });
+    store.startPolling();
+    await vi.waitFor(() => expect(getWorkerProgress).toHaveBeenCalledTimes(1));
+    store.stopPolling();
+    expect(store.activeCount).toBe(1);
+
+    // It ran and found nothing. No batch is coming; the row must not linger.
+    getWorkerProgress.mockResolvedValueOnce({
+      workers: {
+        MissingFilePurgeTask: {
+          label: "files_purged",
+          current: 0,
+          total: 0,
+          remaining: 0,
+          status: "idle",
+          running: false,
+          active: false,
+        },
+      },
+    });
+    store.startPolling();
+    await vi.waitFor(() => expect(getWorkerProgress).toHaveBeenCalledTimes(2));
+    store.stopPolling();
+    expect(store.activeCount).toBe(0);
+  });
+
   it("still drops a worker that has genuinely stopped", async () => {
     const store = useTasksStore();
 

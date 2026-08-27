@@ -155,6 +155,11 @@ export const useTasksStore = defineStore("tasks", () => {
         // a face pass grind through twelve thousand pictures, the Tasks tab
         // read "nothing running" most of the time.
         if (snapshot.active === true) return true;
+        // The grace below exists for a worker between batches of a pass. A
+        // worker whose whole job is zero rows ("File cleanup 0, 0.00/s") has
+        // no batches to be between — it ran, found nothing, and lingering for
+        // ten seconds only reads as a row that never does anything.
+        if (!(Number(snapshot.total) > 0)) return false;
         const lastActiveAt = Number(lastActiveAtByWorker.get(key) || 0);
         const lastProgressAt = Number(lastProgressAtByWorker.get(key) || 0);
         const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);

@@ -1581,6 +1581,17 @@ class Vault:
                 finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "checkpoints_hashed"
+            elif worker_type == TaskType.ORIENTATION:
+                # Without its own count this row fell into `planner_managed`
+                # below — `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
+                # while 6,462 pictures were still NULL and the finder was
+                # working through them 128 at a time; every batch made the
+                # row pop back in, apparently finished.
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_orientations)
+                    or 0
+                )
+                label = "orientations_read"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
                 # the v1.8.0 upgrade this counts the entire library, which is what
@@ -1636,6 +1647,20 @@ class Vault:
             select(func.count())
             .select_from(Snapshot)
             .where(Snapshot.identity_scrubbed_at.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_orientations(session: Session) -> int:
+        """Mirrors ``OrientationTask.find_pictures_missing_orientation``."""
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.orientation.is_(None))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.file_path.is_not(None))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
