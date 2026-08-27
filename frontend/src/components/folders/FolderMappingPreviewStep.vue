@@ -14,7 +14,7 @@ import {
   stopFolderStructureCommit,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
-import { FACET_KINDS } from "../../utils/folderMappingKinds";
+import { FACET_KINDS, kindStyle } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
@@ -183,7 +183,7 @@ onUnmounted(() => {
     </div>
 
     <div class="preview-step__groups">
-      <div v-for="kind in FACET_KINDS" :key="kind.value" class="preview-step__group">
+      <div v-for="kind in FACET_KINDS" :key="kind.value" class="preview-step__group" :style="kindStyle(kind.value)">
         <template v-if="grouped.get(kind.value)?.size">
           <div class="preview-step__group-title">
             <v-icon size="15">{{ kind.icon }}</v-icon>
@@ -320,10 +320,15 @@ onUnmounted(() => {
   gap: var(--space-2);
 }
 
+.preview-step__group-title .v-icon {
+  color: rgb(var(--kind));
+}
+
 .preview-step__chip {
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill, 999px);
   background: rgb(var(--v-theme-panel));
+  box-shadow: inset 3px 0 0 rgb(var(--kind));
   font-size: var(--text-xs);
 }
 

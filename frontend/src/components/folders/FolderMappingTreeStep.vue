@@ -23,6 +23,7 @@ import {
   JUST_A_FOLDER_KIND,
   kindByDigit,
   kindByValue,
+  kindStyle,
 } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
 
@@ -201,6 +202,7 @@ function next() {
               type="button"
               class="map-tree__kind-chip"
               :class="{ 'map-tree__kind-chip--on': levelDefaults.get(level.depth) === kind.value }"
+              :style="kindStyle(kind.value)"
               @click="setLevelDefault(level, kind.value)"
             >
               <v-icon size="14">{{ kind.icon }}</v-icon>
@@ -210,6 +212,7 @@ function next() {
               type="button"
               class="map-tree__kind-chip map-tree__kind-chip--ignore"
               :class="{ 'map-tree__kind-chip--on': levelDefaults.get(level.depth) === JUST_A_FOLDER_KIND.value }"
+              :style="kindStyle(JUST_A_FOLDER_KIND.value)"
               @click="setLevelDefault(level, JUST_A_FOLDER_KIND.value)"
             >
               <v-icon size="14">{{ JUST_A_FOLDER_KIND.icon }}</v-icon>
@@ -224,6 +227,7 @@ function next() {
             :key="folder.id"
             class="map-tree__row"
             :class="`map-tree__row--${resolvedKind(folder) || 'none'}`"
+            :style="kindStyle(resolvedKind(folder))"
             tabindex="0"
             @keydown="onRowKeydown(folder, $event)"
           >
@@ -248,6 +252,7 @@ function next() {
                   :key="kind.value"
                   type="button"
                   class="map-tree__row-menu-item"
+                  :style="kindStyle(kind.value)"
                   @click="setRowOverride(folder, kind.value)"
                 >
                   <v-icon size="14">{{ kind.icon }}</v-icon>
@@ -373,10 +378,18 @@ function next() {
   cursor: pointer;
 }
 
+.map-tree__kind-chip .v-icon {
+  color: rgb(var(--kind));
+}
+
 .map-tree__kind-chip--on {
-  border-color: rgb(var(--v-theme-accent));
-  background: rgba(var(--v-theme-accent), 0.14);
-  color: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--kind));
+  background: rgb(var(--kind));
+  color: rgb(var(--on-kind));
+}
+
+.map-tree__kind-chip--on .v-icon {
+  color: inherit;
 }
 
 .map-tree__kind-chip--ignore.map-tree__kind-chip--on {
@@ -416,17 +429,29 @@ function next() {
   outline-offset: -2px;
 }
 
-.map-tree__row--project {
-  border-left-color: rgb(var(--v-theme-accent));
-}
-.map-tree__row--person {
-  border-left-color: rgb(var(--v-theme-accent));
-}
-.map-tree__row--set {
-  border-left-color: rgb(var(--v-theme-accent));
-}
+/* The kind's colour on the row edge and its control; the label stays in the
+   text colour because these four are fills, not small-text foregrounds. */
+.map-tree__row--project,
+.map-tree__row--set,
+.map-tree__row--person,
 .map-tree__row--tag {
-  border-left-color: rgb(var(--v-theme-accent));
+  border-left-width: 3px;
+  border-left-color: rgb(var(--kind));
+}
+
+.map-tree__row--folder {
+  border-left-color: rgba(var(--kind), 0.35);
+}
+
+.map-tree__row:not(.map-tree__row--none) .map-tree__row-kind {
+  border-color: rgba(var(--kind), 0.6);
+  background: rgba(var(--kind), 0.12);
+}
+
+.map-tree__row--folder .map-tree__row-kind {
+  border-color: rgb(var(--v-theme-border));
+  background: transparent;
+  color: rgba(var(--v-theme-on-background), 0.65);
 }
 
 .map-tree__row-name {
@@ -492,6 +517,10 @@ function next() {
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
+}
+
+.map-tree__row-menu-item .v-icon {
+  color: rgb(var(--kind));
 }
 
 .map-tree__row-menu-item:hover {
