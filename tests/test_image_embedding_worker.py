@@ -3,6 +3,7 @@ import shutil
 from datetime import datetime
 
 import numpy as np
+import pytest
 
 from sqlmodel import Session, text
 
@@ -152,3 +153,101 @@ def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
 
         assert len(work) == 1
         assert remaining == 1
+
+
+class _RecordingWorkflow:
+    """Records what the task hands the workflow; embeds nothing real."""
+
+    def __init__(self):
+        self.calls = []
+        self.preprocessed = []
+
+    def is_ready(self):
+        return True
+
+    def ensure_ready(self):
+        return None
+
+    def preprocess_images(self, images):
+        tensors = [f"tensor-for-{id(img)}" for img in images]
+        self.preprocessed.extend(tensors)
+        return tensors
+
+    def encode_images(self, images, tensors=None):
+        self.calls.append({"n": len(images), "tensors": tensors})
+        return np.ones((len(images), 4), dtype=np.float32)
+
+
+def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
+    """Decode, dhash and CLIP preprocessing happen off the GPU worker.
+
+    On the worker they were 4 s of a 4.2 s batch of 128; the forward pass is
+    a tenth of a second. The pool must also keep the batch's order, or a
+    hash lands on the wrong picture.
+    """
+    from PIL import Image as PILImage
+
+    from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+    from pixlstash.vault import Vault
+
+    names = [f"p{i}.png" for i in range(9)]
+    for i, name in enumerate(names):
+        PILImage.new("RGB", (32, 24), (i * 20, 40, 60)).save(tmp_path / name)
+    with Vault(image_root=str(tmp_path)) as vault:
+        workflow = _RecordingWorkflow()
+        task = ImageEmbeddingTask(
+            database=vault.db,
+            clip_workflow=workflow,
+            batch=[(i + 1, name) for i, name in enumerate(names)],
+        )
+        task._preload_images_task()
+        preloaded = task._preloaded_images
+
+        assert [entry[0] for entry in preloaded] == list(range(1, 10)), "order kept"
+        assert all(len(entry) == 5 for entry in preloaded)
+        assert all(entry[3] is not None for entry in preloaded), "dhash preloaded"
+        # The pool interleaves calls, so the workflow's own record is in call
+        # order; what matters is that every picture's tensor is ITS tensor.
+        assert [entry[4] for entry in preloaded] == [
+            f"tensor-for-{id(entry[2])}" for entry in preloaded
+        ], "each picture carries the tensor preprocessed from its own image"
+        assert sorted(workflow.preprocessed) == sorted(e[4] for e in preloaded)
+
+
+def test_the_worker_uses_the_preloaded_tensors_and_hashes(tmp_path, monkeypatch):
+    from PIL import Image as PILImage
+
+    from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+    from pixlstash.vault import Vault
+
+    img = PILImage.new("RGB", (32, 24), "blue")
+    with Vault(image_root=str(tmp_path)) as vault:
+        workflow = _RecordingWorkflow()
+        task = ImageEmbeddingTask(database=vault.db, clip_workflow=workflow, batch=[])
+        monkeypatch.setattr(
+            ImageEmbeddingTask,
+            "_compute_dhash",
+            staticmethod(
+                lambda *_: pytest.fail("the worker re-hashed a preloaded image")
+            ),
+        )
+        monkeypatch.setattr(task, "_save_results", staticmethod(lambda *_: []))
+        monkeypatch.setattr(
+            ImageEmbeddingTask,
+            "_save_results",
+            staticmethod(lambda session, updates: []),
+        )
+
+        task._process_preloaded(
+            [(1, "a.png", img, "aa" * 8, "t1"), (2, "b.png", img, "bb" * 8, "t2")]
+        )
+
+        assert workflow.calls == [{"n": 2, "tensors": ["t1", "t2"]}]
+
+        # A batch with any tensor missing is handed over whole, untensored:
+        # one forward pass, preprocessed by the service in one go.
+        workflow.calls.clear()
+        task._process_preloaded(
+            [(1, "a.png", img, "aa" * 8, "t1"), (2, "b.png", img, "bb" * 8, None)]
+        )
+        assert workflow.calls == [{"n": 2, "tensors": None}]
