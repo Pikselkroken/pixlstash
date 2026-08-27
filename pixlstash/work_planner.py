@@ -234,6 +234,7 @@ class WorkPlanner:
         # finder name; created on the first submit, popped when the drain fires.
         self._pass_stats: dict[str, _PassStats] = {}
         self._gpu_util_unavailable = False
+        self._gpu_util_torch_missing_logged = False
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -614,10 +615,22 @@ class WorkPlanner:
             return
         torch = sys.modules.get("torch")
         if torch is None:
+            # Not sticky: torch arrives with the first model load, and a burst
+            # that started before it simply has fewer samples.
+            if not self._gpu_util_torch_missing_logged:
+                self._gpu_util_torch_missing_logged = True
+                logger.info(
+                    "[PIPELINE_PASS] GPU-busy sampling waiting for torch to be "
+                    "imported (no model loaded yet); bursts until then read n/a"
+                )
             return
         try:
             if not torch.cuda.is_available():
                 self._gpu_util_unavailable = True
+                logger.info(
+                    "[PIPELINE_PASS] GPU-busy sampling unavailable, reporting n/a: "
+                    "torch.cuda.is_available() is False in the planner thread"
+                )
                 return
             utilization = float(torch.cuda.utilization())
         except Exception as exc:
