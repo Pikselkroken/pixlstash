@@ -441,6 +441,22 @@ def register_reference_folder(
     return rf
 
 
+#: Top-level folders under a library's own root that hold PixlStash's files,
+#: not the owner's pictures: the snapshot tree, and the ``tmp/`` cache the
+#: set and character thumbnail routes write into. Every walk of a library's
+#: root skips these; the dot-folder rule covers the rest (``.ref_thumbs``,
+#: ``.pixlstash``, ``.staging``). Found the hard way: an import of a library's
+#: own root indexed 24 set and face thumbnails as pictures.
+LIBRARY_OWN_FOLDERS = ("snapshots", "tmp")
+
+
+def library_own_folders(image_root: str) -> set[str]:
+    """Realpaths of the folders under *image_root* that no walk may index."""
+    return {
+        os.path.realpath(os.path.join(image_root, name)) for name in LIBRARY_OWN_FOLDERS
+    }
+
+
 def validate_local_import_root(server, root_path: str) -> None:
     """Refuse a `local_import` commit whose root is not the library's own tree.
 
@@ -587,9 +603,15 @@ def local_import_pictures(
     # image_root itself. Without this prune, local_import would re-import
     # every reference-folder thumbnail already sitting in `.ref_thumbs/` as
     # if it were a picture of its own (`.webp` is a supported extension).
+    own = library_own_folders(image_root)
     file_paths: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root_path):
-        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not name.startswith(".")
+            and os.path.realpath(os.path.join(dirpath, name)) not in own
+        ]
         for name in filenames:
             if not name.startswith(".") and is_supported_media_file(name):
                 file_paths.append(os.path.join(dirpath, name))

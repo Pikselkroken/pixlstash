@@ -465,6 +465,57 @@ def test_local_import_skips_dot_folders(owner_env):
     )
 
 
+def test_local_import_skips_the_librarys_own_folders(owner_env):
+    """`tmp/` holds the set and face thumbnail caches; `snapshots/` the vault
+    copies. Neither is the owner's pictures. A real import of a library root
+    indexed 24 cache thumbnails as pictures before this."""
+    owner, server = owner_env["owner"], owner_env["server"]
+    root = server.vault.image_root
+    _make_tree(
+        root,
+        {
+            "own-folders/Trip": ["a.jpg"],
+            "tmp/set_thumbnails": ["picture_set_1.webp"],
+            "tmp/face_thumbnails": ["character_1.png"],
+            "snapshots/2026-01-01": ["stray.jpg"],
+        },
+    )
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    read = _drain_read(owner, read_task_id)
+    assert read["status"] == "completed", read
+    walked = {
+        f["relative_path"]
+        for level in read["result"]["levels"]
+        for f in level["folders"]
+    }
+    assert not any(p == "tmp" or p.startswith("tmp/") for p in walked), walked
+    assert not any(p == "snapshots" or p.startswith("snapshots/") for p in walked)
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={"task_id": read_task_id, "assignments": [], "mode": "local_import"},
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    assert (
+        _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)["status"]
+        == "completed"
+    )
+
+    from sqlmodel import select
+
+    from pixlstash.db_models.picture import Picture
+
+    paths = server.vault.db.run_immediate_read_task(
+        lambda s: [p for p in s.exec(select(Picture.file_path)).all()]
+    )
+    assert "own-folders/Trip/a.jpg" in paths
+    assert not any(p.startswith(("tmp/", "snapshots/")) for p in paths), [
+        p for p in paths if p.startswith(("tmp/", "snapshots/"))
+    ]
+
+
 def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
     """local_import must never be reachable against an external folder - that
     is exactly what mode="reference" (register_reference_folder) is for, and
