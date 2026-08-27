@@ -23,7 +23,15 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         return "MissingFaceExtractionFinder"
 
     def max_inflight_tasks(self) -> int:
-        return 3
+        # Six, not three. The GPU queue is one worker with HIGH-priority face
+        # tasks ahead of MEDIUM tags and embeddings, so faces only ever wait
+        # when the face queue is momentarily EMPTY - and with three in flight
+        # it emptied every few seconds: three ~1.5 s tasks finish faster than
+        # a planner sweep over 25 finders refills them, the worker took a 5 s
+        # CLIP batch and a 6 s tag batch, and the next face task queued behind
+        # both ([PIPELINE_STALL], 11 s apart in a real pass). Each in-flight
+        # task holds ~80 MB of 512 px preloads; six is under half a gigabyte.
+        return 6
 
     def find_task(self):
         engine = self._engine_getter()

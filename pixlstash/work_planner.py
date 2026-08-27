@@ -233,6 +233,10 @@ class WorkPlanner:
         # Per-finder burst accounting for the [PIPELINE_PASS] line, keyed by
         # finder name; created on the first submit, popped when the drain fires.
         self._pass_stats: dict[str, _PassStats] = {}
+        # When a GPU finder's queue last ran dry mid-pass, so the refill can say
+        # how long the stall actually was - the warning above only marks its
+        # start, and "may be idle" is not a number anyone can act on.
+        self._stalled_since: dict[str, float] = {}
         self._gpu_util_unavailable = False
         self._gpu_util_torch_missing_logged = False
         self._lock = threading.Lock()
@@ -361,6 +365,8 @@ class WorkPlanner:
                     "GPU may be idle until next finder cycle.",
                     finder_name,
                 )
+                with self._lock:
+                    self._stalled_since[finder_name] = time.perf_counter()
             with self._lock:
                 finder = self._task_finders_by_name.get(finder_name)
             if finder is not None:
@@ -530,6 +536,14 @@ class WorkPlanner:
                     self._pass_stats[finder_name] = _PassStats(
                         started_at=time.perf_counter()
                     )
+                stalled_since = self._stalled_since.pop(finder_name, None)
+            if stalled_since is not None:
+                logger.warning(
+                    "[PIPELINE_STALL] %s refilled after %.2fs",
+                    finder_name,
+                    time.perf_counter() - stalled_since,
+                )
+            with self._lock:
                 if task_id:
                     self._finder_by_task_id[task_id] = finder_name
 
