@@ -507,15 +507,14 @@ def test_signals_that_disagree_return_both_rather_than_one():
 
     proposal = _rows(result, 2)["mira"]["proposal"]
     assert proposal["kind"] is None
-    assert sorted(proposal["candidates"]) == ["person", "project", "set"]
+    # The leaf line is evidence only here: a single name match is a lookup,
+    # and the shape signals explain it rather than contest it.
+    assert sorted(proposal["candidates"]) == ["person", "project"]
     assert _signals(proposal) >= {"faces", "name_match", "leaf"}
 
 
 def test_signals_that_agree_keep_the_match_and_both_reasons():
-    # A subfolder, so the leaf signal has nothing to add: this pins what two
-    # agreeing signals do with a match, not what a third dissenting one does.
-    spec = {**_faces_spec(40), "mira/raw": []}
-    with _tree(spec) as root:
+    with _tree(_faces_spec(40)) as root:
         result = FolderStructureRead(
             root,
             detect_faces=_detector_from_identity(lambda i: 1),
@@ -1492,7 +1491,7 @@ def test_children_of_mixed_kinds_still_make_a_container():
         ).run()
 
     rows = _rows(result, 3)
-    assert sorted(rows["mira"]["proposal"]["candidates"]) == ["person", "set"]
+    assert rows["mira"]["proposal"]["kind"] == "person", "name-matched: no contest"
     assert rows["holiday 2024"]["proposal"]["kind"] == "set"
     family = _rows(result, 2)["Family"]["proposal"]
     assert family["kind"] == "project"
@@ -1693,3 +1692,30 @@ def test_a_dated_name_is_still_never_a_person():
     proposal = _rows(result, 2)["2006-09-08 Anna wedding"]["proposal"]
     assert proposal["kind"] == "set"
     assert "faces" not in _signals(proposal)
+
+
+def test_a_single_name_match_is_explained_by_the_shape_signals_not_contested():
+    """A lookup outranks an inference: the leaf and batch lines are kept as
+    evidence, the kind and the match are the entity's."""
+    with _tree(
+        {
+            "": [],
+            "Mira": ["a.jpg", "b.jpg", "c.jpg"],
+            "Product shots": [f"IMG_{i:04d}.jpg" for i in range(9)],
+        }
+    ) as root:
+        result = FolderStructureRead(
+            root,
+            detect_faces=None,
+            existing_entities=[("character", 41, "Mira"), ("set", 7, "Product shots")],
+        ).run()
+
+    person = _rows(result, 2)["Mira"]["proposal"]
+    assert person["kind"] == "person" and person["candidates"] == []
+    assert person["match"]["id"] == 41
+    assert _signals(person) == {"name_match", "leaf"}
+
+    picture_set = _rows(result, 2)["Product shots"]["proposal"]
+    assert picture_set["kind"] == "set" and picture_set["candidates"] == []
+    assert picture_set["match"]["id"] == 7
+    assert _signals(picture_set) == {"name_match", "leaf", "batch_numbering"}

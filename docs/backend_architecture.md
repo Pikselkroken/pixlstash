@@ -5859,10 +5859,14 @@ Person and a date bucket of them stays a bucket.
 
 **They disagree the way the older signals do.** A leaf of one person's pictures
 is `candidates: [person, set]` with both evidence lines — the leaf is genuinely
-either, and picking would be the guess the evidence rule exists to prevent. One
-consequence worth knowing: a name-matched Person folder that is also a leaf now
-comes back narrowed rather than matched, because the match only survives a
-single-kind answer.
+either, and picking would be the guess the evidence rule exists to prevent.
+**A single name match outranks all of them.** It is a lookup and they are
+inferences, so when exactly one entity kind matched by name the shape signals
+still append their evidence lines but add no competing kind: a leaf folder
+named after an existing Person is `kind: person` with its `match` intact and
+`leaf` under it as a reason. `faces` keeps its own rule (it only adds `person`
+when absent). A name that matched two kinds is already narrowed, and there the
+shape signals add kinds as anywhere else.
 
 ### Why cardinality is level-scoped and nothing else is
 

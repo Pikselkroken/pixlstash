@@ -825,7 +825,9 @@ class FolderStructureRead:
         if folder.depth > 1:
             # The root is the library itself, not a thing in it: no shape signal
             # reads it. Name match and sidecars above still may.
-            self._read_shape(folder, grouped, kinds, evidence)
+            # A single name match is a lookup and the shape signals are
+            # inferences: they explain the row, they do not contest it.
+            self._read_shape(folder, grouped, kinds, evidence, len(matches) != 1)
 
         if len(kinds) == 1:
             return {
@@ -852,13 +854,20 @@ class FolderStructureRead:
         grouped: Optional[list[set[str]]],
         kinds: list[str],
         evidence: list[dict[str, Any]],
+        may_propose: bool,
     ) -> None:
         """The four shape signals: leaf, container, capture_day, batch_numbering.
 
-        Each appends its evidence and its kind to the caller's lists; kinds that
-        disagree become ``candidates`` in the caller, exactly as the older
-        signals do.
+        Each appends its evidence to the caller's list. With ``may_propose`` it
+        appends its kind too, and kinds that disagree become ``candidates`` in
+        the caller, exactly as the older signals do; without it - the name
+        matched exactly one entity - the evidence stands and the match holds.
         """
+
+        def propose(kind: str) -> None:
+            if may_propose and kind not in kinds:
+                kinds.append(kind)
+
         pictures = len(folder.direct_pictures)
         bare_date = reads_as_a_date(folder.name)
         if bare_date:
@@ -877,8 +886,7 @@ class FolderStructureRead:
                     "pictures": pictures,
                 }
             )
-            if "set" not in kinds:
-                kinds.append("set")
+            propose("set")
 
         if (
             grouped
@@ -903,14 +911,13 @@ class FolderStructureRead:
                     "grouped": count,
                 }
             )
-            if "project" not in kinds:
-                kinds.append("project")
-            if _YEAR_ONLY_NAME.match(folder.name.strip()) and "set" not in kinds:
+            propose("project")
+            if _YEAR_ONLY_NAME.match(folder.name.strip()):
                 # A bare year over Sets is not picked: the owner of the library
                 # this was built against files `2009`, `2010` as Sets, and a
                 # year is also the one container name that says nothing about
                 # what it groups. Both are offered.
-                kinds.append("set")
+                propose("set")
 
         if (
             folder.capture_sampled >= MIN_FACE_SAMPLE
@@ -933,8 +940,7 @@ class FolderStructureRead:
                     "days": folder.capture_days,
                 }
             )
-            if "set" not in kinds:
-                kinds.append("set")
+            propose("set")
 
         if pictures >= MIN_LEAF_PICTURES:
             prefixes = Counter()
@@ -959,7 +965,7 @@ class FolderStructureRead:
                         }
                     )
                     if not kinds and not bare_date:
-                        kinds.append("set")
+                        propose("set")
 
     def _level_proposal(
         self, folders: list[_Folder], rows: list[dict[str, Any]]
