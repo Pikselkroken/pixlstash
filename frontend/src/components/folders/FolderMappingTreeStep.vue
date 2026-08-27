@@ -2,56 +2,57 @@
 /**
  * Wizard step 2 ("MapTree") - name what each folder level is.
  *
- * Direction A from DECISIONS.md: assign a whole level, override per row,
- * because two folders at the same depth can legitimately mean two different
- * things. A folder's resolved kind is, in order: its own row override, its
- * level's default, then the Phase 2 signal's own proposal - the same
- * override-beats-default-beats-signal chain the artboard's "press a number on
- * a row" promises.
+ * Direction A from DECISIONS.md (pass 6): assign a whole level from its band,
+ * override per row, because two folders at the same depth can legitimately
+ * mean two different things. A folder's resolved kind is, in order: its own
+ * row override, its level's default, then the Phase 2 signal's own proposal.
+ *
+ * The one selection rule: acting on a selected row acts on the whole
+ * selection - its dropdown, or a digit while it is focused. Selection is
+ * scoped to one level. The band's dropdown applies to the selection if one
+ * exists, to the visible rows while the level is filtered, else to the level.
  *
  * Nothing is written from here. `next` hands the parent the assignments the
- * Preview step will show and the commit will send; the level 1 row (the
- * scanned root itself) never gets one, matching the artboard's "the library
- * itself".
+ * Preview step will show; `later` is "Drop this, organise later" - index
+ * everything, map nothing. The root row (level 1, `relative_path` "") is
+ * assignable: the commit service addresses the root as "".
  */
-import { computed, reactive } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { VMenu } from "vuetify/components";
 
-import {
-  ALL_KINDS,
-  FACET_KINDS,
-  JUST_A_FOLDER_KIND,
-  kindByDigit,
-  kindByValue,
-  kindStyle,
-} from "../../utils/folderMappingKinds";
+import { ALL_KINDS, JUST_A_FOLDER_KIND, kindByDigit, kindByValue, kindStyle } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
   result: { type: Object, required: true },
 });
 
-const emit = defineEmits(["back", "next"]);
+const emit = defineEmits(["next", "later"]);
 
-const VISIBLE_CAP = 8;
+const ROW_CAP = 6;
 
-const levels = computed(() =>
-  (props.result.levels || []).filter((level) => level.depth > 1),
-);
+const levels = computed(() => props.result.levels || []);
 
 // depth -> kind, seeded from each level's own proposal where the signal was
 // confident enough to have one. Reactive Map: Vue 3 tracks get/set on it.
 const levelDefaults = reactive(new Map());
-for (const level of props.result.levels || []) {
-  if (level.depth > 1 && level.proposal?.kind) {
-    levelDefaults.set(level.depth, level.proposal.kind);
-  }
+for (const level of levels.value) {
+  if (level.proposal?.kind) levelDefaults.set(level.depth, level.proposal.kind);
 }
 // folder.id -> kind, the per-row override.
 const overrides = reactive(new Map());
-
 const filterText = reactive(new Map()); // depth -> string
-const expandedLevels = reactive(new Set()); // depth
+const collapsed = reactive(new Set()); // depth
+
+// Selection: one level at a time. `anchorId` is the Shift+click range start.
+const selectedIds = reactive(new Set());
+const selectedDepth = ref(null);
+let anchorId = null;
+const hoverLinked = ref(false);
+
+const announcement = ref("");
+const root = ref(null);
+const sb = ref(0);
 
 function resolvedKind(folder) {
   if (overrides.has(folder.id)) return overrides.get(folder.id);
@@ -68,78 +69,192 @@ function resolvedMatch(folder) {
   return null;
 }
 
-function kindLabel(folder) {
-  // No resolved kind IS "Just a folder": `buildAssignments` and `summary` both
-  // drop a null kind and a "folder" kind by the same test, so the control has
-  // to say the thing the commit will do rather than a prompt to choose.
-  const kind = resolvedKind(folder);
-  return kindByValue(kind)?.label ?? kind ?? JUST_A_FOLDER_KIND.label;
-}
-
-function setLevelDefault(level, kindValue) {
-  levelDefaults.set(level.depth, kindValue);
-}
-
-function setRowOverride(folder, kindValue) {
-  overrides.set(folder.id, kindValue);
-}
-
-function resetRowOverride(folder) {
-  overrides.delete(folder.id);
-}
-
-function onRowKeydown(folder, event) {
-  if (event.target !== event.currentTarget) return;
-  const kind = kindByDigit(event.key);
-  if (!kind) return;
-  event.preventDefault();
-  setRowOverride(folder, kind.value);
-}
-
 function visibleFolders(level) {
   const filter = (filterText.get(level.depth) || "").trim().toLowerCase();
-  if (filter) {
-    return level.folders.filter((f) => f.name.toLowerCase().includes(filter));
-  }
-  if (expandedLevels.has(level.depth)) return level.folders;
-  return level.folders.slice(0, VISIBLE_CAP);
+  if (!filter) return level.folders;
+  return level.folders.filter((f) => f.name.toLowerCase().includes(filter));
 }
 
-function hiddenCount(level) {
-  const filter = (filterText.get(level.depth) || "").trim();
-  if (filter || expandedLevels.has(level.depth)) return 0;
-  return Math.max(0, level.folders.length - VISIBLE_CAP);
+function filterActive(level) {
+  return Boolean((filterText.get(level.depth) || "").trim());
+}
+
+function selectionCount(level) {
+  return selectedDepth.value === level.depth ? selectedIds.size : 0;
+}
+
+function isSelected(folder) {
+  return selectedIds.has(folder.id);
+}
+
+/** Distinct resolved kinds across a level's rows, in strip order. */
+function levelKinds(level) {
+  const present = new Set(level.folders.map(resolvedKind));
+  return ALL_KINDS.filter((k) => present.has(k.value));
+}
+
+function bandKind(level) {
+  const kinds = levelKinds(level);
+  if (kinds.length > 1) return "mixed";
+  return kinds[0]?.value ?? levelDefaults.get(level.depth) ?? null;
+}
+
+function bandLabel(level) {
+  const selected = selectionCount(level);
+  if (selected) return `Set ${selected} selected to`;
+  if (filterActive(level)) return `Set these ${visibleFolders(level).length} to`;
+  return "Set them all to";
+}
+
+function mixedStyle(level) {
+  const stripes = levelKinds(level)
+    .map((k, i) => `rgba(var(--v-theme-${k.color}), 0.16) ${i * 6}px ${(i + 1) * 6}px`)
+    .join(", ");
+  return { backgroundImage: `repeating-linear-gradient(45deg, ${stripes})` };
+}
+
+function menuGroups(candidates) {
+  if (candidates?.length === 2) {
+    const first = candidates.map(kindByValue).filter(Boolean);
+    return [first, ALL_KINDS.filter((k) => !candidates.includes(k.value))];
+  }
+  return [ALL_KINDS];
+}
+
+function pluralOf(kind, n) {
+  const k = kindByValue(kind) ?? JUST_A_FOLDER_KIND;
+  return n === 1 ? k.label : k.plural;
+}
+
+function setRows(folders, kind) {
+  for (const folder of folders) overrides.set(folder.id, kind);
+  const n = folders.length;
+  announcement.value = `${n} folder${n === 1 ? " is" : "s are"} now ${pluralOf(kind, n)}`;
+}
+
+/** The band's dropdown: selection, else the filtered rows, else the level. */
+function applyToLevel(level, kind) {
+  if (selectionCount(level)) {
+    setRows(level.folders.filter(isSelected), kind);
+  } else if (filterActive(level)) {
+    setRows(visibleFolders(level), kind);
+  } else {
+    levelDefaults.set(level.depth, kind);
+    for (const folder of level.folders) overrides.delete(folder.id);
+    const n = level.folders.length;
+    announcement.value = `Level ${level.depth}: all ${n} folder${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ${pluralOf(kind, n)}`;
+  }
+}
+
+/** A row's dropdown or digit: the whole selection if the row is in it. */
+function applyToRow(level, folder, kind) {
+  setRows(isSelected(folder) ? level.folders.filter(isSelected) : [folder], kind);
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  selectedDepth.value = null;
+  anchorId = null;
+}
+
+function ensureLevel(level) {
+  if (selectedDepth.value !== level.depth) {
+    selectedIds.clear();
+    selectedDepth.value = level.depth;
+    anchorId = null;
+  }
+}
+
+function toggleRow(level, folder) {
+  ensureLevel(level);
+  if (selectedIds.has(folder.id)) selectedIds.delete(folder.id);
+  else selectedIds.add(folder.id);
+  anchorId = folder.id;
+  if (!selectedIds.size) selectedDepth.value = null;
+}
+
+function onRowClick(level, folder, event) {
+  if (event.target.closest(".map-tree__kdd, .map-tree__menu")) return;
+  ensureLevel(level);
+  if (event.shiftKey && anchorId !== null) {
+    const rows = visibleFolders(level);
+    const a = rows.findIndex((f) => f.id === anchorId);
+    const b = rows.indexOf(folder);
+    if (a >= 0 && b >= 0) {
+      selectedIds.clear();
+      for (const f of rows.slice(Math.min(a, b), Math.max(a, b) + 1)) selectedIds.add(f.id);
+      return;
+    }
+  }
+  if (event.ctrlKey || event.metaKey) {
+    toggleRow(level, folder);
+    return;
+  }
+  selectedIds.clear();
+  selectedIds.add(folder.id);
+  anchorId = folder.id;
+}
+
+function onRowKeydown(level, folder, event) {
+  if (event.target !== event.currentTarget) return;
+  const digit = kindByDigit(event.key);
+  if (digit) {
+    event.preventDefault();
+    applyToRow(level, folder, digit.value);
+    return;
+  }
+  switch (event.key) {
+    case "Escape":
+      // Escape only ever deselects here; the wizard's dialog is persistent,
+      // so nothing above us treats it as close.
+      if (!selectedIds.size) return;
+      event.preventDefault();
+      clearSelection();
+      return;
+    case " ":
+      event.preventDefault();
+      toggleRow(level, folder);
+      return;
+    case "Enter":
+      event.preventDefault();
+      event.currentTarget.querySelector(".map-tree__kdd")?.click();
+      return;
+    case "ArrowDown":
+    case "ArrowUp": {
+      event.preventDefault();
+      const rows = visibleFolders(level);
+      const next = rows[rows.indexOf(folder) + (event.key === "ArrowDown" ? 1 : -1)];
+      if (!next) return;
+      if (event.shiftKey) {
+        ensureLevel(level);
+        selectedIds.add(folder.id);
+        selectedIds.add(next.id);
+      }
+      const sibling = event.key === "ArrowDown" ? event.currentTarget.nextElementSibling : event.currentTarget.previousElementSibling;
+      sibling?.focus();
+    }
+  }
 }
 
 function setFilter(level, value) {
   filterText.set(level.depth, value);
 }
 
-function expand(level) {
-  expandedLevels.add(level.depth);
+function toggleCollapsed(level) {
+  if (collapsed.has(level.depth)) collapsed.delete(level.depth);
+  else collapsed.add(level.depth);
+  nextTick(measureSb);
 }
 
-const summary = computed(() => {
-  const projects = new Set();
-  const people = new Set();
-  const sets = new Set();
-  const tags = new Set();
+const tally = computed(() => {
+  const counts = new Map(ALL_KINDS.map((k) => [k.value, 0]));
   for (const level of levels.value) {
     for (const folder of level.folders) {
       const kind = resolvedKind(folder);
-      if (!kind || kind === "folder") continue;
-      if (kind === "project") projects.add(folder.name);
-      else if (kind === "person") people.add(folder.name);
-      else if (kind === "set") sets.add(folder.name);
-      else if (kind === "tag") tags.add(folder.name);
+      if (counts.has(kind)) counts.set(kind, counts.get(kind) + 1);
     }
   }
-  return {
-    project: projects.size,
-    person: people.size,
-    set: sets.size,
-    tag: tags.size,
-  };
+  return counts;
 });
 
 function buildAssignments() {
@@ -147,7 +262,7 @@ function buildAssignments() {
   for (const level of levels.value) {
     for (const folder of level.folders) {
       const kind = resolvedKind(folder);
-      if (!kind || kind === "folder") continue;
+      if (!kind || kind === JUST_A_FOLDER_KIND.value) continue;
       const match = resolvedMatch(folder);
       const row = { relative_path: folder.relative_path, kind };
       if (match) row.match_id = match.id;
@@ -157,133 +272,192 @@ function buildAssignments() {
   return rows;
 }
 
-function next() {
-  emit("next", buildAssignments());
+// The band sits outside its level's scroll area and is offset by the
+// scrollbar's real width, measured rather than typed.
+function measureSb() {
+  const el = root.value?.querySelector(".map-tree__tree");
+  if (el) sb.value = el.offsetWidth - el.clientWidth;
 }
+
+onMounted(() => {
+  measureSb();
+  window.addEventListener("resize", measureSb);
+});
+onUnmounted(() => window.removeEventListener("resize", measureSb));
 </script>
 
 <template>
-  <div class="map-tree">
-    <div class="map-tree__header">
-      <p class="map-tree__lead">
-        from up to 20 pictures per folder - each row says what answered it
-      </p>
-      <div class="map-tree__summary">
-        <span v-if="summary.project">{{ summary.project }} {{ summary.project === 1 ? "Project" : "Projects" }}</span>
-        <span v-if="summary.person">{{ summary.person }} {{ summary.person === 1 ? "Person" : "People" }}</span>
-        <span v-if="summary.set">{{ summary.set }} {{ summary.set === 1 ? "Set" : "Sets" }}</span>
-        <span v-if="summary.tag">{{ summary.tag }} {{ summary.tag === 1 ? "Tag" : "Tags" }}</span>
-      </div>
-      <AppButton variant="secondary" size="sm" @click="emit('back')">
-        Cancel
-      </AppButton>
+  <div ref="root" class="map-tree" :style="{ '--sb': sb + 'px' }">
+    <div class="map-tree__strip" role="status" aria-label="What this makes">
+      <span
+        v-for="kind in ALL_KINDS"
+        :key="kind.value"
+        class="map-tree__chip"
+        :class="{ 'map-tree__chip--folder': kind.value === JUST_A_FOLDER_KIND.value }"
+        :style="kindStyle(kind.value)"
+      >
+        <v-icon size="15">{{ kind.icon }}</v-icon>
+        {{ kind.plural }}
+        <span v-if="kind.value !== JUST_A_FOLDER_KIND.value && tally.get(kind.value)" class="map-tree__chip-count">
+          {{ tally.get(kind.value) }}
+        </span>
+      </span>
     </div>
 
+    <p class="visually-hidden" aria-live="polite">{{ announcement }}</p>
+
     <div class="map-tree__levels">
-      <section v-for="level in levels" :key="level.depth" class="map-tree__level">
-        <div class="map-tree__level-header">
-          <span class="map-tree__level-title">
+      <section v-for="level in levels" :key="level.depth" class="map-tree__level" :data-depth="level.depth">
+        <div class="map-tree__band">
+          <button
+            type="button"
+            class="map-tree__caret"
+            :aria-expanded="!collapsed.has(level.depth)"
+            :aria-label="`Level ${level.depth}`"
+            @click="toggleCollapsed(level)"
+          >
+            <v-icon size="15">{{ collapsed.has(level.depth) ? "mdi-chevron-right" : "mdi-chevron-down" }}</v-icon>
+          </button>
+          <span class="map-tree__band-title">
             Level {{ level.depth }} · {{ level.folder_count }} folder{{ level.folder_count === 1 ? "" : "s" }}
           </span>
-          <span v-if="level.proposal?.evidence?.[0]?.text" class="map-tree__level-evidence">
-            {{ level.proposal.evidence[0].text }}
-          </span>
           <input
+            v-if="level.folders.length > ROW_CAP"
             class="map-tree__filter"
             type="text"
             placeholder="filter…"
+            :aria-label="`Filter level ${level.depth}`"
             :value="filterText.get(level.depth) || ''"
             @input="setFilter(level, $event.target.value)"
           />
-          <div class="map-tree__level-kinds">
-            <button
-              v-for="kind in FACET_KINDS"
-              :key="kind.value"
-              type="button"
-              class="map-tree__kind-chip"
-              :class="{ 'map-tree__kind-chip--on': levelDefaults.get(level.depth) === kind.value }"
-              :style="kindStyle(kind.value)"
-              @click="setLevelDefault(level, kind.value)"
-            >
-              <v-icon size="14">{{ kind.icon }}</v-icon>
-              {{ kind.label }}
-            </button>
-            <button
-              type="button"
-              class="map-tree__kind-chip map-tree__kind-chip--ignore"
-              :class="{ 'map-tree__kind-chip--on': levelDefaults.get(level.depth) === JUST_A_FOLDER_KIND.value }"
-              :style="kindStyle(JUST_A_FOLDER_KIND.value)"
-              @click="setLevelDefault(level, JUST_A_FOLDER_KIND.value)"
-            >
-              <v-icon size="14">{{ JUST_A_FOLDER_KIND.icon }}</v-icon>
-              {{ JUST_A_FOLDER_KIND.label }}
-            </button>
-          </div>
+          <span class="map-tree__band-label">{{ bandLabel(level) }}</span>
+          <v-menu :close-on-content-click="true">
+            <template #activator="{ props: menuProps }">
+              <button
+                type="button"
+                class="map-tree__kdd map-tree__kdd--band"
+                :class="{
+                  'map-tree__kdd--mixed': bandKind(level) === 'mixed',
+                  'map-tree__kdd--none': !bandKind(level),
+                  'map-tree__kdd--folder': bandKind(level) === JUST_A_FOLDER_KIND.value,
+                  'map-tree__kdd--linked': selectionCount(level) > 0,
+                  'map-tree__kdd--echo': hoverLinked && selectionCount(level) > 0,
+                }"
+                :style="bandKind(level) === 'mixed' ? mixedStyle(level) : kindStyle(bandKind(level))"
+                aria-haspopup="menu"
+                :aria-label="`${bandLabel(level)}, ${bandKind(level) === 'mixed' ? 'Mixed: ' + levelKinds(level).map((k) => k.label).join(', ') : kindByValue(bandKind(level))?.label ?? 'choose'}`"
+                :title="level.proposal?.evidence?.[0]?.text"
+                v-bind="menuProps"
+                @mouseenter="selectionCount(level) && (hoverLinked = true)"
+                @mouseleave="hoverLinked = false"
+              >
+                <v-icon v-if="bandKind(level) === 'mixed'" size="13">mdi-shuffle-variant</v-icon>
+                <v-icon v-else-if="bandKind(level)" size="13">{{ kindByValue(bandKind(level)).icon }}</v-icon>
+                <span class="map-tree__kdd-label">
+                  {{ bandKind(level) === "mixed" ? "Mixed" : kindByValue(bandKind(level))?.label ?? "choose…" }}
+                </span>
+                <v-icon size="12">mdi-chevron-down</v-icon>
+              </button>
+            </template>
+            <div class="map-tree__menu" role="menu">
+              <template v-for="(group, gi) in menuGroups(level.proposal?.candidates)" :key="gi">
+                <div v-if="gi" class="map-tree__menu-divider" />
+                <button
+                  v-for="kind in group"
+                  :key="kind.value"
+                  type="button"
+                  role="menuitem"
+                  class="map-tree__menu-item"
+                  :data-kind="kind.value"
+                  :style="kindStyle(kind.value)"
+                  @click="applyToLevel(level, kind.value)"
+                >
+                  <v-icon size="14">{{ kind.icon }}</v-icon>
+                  {{ kind.label }}
+                  <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
+                </button>
+              </template>
+            </div>
+          </v-menu>
         </div>
 
-        <div class="map-tree__rows">
+        <div
+          v-if="!collapsed.has(level.depth)"
+          class="map-tree__tree"
+          role="tree"
+          aria-multiselectable="true"
+          :aria-label="`Level ${level.depth}`"
+        >
           <div
             v-for="folder in visibleFolders(level)"
             :key="folder.id"
             class="map-tree__row"
-            :class="`map-tree__row--${resolvedKind(folder) || 'none'}`"
-            :style="kindStyle(resolvedKind(folder))"
+            :class="{ 'map-tree__row--sel': isSelected(folder) }"
+            role="treeitem"
             tabindex="0"
-            @keydown="onRowKeydown(folder, $event)"
+            :aria-selected="isSelected(folder)"
+            :aria-label="`${folder.name}, ${folder.picture_count.toLocaleString()} pictures`"
+            aria-keyshortcuts="1 2 3 4 0"
+            @click="onRowClick(level, folder, $event)"
+            @keydown="onRowKeydown(level, folder, $event)"
           >
-            <span class="map-tree__row-name">{{ folder.name }}</span>
-            <span class="map-tree__row-count">{{ folder.picture_count.toLocaleString() }}</span>
-            <span v-if="folder.proposal?.evidence?.[0]?.text" class="map-tree__row-evidence">
-              {{ folder.proposal.evidence[0].text }}
-            </span>
-            <span v-else-if="folder.proposal?.candidates?.length" class="map-tree__row-evidence">
-              one of: {{ folder.proposal.candidates.map((c) => kindByValue(c)?.label ?? c).join(", ") }}
-            </span>
-
+            <v-icon class="map-tree__lead" size="15">mdi-folder-outline</v-icon>
+            <span class="map-tree__name">{{ folder.name }}</span>
+            <span class="map-tree__count">{{ folder.picture_count.toLocaleString() }}</span>
             <v-menu :close-on-content-click="true">
               <template #activator="{ props: menuProps }">
-                <button type="button" class="map-tree__row-kind" v-bind="menuProps">
-                  {{ kindLabel(folder) }} <v-icon size="14">mdi-chevron-down</v-icon>
+                <button
+                  type="button"
+                  class="map-tree__kdd"
+                  :class="{
+                    'map-tree__kdd--none': !resolvedKind(folder),
+                    'map-tree__kdd--folder': resolvedKind(folder) === JUST_A_FOLDER_KIND.value,
+                    'map-tree__kdd--linked': isSelected(folder),
+                    'map-tree__kdd--echo': hoverLinked && isSelected(folder),
+                  }"
+                  :style="kindStyle(resolvedKind(folder))"
+                  aria-haspopup="menu"
+                  :aria-label="`Kind, ${kindByValue(resolvedKind(folder))?.label ?? 'choose'}`"
+                  :aria-description="isSelected(folder) ? `applies to the ${selectedIds.size} selected folders` : undefined"
+                  :title="folder.proposal?.evidence?.[0]?.text"
+                  v-bind="menuProps"
+                  @mouseenter="isSelected(folder) && (hoverLinked = true)"
+                  @mouseleave="hoverLinked = false"
+                >
+                  <v-icon v-if="resolvedKind(folder)" size="13">{{ kindByValue(resolvedKind(folder)).icon }}</v-icon>
+                  <span class="map-tree__kdd-label">{{ kindByValue(resolvedKind(folder))?.label ?? "choose…" }}</span>
+                  <v-icon size="12">mdi-chevron-down</v-icon>
                 </button>
               </template>
-              <div class="map-tree__row-menu">
-                <button
-                  v-for="kind in ALL_KINDS"
-                  :key="kind.value"
-                  type="button"
-                  class="map-tree__row-menu-item"
-                  :style="kindStyle(kind.value)"
-                  @click="setRowOverride(folder, kind.value)"
-                >
-                  <v-icon size="14">{{ kind.icon }}</v-icon>
-                  {{ kind.label }}
-                  <span class="map-tree__row-menu-digit">{{ kind.digit }}</span>
-                </button>
-                <button
-                  v-if="overrides.has(folder.id)"
-                  type="button"
-                  class="map-tree__row-menu-item map-tree__row-menu-item--reset"
-                  @click="resetRowOverride(folder)"
-                >
-                  Use the level's default
-                </button>
+              <div class="map-tree__menu" role="menu">
+                <template v-for="(group, gi) in menuGroups(folder.proposal?.candidates)" :key="gi">
+                  <div v-if="gi" class="map-tree__menu-divider" />
+                  <button
+                    v-for="kind in group"
+                    :key="kind.value"
+                    type="button"
+                    role="menuitem"
+                    class="map-tree__menu-item"
+                    :data-kind="kind.value"
+                    :style="kindStyle(kind.value)"
+                    @click="applyToRow(level, folder, kind.value)"
+                  >
+                    <v-icon size="14">{{ kind.icon }}</v-icon>
+                    {{ kind.label }}
+                    <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
+                  </button>
+                </template>
               </div>
             </v-menu>
-          </div>
-
-          <div v-if="hiddenCount(level) > 0" class="map-tree__more">
-            {{ hiddenCount(level) }} more
-            <button type="button" class="map-tree__show-all" @click="expand(level)">
-              Show all {{ level.folder_count }}
-            </button>
           </div>
         </div>
       </section>
     </div>
 
-    <div class="map-tree__actions">
-      <AppButton variant="primary" @click="next">Review and import</AppButton>
-      <AppButton variant="secondary" @click="emit('back')">Cancel</AppButton>
+    <div class="map-tree__footer">
+      <AppButton variant="secondary" @click="emit('later')">Drop this, organise later</AppButton>
+      <span class="map-tree__footer-note">nothing is written yet</span>
+      <AppButton variant="primary" @click="emit('next', buildAssignments())">Review and import</AppButton>
     </div>
   </div>
 </template>
@@ -292,210 +466,279 @@ function next() {
 .map-tree {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  flex: 1;
   min-height: 0;
+  min-width: 0;
 }
 
-.map-tree__header {
+/* The tally strip: one chip per kind, each in its own colour. */
+.map-tree__strip {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.map-tree__lead {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.65);
-}
-
-.map-tree__summary {
-  display: flex;
+  align-items: center;
   gap: var(--space-3);
-  margin-left: auto;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.72);
-  align-self: center;
+  padding: var(--space-3) var(--space-5);
+  background: rgb(var(--v-theme-panel));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.map-tree__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-4) 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--kind), 0.45);
+  border-left: var(--rail-w) solid rgb(var(--kind));
+  background: rgba(var(--kind), 0.14);
+  color: rgb(var(--kind));
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.map-tree__chip--folder {
+  border-color: rgba(var(--kind), calc(0.45 * var(--opacity-text-secondary)));
+  border-left-color: rgba(var(--kind), var(--opacity-text-secondary));
+  background: rgba(var(--kind), calc(0.14 * var(--opacity-text-secondary)));
+  color: rgba(var(--kind), var(--opacity-text-secondary));
+}
+
+.map-tree__chip-count {
+  color: rgb(var(--v-theme-on-surface));
+  font-variant-numeric: tabular-nums;
 }
 
 .map-tree__levels {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding-bottom: var(--space-4);
 }
 
-.map-tree__level-header {
+/* A level band: chrome tone, full width, outside its level's scroll area and
+   offset by the measured scrollbar width so its dropdown lines up with the
+   rows' column. */
+.map-tree__band {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: var(--space-3);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid rgb(var(--v-theme-border));
-}
-
-.map-tree__level-title {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  height: 36px;
+  padding: 0 calc(var(--space-5) + var(--sb, 0px)) 0 var(--space-5);
+  background: rgb(var(--v-theme-panel));
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.map-tree__level-evidence {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.6);
+.map-tree__level:first-child .map-tree__band {
+  border-top: 0;
+}
+
+.map-tree__caret {
+  display: inline-flex;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.map-tree__band-title {
+  white-space: nowrap;
 }
 
 .map-tree__filter {
   height: 24px;
-  padding: 0 var(--space-2);
+  min-width: 160px;
+  padding: 0 var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
+  background: rgb(var(--v-theme-input-background));
+  color: rgb(var(--v-theme-input-text));
   font-size: var(--text-xs);
-  width: 120px;
 }
 
-.map-tree__level-kinds {
-  display: flex;
-  gap: var(--space-2);
+.map-tree__band-label {
   margin-left: auto;
-  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.map-tree__kind-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 24px;
-  padding: 0 var(--space-2);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-pill, 999px);
-  background: transparent;
-  color: inherit;
-  font-size: var(--text-2xs);
-  cursor: pointer;
+/* Six rows, then the level scrolls on its own; the gutter is reserved so the
+   dropdown column never shifts. Thin bars, as style.css. */
+.map-tree__tree {
+  max-height: 204px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.22) transparent;
 }
 
-.map-tree__kind-chip .v-icon {
-  color: rgb(var(--kind));
-}
-
-.map-tree__kind-chip--on {
-  border-color: rgb(var(--kind));
-  background: rgb(var(--kind));
-  color: rgb(var(--on-kind));
-}
-
-.map-tree__kind-chip--on .v-icon {
-  color: inherit;
-}
-
-.map-tree__kind-chip--ignore.map-tree__kind-chip--on {
-  border-color: rgba(var(--v-theme-on-background), 0.4);
-  background: rgba(var(--v-theme-on-background), 0.08);
-  color: rgb(var(--v-theme-on-background));
-}
-
-.map-tree__rows {
-  display: flex;
-  flex-direction: column;
-}
-
-/* A separator per row and a whole-row hover, because the name is on the left
-   and its control is on the right: with neither, the eye cannot carry a line
-   across the gap and you cannot tell which dropdown belongs to which folder. */
+/* Rows: a grid so the count and the dropdown sit at one x on every level,
+   behind the house selection rail (always present, always transparent). */
 .map-tree__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 72px 152px;
+  column-gap: var(--space-4);
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-2);
-  border-radius: var(--radius-sm);
-  border-left: 2px solid transparent;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.6);
+  min-height: 34px;
+  padding: 0 var(--space-5) 0 var(--space-6);
+  border-left: var(--rail-w) solid transparent;
+  font-size: var(--text-sm);
+  cursor: default;
 }
 
-.map-tree__row:last-child {
-  border-bottom-color: transparent;
+.map-tree__row:nth-child(even) {
+  background: rgba(var(--v-theme-on-surface), 0.06);
 }
 
 .map-tree__row:hover {
   background: var(--hover-wash);
 }
 
+.map-tree__row.map-tree__row--sel {
+  background: var(--active-wash);
+  border-left-color: var(--active-bar);
+  color: var(--active-text);
+}
+
 .map-tree__row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-accent));
-  outline-offset: -2px;
+  box-shadow: inset var(--focus-ring);
 }
 
-/* The kind's colour on the row edge and its control; the label stays in the
-   text colour because these four are fills, not small-text foregrounds. */
-.map-tree__row--project,
-.map-tree__row--set,
-.map-tree__row--person,
-.map-tree__row--tag {
-  border-left-width: 3px;
-  border-left-color: rgb(var(--kind));
+.map-tree__lead {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.map-tree__row--folder {
-  border-left-color: rgba(var(--kind), 0.35);
+.map-tree__row--sel .map-tree__lead {
+  color: var(--active-bar);
 }
 
-.map-tree__row:not(.map-tree__row--none) .map-tree__row-kind {
-  border-color: rgba(var(--kind), 0.6);
-  background: rgba(var(--kind), 0.12);
-}
-
-.map-tree__row--folder .map-tree__row-kind {
-  border-color: rgb(var(--v-theme-border));
-  background: transparent;
-  color: rgba(var(--v-theme-on-background), 0.65);
-}
-
-.map-tree__row-name {
+.map-tree__name {
   min-width: 0;
-  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-sm);
 }
 
-.map-tree__row-count {
-  flex-shrink: 0;
+.map-tree__count {
+  text-align: right;
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.6);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.map-tree__row-evidence {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-background), 0.55);
+.map-tree__row--sel .map-tree__count {
+  color: inherit;
 }
 
-.map-tree__row-kind {
-  flex-shrink: 0;
-  margin-left: auto;
+/* The kind dropdown: one width everywhere, filled with the kind's wash and
+   edged in its colour. Base 22%, hover 40%, echo 31%. */
+.map-tree__kdd {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  height: 24px;
+  gap: var(--space-2);
+  width: 152px;
+  height: 26px;
   padding: 0 var(--space-2);
-  border: 1px solid rgb(var(--v-theme-border));
+  border: 1px solid rgba(var(--kind), 0.55);
+  border-left: var(--rail-w) solid rgb(var(--kind));
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font-size: var(--text-2xs);
+  background: rgba(var(--kind), 0.22);
+  color: rgb(var(--kind));
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.map-tree__row-menu {
+.map-tree__kdd--echo {
+  background: rgba(var(--kind), 0.31);
+}
+
+.map-tree__kdd:hover {
+  background: rgba(var(--kind), 0.4);
+}
+
+.map-tree__kdd-label {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-tree__kdd--folder {
+  border-color: rgba(var(--kind), calc(0.55 * var(--opacity-text-secondary)));
+  border-left-color: rgba(var(--kind), var(--opacity-text-secondary));
+  background: rgba(var(--kind), calc(0.22 * var(--opacity-text-secondary)));
+  color: rgba(var(--kind), var(--opacity-text-secondary));
+}
+
+.map-tree__kdd--folder.map-tree__kdd--echo {
+  background: rgba(var(--kind), calc(0.31 * var(--opacity-text-secondary)));
+}
+
+.map-tree__kdd--folder:hover {
+  background: rgba(var(--kind), calc(0.4 * var(--opacity-text-secondary)));
+}
+
+.map-tree__kdd--none {
+  border: 1px dashed rgb(var(--v-theme-border));
+  border-left: var(--rail-w) solid transparent;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-weight: var(--weight-medium);
+}
+
+.map-tree__kdd--none:hover {
+  background: var(--hover-wash);
+}
+
+/* Mixed: neutral control, on-surface text, the level's kinds as 45° stripes
+   (background-image is set inline from the kinds present). */
+.map-tree__kdd--mixed {
+  border-color: rgb(var(--v-theme-border));
+  border-left-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  background-color: rgb(var(--v-theme-input-background));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.map-tree__kdd--mixed.map-tree__kdd--echo,
+.map-tree__kdd--mixed:hover {
+  background-color: var(--hover-wash);
+}
+
+/* "These change together": a small arrow in the selection colour, in the
+   gutter to the right of the dropdown, pointing at it. Absolutely positioned
+   so the column keeps its width. */
+.map-tree__kdd--linked::after {
+  content: "";
+  position: absolute;
+  right: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border: 5px solid transparent;
+  border-right: 6px solid var(--active-bar);
+  border-left: 0;
+}
+
+.map-tree__menu {
   display: flex;
   flex-direction: column;
   min-width: 180px;
@@ -505,7 +748,12 @@ function next() {
   box-shadow: var(--elevation-3);
 }
 
-.map-tree__row-menu-item {
+.map-tree__menu-divider {
+  margin: var(--space-2) 0;
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.map-tree__menu-item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -519,50 +767,39 @@ function next() {
   cursor: pointer;
 }
 
-.map-tree__row-menu-item .v-icon {
+.map-tree__menu-item .v-icon {
   color: rgb(var(--kind));
 }
 
-.map-tree__row-menu-item:hover {
-  background: var(--hover-wash, rgba(var(--v-theme-on-panel), 0.06));
+.map-tree__menu-item:hover {
+  background: var(--hover-wash);
 }
 
-.map-tree__row-menu-digit {
+.map-tree__menu-digit {
   margin-left: auto;
+  min-width: 18px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-panel), 0.5);
+  line-height: 1;
+  text-align: center;
+  opacity: var(--opacity-text-secondary);
 }
 
-.map-tree__row-menu-item--reset {
-  margin-top: var(--space-1);
-  border-top: 1px solid rgb(var(--v-theme-border));
-  padding-top: var(--space-2);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-panel), 0.65);
-}
-
-.map-tree__more {
+.map-tree__footer {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.6);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: rgb(var(--v-theme-panel));
+  border-top: 1px solid rgb(var(--v-theme-divider));
 }
 
-.map-tree__show-all {
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
+.map-tree__footer-note {
+  margin-left: auto;
   font-size: var(--text-2xs);
-  height: 22px;
-  padding: 0 var(--space-2);
-  cursor: pointer;
-}
-
-.map-tree__actions {
-  display: flex;
-  gap: var(--space-3);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

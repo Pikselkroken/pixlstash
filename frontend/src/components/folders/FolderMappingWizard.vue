@@ -64,6 +64,9 @@ const readTaskId = ref("");
 const resumeTaskId = ref("");
 const readResult = ref(null);
 const assignments = ref([]);
+// "Drop this, organise later" from the mapping step: the Preview step's own
+// Organise later (a commit with no assignments), started the moment it mounts.
+const autoLater = ref(false);
 const currentMode = ref(props.mode);
 // Mirrors FolderMappingPreviewStep's own `committing`. A commit, once
 // started, runs to completion server-side and cannot be un-started, so while
@@ -95,6 +98,7 @@ watch(
     }
     readResult.value = null;
     assignments.value = [];
+    autoLater.value = false;
     committing.value = false;
   },
   { immediate: true },
@@ -138,16 +142,23 @@ function onScanReady({ taskId, result }) {
 
 function onMappingNext(built) {
   assignments.value = built;
+  autoLater.value = false;
+  step.value = "preview";
+}
+
+function onMappingLater() {
+  assignments.value = [];
+  autoLater.value = true;
   step.value = "preview";
 }
 
 function organiseLater() {
   // A commit that has started cannot be cancelled (§22) and keeps running
   // server-side either way, so this must be a no-op while `committing` is
-  // true - `:persistent` on the dialog below blocks Escape and a backdrop
-  // click, but AppDialog's header close button and `@click:outside` both
-  // call this unconditionally, so the real guard has to live here rather
-  // than be assumed from the dialog prop.
+  // true. The dialog is `:persistent` for its whole life: Escape belongs to
+  // the mapping step (it clears the selection) and a backdrop click must
+  // never mean "organise later" by accident. AppDialog's header close button
+  // still calls this unconditionally, so the guard lives here.
   if (committing.value) return;
   // The store entry is left alone on purpose - see the header comment. There
   // is nothing to keep only when the owner never got past picking a folder.
@@ -164,8 +175,9 @@ function onCommitted(result) {
   <AppDialog
     :open="open"
     :title="title"
-    :width="step === 'choose' ? 560 : 960"
-    :persistent="committing"
+    :width="step === 'choose' ? 560 : 840"
+    :pad-body="step !== 'mapping'"
+    :persistent="true"
     @close="organiseLater"
   >
     <div v-if="step === 'choose'" class="mapping-wizard__choose">
@@ -208,8 +220,8 @@ function onCommitted(result) {
     <FolderMappingTreeStep
       v-else-if="step === 'mapping' && readResult"
       :result="readResult"
-      @back="organiseLater"
       @next="onMappingNext"
+      @later="onMappingLater"
     />
 
     <FolderMappingPreviewStep
@@ -220,6 +232,7 @@ function onCommitted(result) {
       :label="label"
       :mode="currentMode"
       :picture-count="readResult?.picture_count || 0"
+      :organise-later-on-mount="autoLater"
       @back="step = 'mapping'"
       @cancel="organiseLater"
       @committed="onCommitted"

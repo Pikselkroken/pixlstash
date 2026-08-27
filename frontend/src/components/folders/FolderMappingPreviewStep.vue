@@ -6,7 +6,7 @@
  * either way - committing registers the folder for in-place indexing and
  * writes database rows only.
  */
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import {
   getFolderStructureCommitStatus,
@@ -28,6 +28,9 @@ const props = defineProps({
   // active library instead (v1.11 Phase 3, "Bring them in" on a freshly
   // created library - integration_architecture.md §22).
   mode: { type: String, default: "reference" },
+  // The mapping step's "Drop this, organise later": run `organiseLater` as
+  // soon as this step mounts, so the owner lands on the running import.
+  organiseLaterOnMount: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["back", "cancel", "committed", "update:committing"]);
@@ -163,6 +166,10 @@ async function abort() {
     commitError.value = errorDetail(error) || "Could not stop the import.";
   }
 }
+
+onMounted(() => {
+  if (props.organiseLaterOnMount) organiseLater();
+});
 
 onUnmounted(() => {
   disposed = true;
