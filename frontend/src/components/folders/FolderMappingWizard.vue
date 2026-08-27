@@ -49,7 +49,7 @@ const props = defineProps({
   // What the Preview step's commit does with the scan - ignored (in favour of
   // `resume.mode`) when resuming, since the mode was fixed the moment the
   // saved entry was created.
-  mode: { type: String, default: "reference" },
+  mode: { type: String, default: "local_import" },
 });
 
 const emit = defineEmits(["close", "committed"]);
@@ -83,9 +83,11 @@ watch(
       label.value = props.resume.label || "";
       resumeTaskId.value = props.resume.taskId;
       readTaskId.value = props.resume.taskId;
-      // Absent on entries saved before `mode` existed - those were always
-      // reference-folder reads.
-      currentMode.value = props.resume.mode || "reference";
+      // Absent on entries saved before `mode` existed. Those were reference
+      // reads, which this wizard no longer starts: libraries indexed in
+      // place replaced reference folders, and the commit route refuses a
+      // reference commit against the library's own storage anyway.
+      currentMode.value = props.resume.mode || "local_import";
       step.value = "scan";
     } else {
       path.value = "";

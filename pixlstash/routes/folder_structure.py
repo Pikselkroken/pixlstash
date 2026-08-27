@@ -694,6 +694,25 @@ def create_router(server) -> APIRouter:
         root_path = result["root"]["path"]
         expected_pictures = result["picture_count"]
 
+        # The library's own storage is indexed in place as MANAGED pictures
+        # and is never a reference folder. A reference-mode commit against
+        # image_root registered a whole library as one reference folder once
+        # (absolute paths, `reference_folder_id` on every row, and "remove"
+        # on that folder would have hard-deleted all 12k pictures), so refuse
+        # it here, where every client meets it, rather than in the wizard.
+        if payload.mode == "reference":
+            image_root = os.path.realpath(server.vault.image_root)
+            resolved = os.path.realpath(root_path)
+            if resolved == image_root or _within(image_root, resolved):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "That folder is the library's own storage, which is "
+                        "indexed in place and is never a reference folder. "
+                        'Use mode=local_import ("Add a library").'
+                    ),
+                )
+
         try:
             assignments = commit_service.parse_assignments(
                 [a.model_dump() for a in payload.assignments]
