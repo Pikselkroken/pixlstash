@@ -13,6 +13,7 @@ import io
 import re
 import tokenize
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -275,6 +276,12 @@ def test_a_finished_face_batch_is_not_re_selected_while_its_rows_are_in_flight(
 
         if resubmitted is not None:
             finder.on_task_complete(resubmitted, None)
+        # And once the rows have landed the claims are let go - the deferred
+        # release must not turn into a permanent one.
+        deadline = time.monotonic() + 5
+        while finder._claimed_picture_ids and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not finder._claimed_picture_ids, "claims held after the write landed"
         assert re_selected & set(ids) == set(), (
             f"pictures {sorted(re_selected & set(ids))} were offered to a second "
             "face task before their rows had landed"

@@ -109,6 +109,9 @@ class FaceExtractionTask(BaseTask):
         self._cpu_spillover_enabled = False
         self._stop_event = threading.Event()
         self._preloaded_images: dict = {}
+        # The DB writes this task submitted and did not wait for; the finder
+        # releases the pictures' claims once every one of them has landed.
+        self.pending_writes: list = []
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
         self._preload_cancel = threading.Event()
@@ -256,22 +259,22 @@ class FaceExtractionTask(BaseTask):
             # be several MB; a batch of 64 can be 500+ MB held unnecessarily.
             self._preloaded_images = {}
 
-            flushes = [
-                self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
-                for bulk_faces, bulk_thumbnail_crops in pending_flushes
+            # Submitted, not awaited. Waiting here parked the single GPU
+            # worker behind whatever LOW write the five CPU stages had on the
+            # writer thread - a measured pass ran at gpu_busy=0.08. But the
+            # pictures must stay CLAIMED until the rows land, or the next sweep
+            # re-offers them and a second detection pass hits the unique face
+            # key (seen as 7 face tasks for 12 pictures). So the worker is
+            # freed now and the finder holds the claims on these futures:
+            # see MissingFaceExtractionFinder.on_task_complete.
+            self.pending_writes = [
+                future
+                for future in (
+                    self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
+                    for bulk_faces, bulk_thumbnail_crops in pending_flushes
+                )
+                if future is not None
             ]
-            # The task is not done until its rows are. Returning before the
-            # write lands releases the pictures' claims, and with the write
-            # queue busy (a LOW tag or CLIP write from the same pass, now
-            # that stages interleave) the next sweep re-offered the pictures
-            # this task had just finished: a second detection pass, then an
-            # IntegrityError on the unique face key that skipped the whole
-            # batch. Seen live as 7 face tasks for 12 pictures. The write is
-            # still submitted at HIGH priority, so this waits only for the
-            # write already on the writer thread plus our own.
-            for future in flushes:
-                if future is not None:
-                    self._db.result_or_throw(future)
 
             picture_ids = sorted(
                 {pic_id for _, pic_id, _, _ in all_changed if pic_id is not None}

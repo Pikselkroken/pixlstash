@@ -1,3 +1,4 @@
+import threading
 from typing import Callable
 
 from sqlmodel import Session, select
@@ -69,6 +70,33 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
             engine=engine,
             pictures=selected,
         )
+
+    def on_task_complete(self, task, error) -> None:
+        """Release the claims only once the task's rows are on disk.
+
+        The task frees the GPU worker before its write lands (see
+        `FaceExtractionTask._run_task`); releasing the claims at that moment
+        would let the next sweep re-offer pictures whose Face rows are still
+        queued behind another stage's write. So the release rides the write
+        futures: immediately when there are none or they are done, otherwise
+        from the last future's completion callback on the writer thread.
+        """
+        pending = [f for f in getattr(task, "pending_writes", []) if not f.done()]
+        if not pending:
+            super().on_task_complete(task, error)
+            return
+        remaining = {"count": len(pending)}
+        lock = threading.Lock()
+
+        def _one_landed(_future):
+            with lock:
+                remaining["count"] -= 1
+                last = remaining["count"] == 0
+            if last:
+                super(MissingFaceExtractionFinder, self).on_task_complete(task, error)
+
+        for future in pending:
+            future.add_done_callback(_one_landed)
 
     def on_all_tasks_complete(self) -> None:
         """Release InsightFace ORT sessions and their CUDA arena once all face
