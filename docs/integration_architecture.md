@@ -1541,7 +1541,7 @@ folder. Backend design is `docs/backend_architecture.md` §24; the release plan 
    to `candidates[0]` would invent a decision the backend deliberately refused to
    make.
 
-### The four signals
+### The eight signals
 
 All deterministic, all local, **no LLM** — a folder name is a string and `Mira`
 could be a person, a project or a client.
@@ -1552,6 +1552,18 @@ could be a person, a project or a client.
 | `sidecars` | a caption `.txt`/`.caption` beside every picture (case-insensitive) | `set` | one folder |
 | `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
 | `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
+| `leaf` | pictures and no folders below; a date *with other words* strengthens it | `set` | one folder |
+| `container` | the level below mostly reads as Sets, People or date buckets, and this folder holds few pictures itself | `project`; a bare year (`2009`) narrows to `project`/`set` | one folder, read off the level below |
+| `capture_day` | EXIF capture dates from the same 20-picture sample | `set` | one folder |
+| `batch_numbering` | most direct pictures named `<prefix><digits>` with one prefix (`IMG_0412`) | `set`, only where nothing else spoke | one folder |
+
+Two `signal` values carry **evidence without a proposal**: `date_bucket` on a
+folder whose whole name is a date (*"filed by date"* — Lightroom, phones and
+Google Photos exports all file by capture day whether or not the pictures belong
+together, so the row proposes nothing and the tooltip explains the blank) and
+on a level mostly made of such folders (*"3 of 3 folders filed by date"*). So
+`kind: null`, `candidates: []` may now arrive with non-empty `evidence`; render
+the text, offer no pick.
 
 `faces` is the only expensive one and the only sampled one:
 **`sampled_per_folder` pictures per folder, never the whole folder**, which is
@@ -1560,7 +1572,7 @@ rather than hardcoded in the client, and the evidence string says what it was
 (`"one face, 19 of 20"`). The full pass runs later as ordinary background work
 and can only *add* people — it never revises a row the owner has accepted.
 
-A fifth `signal` value, `level_vote`, can appear on a **level** proposal: it
+One more `signal` value, `level_vote`, can appear on a **level** proposal: it
 means the level took its rows' answer as its own, and its `text` says the count
 (`"31 of 149 folders read as Set"`).
 
@@ -1590,7 +1602,7 @@ the cancel route. A client holding a completed result should keep it rather than
 expect to re-fetch it.
 
 **No inference engine is not an error.** With no GPU task runner the read still
-runs and the other three signals still answer; only `faces` stays silent, so no
+runs and the other signals still answer; only `faces` stays silent, so no
 folder comes back as a Person. The result says which happened
 (`face_signal_ran`) — without that field the same tree answers differently
 depending on whether models had loaded, and neither the client nor the owner
@@ -1762,7 +1774,7 @@ The three ways a proposal comes back, and all three are legitimate:
 |---|---|---|
 | `kind` set, `evidence` non-empty | a signal answered | the row is filled, with its reason under it |
 | `kind: null`, `candidates` 2+ | signals ruled things out, nothing in | "one of these: …" |
-| `kind: null`, `candidates: []` | nothing had anything to say | "This one is… ▾" |
+| `kind: null`, `candidates: []` | nothing proposed; `evidence` may still explain why (`date_bucket`) | "This one is… ▾" |
 
 `kind: "folder"` — **"just a folder"** — is in the enum because the *owner* can
 choose it on the mapping screen and Phase 3 will send it back. **No signal ever

@@ -5752,7 +5752,7 @@ renamed. That is not an implementation detail to preserve by care — it is the
 release's headline (*"import moves zero files"*), and Phase 3 is the only thing
 that commits anything.
 
-### The four signals
+### The eight signals
 
 | Signal | Scope | Cost | Proposes |
 |---|---|---|---|
@@ -5760,6 +5760,10 @@ that commits anything.
 | `sidecars` | one folder | free (the walk already listed the folder) | `set` |
 | `faces` | one folder | **`SAMPLED_PER_FOLDER` decodes + one detection batch** | `person` |
 | `name_match` | one folder | one query for the whole read | that entity's kind |
+| `leaf` | one folder | free (the walk) | `set` |
+| `container` | one folder, read off the level below | free (arithmetic over the rows) | `project`, or `project`/`set` for a bare year |
+| `capture_day` | one folder | free (EXIF from the opens the face sample already makes) | `set` |
+| `batch_numbering` | one folder | free (the listing) | `set`, only where nothing else spoke |
 
 Only `faces` is expensive, and it is the reason the constants are constants.
 `SAMPLED_PER_FOLDER = 20` is what makes the pass two minutes rather than an
@@ -5791,11 +5795,84 @@ every batch of the read jumps ahead of background work. That is arguably right
 assuming, and it is the reason the read has a deadline: an URGENT task that
 cannot finish starves the queue it jumped.
 
+### The shape signals: what a photo library looks like
+
+The first four signals leave a photo library — no captions, no existing
+entities — reading as Person-or-nothing. The other four read the *shape* of the
+tree, and they are what makes `root/ClientA/shoot1/*.jpg` come back as a
+Project over Sets. All of them skip the root row: the root is the library
+itself, not a thing in it.
+
+**`leaf`** — `MIN_LEAF_PICTURES` (3) or more direct pictures and no folders
+below → Set, evidence *"pictures and no folders below"*. The floor exists for
+the reason `MIN_SIDECAR_PICTURES` does. Names are read three ways here, and the
+split is the owner's correction, not a refinement:
+
+- A **bare date** (`2006-09-08`, `2006-09`, `20060908`, an importer's
+  `2006-09-08_1`) is a **date bucket**. Lightroom, phones and Google Photos
+  exports all file by capture day whether or not the pictures belong together,
+  so the name says *when*, never *what*: the leaf rule stays silent, the row
+  proposes nothing, and it carries a `date_bucket` evidence line
+  (*"filed by date"*) so the tooltip explains the blank. A level whose folders
+  are mostly bare dates says so at level scope too (*"3 of 3 folders filed by
+  date"*) and does **not** fall through to the *"used once each, so not labels"*
+  candidates line — the owner sets the whole level in one gesture if they do
+  want a Set per day.
+- A **date with other words** (`2006-09-08 Anna wedding`, `2024-03 Iceland`) is
+  a name somebody chose. The leaf rule fires with *"dated and named, pictures
+  and no folders below"*.
+- Either form keeps the existing Person veto: a date is not a name anybody has.
+
+**`container`** — the other level-scoped signal, and the only one that needs
+another level read first, which is why `_build_result` builds rows **deepest
+first**. When at least 60% (`_LEVEL_VOTE_SHARE_PCT`) of a level's rows read as
+Set or Person — a row's `kind`, or every one of its `candidates` — or are
+bare-date buckets, each parent with subfolders and few pictures of its own
+(direct at most `_CONTAINER_MAX_DIRECT_PCT` = 10% of its recursive count)
+proposes Project with *"groups 2 folders read as Set"* / *"… filed by date"*.
+Children of mixed kinds count, and the text says *"read as Set or Person"*. The
+one exception is deliberate and written in the code: a container whose bare
+name is a **year** (`2009`) comes back as `candidates: [project, set]` rather
+than Project, because the owner of the library this was built against files
+year folders as Sets and a year is the one container name that says nothing
+about what it groups. The level above then reads Project through the ordinary
+level vote (*"2 of 2 folders read as Project"*).
+
+**`capture_day`** — EXIF `DateTimeOriginal` (falling back to `DateTime`) from
+**the same sample the face pass opens**. `_load_sample` reads the tag before it
+decodes, and with no inference engine it opens the file for the tag alone, so
+the sample pass now runs whether or not `detect_faces` is available and only
+the detection is optional; the stage is still reported as `faces` on the wire.
+One or two distinct days (`_CAPTURE_MAX_DAYS`) across a sample of at least
+`MIN_FACE_SAMPLE` → Set, *"shot on 1 day"*. It never fires when fewer than half
+the sample carried a date (`_CAPTURE_MIN_DATED_PCT`), and it is silent on a
+bare-date folder and on any folder directly under a level of them, where one
+day is true by construction and says nothing.
+
+**`batch_numbering`** — from the listing alone: when 80% (`_BATCH_SHARE_PCT`)
+of a folder's direct picture stems match `<prefix><digits>` with one prefix
+(`IMG_0412`, `DSC01234`, `00017-1234` — the prefix may be empty, the digits are
+at least three), evidence *"numbered as one batch (IMG_0001…)"*. It is
+additional evidence: it proposes Set only where nothing else spoke and never
+contradicts another signal's kind, so a Person folder of `IMG_` files stays a
+Person and a date bucket of them stays a bucket.
+
+**They disagree the way the older signals do.** A leaf of one person's pictures
+is `candidates: [person, set]` with both evidence lines — the leaf is genuinely
+either, and picking would be the guess the evidence rule exists to prevent.
+**A single name match outranks all of them.** It is a lookup and they are
+inferences, so when exactly one entity kind matched by name the shape signals
+still append their evidence lines but add no competing kind: a leaf folder
+named after an existing Person is `kind: person` with its `match` intact and
+`leaf` under it as a reason. `faces` keeps its own rule (it only adds `person`
+when absent). A name that matched two kinds is already narrowed, and there the
+shape signals add kinds as anywhere else.
+
 ### Why cardinality is level-scoped and nothing else is
 
 Cardinality is a property of a *level* — "four names under 118 parents" cannot
-be said about one folder — so it is the only signal that speaks in a level's
-`proposal`, and a level of one folder (the root) never carries a reading at all.
+be said about one folder — so it speaks in a level's
+`proposal` (`container` is the other level-scoped reading, above), and a level of one folder (the root) never carries a reading at all.
 Its **negative** matters as much as its positive: names used once each are not
 labels, which rules `tag` out and rules nothing in, and that is what produces a
 level with `candidates` and no `kind`.

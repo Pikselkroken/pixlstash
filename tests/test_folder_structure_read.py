@@ -27,9 +27,14 @@ from pixlstash.services.folder_structure_service import (
     MAX_FOLDERS,
     MIN_FACE_SAMPLE,
     FACE_MAJORITY_PCT,
+    MIN_LEAF_PICTURES,
     MIN_SIDECAR_PICTURES,
     SAME_IDENTITY_COSINE,
     SAMPLED_PER_FOLDER,
+    _BATCH_SHARE_PCT,
+    _CAPTURE_MAX_DAYS,
+    _CAPTURE_MIN_DATED_PCT,
+    _CONTAINER_MAX_DIRECT_PCT,
     _ENTITY_KIND,
     _LEVEL_VOTE_SHARE_PCT,
     _clears_share,
@@ -41,6 +46,8 @@ from pixlstash.services.folder_structure_service import (
     _evenly_spaced,
     load_existing_entities,
     normalise_name,
+    reads_as_a_date,
+    reads_as_dated,
 )
 from pixlstash.utils.library_layout import Facet, _match_key
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
@@ -165,6 +172,22 @@ def _level(result, depth):
         if level["depth"] == depth:
             return level
     raise AssertionError(f"no level at depth {depth}")
+
+
+def _signals(proposal) -> set:
+    return {e["signal"] for e in proposal["evidence"]}
+
+
+def _signal(proposal, name):
+    """The one evidence entry a signal left, or fail naming what is there."""
+    found = [e for e in proposal["evidence"] if e["signal"] == name]
+    assert len(found) == 1, f"expected one {name!r} line in {proposal['evidence']}"
+    return found[0]
+
+
+def _offered(proposal) -> set:
+    """Every kind the row offers: its pick, or its candidates."""
+    return {proposal["kind"]} - {None} | set(proposal["candidates"])
 
 
 # ===========================================================================
@@ -304,8 +327,7 @@ def test_a_caption_beside_every_picture_reads_as_set():
 
     proposal = _rows(result, 2)["shoot"]["proposal"]
     assert proposal["kind"] == "set"
-    (evidence,) = proposal["evidence"]
-    assert evidence["signal"] == "sidecars"
+    evidence = _signal(proposal, "sidecars")
     assert evidence["pictures"] == 3 and evidence["with_sidecar"] == 3, (
         "both `a.txt` and `a.jpg.txt` are caption conventions in the wild"
     )
@@ -314,7 +336,9 @@ def test_a_caption_beside_every_picture_reads_as_set():
 
 def test_a_caption_beside_most_pictures_says_nothing_at_all():
     """`every` picture, not `most`. A signal that cannot state its reason does
-    not propose - and 'a caption beside 2 of 3' is not the Set fact."""
+    not propose - and 'a caption beside 2 of 3' is not the Set fact. The folder
+    is still a leaf of pictures, so the leaf signal speaks; the sidecar one
+    must not."""
     with _tree(
         {
             "": [],
@@ -324,8 +348,7 @@ def test_a_caption_beside_most_pictures_says_nothing_at_all():
         result = FolderStructureRead(root).run()
 
     proposal = _rows(result, 2)["shoot"]["proposal"]
-    assert proposal["kind"] is None
-    assert proposal["evidence"] == []
+    assert _signals(proposal) == {"leaf"}
 
 
 # ===========================================================================
@@ -346,9 +369,11 @@ def test_one_identity_across_a_folder_reads_as_person_and_says_the_count():
         ).run()
 
     proposal = _rows(result, 2)["mira"]["proposal"]
-    assert proposal["kind"] == "person"
-    (evidence,) = proposal["evidence"]
-    assert evidence["signal"] == "faces"
+    # A leaf of pictures also reads as a Set, and the two disagree: candidates.
+    assert proposal["kind"] is None
+    assert sorted(proposal["candidates"]) == ["person", "set"]
+    assert proposal["evidence"][0]["signal"] == "faces", "strongest first"
+    evidence = _signal(proposal, "faces")
     assert evidence["sampled"] == SAMPLED_PER_FOLDER
     assert evidence["matched"] == 19
     assert evidence["text"] == "one face, 19 of 20"
@@ -361,8 +386,8 @@ def test_a_folder_of_different_people_proposes_nothing():
         ).run()
 
     proposal = _rows(result, 2)["mira"]["proposal"]
-    assert proposal["kind"] is None
-    assert proposal["evidence"] == []
+    assert "person" not in _offered(proposal)
+    assert "faces" not in _signals(proposal)
 
 
 def test_a_dated_folder_is_never_read_as_a_person():
@@ -378,8 +403,11 @@ def test_a_dated_folder_is_never_read_as_a_person():
 
     proposal = _rows(result, 2)["2006-09-08"]["proposal"]
     assert proposal["kind"] is None, "a date is not a name anybody has"
-    # No kind left, so no reason to state - the signal's standing contract.
-    assert proposal["evidence"] == []
+    assert proposal["candidates"] == []
+    # The faces line goes with the kind it could not propose; what is left
+    # explains the blank.
+    assert "faces" not in _signals(proposal)
+    assert _signal(proposal, "date_bucket")["text"] == "filed by date"
 
 
 def test_the_face_signal_stays_silent_below_the_minimum_sample():
@@ -389,7 +417,7 @@ def test_the_face_signal_stays_silent_below_the_minimum_sample():
             root, detect_faces=_detector_from_identity(lambda i: 1)
         ).run()
 
-    assert _rows(result, 2)["mira"]["proposal"]["evidence"] == []
+    assert "faces" not in _signals(_rows(result, 2)["mira"]["proposal"])
 
 
 def test_no_more_than_the_sample_is_ever_decoded():
@@ -414,13 +442,13 @@ def test_a_folder_whose_detection_fails_costs_that_folder_and_not_the_read():
         result = FolderStructureRead(root, detect_faces=detect).run()
 
     assert result["folder_count"] == 2, "the read still completed"
-    assert _rows(result, 2)["mira"]["proposal"]["evidence"] == []
+    assert "faces" not in _signals(_rows(result, 2)["mira"]["proposal"])
 
 
 def test_without_an_engine_no_folder_is_proposed_as_a_person():
     with _tree(_faces_spec(40)) as root:
         result = FolderStructureRead(root, detect_faces=None).run()
-    assert _rows(result, 2)["mira"]["proposal"]["kind"] is None
+    assert "person" not in _offered(_rows(result, 2)["mira"]["proposal"])
 
 
 # ===========================================================================
@@ -479,8 +507,10 @@ def test_signals_that_disagree_return_both_rather_than_one():
 
     proposal = _rows(result, 2)["mira"]["proposal"]
     assert proposal["kind"] is None
+    # The leaf line is evidence only here: a single name match is a lookup,
+    # and the shape signals explain it rather than contest it.
     assert sorted(proposal["candidates"]) == ["person", "project"]
-    assert {e["signal"] for e in proposal["evidence"]} == {"faces", "name_match"}
+    assert _signals(proposal) >= {"faces", "name_match", "leaf"}
 
 
 def test_signals_that_agree_keep_the_match_and_both_reasons():
@@ -494,7 +524,7 @@ def test_signals_that_agree_keep_the_match_and_both_reasons():
     proposal = _rows(result, 2)["mira"]["proposal"]
     assert proposal["kind"] == "person"
     assert proposal["match"]["id"] == 41
-    assert [e["signal"] for e in proposal["evidence"]] == ["faces", "name_match"]
+    assert [e["signal"] for e in proposal["evidence"]][:2] == ["faces", "name_match"]
 
 
 # ===========================================================================
@@ -974,6 +1004,9 @@ def test_a_split_level_is_not_decided_by_what_the_folders_are_called():
             spec[name] = _CAPTIONED
         for name in face_names:
             spec[name] = [f"{i:03d}.jpg" for i in range(MIN_FACE_SAMPLE + 1)]
+            # A subfolder keeps the leaf signal out of it, so the split really
+            # is two Sets against two People.
+            spec[f"{name}/raw"] = []
         return spec
 
     answers = []
@@ -994,8 +1027,8 @@ def test_the_level_vote_share_is_sixty_percent_and_not_a_rounded_half():
     spec = {"": []}
     for name in ("aa", "bb"):  # 2 of 4 read as Set
         spec[name] = _CAPTIONED
-    for name in ("cc", "dd"):  # …and 2 say nothing at all
-        spec[name] = ["a.jpg", "b.jpg", "c.jpg"]
+    for name in ("cc", "dd"):  # …and 2 say nothing at all (below the leaf floor)
+        spec[name] = ["a.jpg", "b.jpg"]
     with _tree(spec) as root:
         two_of_four = _level(FolderStructureRead(root).run(), 2)["proposal"]
     assert two_of_four["kind"] is None, f"50% is not 60%: {two_of_four}"
@@ -1037,8 +1070,8 @@ def test_the_face_majority_is_where_it_says_it_is():
         below = FolderStructureRead(
             root, detect_faces=_detector_from_identity(lambda i: 1 if i < 13 else i + 2)
         ).run()
-    assert _rows(at_the_line, 2)["mira"]["proposal"]["kind"] == "person"
-    assert _rows(below, 2)["mira"]["proposal"]["kind"] is None
+    assert "person" in _offered(_rows(at_the_line, 2)["mira"]["proposal"])
+    assert "person" not in _offered(_rows(below, 2)["mira"]["proposal"])
 
 
 def test_the_tag_shape_needs_repetition_across_several_parents():
@@ -1269,10 +1302,10 @@ def test_a_six_picture_folder_needs_five_faces_not_four():
             root,
             detect_faces=_detector_from_identity(lambda i: 1 if i < 5 else i + 2),
         ).run()
-    assert _rows(four, 2)["mira"]["proposal"]["kind"] is None, (
+    assert "person" not in _offered(_rows(four, 2)["mira"]["proposal"]), (
         "4 of 6 is 66.7% and must not clear a 70% rule"
     )
-    assert _rows(five, 2)["mira"]["proposal"]["kind"] == "person"
+    assert "person" in _offered(_rows(five, 2)["mira"]["proposal"])
 
 
 def test_a_read_rooted_at_a_filesystem_root_still_has_a_name(monkeypatch):
@@ -1308,3 +1341,381 @@ def test_the_librarys_own_snapshots_tree_is_never_offered_for_mapping():
     assert "Holiday" in names
     assert "snapshots" not in names
     assert "26" not in names, "the whole subtree, not just its top"
+
+
+# ===========================================================================
+# The shape signals: leaf, container, capture_day, batch_numbering
+# ===========================================================================
+
+
+def _write_dated(folder: str, names: list[str], days: list[str]) -> None:
+    """JPEGs carrying EXIF DateTimeOriginal, cycling through ``days``."""
+    from PIL import Image
+
+    os.makedirs(folder, exist_ok=True)
+    for index, name in enumerate(names):
+        exif = Image.Exif()
+        exif.get_ifd(0x8769)[36867] = f"{days[index % len(days)]} 10:{index:02d}:00"
+        Image.new("RGB", (16, 16), (32, 64, 96)).save(
+            os.path.join(folder, name), exif=exif
+        )
+
+
+#: Nine pictures whose names are NOT a numbered batch (`pic1`, one digit), so
+#: a test that does not mean to exercise `batch_numbering` does not.
+_NINE = [f"pic{i}.jpg" for i in range(9)]
+
+
+def test_a_leaf_of_pictures_reads_as_set_and_a_curated_date_name_strengthens_it():
+    with _tree(
+        {
+            "": [],
+            "2009": [],
+            "2009/2006-09-08 Anna wedding": _NINE,
+            "2009/2006-09-09": _NINE,
+        }
+    ) as root:
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    rows = _rows(result, 3)
+    named = rows["2006-09-08 Anna wedding"]["proposal"]
+    assert named["kind"] == "set"
+    assert _signal(named, "leaf")["text"] == (
+        "dated and named, pictures and no folders below"
+    )
+    # The bare date is a bucket: Lightroom, phones and Google Photos exports
+    # all file by capture day whether or not the pictures belong together.
+    bucket = rows["2006-09-09"]["proposal"]
+    assert bucket["kind"] is None and bucket["candidates"] == []
+    assert _signal(bucket, "date_bucket")["text"] == "filed by date"
+    assert "leaf" not in _signals(bucket)
+
+
+def test_a_photo_library_of_year_over_day_folders():
+    """`root/2009/2006-09-08/*.jpg`: the day is a bucket, the level says so,
+    and the year is offered as Project or Set rather than picked."""
+    with _tree(
+        {
+            "": [],
+            "2009": [],
+            "2009/2006-09-08": _NINE,
+            "2009/2006-09-09": _NINE,
+            "2010": [],
+            "2010/2010-01-01": _NINE,
+        }
+    ) as root:
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    day = _rows(result, 3)["2006-09-08"]["proposal"]
+    assert day["kind"] is None and day["candidates"] == []
+    assert _signals(day) == {"date_bucket"}
+    level = _level(result, 3)["proposal"]
+    assert level["kind"] is None and level["candidates"] == [], (
+        "a level of buckets must not fall through to the 'used once each' line"
+    )
+    assert level["evidence"] == [
+        {"signal": "date_bucket", "text": "3 of 3 folders filed by date", "dated": 3}
+    ]
+
+    year = _rows(result, 2)["2009"]["proposal"]
+    assert year["kind"] is None
+    assert sorted(year["candidates"]) == ["project", "set"]
+    assert _signal(year, "container")["text"] == "groups 2 folders filed by date"
+    assert _signal(_rows(result, 2)["2010"]["proposal"], "container")["text"] == (
+        "groups 1 folder filed by date"
+    )
+
+
+def test_shoots_under_a_client_read_as_sets_and_the_client_as_project():
+    with _tree(
+        {
+            "": [],
+            "ClientA": [],
+            "ClientA/shoot1": _NINE,
+            "ClientA/shoot2": _NINE,
+            "ClientB": [],
+            "ClientB/shoot3": _NINE,
+        }
+    ) as root:
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    for name in ("shoot1", "shoot2", "shoot3"):
+        shoot = _rows(result, 3)[name]["proposal"]
+        assert shoot["kind"] == "set", shoot
+        assert _signal(shoot, "leaf")["text"] == "pictures and no folders below"
+    assert _level(result, 3)["proposal"]["kind"] == "set"
+
+    client = _rows(result, 2)["ClientA"]["proposal"]
+    assert client["kind"] == "project", client
+    assert client["evidence"] == [
+        {"signal": "container", "text": "groups 2 folders read as Set", "grouped": 2}
+    ]
+    assert _level(result, 2)["proposal"]["kind"] == "project"
+    assert _level(result, 2)["proposal"]["evidence"][0]["text"] == (
+        "2 of 2 folders read as Project"
+    )
+
+
+def test_a_container_holding_most_of_its_own_pictures_is_not_a_project():
+    assert _CONTAINER_MAX_DIRECT_PCT == 10, "the counts below are chosen against 10"
+    with _tree(
+        {
+            "": [],
+            "ClientA": [f"own{i:02d}.jpg" for i in range(20)],
+            "ClientA/shoot1": _NINE,
+            "ClientA/shoot2": _NINE,
+        }
+    ) as root:
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    client = _rows(result, 2)["ClientA"]["proposal"]
+    assert "project" not in _offered(client), client
+    assert "container" not in _signals(client)
+
+
+def test_children_of_mixed_kinds_still_make_a_container():
+    with _tree(
+        {
+            "": [],
+            "Family": [],
+            "Family/mira": _NINE,
+            # Below MIN_FACE_SAMPLE, so the stub detector cannot make it a
+            # Person too; the leaf signal alone reads it.
+            "Family/holiday 2024": _NINE[: MIN_FACE_SAMPLE - 1],
+        }
+    ) as root:
+        result = FolderStructureRead(
+            root,
+            detect_faces=_detector_from_identity(lambda i: 1),
+            existing_entities=[("character", 1, "Mira")],
+        ).run()
+
+    rows = _rows(result, 3)
+    assert rows["mira"]["proposal"]["kind"] == "person", "name-matched: no contest"
+    assert rows["holiday 2024"]["proposal"]["kind"] == "set"
+    family = _rows(result, 2)["Family"]["proposal"]
+    assert family["kind"] == "project"
+    assert (
+        _signal(family, "container")["text"] == "groups 2 folders read as Set or Person"
+    )
+
+
+def test_nothing_proposes_at_the_root():
+    """The root is the library itself: neither a leaf nor a container."""
+    with _tree({"": _NINE}) as root:
+        flat = FolderStructureRead(root, detect_faces=None).run()
+    with _tree({"": [], "a": _NINE, "b": _NINE}) as root:
+        nested = FolderStructureRead(root, detect_faces=None).run()
+
+    for result in (flat, nested):
+        proposal = _level(result, 1)["folders"][0]["proposal"]
+        assert proposal == {
+            "kind": None,
+            "candidates": [],
+            "match": None,
+            "evidence": [],
+        }
+    assert _rows(nested, 2)["a"]["proposal"]["kind"] == "set", "…but its children do"
+
+
+def test_a_leaf_with_one_face_and_one_capture_day_narrows_to_person_or_set():
+    with _tree({"": [], "ClientA": []}) as root:
+        _write_dated(os.path.join(root, "ClientA", "shoot1"), _NINE, ["2024:03:01"])
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+
+    proposal = _rows(result, 3)["shoot1"]["proposal"]
+    assert proposal["kind"] is None
+    assert sorted(proposal["candidates"]) == ["person", "set"]
+    assert _signals(proposal) == {"faces", "leaf", "capture_day"}
+    assert _signal(proposal, "capture_day") == {
+        "signal": "capture_day",
+        "text": "shot on 1 day",
+        "sampled": 9,
+        "dated": 9,
+        "days": 1,
+    }
+
+
+def test_capture_days_are_counted_from_exif_and_bounded():
+    with _tree({"": [], "Trips": []}) as root:
+        trips = os.path.join(root, "Trips")
+        _write_dated(os.path.join(trips, "two"), _NINE, ["2024:03:01", "2024:03:02"])
+        _write_dated(
+            os.path.join(trips, "three"),
+            _NINE,
+            ["2024:03:01", "2024:03:02", "2024:03:03"],
+        )
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    rows = _rows(result, 3)
+    assert _signal(rows["two"]["proposal"], "capture_day")["text"] == "shot on 2 days"
+    assert _CAPTURE_MAX_DAYS == 2
+    assert "capture_day" not in _signals(rows["three"]["proposal"])
+
+
+def test_capture_day_needs_half_the_sample_dated():
+    assert _CAPTURE_MIN_DATED_PCT == 50
+    with _tree({"": [], "shoot": [f"u{i}.jpg" for i in range(5)]}) as root:
+        shoot = os.path.join(root, "shoot")
+        _write_dated(shoot, [f"d{i}.jpg" for i in range(4)], ["2024:03:01"])
+        four_of_nine = FolderStructureRead(root, detect_faces=None).run()
+        _write_dated(shoot, ["d4.jpg"], ["2024:03:01"])
+        five_of_ten = FolderStructureRead(root, detect_faces=None).run()
+
+    assert "capture_day" not in _signals(_rows(four_of_nine, 2)["shoot"]["proposal"])
+    assert _signal(_rows(five_of_ten, 2)["shoot"]["proposal"], "capture_day") == {
+        "signal": "capture_day",
+        "text": "shot on 1 day",
+        "sampled": 10,
+        "dated": 5,
+        "days": 1,
+    }
+
+
+def test_capture_day_is_circular_on_a_date_bucket_and_under_a_level_of_them():
+    """A folder named for a day was shot on that day by construction."""
+    with _tree({"": [], "2009": []}) as root:
+        _write_dated(os.path.join(root, "2009", "2006-09-08"), _NINE, ["2006:09:08"])
+        _write_dated(os.path.join(root, "2009", "2006-09-09"), _NINE, ["2006:09:09"])
+        # Under a level of buckets a curated name is silent too: the day is
+        # the parent's, not evidence about this folder.
+        _write_dated(
+            os.path.join(root, "2009", "2006-09-08", "selects"), _NINE, ["2006:09:08"]
+        )
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    assert "capture_day" not in _signals(_rows(result, 3)["2006-09-09"]["proposal"])
+    selects = _rows(result, 4)["selects"]["proposal"]
+    assert "capture_day" not in _signals(selects)
+    assert selects["kind"] == "set", "the leaf signal is not what is circular"
+    assert _level(result, 3)["proposal"]["evidence"][0]["text"] == (
+        "2 of 2 folders filed by date"
+    )
+
+
+def test_the_sample_is_opened_without_an_engine_and_faces_stay_off():
+    with _tree({"": [], "ClientA": []}) as root:
+        _write_dated(os.path.join(root, "ClientA", "shoot1"), _NINE, ["2024:03:01"])
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    assert result["face_signal_ran"] is False
+    proposal = _rows(result, 3)["shoot1"]["proposal"]
+    assert proposal["kind"] == "set"
+    assert "capture_day" in _signals(proposal)
+    assert "faces" not in _signals(proposal)
+
+
+def test_batch_numbering_fires_on_one_prefix_and_not_on_mixed_names():
+    assert _BATCH_SHARE_PCT == 80 and MIN_LEAF_PICTURES == 3
+    with _tree(
+        {
+            "": [],
+            "img": [f"IMG_{i:04d}.jpg" for i in range(1, 10)],
+            "dsc": [f"DSC{i:05d}.jpg" for i in range(1, 10)],
+            "seq": [f"{i:05d}-{1000 + i}.png" for i in range(1, 10)],
+            "mixed": ["cover.jpg", "IMG_0001.jpg", "DSC00002.jpg", "final.jpg"],
+            "seven_of_nine": [f"IMG_{i:04d}.jpg" for i in range(7)]
+            + ["a.jpg", "b.jpg"],
+            "eight_of_ten": [f"IMG_{i:04d}.jpg" for i in range(8)] + ["a.jpg", "b.jpg"],
+        }
+    ) as root:
+        result = FolderStructureRead(root, detect_faces=None).run()
+
+    rows = _rows(result, 2)
+    assert _signal(rows["img"]["proposal"], "batch_numbering") == {
+        "signal": "batch_numbering",
+        "text": "numbered as one batch (IMG_0001…)",
+        "pictures": 9,
+        "numbered": 9,
+    }
+    assert _signal(rows["dsc"]["proposal"], "batch_numbering")["text"] == (
+        "numbered as one batch (DSC00001…)"
+    )
+    assert _signal(rows["seq"]["proposal"], "batch_numbering")["text"] == (
+        "numbered as one batch (00001-1001…)"
+    )
+    assert "batch_numbering" not in _signals(rows["mixed"]["proposal"])
+    assert "batch_numbering" not in _signals(rows["seven_of_nine"]["proposal"]), (
+        "7 of 9 is 77.8%, not 80%"
+    )
+    assert "batch_numbering" in _signals(rows["eight_of_ten"]["proposal"])
+
+
+def test_batch_numbering_never_contradicts_another_signal():
+    """Additional evidence: a Person folder of IMG_ files stays a Person, and
+    a date bucket of them stays a bucket."""
+    numbered = [f"IMG_{i:04d}.jpg" for i in range(9)]
+    with _tree(
+        {"": [], "mira": numbered, "mira/raw": [], "2006-09-08": numbered}
+    ) as root:
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+
+    mira = _rows(result, 2)["mira"]["proposal"]
+    assert mira["kind"] == "person"
+    assert "batch_numbering" in _signals(mira)
+    bucket = _rows(result, 2)["2006-09-08"]["proposal"]
+    assert bucket["kind"] is None and bucket["candidates"] == []
+    assert _signals(bucket) == {"date_bucket", "batch_numbering"}
+
+
+@pytest.mark.parametrize(
+    "name,bare,dated",
+    [
+        ("2009", True, False),
+        ("2006-09", True, False),
+        ("2006-09-08", True, False),
+        ("20060908", True, False),
+        ("2006-09-08_1", True, False),
+        ("2006-09-08-2", True, False),
+        ("2006-09-08 Anna wedding", False, True),
+        ("2024-03 Iceland", False, True),
+        ("2024 Shoots", False, True),
+        ("Anna", False, False),
+        ("mira", False, False),
+    ],
+)
+def test_a_bare_date_and_a_dated_name_are_told_apart(name, bare, dated):
+    assert reads_as_a_date(name) is bare
+    assert reads_as_dated(name) is dated
+
+
+def test_a_dated_name_is_still_never_a_person():
+    """The Person veto covers both forms: a date is not a name anybody has."""
+    with _tree({"": [], "2006-09-08 Anna wedding": _NINE}) as root:
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+    proposal = _rows(result, 2)["2006-09-08 Anna wedding"]["proposal"]
+    assert proposal["kind"] == "set"
+    assert "faces" not in _signals(proposal)
+
+
+def test_a_single_name_match_is_explained_by_the_shape_signals_not_contested():
+    """A lookup outranks an inference: the leaf and batch lines are kept as
+    evidence, the kind and the match are the entity's."""
+    with _tree(
+        {
+            "": [],
+            "Mira": ["a.jpg", "b.jpg", "c.jpg"],
+            "Product shots": [f"IMG_{i:04d}.jpg" for i in range(9)],
+        }
+    ) as root:
+        result = FolderStructureRead(
+            root,
+            detect_faces=None,
+            existing_entities=[("character", 41, "Mira"), ("set", 7, "Product shots")],
+        ).run()
+
+    person = _rows(result, 2)["Mira"]["proposal"]
+    assert person["kind"] == "person" and person["candidates"] == []
+    assert person["match"]["id"] == 41
+    assert _signals(person) == {"name_match", "leaf"}
+
+    picture_set = _rows(result, 2)["Product shots"]["proposal"]
+    assert picture_set["kind"] == "set" and picture_set["candidates"] == []
+    assert picture_set["match"]["id"] == 7
+    assert _signals(picture_set) == {"name_match", "leaf", "batch_numbering"}
