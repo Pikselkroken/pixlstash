@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from typing import Optional
 
@@ -107,31 +108,72 @@ class ImageEmbeddingTask(BaseTask):
         if self._preload_thread is not None:
             self._preload_thread.join(timeout=10)
 
+    _PRELOAD_WORKERS = 4
+
     def _preload_images_task(self) -> None:
-        preloaded = []
-        for pid, file_path in self._batch:
+        """Decode, hash and preprocess the batch, off the GPU worker.
+
+        Everything per-image that is CPU work happens here, in a small pool:
+        the decode, the perceptual hash (a LANCZOS resample of the full
+        frame), and CLIP's own preprocessing when the model is already loaded.
+        Measured on the GPU worker instead, those were 4 s of a 4.2 s batch of
+        128 - the forward pass itself is a tenth of a second - and the single
+        GPU worker sat on CPU work while every other stage waited for it.
+        """
+
+        def _one(item):
+            pid, file_path = item
             if self._preload_cancel.is_set():
-                break
+                return []
             try:
                 full_path = os.path.join(self._db.image_root, file_path)
                 if VideoUtils.is_video_file(file_path):
-                    frames = VideoUtils.extract_representative_video_frames(
-                        full_path, count=3
-                    )
-                    for frame in frames:
-                        preloaded.append((pid, file_path, frame.convert("RGB")))
+                    images = [
+                        frame.convert("RGB")
+                        for frame in VideoUtils.extract_representative_video_frames(
+                            full_path, count=3
+                        )
+                    ]
                 else:
-                    img = Image.open(full_path).convert("RGB")
-                    preloaded.append((pid, file_path, img))
+                    images = [Image.open(full_path).convert("RGB")]
             except Exception as exc:
                 logger.debug("EmbedPreload: failed to load %s: %s", file_path, exc)
-                preloaded.append((pid, file_path, None))
+                return [(pid, file_path, None, None, None)]
+            tensors = None
+            if self._clip_workflow is not None:
+                try:
+                    tensors = self._clip_workflow.preprocess_images(images)
+                except Exception as exc:
+                    # The worker preprocesses anything not done here.
+                    logger.debug(
+                        "EmbedPreload: preprocess failed for %s, deferring to the "
+                        "worker: %s",
+                        file_path,
+                        exc,
+                    )
+                    tensors = None
+            return [
+                (
+                    pid,
+                    file_path,
+                    img,
+                    self._compute_dhash(img),
+                    tensors[i] if tensors is not None else None,
+                )
+                for i, img in enumerate(images)
+            ]
+
+        preloaded = []
+        workers = min(self._PRELOAD_WORKERS, max(1, len(self._batch)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for entries in pool.map(_one, self._batch):
+                preloaded.extend(entries)
         with self._preload_lock:
             self._preloaded_images = preloaded
         logger.debug(
             "[EMBED_PRELOAD] task_id=%s preloaded=%d/%d",
             self.id,
-            sum(1 for _, _, img in preloaded if img is not None),
+            sum(1 for entry in preloaded if entry[2] is not None),
             len(self._batch),
         )
 
@@ -445,10 +487,13 @@ class ImageEmbeddingTask(BaseTask):
         started_at: float | None = None,
         preload_wait_s: float = 0.0,
     ) -> list:
-        """Process a list of ``(pid, file_path, PIL.Image | None)`` triples.
+        """Process the preloaded batch.
 
         Args:
-            preloaded: The batch, one triple per picture.
+            preloaded: One entry per picture (per frame for a video):
+                ``(pid, file_path, PIL.Image | None)``, optionally followed by
+                the perceptual hash and the CLIP-preprocessed tensor the
+                preload pool computed. Anything missing is computed here.
             started_at: ``time.perf_counter()`` when the task started running;
                 ``total_s`` in the timing line is measured from it.
             preload_wait_s: How long the task blocked on the preload thread.
@@ -460,17 +505,26 @@ class ImageEmbeddingTask(BaseTask):
         flat_images = []
         flat_pids = []
         flat_hashes = []
+        flat_tensors = []
         decode_failed_pids = set()
-        batch_pids = {pid for pid, _, _ in preloaded}
-        batch_files = {pid: fp for pid, fp, _ in preloaded}
+        batch_pids = {entry[0] for entry in preloaded}
+        batch_files = {entry[0]: entry[1] for entry in preloaded}
 
-        for pid, file_path, img in preloaded:
+        for entry in preloaded:
+            pid, file_path, img = entry[:3]
             if img is None:
                 decode_failed_pids.add(pid)
                 continue
+            dhash = entry[3] if len(entry) > 3 else None
+            tensor = entry[4] if len(entry) > 4 else None
             flat_images.append(img)
-            flat_hashes.append(self._compute_dhash(img))
+            flat_hashes.append(dhash if dhash is not None else self._compute_dhash(img))
+            flat_tensors.append(tensor)
             flat_pids.append(pid)
+        # All or nothing: a batch is one forward pass, and the service
+        # preprocesses the whole list itself when any tensor is missing.
+        if any(t is None for t in flat_tensors):
+            flat_tensors = None
 
         # A None image means the file could not be decoded - suppress those
         # pictures (issue #585) so they are not re-selected every sweep. This is
@@ -501,7 +555,11 @@ class ImageEmbeddingTask(BaseTask):
 
         if clip_ready:
             try:
-                embeddings = self._clip_workflow.encode_images(flat_images)
+                embeddings = (
+                    self._clip_workflow.encode_images(flat_images, tensors=flat_tensors)
+                    if flat_tensors is not None
+                    else self._clip_workflow.encode_images(flat_images)
+                )
             except Exception as exc:
                 logger.error(
                     "ImageEmbeddingTask: Failed to use CLIP workflow model: %s",
