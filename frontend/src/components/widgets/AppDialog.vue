@@ -52,9 +52,9 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: "" },
   subtitle: { type: String, default: "" },
-  // Numeric pixel width — the proposal sizes dialogs at fixed widths.
+  // Numeric pixel width - the proposal sizes dialogs at fixed widths.
   width: { type: Number, default: 480 },
-  // When false the body is flush (no padding) — used by the two-pane Settings
+  // When false the body is flush (no padding) - used by the two-pane Settings
   // dialog where the nav rail and content own their own padding.
   padBody: { type: Boolean, default: true },
   persistent: { type: Boolean, default: false },
@@ -72,7 +72,7 @@ const ENTER_EXEMPT =
   "textarea, select, button, a[href], summary, [contenteditable='true'], [role='textbox']";
 
 /**
- * The dialog keyboard contract (owner decision, 2026-07-29 — see
+ * The dialog keyboard contract (owner decision, 2026-07-29 - see
  * docs/frontend_architecture.md "App* design-system primitives"): Escape
  * dismisses, plain Enter accepts. Handled here, on the dialog's own subtree,
  * so every AppDialog gets it and no page-level Escape owner is consulted
@@ -99,7 +99,7 @@ function onKeydown(e) {
 <style scoped>
 /* A dialog is the highest elevation in the app: the --surface fill, --elevation-4
    shadow, --radius-lg corners, over the v-dialog scrim. The title bar is a real
-   header row — title left, actions + an inline ghost close button right — never a
+   header row - title left, actions + an inline ghost close button right - never a
    floating circular FAB. Same chrome language as the toolbar popovers, one
    elevation level up. */
 .app-dialog {

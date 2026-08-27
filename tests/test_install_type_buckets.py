@@ -191,6 +191,6 @@ def test_the_shell_sets_the_marker_only_for_a_dev_backend():
         "install would report as ours"
     )
     assert "PIXLSTASH_INSTALL_TYPE: 'electron'" in source, (
-        "the shell must keep declaring the electron channel — it is a runtime "
+        "the shell must keep declaring the electron channel - it is a runtime "
         "switch for cookie_secure and the loopback listener"
     )

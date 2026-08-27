@@ -15,7 +15,7 @@ Security posture (do not weaken):
   Production never sets the flag; only ``frontend/e2e/serve_e2e_backend.py``
   does, for the hermetic test backend.
 * **Owner-only, defense in depth.** Even when the flag is on, the handler calls
-  ``auth.require_unscoped_owner`` — a full cookie session or an unscoped
+  ``auth.require_unscoped_owner`` - a full cookie session or an unscoped
   ALL-token. READ tokens and resource-scoped tokens are rejected (the auth
   middleware already blocks READ-token writes; the handler re-checks). The
   endpoint emits broadcast events but never reads or returns per-object
@@ -107,7 +107,7 @@ class InjectWsEventRequest(BaseModel):
         default=None,
         description=(
             'Optional grid hint: "added", "updated", "removed", or "restored" '
-            "(a scrapheap undo/restore — the card comes back, but the picture "
+            "(a scrapheap undo/restore - the card comes back, but the picture "
             "is not a new import)."
         ),
         examples=["updated"],

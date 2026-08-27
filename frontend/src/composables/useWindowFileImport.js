@@ -16,7 +16,7 @@ import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
  * One notice key per DROP, never one for the verb.
  *
  * The card is sticky for as long as the copy runs, and a copy can run for
- * minutes — so a second drop arriving mid-copy is ordinary, not exotic. A
+ * minutes - so a second drop arriving mid-copy is ordinary, not exotic. A
  * shared key made the second drop coalesce onto the first one's card and then
  * dismiss it, leaving a running multi-gigabyte copy with nothing on screen and
  * a success message about the other file.
@@ -33,7 +33,7 @@ let modelDropSeq = 0;
  *
  * A `.safetensors` is the exception that IS claimed here wherever it lands,
  * grid included: it is not a picture on any screen, and it has its own
- * destination — see `addDroppedModelFiles`.
+ * destination - see `addDroppedModelFiles`.
  *
  * @param {object} deps
  * @param {import("vue").Ref} deps.sidebarRef - the sidebar, which owns the
@@ -53,7 +53,7 @@ export function useWindowFileImport({ sidebarRef }) {
     const dataTransfer = event?.dataTransfer;
     if (!dataTransfer) return false;
     // An internal app drag (grid thumbnail → sidebar character/set/project) is
-    // never a file import — bail before the files check. On the desktop shell
+    // never a file import - bail before the files check. On the desktop shell
     // (Electron) such a drag ALSO populates dataTransfer.files with the dragged
     // in-page image as a real File (the web does not), so without this guard the
     // window-level import handler mistakes the assign-drag for an external file
@@ -92,7 +92,7 @@ export function useWindowFileImport({ sidebarRef }) {
    *
    * `POST /model-files` takes a PATH, not bytes: the file is on the machine
    * running PixlStash, so the server copies it into the model store and
-   * registers it — no upload. A drop hands over a `File`, which carries a name
+   * registers it - no upload. A drop hands over a `File`, which carries a name
    * and bytes but no path, and only the desktop shell can answer where it came
    * from (`webUtils.getPathForFile`, via the preload bridge). In a browser tab
    * there is nothing to resolve and nothing to send, so the drop says where the
@@ -129,14 +129,14 @@ export function useWindowFileImport({ sidebarRef }) {
     const dropKey = `model-file-drop-${(modelDropSeq += 1)}`;
     /** Sticky, and re-pushed per file: a copy outlasts any countdown, and a
      * card that expires mid-copy reads as "it finished". The count is the only
-     * progress there is — the route copies a whole file per request. */
+     * progress there is - the route copies a whole file per request. */
     const sayCopying = (index) =>
       noticeStore.push({
         level: "info",
         text:
           resolved.length === 1
             ? `Copying ${resolved[0].name} into the model store…`
-            : `Copying ${index + 1} of ${resolved.length} into the model store — ${resolved[index].name}…`,
+            : `Copying ${index + 1} of ${resolved.length} into the model store - ${resolved[index].name}…`,
         key: dropKey,
         timeout: 0,
       });
@@ -202,7 +202,7 @@ export function useWindowFileImport({ sidebarRef }) {
     }
     event.preventDefault();
     // Decided synchronously, from the flat list, because `stopPropagation` only
-    // counts while the event is still being dispatched — which is now, before
+    // counts while the event is still being dispatched - which is now, before
     // the walk below can tell us what a dropped folder holds. A drop of model
     // files ALONE is claimed outright, grid included, or the grid's own handler
     // would report it as unsupported while the shelf was busy accepting it.
@@ -222,7 +222,7 @@ export function useWindowFileImport({ sidebarRef }) {
 
     // Started BEFORE the shelf work and never awaited with it: a model copy
     // runs for minutes, and the pictures of a mixed drop must not queue behind
-    // it. Inside the grid there is nothing to start — its own handler has the
+    // it. Inside the grid there is nothing to start - its own handler has the
     // pictures already, with the character context this one lacks.
     if (!insideGrid && pictureFiles.length) {
       const projectId = sidebarRef.value?.currentProjectId ?? null;

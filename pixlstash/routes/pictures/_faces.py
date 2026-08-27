@@ -36,7 +36,7 @@ class _DetectedFace:
     ``FaceResult.embedding`` (the normalised ArcFace vector from the recognition
     model) is the same value face extraction stores in ``Face.features`` as
     ``embedding.astype("float32").tobytes()``, so scoring an uploaded image this
-    way is bit-for-bit identical to scoring a stored picture — without writing
+    way is bit-for-bit identical to scoring a stored picture - without writing
     any ``Picture``/``Face`` rows.
     """
 
@@ -79,7 +79,7 @@ class FaceProjectionResponse(BaseModel):
 
 
 class FaceListResponse(BaseModel):
-    """``{"faces": [...]}`` — the wire shape the generic by-name reader used.
+    """``{"faces": [...]}`` - the wire shape the generic by-name reader used.
 
     Kept identical on purpose so the SPA (``api/pictures.js::listPictureFaces``)
     and ``tests/utils.py::wait_for_faces`` need no change when #721 moved these

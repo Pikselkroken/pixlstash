@@ -7,8 +7,8 @@ never reads a library's identity tables: a folder copied in from elsewhere may
 carry someone else's ``user``/``usertoken`` rows, and those must stay inert.
 
 Every write here is a single short transaction (see
-:class:`pixlstash.hub.db.HubDatabase`), and the two structural invariants —
-one registration per path, at most one active library — are enforced by unique
+:class:`pixlstash.hub.db.HubDatabase`), and the two structural invariants -
+one registration per path, at most one active library - are enforced by unique
 indexes rather than by check-then-write logic, so a concurrent CLI and server
 cannot interleave their way past them.
 """
@@ -329,7 +329,7 @@ class LibraryRegistry:
 
         Args:
             cleaned: The stripped name about to be written.
-            except_id: A row allowed to hold the name already — the one being
+            except_id: A row allowed to hold the name already - the one being
                 renamed, or revived into it.
             conn: An open transaction to read through.
                 :meth:`~pixlstash.hub.db.HubDatabase.transaction` opens
@@ -339,7 +339,7 @@ class LibraryRegistry:
                 concurrent adds of one name both pass. Every caller that is
                 about to write passes it. The exception is :meth:`create`'s early
                 call, which exists to fail *before* a vault is built and is
-                deliberately advisory — the authoritative check runs later,
+                deliberately advisory - the authoritative check runs later,
                 inside :meth:`_register`'s own transaction.
 
         Raises:
@@ -404,8 +404,8 @@ class LibraryRegistry:
             name or os.path.basename(resolved),
             # Start-up must not die on a name. `bootstrap._register_first_library`
             # passes the hardcoded "Library 1" and does not catch
-            # LibraryExistsError, so refusing here would turn a duplicate label —
-            # a nuisance — into a server that will not boot.
+            # LibraryExistsError, so refusing here would turn a duplicate label -
+            # a nuisance - into a server that will not boot.
             unique_name=False,
         )
 
@@ -714,14 +714,14 @@ class LibraryRegistry:
                 return self._revive(existing, cleaned, fingerprint, unique_name)
             # Before the UPDATE below, not after. That UPDATE commits, and it
             # renames the detached row's path to something `_find_by_path` can
-            # never match again — so a refusal after it would strand that row's
+            # never match again - so a refusal after it would strand that row's
             # uuid and every share token stamped with it, which is exactly what
             # `detach` promises cannot happen.
             #
             # Gated on the flag like every other call, or `unique_name=False`
             # would be a promise this branch quietly breaks: start-up would
             # still die on a name here (#1096 review). Nothing is stranded by
-            # skipping it — with no name check anywhere in the call there is no
+            # skipping it - with no name check anywhere in the call there is no
             # refusal left to land after the commit.
             if unique_name:
                 self._refuse_duplicate_name(cleaned)
@@ -892,8 +892,8 @@ class LibraryRegistry:
 
         A registration made while its vault carried no fingerprint records
         ``vault_uuid = NULL``; the value is written on the first successful
-        open. If something else stamps that vault first — another PixlStash
-        installation on this machine pointed at the same folder — every later
+        open. If something else stamps that vault first - another PixlStash
+        installation on this machine pointed at the same folder - every later
         startup dies on the conflict check with nothing in the UI to undo it.
 
         A NULL fingerprint means this hub has never served the library, so

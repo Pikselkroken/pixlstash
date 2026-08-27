@@ -294,7 +294,7 @@
            Selection-scoped like Segment, and the context menu's counterpart of
            this pair is gated identically, so it belongs here as well: #403
            holds the two menus to the same action list for a multi-selection.
-           Applied on click — no dialog, no direction picker, no confirmation,
+           Applied on click - no dialog, no direction picker, no confirmation,
            because two clicks give 180° and undo is the safety net. Greyed
            rather than hidden when nothing in the selection can carry a
            rotation, since the tooltip is what points at the copy route. -->
@@ -468,7 +468,7 @@ const showRemoveStackButton = computed(() => {
 });
 
 // True when selected images span multiple stacks (or one stack mixed with
-// non-stacked images) — the single-stack case is handled by showRemoveStackButton.
+// non-stacked images) - the single-stack case is handled by showRemoveStackButton.
 const showUnstackMultipleButton = computed(() => {
   if (props.isScrapheapView) return false;
   if (showRemoveStackButton.value) return false;
@@ -678,8 +678,8 @@ watch(
 
 // ── Restore from snapshot (mirrors ImageGridContextMenu.vue) ─────────────────
 // The five most-recent compatible snapshots offered as quick-restore targets
-// for the current selection. Lives here so the Selection ▾ dropdown — and its
-// keyboard "S" entry point — exposes the same selection-scoped action as the
+// for the current selection. Lives here so the Selection ▾ dropdown - and its
+// keyboard "S" entry point - exposes the same selection-scoped action as the
 // right-click context menu. Like the context menu, it drives the app-wide
 // RestoreConfirmDialog via the snapshots store (no parent wiring needed).
 const recentSnapshots = computed(() =>
@@ -704,7 +704,7 @@ watch(restoreSubmenuOpen, async (isOpen) => {
     recentSnapshots.value.map(async (cp) => {
       try {
         const body = await hashCompareSnapshot(cp.id, pictureIds);
-        // Bail on stale apply — a newer run has superseded this one.
+        // Bail on stale apply - a newer run has superseded this one.
         if (token !== _hashCompareRunToken) return;
         const identicalSet = new Set(body.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));

@@ -59,7 +59,7 @@ class GridPicture(BaseModel):
 
     **This model is enforced, not just documented.** It is the declared
     ``response_model`` of the grid listing routes, so FastAPI validates every row
-    against it and — since the config does not set ``extra="allow"`` — **drops any
+    against it and - since the config does not set ``extra="allow"`` - **drops any
     key not declared here**. That is load-bearing beyond tidiness: ``fields=full``
     selects ``Picture.metadata_fields()``, which includes ``project_id``, and the
     only reason those rows do not leak a project id to a token that cannot see it
@@ -148,7 +148,7 @@ class GridPicture(BaseModel):
             "which this picture will be permanently deleted by the retention "
             "auto-purge, already including the grace floor that a retention "
             "reduction puts under every deadline. `null` means it will never "
-            "be auto-purged — because retention is set to Never, because the "
+            "be auto-purged - because retention is set to Never, because the "
             "picture is `auto_purge_exempt`, or because it carries no "
             "soft-delete timestamp. Render the countdown from this value; do "
             "not recompute it client-side."
@@ -170,13 +170,13 @@ class GridPicture(BaseModel):
         description=(
             "Scrapheap view only (`only_deleted=true`). Why the picture is "
             "exempt, or null when it is not:\n\n"
-            "- `protected` — a reference-folder original with "
+            "- `protected` - a reference-folder original with "
             "`allow_delete_file=false`. Permanent and intrinsic; only the "
             "manual, consent-gated delete-forever can destroy it.\n"
-            "- `locked` — frozen by a locked picture-set (directly, or via a "
+            "- `locked` - frozen by a locked picture-set (directly, or via a "
             "stack sibling). Clearable: unlock the set and the picture rejoins "
             "the normal retention schedule.\n\n"
-            "When both apply, `protected` wins — it is the stronger reason, and "
+            "When both apply, `protected` wins - it is the stronger reason, and "
             "labelling such a picture merely 'locked' would understate why it "
             "is being kept."
         ),

@@ -47,7 +47,7 @@ export function useBreadcrumb() {
     // beats rendering a placeholder and then correcting it.
     const projName = (id) => entityNames.projectNames[id];
     // Root scope crumb names the sidebar bar/tab the view belongs to. These are
-    // scope *labels*, not destinations — plain text, not links. Only an
+    // scope *labels*, not destinations - plain text, not links. Only an
     // ancestor that has a real grid route (a project, in project sub-views) is
     // clickable.
     const globalRoot = { label: "Global" };

@@ -4,19 +4,19 @@ Pins the single project-membership reconciliation implementation
 (``pixlstash/services/project_membership_service.py``) that both the character
 PATCH (``routes/characters.py::patch_character``) and the picture-set PATCH
 (``routes/picture_sets.py::update_picture_set``) delegate to. The same function
-is exercised for BOTH entity kinds — character-anchored (via ``Face``, excluded
+is exercised for BOTH entity kinds - character-anchored (via ``Face``, excluded
 with ``exclude_character_id``) and set-anchored (via ``PictureSetMember``,
-excluded with ``exclude_set_id``) — across every direction:
+excluded with ``exclude_set_id``) - across every direction:
 
-* **added** — entity gains a project (``old=None`` -> ``new=P``);
-* **changed** — entity moves between projects (``old=A`` -> ``new=B``);
-* **removed** — entity leaves all projects (``old=P`` -> ``new=None``);
-* **unchanged** — idempotent repair (``old=P`` -> ``new=P``) heals a missing row;
-* **reference-aware retention** — a picture stays in the old project when a
+* **added** - entity gains a project (``old=None`` -> ``new=P``);
+* **changed** - entity moves between projects (``old=A`` -> ``new=B``);
+* **removed** - entity leaves all projects (``old=P`` -> ``new=None``);
+* **unchanged** - idempotent repair (``old=P`` -> ``new=P``) heals a missing row;
+* **reference-aware retention** - a picture stays in the old project when a
   second entity assigned to that project still anchors it.
 
 Both kinds must produce identical membership/pointer outcomes for the direction
-cases, and identical retention semantics differing only in the anchor type — that
+cases, and identical retention semantics differing only in the anchor type - that
 equivalence is exactly what the dedup relies on.
 """
 
@@ -83,8 +83,8 @@ def _memberships(session, pic_id):
 def _make_anchor(session, kind, project_id, pic_id, name, face_index=0):
     """Create an entity of *kind* assigned to *project_id* anchoring *pic_id*.
 
-    Since issue #125 the assignment is written in both representations — the
-    scalar primary-project FK *and* the membership join row — via
+    Since issue #125 the assignment is written in both representations - the
+    scalar primary-project FK *and* the membership join row - via
     ``set_character_projects`` / ``set_picture_set_projects``, because
     ``picture_referenced_by_project`` now reads the join. A fixture that only set
     the FK would leave the anchor invisible and silently weaken every
@@ -282,7 +282,7 @@ def test_reconcile_reference_aware_retention(server, kind):
 
 
 # ===========================================================================
-# Issue #125 — multi-project entity membership
+# Issue #125 - multi-project entity membership
 # ===========================================================================
 
 

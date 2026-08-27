@@ -184,7 +184,7 @@ def _follow_positive_ui(
         text = _get_widget_value_ui(node, "text")
         if isinstance(text, str) and text.strip():
             return text.strip()
-        # text may be fed by an external STRING link — follow it
+        # text may be fed by an external STRING link - follow it
         for inp in node.get("inputs") or []:
             if inp.get("name") == "text" and inp.get("link") is not None:
                 src_id = link_map.get(str(inp["link"]))
@@ -220,7 +220,7 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
 
         for node in graph.get("nodes") or []:
             node_type = node.get("type", "")
-            # mode 2 = muted/never, mode 4 = bypassed — skip both
+            # mode 2 = muted/never, mode 4 = bypassed - skip both
             if node.get("mode", 0) not in (0, None):
                 continue
 
@@ -623,9 +623,9 @@ def find_comfy_api_prompt(metadata: dict) -> dict | None:
     This is deliberately NOT :func:`find_comfy_workflow`. ComfyUI embeds two
     different things in a generated PNG:
 
-    - the ``workflow`` chunk — the *UI* node graph, for reopening in the editor.
+    - the ``workflow`` chunk - the *UI* node graph, for reopening in the editor.
       It is **not submittable** to ``POST /prompt``.
-    - the ``prompt`` chunk — the *resolved API graph the server actually
+    - the ``prompt`` chunk - the *resolved API graph the server actually
       executed*. This is the only executable one.
 
     Only the ``prompt`` chunk is considered here, and it must additionally pass
@@ -638,7 +638,7 @@ def find_comfy_api_prompt(metadata: dict) -> dict | None:
 
     Args:
         metadata: Raw embedded metadata as returned by
-            ``ImageUtils.extract_embedded_metadata`` — PNG text chunks live
+            ``ImageUtils.extract_embedded_metadata`` - PNG text chunks live
             under ``metadata["png"]``.
 
     Returns:

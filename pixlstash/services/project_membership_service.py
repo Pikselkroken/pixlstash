@@ -3,7 +3,7 @@
 When a character's or picture set's ``project_id`` changes, the entity's member
 pictures must be moved between :class:`~pixlstash.db_models.PictureProjectMember`
 rows: each picture is *added* to the new project and *removed* from the old one.
-Removal is **reference-aware** — a picture stays in the old project when another
+Removal is **reference-aware** - a picture stays in the old project when another
 character or picture set still assigned to that project anchors it there (see
 :func:`pixlstash.routes._helpers.picture_referenced_by_project`). When the entity
 leaves all projects, each picture's scalar ``Picture.project_id`` pointer falls
@@ -18,21 +18,21 @@ previously duplicated, verbatim in behaviour, between
 Each caller keeps three responsibilities of its own, because they differ by
 entity kind and were never part of the shared algorithm:
 
-* **member-picture derivation** — characters resolve the pictures of their faces
+* **member-picture derivation** - characters resolve the pictures of their faces
   and expand them to whole stacks (project membership is stack-atomic for a
   character); picture sets read their explicit members. The caller passes the
   already-resolved ``picture_ids``.
-* **the trigger** — characters reconcile only when ``project_id`` actually
+* **the trigger** - characters reconcile only when ``project_id`` actually
   changes; picture sets also reconcile on an idempotent same-project re-assign
   to repair historical drift. The caller decides whether to call this function.
-* **the "did anything change" signal** — characters treat "the entity had member
+* **the "did anything change" signal** - characters treat "the entity had member
   pictures" as the signal; picture sets use the precise change counts returned
   here. This function returns :class:`ProjectMembershipReconcileResult` so either
   interpretation is available.
 
 The function takes a **pre-opened** ``Session`` (the same threading discipline as
 ``enforce_picture_scope`` and the set-lock guards) and never touches
-``vault.db`` — per the services DB-access rule (backend_architecture.md §10.1)
+``vault.db`` - per the services DB-access rule (backend_architecture.md §10.1)
 the caller owns the transaction and commit.
 
 **Multi-project entities (issue #125).** A character or picture set may now belong
@@ -40,7 +40,7 @@ to several projects at once. This module also owns the *entity*→project write
 path: :func:`set_character_projects` / :func:`set_picture_set_projects` maintain
 the ``CharacterProjectMember`` / ``PictureSetProjectMember`` join rows **and**
 re-derive the legacy scalar ``project_id`` pointer (lowest member project id, or
-``None``). Nothing else may assign those FKs — see
+``None``). Nothing else may assign those FKs - see
 :mod:`pixlstash.db_models.entity_project` for the read-side predicates and the
 "write both, read the join" contract. The picture-side reconciliation follows in
 :func:`reconcile_entity_projects_change`, of which the original single-project
@@ -88,7 +88,7 @@ class EntityProjectChange:
         added: Project ids the entity newly joined.
         removed: Project ids the entity left.
         primary_project_id: The value written to the entity's scalar
-            ``project_id`` pointer — the lowest member project id, or ``None``
+            ``project_id`` pointer - the lowest member project id, or ``None``
             when the entity now belongs to no project.
         target_project_ids: The full, normalised membership set after the write.
     """
@@ -112,7 +112,7 @@ class ProjectMembershipReconcileResult:
         memberships_added: ``PictureProjectMember`` rows created for the new
             project.
         memberships_removed: ``PictureProjectMember`` rows deleted from the old
-            project (reference-aware — only pictures no longer anchored there).
+            project (reference-aware - only pictures no longer anchored there).
         pointers_repointed: Pictures whose scalar ``Picture.project_id`` pointer
             was updated (to the new project, or to a fallback membership when the
             entity left all projects).
@@ -147,14 +147,14 @@ def reconcile_entity_project_change(
 
     1. **Add** a ``PictureProjectMember`` for ``new_project_id`` when one does not
        already exist (skipped when ``new_project_id`` is ``None``).
-    2. **Remove** the ``PictureProjectMember`` for ``old_project_id`` — unless
+    2. **Remove** the ``PictureProjectMember`` for ``old_project_id`` - unless
        another character or picture set still assigned to that project anchors
        the picture there (reference-aware; the moving entity is excluded via
        ``exclude_character_id`` / ``exclude_set_id``). Skipped when
        ``old_project_id`` is ``None`` or equals ``new_project_id``.
     3. **Repoint** the scalar ``Picture.project_id``: to ``new_project_id`` when
-       a new project is set, otherwise — if the picture still pointed at the old
-       project — fall back to any remaining membership (lowest ``project_id``) or
+       a new project is set, otherwise - if the picture still pointed at the old
+       project - fall back to any remaining membership (lowest ``project_id``) or
        ``None`` when none remain.
 
     Passing ``old_project_id == new_project_id`` with a non-``None`` project is
@@ -214,7 +214,7 @@ def reconcile_entity_projects_change(
        (not just the newly added ids) keeps the historical idempotent-repair path:
        a drifted picture missing a row is healed.
     2. **Remove** the ``PictureProjectMember`` for every id in
-       ``remove_project_ids`` — unless another character or picture set still in
+       ``remove_project_ids`` - unless another character or picture set still in
        that project anchors the picture there (reference-aware; the moving entity
        is excluded via ``exclude_character_id`` / ``exclude_set_id``). Ids present
        in ``ensure_project_ids`` are never removed.
@@ -364,7 +364,7 @@ def _require_projects_exist(session: Session, project_ids: Iterable[int]) -> Non
         project_ids: Project ids to validate.
 
     Raises:
-        HTTPException: ``404`` with ``detail="Project not found"`` — the same
+        HTTPException: ``404`` with ``detail="Project not found"`` - the same
             shape the character / picture-set handlers returned before #125, so
             the API contract is unchanged.
     """

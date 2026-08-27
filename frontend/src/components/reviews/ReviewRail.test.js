@@ -1,4 +1,4 @@
-// ReviewRail — focus management around archived-review removal, and the
+// ReviewRail - focus management around archived-review removal, and the
 // accessible names of the two icon-only controls.
 //
 // Removing an archived receipt unmounts the row the user just activated (and,

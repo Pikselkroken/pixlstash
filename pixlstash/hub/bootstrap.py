@@ -154,8 +154,8 @@ def bootstrap_hub(
     library exactly as inert as if the prompt had never been offered.
 
     The callback may block on a human for an arbitrary time (it is how the
-    interactive startup prompt is implemented), so another process — for
-    instance the CLI command it stands in for, run concurrently — can finish
+    interactive startup prompt is implemented), so another process - for
+    instance the CLI command it stands in for, run concurrently - can finish
     the same preparation, or the whole migration, while it waits. The state is
     therefore re-read once the callback returns, before deciding whether to
     call :func:`prepare_legacy_identity` at all, and that call is still
@@ -163,7 +163,7 @@ def bootstrap_hub(
     thing it wanted has already happened must not abort over it.
 
     ``library_switch_prompt``, when given, is offered the attached libraries
-    that still open whenever the active one does not — see
+    that still open whenever the active one does not - see
     :func:`_offer_a_usable_library`.
     """
     hub = HubDatabase(hub_path or default_hub_path())
@@ -454,15 +454,15 @@ def _offer_a_usable_library(
 
     Two failures are folded into one recovery here because start-up itself is
     what makes the first one permanent. Opening a vault *creates* the file, so a
-    vault deleted outside PixlStash — a desktop install and a source install
-    keep separate hubs but share one folder on disk — is a missing database on
+    vault deleted outside PixlStash - a desktop install and a source install
+    keep separate hubs but share one folder on disk - is a missing database on
     the next start-up and an *unrecognisable* one on every start-up after that.
     Validating read-only first leaves the folder untouched.
 
     That still leaves nowhere to go: the Settings pane that changes the active
     library needs the server this failure is preventing, and the CLI has no verb
     for it. So the attached libraries that do open are offered instead, and the
-    error names them when nobody can be asked. Never chosen automatically — an
+    error names them when nobody can be asked. Never chosen automatically - an
     import landing in a library the owner did not pick is worse than a refusal.
     """
     try:

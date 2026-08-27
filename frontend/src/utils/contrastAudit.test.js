@@ -13,7 +13,7 @@ import {
 // (11px semibold labels in ReviewRail.vue on chrome that stays dark in both
 // themes). Three of four fell to 2.48:1 – 2.97:1 and shipped to develop,
 // because the only contrast coverage in the repo was the Playwright notice-card
-// spec — it renders the rail and nothing else.
+// spec - it renders the rail and nothing else.
 //
 // These assert the arithmetic on every pair, so a token edit that breaks a pair
 // no test happens to render still fails here.
@@ -103,7 +103,7 @@ describe('main.js status tokens', () => {
       .filter((row) => !row.pass)
       .map(
         (row) =>
-          `${row.group} — ${row.name}: ${row.fg} on ${row.bg} is ` +
+          `${row.group} - ${row.name}: ${row.fg} on ${row.bg} is ` +
           `${row.ratio.toFixed(2)}:1, floor ${row.floor}:1`,
       )
     expect(failures).toEqual([])

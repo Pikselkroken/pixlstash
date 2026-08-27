@@ -1,4 +1,4 @@
-"""Add tagger_run table — evaluation reports pushed from PixlTagger.
+"""Add tagger_run table - evaluation reports pushed from PixlTagger.
 
 Stores every run PixlTagger pushes (including rejected ones) with its full report
 payload, so PixlStash owns the tagger's stats/trend history. The first brick of making

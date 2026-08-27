@@ -6,7 +6,7 @@ cost and decreasing certainty. This module owns detection, the tier policy, the
 cover preselection and the evidence pills; :mod:`pixlstash.services.dedup_verdict_service`
 owns what happens when the user decides.
 
-Tier 1 — exact
+Tier 1 - exact
 --------------
 ``GROUP BY`` on an indexed hash column. **The column is the existing
 ``picture.pixel_sha``** (``Field(default=None, index=True)`` in
@@ -33,17 +33,17 @@ pictures ending up in one *stack*, which is reversible with one keystroke).
 :class:`~pixlstash.tasks.missing_pixel_sha_finder.MissingPixelShaFinder` backfills
 the rows that predate it.
 
-Tier 2 — bucketed near
+Tier 2 - bucketed near
 ----------------------
 Perceptual hashes compared **only within candidate buckets**, never library-wide.
 The buckets reuse what the library already precomputes:
 
-* ``picture.size_bin_index`` — an indexed ``(width << 32) + height`` column
+* ``picture.size_bin_index`` - an indexed ``(width << 32) + height`` column
   maintained by ``LikenessParameterUtils.size_bin_index``. Exact-dimension
   bucket; catches re-saves, re-encodes and burst frames.
-* capture minute — ``created_at`` truncated to the minute; catches bursts and
+* capture minute - ``created_at`` truncated to the minute; catches bursts and
   re-exports that changed dimensions.
-* import batch / folder — ``import_source_folder``, and the containing directory
+* import batch / folder - ``import_source_folder``, and the containing directory
   of ``file_path`` for reference-folder pictures.
 
 ``LikenessParameter.PHASH_PREFIX`` was investigated and is deliberately **not**
@@ -57,7 +57,7 @@ reader. Within a bucket this module does the real thing: XOR + popcount over the
 Each bucket is an independent unit of work, so buckets stream into the queue as
 they finish rather than the queue waiting for a full pass.
 
-Tier 3 — embedding
+Tier 3 - embedding
 ------------------
 The existing :class:`~pixlstash.db_models.picture_likeness.PictureLikeness` edge
 table, folded into components by the shipped
@@ -71,7 +71,7 @@ Policy
 auto/review split *for the queue*. Tier 1 is always on and cannot be switched
 off; each looser tier is a separate opt-in that requires the tier above it; the
 similarity threshold defaults to 0.90 and **nothing below 0.65 is ever
-suggested**. The dry-run planner and its report stay exactly as shipped — they
+suggested**. The dry-run planner and its report stay exactly as shipped - they
 are the non-destructive foundation this builds on, and ``SweepPolicy`` remains
 the parameter object for that surface.
 """
@@ -147,7 +147,7 @@ DEFAULT_THRESHOLD = 0.90
 """The near-duplicate similarity default (design §7 "Threshold")."""
 
 MIN_THRESHOLD = 0.65
-"""Hard floor. Below this nothing is suggested at all — a low threshold produces
+"""Hard floor. Below this nothing is suggested at all - a low threshold produces
 confident-looking garbage and destroys trust in the sidebar count. Never a silent
 clamp: :class:`TierPolicy` raises ``ValueError`` here, and every route carries the
 same bound as a pydantic ``ge=``, so over HTTP a low threshold is refused with a
@@ -189,7 +189,7 @@ MAX_BUCKET_MEMBERS = 4000
 """Cap on one tier-2 bucket. The within-bucket comparison is O(k^2) popcounts,
 which numpy does in milliseconds at k=4000 (~8M comparisons); beyond that the
 bucket is split into shards rather than being dropped, so nothing is silently
-skipped. This bounds **CPU**, not memory — see :data:`MAX_PAIRS_PER_BUCKET`."""
+skipped. This bounds **CPU**, not memory - see :data:`MAX_PAIRS_PER_BUCKET`."""
 
 MAX_PAIRS_PER_BUCKET = 50_000
 """Cap on the *materialised* near-pairs of one bucket.
@@ -203,8 +203,8 @@ only needs a spanning subset of. 50 000 pairs is ~4 MB.
 **The cap can lose membership.** Pairs are emitted in increasing member-offset
 order, so the cap keeps the nearest-offset edges and drops the wider ones. For a
 uniformly near-identical bucket that costs only confidence resolution (the
-offset-1 edges alone span the block). For a dense but *non-uniform* block —
-~700 mutually matching members exhaust the cap well inside the low offsets — a
+offset-1 edges alone span the block). For a dense but *non-uniform* block -
+~700 mutually matching members exhaust the cap well inside the low offsets - a
 member whose only match sits at a wider offset gets no edge at all and is split
 off into its own group or drops out of the queue. Hitting the cap logs a warning
 naming the bucket, the offset it stopped at and that consequence; the cap is
@@ -249,7 +249,7 @@ COVER_PIXEL_WEIGHT = 4.0
 COVER_TAG_WEIGHT = 3.0
 COVER_SCORE_WEIGHT = 2.0
 """Weights of the LEGACY ``cover_score`` composite (kept only for the wire field
-of the same name, which is deprecated). Cover selection no longer uses it — see
+of the same name, which is deprecated). Cover selection no longer uses it - see
 :func:`cover_order_key` for the ranking that does (2026-07-30 rework)."""
 
 COVER_SMART_SCORE_BUCKET = 0.25
@@ -270,7 +270,7 @@ re-NULLed on invalidation); anything non-positive is defensively treated the
 same way, covering the repo's ``-1.0`` failed-metric convention should it ever
 reach this column. An unknown score must be *neutral*, never *worst*: ranking
 it at zero would bury a not-yet-scored original under every scored copy (the
-same rule the sweep keeper and the smart-score grid sort follow — neither ranks
+same rule the sweep keeper and the smart-score grid sort follow - neither ranks
 an unscored picture at zero). The midpoint of the [1, 5] scale says "average
 until proven otherwise": a copy known to be better still wins the tier, a copy
 known to be worse still loses it, and unknown vs unknown falls through to
@@ -311,7 +311,7 @@ TIER_STRENGTH: dict[str, int] = {
 Two tiers can find the *same* group: a byte-identical pair is also perceptually
 identical, so a near-enabled rescan rediscovers every exact pair. The upsert is
 keyed on the signature, so without precedence the later (weaker) tier overwrote
-the stronger one — and an ``exact`` pair silently downgraded to ``near``
+the stronger one - and an ``exact`` pair silently downgraded to ``near``
 disappeared from the exact-only default queue *and* from ``POST
 /dedup/auto-stack``, which only ever acts on ``exact``.
 """
@@ -405,7 +405,7 @@ class DedupScope:
             # Normalise here, not at query time, and reject what normalises away.
             # The predicate strips trailing separators before building its LIKE
             # prefix, so "/", "\", "///" all became an empty prefix and a LIKE
-            # pattern of "%" — a "Find duplicates in this folder" request that
+            # pattern of "%" - a "Find duplicates in this folder" request that
             # silently meant the whole vault, and a persisted dedupscan row whose
             # scope_key claimed otherwise. Normalising at construction also makes
             # "/photos" and "/photos/" the same scope key instead of two scans.
@@ -489,7 +489,7 @@ class TierPolicy:
 
     Attributes:
         near_enabled: Tier 2. Opt-in.
-        embedding_enabled: Tier 3. Opt-in, and requires ``near_enabled`` — the
+        embedding_enabled: Tier 3. Opt-in, and requires ``near_enabled`` - the
             design's "enabling one requires the tier above it", so a user cannot
             land on "same scene" suggestions without having deliberately walked
             down to them.
@@ -589,7 +589,7 @@ class CandidateMember:
     def thumbnail_version(self) -> str:
         """The ``?v=`` version the queue's thumbnail URLs must carry.
 
-        Same value and same semantics as the batch-thumbnail endpoint's — both
+        Same value and same semantics as the batch-thumbnail endpoint's - both
         call :meth:`ImageUtils.thumbnail_cache_version`. Without it a thumbnail
         regenerated mid-triage would keep painting the stale cached bitmap in the
         queue, because the queue's URL would never change.
@@ -634,12 +634,12 @@ class CandidateMember:
         ``(pixel_sha, size_bytes)``; identity omitting the size made
         :func:`group_signature` non-injective over groups, which meant two
         distinct exact groups differing only in size collapsed onto one
-        signature — the upsert dropped one from the queue, a ``keep_separate``
+        signature - the upsert dropped one from the queue, a ``keep_separate``
         silenced both file sets, and a stack verdict's write target depended on
         scan order rather than on what the user saw.
 
         A picture whose hash has not been computed yet falls back to ``id:<n>``,
-        which is stable but *not* stable across a re-import of the same file — so
+        which is stable but *not* stable across a re-import of the same file - so
         a verdict made on a group containing such a member will be re-asked after
         a re-import. That is the honest behaviour: pretending two un-hashed rows
         are the same file would make the verdict memory lie.
@@ -653,7 +653,7 @@ class CandidateMember:
     def known_smart_score(self) -> Optional[float]:
         """The stored smart score, when it is actually usable.
 
-        ``None`` covers both "never computed / invalidated" (a NULL column —
+        ``None`` covers both "never computed / invalidated" (a NULL column -
         ``MissingSmartScoreFinder`` will fill it) and any non-positive value
         (defence against the repo's ``-1.0`` failed-metric sentinel; the real
         scale starts at 1). The ranking treats an unknown score as *neutral*
@@ -805,7 +805,7 @@ def group_signature(content_keys: Iterable[str]) -> str:
 def cover_order_key(member: CandidateMember) -> tuple:
     """Sort key implementing the cover ranking (reworked 2026-07-30).
 
-    Lexicographic tiers, strongest first — a lower tier can never outvote a
+    Lexicographic tiers, strongest first - a lower tier can never outvote a
     higher one, which is what "prioritise smart score" means and what the old
     weighted sum (``px*4 + tags*3 + score*2 + RAW``) could not express: there a
     40 MP blurry scan outscored a sharp 12 MP original on pixels alone.
@@ -813,7 +813,7 @@ def cover_order_key(member: CandidateMember) -> tuple:
     1. **Smart score**, in quarter-star buckets
        (:data:`COVER_SMART_SCORE_BUCKET`): the library's one composite quality
        opinion (CLIP anchors, aesthetics, sharpness, resolution, detail,
-       anomaly penalty — see ``pixlstash/scoring/smart_score.py``). Unknown or
+       anomaly penalty - see ``pixlstash/scoring/smart_score.py``). Unknown or
        failed scores rank *neutral* (:data:`COVER_SMART_SCORE_NEUTRAL`), never
        zero. Bucketing keeps scoring noise from outranking real differences.
     2. **Image size** as raw pixel count. Pixels, not bytes: bytes measure
@@ -830,13 +830,13 @@ def cover_order_key(member: CandidateMember) -> tuple:
        (``routes/stacks.py::_stack_order_key`` / the sweep keeper) puts it
        first: duplicates of one shot rarely carry different stars, and the
        post-stack metadata union lifts every member to ``max(score)`` anyway,
-       so inside a duplicate group stars barely discriminate — and the owner's
+       so inside a duplicate group stars barely discriminate - and the owner's
        requirement is smart score first.
     5. **Tag count** (richer metadata), then the **RAW** camera-original
        bonus, then **file size in bytes** (at equal pixels the heavier file is
        the less-compressed one).
     6. Ties break to the **oldest capture time** (the original, not a later
-       re-export — the one deliberate inversion of the stack order's
+       re-export - the one deliberate inversion of the stack order's
        recency-first rule, because a duplicate group wants its origin), then
        to the lowest id so the choice is deterministic for rows with no
        timestamp.
@@ -930,7 +930,7 @@ def build_group_evidence(
     carrying red pills is exactly the one that needs Compare. So this deliberately
     reports resolution / aspect-ratio / format mismatches alongside the match.
 
-    Nothing here is a conclusion — the client renders reasons and the user
+    Nothing here is a conclusion - the client renders reasons and the user
     decides.
     """
     pills: list[dict[str, Any]] = []
@@ -985,8 +985,8 @@ def build_candidate_evidence(
     """Per-candidate why-pills, so the client renders reasons, not conclusions.
 
     These are the signals :func:`cover_order_key` actually ranks on, stated per
-    candidate in ranking-priority order — smart score first, then resolution,
-    then sharpness, then the lower-order signals — so a user can see *why* the
+    candidate in ranking-priority order - smart score first, then resolution,
+    then sharpness, then the lower-order signals - so a user can see *why* the
     preselection landed where it did and disagree with it. A signal nobody in
     the group carries (no smart score computed yet, no sharpness) produces no
     pill: the serialized ``smart_score`` / ``sharpness`` fields are null there
@@ -1021,7 +1021,7 @@ def build_candidate_evidence(
         shortfall = 100 - int(round(100 * member.pixels / best_pixels))
         pills.append(_pill(f"{shortfall}% fewer pixels than the best", against=True))
 
-    # Tier 3: sharpness, positive-only — a third-order "softer" red pill on
+    # Tier 3: sharpness, positive-only - a third-order "softer" red pill on
     # every non-sharpest member would be noise, not evidence.
     with_sharpness = [m for m in members if m.known_sharpness is not None]
     if with_sharpness and member.known_sharpness is not None:
@@ -1070,7 +1070,7 @@ def load_candidates(
 ) -> dict[int, CandidateMember]:
     """Load the cover / evidence columns for *picture_ids*, plus their tag counts.
 
-    One query per id chunk for the picture columns and one for the tag counts —
+    One query per id chunk for the picture columns and one for the tag counts -
     never a per-picture round trip, because the queue loads a whole page of
     groups at once.
     """
@@ -1131,7 +1131,7 @@ def load_candidates(
             if member is not None:
                 member.tag_count = int(count or 0)
         # Sharpness for the ranking's third tier. Its own indexed lookup, like
-        # the tag counts — Quality is one row per picture (or absent until the
+        # the tag counts - Quality is one row per picture (or absent until the
         # quality task has run; -1.0 marks a failed computation, and both read
         # as "unknown" through CandidateMember.known_sharpness).
         quality_rows = session.exec(
@@ -1491,10 +1491,10 @@ def build_near_buckets(
 
     Four bucket kinds, all cheap and all reusing precomputed columns:
 
-    * ``size_bin`` — the indexed ``picture.size_bin_index`` (exact width/height).
-    * ``capture_minute`` — ``created_at`` truncated to the minute.
-    * ``import_folder`` — the ``import_source_folder`` batch.
-    * ``folder`` — the containing directory of ``file_path``.
+    * ``size_bin`` - the indexed ``picture.size_bin_index`` (exact width/height).
+    * ``capture_minute`` - ``created_at`` truncated to the minute.
+    * ``import_folder`` - the ``import_source_folder`` batch.
+    * ``folder`` - the containing directory of ``file_path``.
 
     A picture appears in several buckets; that is the point. Buckets larger than
     :data:`MAX_BUCKET_MEMBERS` are split on the leading hex digits of the picture
@@ -1587,7 +1587,7 @@ def near_pairs_in_bucket(
     ``similarity = 1 - hamming(dhash_a, dhash_b) / 64`` over the 64-bit dHash
     stored in ``picture.perceptual_hash``. The comparison is a numpy XOR plus a
     SWAR popcount over the bucket's upper triangle, so a 4000-member bucket is
-    ~8M popcounts — milliseconds — and the library-wide O(n^2) never happens.
+    ~8M popcounts - milliseconds - and the library-wide O(n^2) never happens.
 
     Returns:
         ``(picture_id_a, picture_id_b, similarity)`` with ``a < b``, similarity
@@ -1709,7 +1709,7 @@ def groups_from_pairs(
 ) -> list[DetectedGroup]:
     """Fold near pairs into connected components and assemble them.
 
-    Reuses :class:`~pixlstash.services.dedup_sweep_service._LikenessForest` — the
+    Reuses :class:`~pixlstash.services.dedup_sweep_service._LikenessForest` - the
     shipped union-find that already accumulates per-component min/max similarity,
     so the group's confidence is its **weakest link**, not its strongest.
     """
@@ -1892,7 +1892,7 @@ def persist_groups_in_session(
             # again; overwriting unconditionally moved them out of the
             # exact-only default view and out of auto-stack's eligibility.
             # Tier, confidence and evidence describe the *same* finding, so they
-            # move together — mixing a stored exact tier with a near
+            # move together - mixing a stored exact tier with a near
             # confidence would misreport both.
             if tier_strength(group.tier.value) >= tier_strength(row.tier):
                 row.tier = group.tier.value
@@ -2029,7 +2029,7 @@ def encode_queue_cursor(confidence: float, group_id: int) -> str:
     row is exactly that pair. The wire form is base64url (unpadded) over
     ``"1|<confidence>|<group id>"``, with the confidence written at 17
     significant digits so a float round-trips exactly and the ``=`` tie-break
-    branch of the keyset predicate is reliable. It is opaque by intent — clients
+    branch of the keyset predicate is reliable. It is opaque by intent - clients
     must pass it back verbatim, never construct or interpret one.
 
     Args:
@@ -2048,7 +2048,7 @@ def decode_queue_cursor(cursor: str) -> tuple[float, int]:
 
     Raises:
         DedupCursorError: The cursor is not a cursor this server minted. A bad
-            cursor is a 400, never a silent restart from the top — silently
+            cursor is a 400, never a silent restart from the top - silently
             paging from offset 0 would hand the client the same page forever.
     """
     text = str(cursor or "")
@@ -2181,7 +2181,7 @@ def live_groups_filter():
     * **Two or more of them.** A soft-delete thins its groups the moment it
       lands, but :func:`prune_stale_groups_in_session` only runs on the next
       verdict or scan; without this the badge counts a group with one picture.
-    * **Spanning two or more stack units** (``COALESCE(stack_id, -id)`` — every
+    * **Spanning two or more stack units** (``COALESCE(stack_id, -id)`` - every
       unstacked picture is its own unit, stacked pictures share one). Members
       already stacked TOGETHER are a decision the user has made, whether or
       not it was made through this queue: the grid's own stack actions never
@@ -2256,7 +2256,7 @@ def count_decided_by_verdict_in_session(
 
     Deliberately ignores the verdict filter itself (and the tier gate, which the
     decided page ignores wholesale), so the menu can show what turning a verdict
-    back on would add before the user turns it on — the same contract as
+    back on would add before the user turns it on - the same contract as
     :func:`count_by_tier_in_session`.
 
     The counts can sum to less than the decided page's ``total``: a resolved
@@ -2374,7 +2374,7 @@ def page_queue_in_session(
     a verdict on a delivered row removes it from ``resolved=False``, and a tier-2
     scan commits new groups after every bucket. Both shift every later row's
     offset, so ``offset=limit`` on the second request skips exactly as many
-    groups as the first page's decisions removed — a deterministic, silent skip
+    groups as the first page's decisions removed - a deterministic, silent skip
     reproduced with a single verdict between two pages. The keyset cursor encodes
     *where the last row was in the ordering* rather than *how many rows to
     discard*, so a row that never moved is never skipped.
@@ -2383,7 +2383,7 @@ def page_queue_in_session(
         session: Pre-opened session.
         policy: Tier gating and threshold; server defaults when omitted.
         scope: Scope to page within; the whole vault when omitted.
-        offset: Deprecated rows-to-skip paging. Ignored when *cursor* is given —
+        offset: Deprecated rows-to-skip paging. Ignored when *cursor* is given -
             the route rejects the combination before it reaches here.
         limit: Page size, clamped to :data:`MAX_PAGE_SIZE`.
         cursor: Opaque keyset position from a previous page's ``next_cursor``.
@@ -2392,7 +2392,7 @@ def page_queue_in_session(
         verdicts: **Decided page only.** Restrict the listing to these live
             verdicts (:class:`DedupVerdictKind` values). ``None`` or empty is
             every verdict, which is the whole decided page. Ignored when
-            *decided* is false — the open queue's rows carry no verdict by
+            *decided* is false - the open queue's rows carry no verdict by
             definition, and the route rejects the combination before it gets
             here.
 
@@ -2446,7 +2446,7 @@ def page_queue_in_session(
             # reachable with the filter off, which is where the way back lives.
             query = query.where(DedupVerdict.verdict.in_(wanted))
     else:
-        # The open queue lists only groups that still pose a decision — same
+        # The open queue lists only groups that still pose a decision - same
         # live-membership rule as the counts, so the badge and the list agree.
         # The decided page keeps thinned groups: the verdict already happened,
         # and hiding it would hide the "clear decision" way back.

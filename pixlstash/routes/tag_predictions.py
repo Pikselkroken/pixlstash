@@ -208,7 +208,7 @@ def create_router(server) -> APIRouter:
             "(a synthetic ``manual`` prediction row is created when the tag was "
             "hand-added and the tagger never predicted it).  Does not modify the "
             "Tag table.  Records an undoable ``pictures.tags.reject`` operation "
-            "summarised as *Removed tag 'x'* — that is what the user did; the "
+            "summarised as *Removed tag 'x'* - that is what the user did; the "
             "ledger is the mechanism.  423 when a locked picture set freezes the "
             "picture (nothing is recorded)."
         ),
@@ -233,7 +233,7 @@ def create_router(server) -> APIRouter:
 
         # Recorded so Ctrl+Z can revert it (§21.2). "Removed tag" is what the user
         # did; the NEG ledger row is the mechanism, and it is captured with the
-        # tags facet so an undo reverses both — a restored tag the tagger still
+        # tags facet so an undo reverses both - a restored tag the tagger still
         # treats as rejected is a half-undo, which is worse than none.
         operation_log_service.run_recorded_metadata_task(
             server.vault,
@@ -290,7 +290,7 @@ def create_router(server) -> APIRouter:
             "Atomically deletes all non-manual TagPrediction rows and all Tag rows "
             "for the picture, then restores the pending-retag sentinel.  This is the "
             "single-round-trip equivalent of calling tag_predictions/delete followed "
-            "by DELETE tags — it avoids the intermediate state where predictions are "
+            "by DELETE tags - it avoids the intermediate state where predictions are "
             "gone but tags still exist, which otherwise tricks the background "
             "MissingTagFinder into running a wasted inference pass."
         ),

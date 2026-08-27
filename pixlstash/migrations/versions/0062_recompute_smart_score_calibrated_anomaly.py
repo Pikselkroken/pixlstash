@@ -6,7 +6,7 @@ and a CLIP-IQA objective quality term was added (see
 ``docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md``). Existing stored
 ``smart_score`` values were produced by the old formula, so this migration NULL-resets the
 column; ``MissingSmartScoreFinder`` then recomputes every picture under the new rule on the
-next run. Schema-only otherwise — no columns are added or removed.
+next run. Schema-only otherwise - no columns are added or removed.
 
 Revision ID: 0062_recompute_smart_score_calibrated_anomaly
 Revises: 0061_add_detection

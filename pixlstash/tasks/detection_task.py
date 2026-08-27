@@ -31,7 +31,7 @@ class DetectionTask(BaseTask):
     Mirrors :class:`~pixlstash.tasks.face_extraction_task.FaceExtractionTask`'s
     GPU-queue / high-priority shape, but runs Florence-2 grounding/OD and stores
     labelled boxes in the :class:`~pixlstash.db_models.detection.Detection`
-    table. Unlike face extraction there is **no WorkFinder** — detection only
+    table. Unlike face extraction there is **no WorkFinder** - detection only
     runs when the user asks for it (the Segment action), so it is not part of
     the NULL-column reprocessing pattern.
 

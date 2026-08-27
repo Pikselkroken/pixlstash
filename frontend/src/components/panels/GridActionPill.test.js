@@ -20,7 +20,7 @@ function mountPill(props = {}, attachTo = undefined) {
   });
 }
 
-describe("GridActionPill — structure", () => {
+describe("GridActionPill - structure", () => {
   it("renders nothing when neither half has anything to say", () => {
     const wrapper = mountPill();
     expect(wrapper.find(".grid-action-pill").exists()).toBe(false);
@@ -68,7 +68,7 @@ describe("GridActionPill — structure", () => {
   });
 });
 
-describe("GridActionPill — focus rescue", () => {
+describe("GridActionPill - focus rescue", () => {
   it("moves focus to the surviving half when a half unmounts under it", async () => {
     // Esc clears the selection while focus sits on Delete. Without this, focus
     // lands on <body> and a keyboard user drops out of the tab order entirely

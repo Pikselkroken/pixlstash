@@ -280,7 +280,7 @@ class PixelatePlugin(ImagePlugin):
             perp_dx = np.round(np.cos(angle_small)).astype(np.int32)
             perp_dy = np.round(np.sin(angle_small)).astype(np.int32)
 
-            # Variance weight at the small scale — errors concentrate where
+            # Variance weight at the small scale - errors concentrate where
             # detail is finest.  Use error_rate as a global scale factor
             # rather than a flat percentile cut, so the distribution mirrors
             # the variance map (non-uniform, content-driven).
@@ -289,7 +289,7 @@ class PixelatePlugin(ImagePlugin):
             )
 
             # Combined probability: variance weight × cluster blob.
-            # No percentile threshold — just compare against uniform random
+            # No percentile threshold - just compare against uniform random
             # so each pixel's chance of being flagged is proportional to its
             # variance score × error_rate.
             rand_field = rng.random((small_h, small_w)).astype(np.float32)

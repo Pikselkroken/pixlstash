@@ -13,7 +13,7 @@ path, because that would wipe manual character assignments.
 
 Matching strategy (per picture):
 
-1. Match new detections to existing rows by ``(frame_index, face_index)`` — the
+1. Match new detections to existing rows by ``(frame_index, face_index)`` - the
    extractor assigns ``face_index`` deterministically by sorted bbox position, so
    with an identical detector the indices line up.
 2. Any remaining unmatched pairs are matched by bbox IoU (handles a rare ordering
@@ -123,7 +123,7 @@ class FaceModelRefreshTask(BaseTask):
     def _load_detection_units(self, pic) -> list:
         """Load the frames to run detection on for one picture (no inference).
 
-        Returns a list of ``(frame_index, image, inv_scale)`` tuples — one per
+        Returns a list of ``(frame_index, image, inv_scale)`` tuples - one per
         image, or one per sampled frame for a video. The image is a BGR
         ``np.ndarray`` already scaled down to ``INFERENCE_MAX_SIDE``; ``inv_scale``
         maps detected bboxes back to original-pixel space. Returns an empty list
@@ -248,7 +248,7 @@ class FaceModelRefreshTask(BaseTask):
         ``face_index`` assigned by the extractor's sorted-bbox rule.
 
         Returns ``{picture_id: list[Face]}``. A picture maps to an empty list
-        when it produced no usable detections — including an unsupported type or
+        when it produced no usable detections - including an unsupported type or
         an unreadable file (``_load_detection_units`` returns ``[]`` and logs);
         the refresh writer turns that into a sentinel row stamped with the new
         pack, so it is not re-selected forever. A picture is OMITTED from the
@@ -336,7 +336,7 @@ class FaceModelRefreshTask(BaseTask):
         # per image (RetinaFace is inherently batch=1) but collects every aligned
         # face crop and runs ONE recognition (embedding) ONNX call across all of
         # them. Feeding it the batch's frames together therefore replaces N
-        # single-crop recognition calls with one — the hot path for a full
+        # single-crop recognition calls with one - the hot path for a full
         # re-embedding sweep (CLAUDE.md throughput/batching practice). The crops
         # are normalised to a fixed recogniser input size, so mixed source-image
         # sizes batch cleanly.
@@ -370,7 +370,7 @@ class FaceModelRefreshTask(BaseTask):
 
         # Block on the write commits. A picture is only counted as changed once
         # its in-place refresh has actually committed. A write that raised (e.g.
-        # a persistent DB failure) is logged with context and NOT counted — the
+        # a persistent DB failure) is logged with context and NOT counted - the
         # row keeps the old pack, so the finder will correctly re-select it for
         # another attempt instead of the failure being silently masked.
         changed_ids: list[int] = []
@@ -445,8 +445,8 @@ class FaceModelRefreshTask(BaseTask):
         The pack-refresh sweep only manages *detected* faces (updated ``pairs`` +
         inserted ``unmatched_new``). Manual annotations are held aside but still
         occupy ``(frame_index, face_index)`` slots that the unique constraint
-        forbids reusing. Renumber the detected faces per frame — by sorted bbox
-        position, the extractor's ordering rule — to the sequence of indices that
+        forbids reusing. Renumber the detected faces per frame - by sorted bbox
+        position, the extractor's ordering rule - to the sequence of indices that
         skips those reserved slots, so an inserted detection can never collide
         with a manually-drawn box (which would raise IntegrityError and leave the
         picture stuck stale).
@@ -478,8 +478,8 @@ class FaceModelRefreshTask(BaseTask):
     ) -> None:
         """Update one picture's face rows in place, preserving character_id.
 
-        Manual annotations — a human-drawn bbox with no embedding
-        (``features IS NULL``) — are NOT managed by this pack-refresh sweep: there
+        Manual annotations - a human-drawn bbox with no embedding
+        (``features IS NULL``) - are NOT managed by this pack-refresh sweep: there
         is no embedding to recompute and the detector never produced the box, so
         the refresh must never delete it, move it, or overwrite its bbox. Such
         rows are held aside untouched and their ``(frame_index, face_index)`` slots
@@ -498,7 +498,7 @@ class FaceModelRefreshTask(BaseTask):
             f for f in existing if f.face_index != -1 and f.features is not None
         ]
 
-        # Slots occupied by manual annotations, per frame — detected faces must not
+        # Slots occupied by manual annotations, per frame - detected faces must not
         # be written into these (unique constraint on picture/frame/face_index).
         reserved: dict[int, set[int]] = {}
         for f in manual_existing:
@@ -507,7 +507,7 @@ class FaceModelRefreshTask(BaseTask):
         if not new_faces:
             # No faces detected now. Remove the detected rows (their embeddings are
             # stale and the current pack no longer finds them) but KEEP manual
-            # annotations — they were never detector output.
+            # annotations - they were never detector output.
             if real_existing:
                 for f in real_existing:
                     logger.info(
@@ -540,7 +540,7 @@ class FaceModelRefreshTask(BaseTask):
             cls._commit(session, picture_id)
             return
 
-        # Real detections exist now — any old sentinel is obsolete.
+        # Real detections exist now - any old sentinel is obsolete.
         for s in sentinels:
             session.delete(s)
 

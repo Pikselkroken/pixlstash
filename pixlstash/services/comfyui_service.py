@@ -389,7 +389,7 @@ def graph_has_pixlstash_nodes(workflow: dict) -> bool:
     Every class in the ComfyUI-PixlStash pack is prefixed, so the prefix is the
     rule: a node added to the pack later is covered without editing this.
 
-    Such a graph is a cycle — PixlStash runs ComfyUI, which calls PixlStash —
+    Such a graph is a cycle - PixlStash runs ComfyUI, which calls PixlStash -
     and it carries **frozen ids**: the loaders serialise a choice as
     ``"<name> #<id>"``, so a replayed file re-applies whatever project, set,
     character or picture id was current when it was authored. That is fine for a
@@ -489,7 +489,7 @@ def _extract_pixlstash_picture_ids(
 
     The empty list is meaningful and distinct from None: the node ran but every
     image it uploaded was a duplicate of one already in the vault, so there is
-    nothing new to stack — and nothing to gain from downloading its previews.
+    nothing new to stack - and nothing to gain from downloading its previews.
     """
     ids: list[int] | None = None
     for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
@@ -788,8 +788,8 @@ def _copy_set_and_project_assignments(
         return
 
     def copy_task(session):
-        # A locked set's membership cannot change. This is a *propagation* path —
-        # the user asked for a generation, not to edit the set — so a locked
+        # A locked set's membership cannot change. This is a *propagation* path -
+        # the user asked for a generation, not to edit the set - so a locked
         # source set is skipped (and logged) rather than failing the whole
         # generation and discarding images already imported.
         source_set_ids = drop_locked_set_ids(
@@ -982,7 +982,7 @@ def _process_comfyui_outputs(
     byte-for-byte:
 
     - On success with newly imported pictures it emits exactly ONE
-      ``EventType.PICTURE_IMPORTED`` event — never a second event, and none for
+      ``EventType.PICTURE_IMPORTED`` event - never a second event, and none for
       already-existing re-imports (``duplicate_ids`` are intentionally ignored;
       they are already in the grid and need no event).
     - The payload carries ``source: "ui"`` and ``change_kind: "added"``.
@@ -1090,7 +1090,7 @@ def _process_comfyui_outputs(
         )
         if pixlstash_ids:
             # A PixlStash saver node uploaded these itself, so there is nothing
-            # left to import — but everything below (stacking, source lineage,
+            # left to import - but everything below (stacking, source lineage,
             # set/project inheritance, the single import event) still has to
             # run, and it needs the ids the node reported.
             #

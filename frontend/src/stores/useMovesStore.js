@@ -1,7 +1,7 @@
-// useMovesStore.js — the moves-made-outside-PixlStash reconciliation queue.
+// useMovesStore.js - the moves-made-outside-PixlStash reconciliation queue.
 //
 // v1.11 Phase 5. Three buckets, reclassified live by the backend on every
-// GET — this store never invents or corrects a verdict itself, only holds
+// GET - this store never invents or corrects a verdict itself, only holds
 // what the last GET said and re-fetches on the WebSocket's "look again" nudge
 // (EXTERNAL_MOVES_PENDING) or after an apply/dismiss.
 //
@@ -36,7 +36,7 @@ export const useMovesStore = defineStore("moves", () => {
     () => unambiguous.value.length + ambiguous.value.length,
   );
   // Distinct from hasPending: an off_layout-only queue has nothing to DECIDE
-  // (no badge, no red dot — hasPending stays false for it), but it still has
+  // (no badge, no red dot - hasPending stays false for it), but it still has
   // to be REACHABLE, or the backend's retention window quietly expires it
   // with nobody ever having seen it. This is what gates the sidebar row's
   // and the screen's own dismiss-all action's visibility.
@@ -75,7 +75,7 @@ export const useMovesStore = defineStore("moves", () => {
     return result;
   }
 
-  /** Resolve one row — an ambiguous "Only X now", or a re-apply of any id. */
+  /** Resolve one row - an ambiguous "Only X now", or a re-apply of any id. */
   async function applyReview(reviewId) {
     const result = await movesApi.applyMoves([reviewId]);
     await fetchPending();
@@ -91,7 +91,7 @@ export const useMovesStore = defineStore("moves", () => {
     return result;
   }
 
-  /** Dismiss the whole queue — "Leave everything as it was". */
+  /** Dismiss the whole queue - "Leave everything as it was". */
   async function dismissAll() {
     const ids = [
       ...unambiguous.value.map((item) => item.review_id),

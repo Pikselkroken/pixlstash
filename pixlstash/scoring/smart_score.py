@@ -253,7 +253,7 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
     the open vault session found no user row on every call, logged a warning per batch,
     and scored with the shipped seed while the owner's edited table sat in the hub.
 
-    The user's table *replaces* the shipped defaults rather than merging with them — that
+    The user's table *replaces* the shipped defaults rather than merging with them - that
     is the contract of
     :func:`~pixlstash.utils.quality.smart_score_utils.smart_score_penalised_tags`, which
     only returns the fallback when the stored value is absent or unparseable. A tag the
@@ -264,7 +264,7 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
     :func:`get_smart_score_penalised_tags_from_request` cannot serve it, since a
     background task has no request.
 
-    It reads ``auth_service.user`` — the process-local owner cache — rather than issuing
+    It reads ``auth_service.user`` - the process-local owner cache - rather than issuing
     a hub query per batch. That cache is not a start-up snapshot for these fields:
     ``PATCH /users/me/config`` writes it back precisely so background scoring sees an
     edit (``pixlstash/routes/config.py``, "keep the process-local owner cache
@@ -311,7 +311,7 @@ def attach_anomaly_inputs(
         apply_thresholds: Confidence gate per anomaly tag; see
             :func:`fetch_anomaly_confidences`.
         penalised_tag_weights: The owner's ``{tag: weight}`` table, resolved by the
-            caller from the hub (see :func:`resolve_penalised_tag_weights`) — it cannot
+            caller from the hub (see :func:`resolve_penalised_tag_weights`) - it cannot
             be read from *this* session, which is a vault one. ``None`` uses the shipped
             seed; ``{}`` is honoured as "penalise nothing".
 
@@ -319,7 +319,7 @@ def attach_anomaly_inputs(
         Config overrides for
         :meth:`~pixlstash.utils.quality.smart_score_utils.SmartScoreUtils.calculate_smart_score_batch_numpy`:
         ``tag_precisions`` from the latest evaluated :class:`TaggerRun`,
-        ``penalised_tag_weights`` as passed in, and ``tag_thresholds`` — the same gate
+        ``penalised_tag_weights`` as passed in, and ``tag_thresholds`` - the same gate
         applied here, forwarded so the penalty can grade each detection's confidence
         relative to its own acceptance threshold rather than in absolute terms.
     """
@@ -391,7 +391,7 @@ def fetch_smart_score_data(
             .limit(200)
         ).all()
 
-        # Candidates — join to picture-level quality rows.
+        # Candidates - join to picture-level quality rows.
         query = select(Picture, Quality).outerjoin(
             Quality,
             Quality.picture_id == Picture.id,

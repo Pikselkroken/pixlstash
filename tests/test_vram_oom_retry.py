@@ -2,7 +2,7 @@
 
 The failure this pins is a user plugin whose model load OOMs because something
 else (a ComfyUI run, a second model) is holding the card. That used to lose the
-whole batch on the first try — and, for descriptions, clear the caption of every
+whole batch on the first try - and, for descriptions, clear the caption of every
 picture in it. See ``BaseTask.run`` and ``DescriptionTask``.
 
 No ``Server`` here on purpose: every piece under test is reachable with plain
@@ -111,7 +111,7 @@ def test_a_transient_oom_is_retried_and_the_batch_survives():
 
     assert task.attempts == 3
     assert task.status == TaskStatus.COMPLETED
-    # Reported between attempts only — never after the one that succeeded.
+    # Reported between attempts only - never after the one that succeeded.
     assert reported == [1, 2]
 
 
@@ -196,7 +196,7 @@ def test_the_runner_closes_the_notice_when_a_retry_succeeds(monkeypatch):
     # Two frames: the retry, then the recovery. Without the second one the
     # user's last word on work that succeeded is "Retrying".
     assert [data["recovered"] for _, data in events] == [False, True]
-    # Attempt 1 OOMed, attempt 2 did the work — so the closing frame names 2.
+    # Attempt 1 OOMed, attempt 2 did the work - so the closing frame names 2.
     # Repeating the last *failed* attempt here would have the card claim the
     # work finished on the attempt that did not finish it.
     assert [data["attempt"] for _, data in events] == [1, 2]
@@ -214,7 +214,7 @@ def test_a_non_oom_death_after_an_oom_still_closes_the_notice(monkeypatch):
 
     # The card is open because of the first attempt, so something has to close
     # it even though the exception that ended the task is not an OOM. It closes
-    # naming attempt 2 — the one that died — and short of the 3 the task was
+    # naming attempt 2 - the one that died - and short of the 3 the task was
     # entitled to, which is what tells the SPA not to promise a later retry.
     assert [data["gave_up"] for _, data in events] == [False, True]
     assert [data["attempt"] for _, data in events] == [1, 2]
@@ -264,7 +264,7 @@ def test_the_wire_payload_carries_the_attempt_count():
 
 
 def test_the_event_is_not_filtered_out_by_a_clients_grid_filters():
-    # It describes the machine, so no grid filter may suppress it — and a
+    # It describes the machine, so no grid filter may suppress it - and a
     # non-owner socket must not receive vault-wide activity at all.
     assert WsBroadcasterMixin._should_send_ws_update(
         None, EventType.VRAM_OOM, {"selected_character": 7}
@@ -315,7 +315,7 @@ def test_an_oom_leaves_existing_descriptions_alone():
     with pytest.raises(_FakeOom):
         task.run()
 
-    # Not "" — the whole point. The captions are untouched and the picture is
+    # Not "" - the whole point. The captions are untouched and the picture is
     # left for the finder to pick up again once the GPU has room.
     assert [pic.description for pic in pictures] == [
         "a cat on a wall",

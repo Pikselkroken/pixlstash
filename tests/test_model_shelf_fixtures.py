@@ -3,8 +3,8 @@
 This is the acceptance test for ``scripts/generate_model_shelf_fixtures.py``.
 The fixtures exist so B4's scanner and the F1+ shelf UI are built against
 realistic data instead of invented data, and that is only true while the two
-readers that will consume them —
-:mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.aitoolkit_run` —
+readers that will consume them -
+:mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.aitoolkit_run` -
 read the generated tree exactly as they read the real thing. So every assertion
 below goes through those readers rather than re-parsing the fixtures here.
 
@@ -149,7 +149,7 @@ class TestAdapterFolder:
         This is the regression: real adapters cluster hard on shape, so the
         generator repeats shapes on purpose, and a sparse payload is all zeroes.
         That made a file's SHA-256 a pure function of its header, and 1,800
-        fixtures collapsed onto 478 distinct files — the shelf then showed 478
+        fixtures collapsed onto 478 distinct files - the shelf then showed 478
         rows and one model carried 202 locations. The payload slug is what fixes
         it, so this hashes the header *and* the slug behind it, straight off
         disk. Everything after them is a hole the header itself measures, which

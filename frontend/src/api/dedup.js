@@ -439,7 +439,7 @@ export async function applyVerdictBatch(
  * stack (restoring the recorded pre-verdict stack state), because the open
  * queue only offers groups whose members span two or more stack units. That
  * unstack is one undoable `dedup.reopen` operation and the response's
- * `batch_id` is its undo handle — gate any receipt/narration on it, exactly
+ * `batch_id` is its undo handle - gate any receipt/narration on it, exactly
  * as for the other verdicts. A clear that touches no picture (keep-separate,
  * or a stack the user already dissolved by hand) records nothing and returns
  * `batch_id: null`.

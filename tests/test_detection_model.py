@@ -1,6 +1,6 @@
 """Fast unit tests for the Detection model and the COCO-subset export sidecar.
 
-No inference engine or server is needed here — these exercise the bbox-as-JSON
+No inference engine or server is needed here - these exercise the bbox-as-JSON
 round-trip, the FK cascade from Picture, and the export sidecar writer.
 """
 

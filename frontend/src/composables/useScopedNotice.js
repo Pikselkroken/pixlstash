@@ -1,8 +1,8 @@
-// useScopedNotice.js — retire a notice when the thing it talks about is gone.
+// useScopedNotice.js - retire a notice when the thing it talks about is gone.
 //
 // Most notices report an event ("Import finished") and are true forever, so a
 // timeout is the only dismissal they need. A few report a *state* of the current
-// context instead — "3 of the selected pictures are in locked sets" — and those
+// context instead - "3 of the selected pictures are in locked sets" - and those
 // have a second, harder deadline: the sentence stops being true the moment the
 // selection, the view, or the lock changes. A notice with an action is sticky by
 // spec (§6 rule 1, so the action stays reachable), which means nothing else will
@@ -16,7 +16,7 @@
 // The ordering problem, and why `arm()` is deferred:
 //
 //   The operation that produces one of these notices usually mutates the very
-//   state the signature watches — the bulk delete narrows the selection to the
+//   state the signature watches - the bulk delete narrows the selection to the
 //   frozen survivors and *then* reports what it skipped. A watcher armed at push
 //   time would therefore fire on the pusher's own mutation and dismiss the card
 //   before it was ever read. So `arm()` records the signature in `nextTick`,
@@ -42,7 +42,7 @@ export function useScopedNotice(keys, signature) {
 
   // The signature the live notices were pushed against. `null` means nothing is
   // live, so a context change has nothing to invalidate. `PENDING` means a push
-  // just happened and its baseline has not settled yet — see `arm()`.
+  // just happened and its baseline has not settled yet - see `arm()`.
   const PENDING = Symbol("pending");
   let armedSignature = null;
   // Bumped by every arm/invalidate so a deferred baseline that has been

@@ -58,7 +58,7 @@ const routes = [
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   // The runs were briefly a destination of their own. They are a view of the
-  // shelf, so the old path redirects rather than 404s — it was published.
+  // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },
   { path: "/ref-folder/:id", name: "ref-folder", component: App },
   { path: "/import-folder/:id", name: "import-folder", component: App },

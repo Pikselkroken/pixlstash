@@ -135,7 +135,7 @@ def register_routes(router, server):
             "into a folder on the machine running PixlStash, then opens that "
             "folder in the host file manager. The destination must be an "
             "empty, writable, existing directory. Local owner, on that "
-            "machine, only — see POST /pictures/export for a ZIP you can "
+            "machine, only - see POST /pictures/export for a ZIP you can "
             "download from anywhere instead."
         ),
         response_model=ExportStartResponse,
@@ -163,7 +163,7 @@ def register_routes(router, server):
         # Resolve before validating: checking the blocklist against the raw
         # string first would let a symlink outside it (e.g. one that points at
         # /etc) pass the check and only get caught, incidentally, by the
-        # writability test below — the same ordering bug the reference-folder
+        # writability test below - the same ordering bug the reference-folder
         # picker avoids in validate_reference_folder_accessible().
         if not os.path.isabs(destination):
             raise HTTPException(status_code=400, detail="Path must be absolute.")
@@ -174,7 +174,7 @@ def register_routes(router, server):
         if not os.path.isdir(resolved_destination):
             raise HTTPException(status_code=404, detail="Destination folder not found.")
         # Creating/replacing entries in a directory needs its execute (search)
-        # bit as well as its write bit on POSIX — W_OK alone can pass here and
+        # bit as well as its write bit on POSIX - W_OK alone can pass here and
         # still fail on every actual write in the background task.
         if not os.access(resolved_destination, os.W_OK | os.X_OK):
             raise HTTPException(
@@ -253,7 +253,7 @@ def register_routes(router, server):
             if task.get("mode") == "folder":
                 # No download step follows a folder export (the files are
                 # already on disk and the folder is opened server-side), so
-                # this is the one report the task gets — collect it now
+                # this is the one report the task gets - collect it now
                 # rather than leaking it in export_tasks forever.
                 destination = task.get("destination")
                 opened = task.get("opened")

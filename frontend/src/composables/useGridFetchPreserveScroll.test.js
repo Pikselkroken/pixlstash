@@ -1,4 +1,4 @@
-// Grid reload — a scroll-preserving fetch must not snap the render window to the top.
+// Grid reload - a scroll-preserving fetch must not snap the render window to the top.
 //
 // Symptom this guards: you scroll down, open an image, remove a tag, press ESC, and
 // the grid is blank until you touch the scroll wheel.
@@ -8,7 +8,7 @@
 // resets visibleStart/visibleEnd to the top of the list, but nothing resets
 // scrollTop. The virtualiser then renders the first screenful of cards while the
 // viewport is still parked further down, so the user sees empty space. Any scroll
-// recomputes the window from the real scrollTop and everything reappears — which is
+// recomputes the window from the real scrollTop and everything reappears - which is
 // why it looked like a thumbnail-loading bug and was not one.
 //
 // Observed in the field (511 images, scrolled near the bottom):

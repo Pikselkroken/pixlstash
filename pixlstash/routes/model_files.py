@@ -1,16 +1,16 @@
 """Files onto the shelf (shelf plan F6, ``Add file``) and off it again (#933).
 
 ``POST /model-files`` is the way in and ``POST /model-files/delete`` is the way
-out. They are one module because they are one authority — a file in a registered
-folder, written or unlinked — and because the second is the only shelf route
+out. They are one module because they are one authority - a file in a registered
+folder, written or unlinked - and because the second is the only shelf route
 that destroys the owner's own bytes, which is worth reading beside the one that
 insists it never touches them.
 
 ``POST /model-files`` is the path for a single adapter or checkpoint that is
 **not** part of a training
 run and does not deserve a whole registered folder of its own: a file downloaded
-into ``~/Downloads`` an hour ago. It is copied into the managed store — the
-folder PixlStash owns, the ruled default destination for a drop or an import —
+into ``~/Downloads`` an hour ago. It is copied into the managed store - the
+folder PixlStash owns, the ruled default destination for a drop or an import -
 and registered there, so it appears on the shelf without the owner having to
 rescan anything.
 
@@ -26,9 +26,9 @@ not there.
 **This is the one shelf route that takes a host path**, which the import block
 beside it deliberately does not (a run is named, and the server joins the name to
 a registered root). It cannot be otherwise: the whole point is a file in a place
-nobody has registered. What is contained is the *write*, not the read — the
+nobody has registered. What is contained is the *write*, not the read - the
 destination is resolved with ``resolve_path_within`` against the registered
-destination folder — and the read is bounded by refusing anything that is not a
+destination folder - and the read is bounded by refusing anything that is not a
 regular ``.safetensors`` file. Authorization is therefore ``LOCAL_OWNER_ONLY``
 (declared in ``pixlstash/authz/registry.py``): it takes a caller-supplied host
 path like ``POST /model-folders`` and writes into a registered folder like
@@ -42,9 +42,9 @@ and the refusal says so.
 ``POST /model-files/delete`` is the shelf's destructive verb, and it is
 deliberately narrow. It acts only on the folders whose contents are the owner's:
 ``user``, and the managed store PixlStash keeps for files it was *given*.
-Everything else the shelf lists is refused whole — the engines PixlStash
+Everything else the shelf lists is refused whole - the engines PixlStash
 downloads for itself, the InsightFace packs, the HuggingFace cache shared with
-every other tool on the machine — and so is a model with an ``unreachable``
+every other tool on the machine - and so is a model with an ``unreachable``
 copy, because an unplugged drive is not a deletion and must never be read as
 one. The default is the OS trash (``send2trash``), which is the undo;
 ``permanent=true`` unlinks, and that one has none.
@@ -53,14 +53,14 @@ one. The default is the OS trash (``send2trash``), which is the undo;
 ``<stem>_samples/`` directory beside it (``services/run_importer.py``), and the
 delete closes the lifecycle the import opens and a move carries: skipping it
 would leave a directory no route lists and no rescan registers, and one that then
-refuses the owner's *whole* re-import of that run — with the remedy only
+refuses the owner's *whole* re-import of that run - with the remedy only
 available outside the app. Unlike the file, it is **non-fatal**: the weights are
 what was asked for, and previews that will not go are a warning and some occupied
 disk rather than a failed deletion.
 
 **Bytes first, rows second, and per model.** Every copy of a model is removed
 before its hub rows are, so an interruption leaves a row naming a file that is
-not there — which the next scan turns into ``missing`` — rather than a file
+not there - which the next scan turns into ``missing`` - rather than a file
 nothing on the shelf can see. A model whose unlink fails keeps its rows and is
 reported as refused, so one bad file cannot take the rest of the batch with it.
 The whole call holds the same machine-wide ``SHELF_IO_LOCK`` slot an add, a move
@@ -110,7 +110,7 @@ logger = get_logger(__name__)
 SOURCE_FOLDER_KIND = "source"
 
 # Which folders the shelf may unlink from is `deletes_unclaimed_files`, in
-# `managed_model_store` — that is where "which declared root is which" is already
+# `managed_model_store` - that is where "which declared root is which" is already
 # decided, and by path, because the columns cannot tell PixlStash's download
 # folder from the HuggingFace cache. `GET /model-folders` reports the same answer
 # as `deletable`, so the client never offers a delete this route would refuse.
@@ -118,8 +118,8 @@ SOURCE_FOLDER_KIND = "source"
 # rather than by `movable` because the managed store is `root_only` (the FOLDER
 # moves as a unit) while the files in it are individually the owner's.
 
-# `STATE_UNREACHABLE` — a copy the scan could not look at, on a drive that is not
-# plugged in — is the one state that must never be treated as a deletion: the
+# `STATE_UNREACHABLE` - a copy the scan could not look at, on a drive that is not
+# plugged in - is the one state that must never be treated as a deletion: the
 # bytes are out there, and dropping the row would leave them orphaned with
 # nothing on the shelf naming them. Imported from the scanner that writes them
 # rather than re-spelled here, so a rename cannot quietly turn this gate into a
@@ -187,7 +187,7 @@ class DeleteRefusal(BaseModel):
         description=(
             "`no_such_model` (the id names no row), `is_a_builtin_engine` "
             "(PixlStash downloaded it for itself), `not_a_user_folder` (a copy "
-            "sits in a folder PixlStash will not unlink from — read `deletable` "
+            "sits in a folder PixlStash will not unlink from - read `deletable` "
             "on `GET /model-folders` for which those are; the InsightFace packs "
             "and the shared HuggingFace cache are the two on a stock machine, "
             "and its own download folder is NOT one of them: the leftovers "
@@ -197,7 +197,7 @@ class DeleteRefusal(BaseModel):
             "path outside the folder it is registered in, which is a broken "
             "row), `trash_unavailable` (this machine has no trash we can reach; "
             "a permanent delete would still work), `partly_deleted` (some "
-            "copies went and one failed, so the rows were kept — the only "
+            "copies went and one failed, so the rows were kept - the only "
             "refusal that has already destroyed something) or `delete_failed` "
             "(nothing was removed and the server log says why)."
         )
@@ -221,7 +221,7 @@ class DeleteModelsResponse(BaseModel):
     trash_name: str = Field(
         default=TRASH_NAME,
         description=(
-            "What THIS machine calls the place the files went — `Trash`, or "
+            "What THIS machine calls the place the files went - `Trash`, or "
             "`Recycle Bin` on Windows. On the receipt because where the bytes "
             "are is the difference between recoverable and not, and the server "
             "is the machine they are on: a shelf opened from a laptop deletes "
@@ -243,7 +243,7 @@ def _contained_path(folder_path: str, relpath: str) -> str:
 
     **The link, never the link's target.** ``resolve_path_within`` returns a
     ``realpath``, and unlinking that would delete the file a symlinked model
-    points AT while leaving the link — which is not what a file manager does,
+    points AT while leaving the link - which is not what a file manager does,
     and which silently guts any other model row naming those bytes. A symlinked
     model is ordinary practice on this shelf (``model_shelf._present_copy``
     contains lexically for exactly that reason), so the containment here is
@@ -279,8 +279,8 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
     and for the same reason: ``hub.fetchall`` takes and releases the hub lock per
     call, so two of them leave a window in which a background
     ``ModelFolderScanner`` can rewrite the very states being gated on. The
-    unlink cannot run inside this block — a 24 GB file would hold the hub's
-    write lock for the length of a disk copy — so the window against the FILES
+    unlink cannot run inside this block - a 24 GB file would hold the hub's
+    write lock for the length of a disk copy - so the window against the FILES
     remains and is closed on the other side instead: the purge drops a ``model``
     row only when no location row for it survives (see
     :func:`~pixlstash.services.model_shelf_service.purge_deleted_models`).
@@ -291,7 +291,7 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
 
     Returns:
         ``(deletable, refused)``. ``deletable`` maps a model id to one entry per
-        registered copy — ``{"folder_id", "relpath", "path"}``, where ``path``
+        registered copy - ``{"folder_id", "relpath", "path"}``, where ``path``
         is ``None`` for a ``missing`` copy, which has a row to drop and nothing
         to unlink. ``refused`` carries ``{"id", "reason"}``.
     """
@@ -388,7 +388,7 @@ def _holds_only_samples(directory: str) -> bool:
     settles the guess is the contents: ai-toolkit names every preview
     ``<timestamp>__<step>_<index>.<ext>``, so a directory holding only those is
     a directory of previews whoever put it there, and a single file that is not
-    one — an owner's favourite render, a note, a subdirectory — means it is
+    one - an owner's favourite render, a note, a subdirectory - means it is
     theirs and the model does not take it.
 
     Symlinks count as "not a sample" (``follow_symlinks=False``): a link is a
@@ -416,7 +416,7 @@ def _holds_only_samples(directory: str) -> bool:
 
 
 def _remove_samples(model_path: str, *, permanent: bool) -> None:
-    """Take the file's training previews with it — **if that is all they are**.
+    """Take the file's training previews with it - **if that is all they are**.
 
     An imported checkpoint's previews sit beside it in ``<stem>_samples/``
     (``services/run_importer.py``), and the lifecycle the import opens and a move
@@ -426,9 +426,9 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
     app.
 
     **What licenses the removal is the directory's contents**, checked by
-    :func:`_holds_only_samples`. The model itself is a thing the caller named —
+    :func:`_holds_only_samples`. The model itself is a thing the caller named -
     they selected that row and a ``model_file`` records exactly which file it is
-    — but this directory is only ever *inferred* from the model's name, so
+    - but this directory is only ever *inferred* from the model's name, so
     removing it on the strength of the name alone would destroy an owner's own
     folder of renders on a Shift+Delete they meant for a ``.safetensors``. A
     directory of nothing but ``<timestamp>__<step>_<index>`` images is the
@@ -440,7 +440,7 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
     to delete and their row is dropped on the strength of that; a previews
     directory that will not go is a warning and some occupied disk, and must not
     turn a completed deletion into a reported failure. It is removed *after* the
-    file for the same reason — the file is the thing being deleted.
+    file for the same reason - the file is the thing being deleted.
     """
     directory = samples_relpath(model_path)
     if not os.path.isdir(directory):
@@ -500,8 +500,8 @@ def create_router(server) -> APIRouter:
     def _source_file(raw_path: str) -> str:
         """Resolve and vet the file the caller named.
 
-        ``realpath`` first, because everything after it — the suffix, the
-        registered-folder check, the copy — has to reason about the file that
+        ``realpath`` first, because everything after it - the suffix, the
+        registered-folder check, the copy - has to reason about the file that
         will actually be read rather than about a symlink standing in for it.
         """
         resolved = os.path.realpath(os.path.normpath(raw_path))
@@ -578,8 +578,8 @@ def create_router(server) -> APIRouter:
         summary="Add one model file to the shelf",
         description=(
             "Copies a single `.safetensors` file from anywhere on this machine "
-            "into a folder the shelf catalogues — the managed store unless "
-            "another is named — and registers it, so it appears without a "
+            "into a folder the shelf catalogues - the managed store unless "
+            "another is named - and registers it, so it appears without a "
             "rescan. The order is copy, verify by SHA-256, then register and "
             "commit; **the original is never removed**. A file that already sits "
             "inside a registered folder is refused: a rescan of that folder is "
@@ -598,7 +598,7 @@ def create_router(server) -> APIRouter:
             # The write is contained even though the name is a basename: a
             # symlink standing at the destination filename resolves out of the
             # folder, and this is what refuses it (a dangling one is refused
-            # *only* here — ``os.path.exists`` is False for it).
+            # *only* here - ``os.path.exists`` is False for it).
             target = resolve_path_within(folder["path"], relpath)
         except ValueError as exc:
             logger.error(
@@ -683,8 +683,8 @@ def create_router(server) -> APIRouter:
             )
             if model_id is None:
                 # The header would not parse, so the scanner would not have
-                # registered it either. Our copy is unambiguously ours — the
-                # target was proven free above — so it goes rather than sitting
+                # registered it either. Our copy is unambiguously ours - the
+                # target was proven free above - so it goes rather than sitting
                 # in the store as a file the shelf never lists.
                 discard_partial(target)
                 raise HTTPException(
@@ -723,7 +723,7 @@ def create_router(server) -> APIRouter:
             "`permanent=false` (the default) moves the files to "
             f"this machine's {TRASH_NAME.lower()}, which is the undo; "
             "`permanent=true` unlinks them and there is none. Only the folders "
-            "whose contents are yours are touched — the ones you registered and "
+            "whose contents are yours are touched - the ones you registered and "
             "the store PixlStash keeps for files it was given. A model with a "
             "copy anywhere else, a copy on a drive that is not plugged in, or "
             "one of PixlStash's own engines is refused with a reason rather "
@@ -767,7 +767,7 @@ def create_router(server) -> APIRouter:
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
-                    # the refusal says which of the two happened — "could not be
+                    # the refusal says which of the two happened - "could not be
                     # deleted" over a model that lost half its copies is the one
                     # sentence a reader must not be given.
                     partly = done > 0
@@ -801,7 +801,7 @@ def create_router(server) -> APIRouter:
                     files_removed += done
             # One transaction for every model that came through, after the last
             # unlink rather than per model. It drops the location rows this call
-            # emptied and then the models left with none — so a copy a scan
+            # emptied and then the models left with none - so a copy a scan
             # registered while the files were going keeps its model alive rather
             # than being purged out from under a file that is still there.
             purged = purge_deleted_models(server.hub, emptied)

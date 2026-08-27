@@ -59,7 +59,7 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         "text_embedding",
         "image_embedding",
         "metadata_hash",
-        # Derived/regenerable scores — excluded so that recalculating them
+        # Derived/regenerable scores - excluded so that recalculating them
         # does not make a snapshot appear as changed.
         "aesthetic_score",
         "smart_score",
@@ -82,7 +82,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
 
     Batched equivalent of :func:`_compute_picture_metadata_hash`: five queries
     per chunk of ``_HASH_ID_CHUNK`` ids instead of five queries per picture.
-    The digest input is byte-for-byte identical to the per-picture version —
+    The digest input is byte-for-byte identical to the per-picture version -
     ``metadata_hash`` is persisted into snapshots and compared against live
     rows, so any change to the canonical string would make every picture in
     every existing snapshot compare as "changed".
@@ -111,7 +111,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         chunk = ids[start : start + _HASH_ID_CHUNK]
         # ORM entity select (NOT a Core column select): the returned instances
         # come from the session's identity map, so ``getattr`` below sees the
-        # same in-memory values ``session.get`` used to return — including the
+        # same in-memory values ``session.get`` used to return - including the
         # ndarray columns that must be skipped and the datetimes that must be
         # ``isoformat``-ed. A Core select would hand back raw driver values and
         # silently change the digest.
@@ -155,7 +155,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         pic = pictures.get(pid)
         if pic is None:
             continue
-        # Iterate only persisted columns — NOT ``model_fields``, which also
+        # Iterate only persisted columns - NOT ``model_fields``, which also
         # contains SQLModel relationship fields (``tags``, ``faces``,
         # ``project``, ...). ``getattr`` on a relationship triggers a lazy load
         # whose ORM objects aren't JSON-serialisable; ``json.dumps(...,
@@ -174,12 +174,12 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
             col_vals[col] = val
         # Face-derived state: the before-flush hash tracker dirties on Face
         # mutations (a Face add / remove / character reassignment is a
-        # user-visible change), so the digest must include face state — else
+        # user-visible change), so the digest must include face state - else
         # the recompute would round-trip to the same value and the UI's
         # identical-state detection would lie for face-only edits.  We hash
         # the bbox + character_id of every face, sorted so the digest is
         # insensitive to row order.  ``features`` (the embedding BLOB) is
-        # deliberately excluded — it's a derived column the WorkPlanner
+        # deliberately excluded - it's a derived column the WorkPlanner
         # regenerates and is not user-visible.
         #
         # LOAD-BEARING: ``str(tuple(...))`` is not cosmetic. The original
@@ -195,7 +195,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         faces = [str(face) for face in sorted(faces_by_pid.get(pid, ()))]
         # Picture-set and project membership are user-visible and reverted by a
         # full restore, but live in their own tables (not Picture columns), so
-        # they must be folded in explicitly — otherwise a picture whose only
+        # they must be folded in explicitly - otherwise a picture whose only
         # change is being moved between sets/projects hashes identically and
         # the restore preview / identical-state detection would wrongly report
         # "unchanged".
@@ -216,7 +216,7 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     """Return a SHA-256 hex digest of a picture's user-visible metadata.
 
     Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted tag
-    list, face state, and picture-set / project **membership** — everything a
+    list, face state, and picture-set / project **membership** - everything a
     full restore would revert. Thin wrapper over
     :func:`_compute_picture_metadata_hashes` so the single-picture and batched
     paths can never drift apart in what they digest.
@@ -251,7 +251,7 @@ def _before_flush_hash_tracker(session, flush_context, instances) -> None:
         ):
             # Adding/removing a picture from a set or project changes its
             # restore-visible state, so its hash must be recomputed. Works for
-            # session.deleted too — the row keeps its picture_id while pending.
+            # session.deleted too - the row keeps its picture_id while pending.
             dirty_pids.add(obj.picture_id)
 
 
@@ -262,7 +262,7 @@ def _after_flush_hash_updater(session, flush_context) -> None:
     is held against the SQLite write lock: the old shape issued five SELECTs
     plus one UPDATE per dirty picture, which turned a 64-picture tag batch into
     ~384 extra statements before the lock could be released (#651). It is now a
-    constant number of statements per flush — the batched hash read plus one
+    constant number of statements per flush - the batched hash read plus one
     executemany UPDATE.
 
     Uses Core SQL UPDATE so the change is committed with the same transaction
@@ -313,7 +313,7 @@ def _before_flush_layout_tracker(session, flush_context, instances) -> None:
     revisits.
 
     Only the four facets a layout can be built from count. A rating, a caption
-    or a tag edit is not an assignment and must not wake the engine — the whole
+    or a tag edit is not an assignment and must not wake the engine - the whole
     rule is that a picture moves when its *folder* stops being true, not
     whenever something about it changes.
     """
@@ -345,7 +345,7 @@ def _attribute_changed(obj, name: str) -> bool:
         return sa_inspect(obj).attrs[name].history.has_changes()
     except Exception:
         # An object with no usable state (detached, or a mapper without the
-        # attribute) — treat as changed rather than silently missing a real
+        # attribute) - treat as changed rather than silently missing a real
         # assignment change, and say so.
         logger.warning(
             "Layout tracker: could not read %s history on %r; treating it as "
@@ -361,7 +361,7 @@ def _library_has_layout(session) -> bool:
     """Whether any root in this library has a layout, cached per session.
 
     The gate that keeps the stamp free for every library that has not chosen a
-    layout — which, on the day this ships, is all of them. One small indexed
+    layout - which, on the day this ships, is all of them. One small indexed
     read per task that touched an assignment, not per flush and not per row.
     """
     cached = session.info.get("_library_has_layout")
@@ -974,7 +974,7 @@ class VaultDatabase:
 
         if not db_exists:
             # Pre-create the database file 0600. Left to SQLite, a missing
-            # database is created at 0644 & ~umask — group/world-readable
+            # database is created at 0644 & ~umask - group/world-readable
             # under the Debian/Ubuntu default umask 002. Doing it here covers
             # every construction site, guarded or not. Without O_EXCL a lost
             # race simply opens the other creator's file; the mode argument is
@@ -986,7 +986,7 @@ class VaultDatabase:
 
         # The guard holds a raw fd on vault.db. POSIX advisory locks are
         # per-process, per-inode: closing ANY fd a process has on a file
-        # releases EVERY fcntl lock that process holds on it — including the
+        # releases EVERY fcntl lock that process holds on it - including the
         # ones SQLite took for the engine's live connections
         # (sqlite.org/howtocorrupt.html §2.2). Closing the guard here, while
         # pooled connections were open, therefore stripped the server of its
@@ -1152,7 +1152,7 @@ class VaultDatabase:
         Use for engine-level operations (e.g. the restore DB-file swap) that
         must serialise with normal writes but cannot tolerate a session bound
         to the current engine. The callable receives only the args/kwargs it
-        was submitted with — no implicit ``session`` argument.
+        was submitted with - no implicit ``session`` argument.
 
         Control tasks always run at IMMEDIATE priority and skip the
         ``self._engine is None`` precondition (a swap is permitted to recreate

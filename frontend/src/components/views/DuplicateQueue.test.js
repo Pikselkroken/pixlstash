@@ -16,7 +16,7 @@ import {
 } from "../../utils/thumbnailSizes";
 
 /**
- * The row pitch the view ESTIMATES at the default size — the strip height (or
+ * The row pitch the view ESTIMATES at the default size - the strip height (or
  * the info column's floor, whichever is taller) plus the row's own chrome.
  *
  * Derived from the ladder rather than written out, because happy-dom lays
@@ -59,7 +59,7 @@ vi.mock("../../api/dedup", () => ({
 
 // The queue opens itself from the URL's scope, so it needs a route. Reactive,
 // as the real one is: the view watches parts of the query, and a plain object
-// would keep those watchers silent — hiding exactly the class of bug where a
+// would keep those watchers silent - hiding exactly the class of bug where a
 // mirror write into the URL feeds back into the component's own route sync.
 const routeMock = reactive({ name: "duplicates", query: {} });
 const routerReplace = vi.fn();
@@ -324,7 +324,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("DuplicateQueue — what a screen reader hears", () => {
+describe("DuplicateQueue - what a screen reader hears", () => {
   // A live region that unmounts with the last row takes the verdict that
   // emptied the queue down with it, so the one announcement a user most needs
   // is the one they would never hear.
@@ -371,7 +371,7 @@ describe("DuplicateQueue — what a screen reader hears", () => {
   });
 });
 
-describe("DuplicateQueue — the tier popover", () => {
+describe("DuplicateQueue - the tier popover", () => {
   const TIERS = [{ key: "near", label: "Near duplicates", count: 4 }];
 
   it("closes on Escape and gives the focus back to its button", async () => {
@@ -425,7 +425,7 @@ describe("DuplicateQueue — the tier popover", () => {
   });
 });
 
-describe("DuplicateQueue — the filter on the Decided page", () => {
+describe("DuplicateQueue - the filter on the Decided page", () => {
   /** Flip to Decided and open the filter popover over it. */
   async function decidedQueue(over = {}) {
     const mounted = await mountQueue([group("g1")], { total: 1 });
@@ -450,8 +450,8 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
     return mounted;
   }
 
-  // The tier gate says nothing about a decision already made — the server
-  // ignores it on the decided page — so the button behind the filter icon has
+  // The tier gate says nothing about a decision already made - the server
+  // ignores it on the decided page - so the button behind the filter icon has
   // to open the control that is actually in force.
   it("swaps the tier menu for the verdict menu", async () => {
     const { wrapper } = await decidedQueue();
@@ -554,7 +554,7 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
   });
 });
 
-describe("DuplicateQueue — when a verdict does not land", () => {
+describe("DuplicateQueue - when a verdict does not land", () => {
   it.each(["partial", "failed"])(
     "never renders Queue clear when the latest scan is %s",
     async (status) => {
@@ -596,7 +596,7 @@ describe("DuplicateQueue — when a verdict does not land", () => {
   });
 });
 
-describe("DuplicateQueue — keeping a group separate", () => {
+describe("DuplicateQueue - keeping a group separate", () => {
   // The backend deliberately records NO operation for this verdict, so no
   // receipt will come. The narration is transient and points at the Decided
   // page, which is the standing way back (it replaced the sticky notice).
@@ -637,7 +637,7 @@ describe("DuplicateQueue — keeping a group separate", () => {
   });
 });
 
-describe("DuplicateQueue — one toolbar", () => {
+describe("DuplicateQueue - one toolbar", () => {
   // The queue used to carry a second bar whose right half was a row of key
   // hints. Every one of those keys is already stated on the row it acts on, in
   // Compare's footer, or in the description a screen reader reads, so the bar
@@ -689,7 +689,7 @@ describe("DuplicateQueue — one toolbar", () => {
   });
 });
 
-describe("DuplicateQueue — who owns the keyboard", () => {
+describe("DuplicateQueue - who owns the keyboard", () => {
   // The bug: the handler was bound on the queue root, so the shortcuts only
   // worked while the DOM focus was inside it. One click on a sidebar row and
   // every key went dead, with nothing on screen to say why.
@@ -770,7 +770,7 @@ describe("DuplicateQueue — who owns the keyboard", () => {
   });
 });
 
-describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
+describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
   function key(name, target = document) {
     const event = new window.KeyboardEvent("keydown", {
       key: name,
@@ -874,7 +874,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
 
   // ...and only while it is OPEN. A closed ⋯ is an ordinary toolbar button,
   // and the keys go on working on it exactly as they do on the tier trigger
-  // beside it — the alternative is two adjacent triggers with opposite
+  // beside it - the alternative is two adjacent triggers with opposite
   // keyboard behaviour.
   it("keys pressed on the closed ⋯ trigger still reach the queue", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -943,7 +943,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
   });
 });
 
-describe("DuplicateQueue — the shell chrome", () => {
+describe("DuplicateQueue - the shell chrome", () => {
   // Duplicates replaces the grid, and with it the grid's toolbar; the
   // app-wide chrome (Settings, the stats rail toggle, undo/redo) is not the
   // grid's and must not vanish with it.
@@ -965,7 +965,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   // The decision record's canonical tail, identical in every view that writes
   // the operation log (the model shelf does not, and mounts no undo):
   // [separator] [UndoControl] [TbGlobalActions]. The ⋯ is NOT part of the
-  // tail — it belongs to the left group, whose controls it collapses, and the
+  // tail - it belongs to the left group, whose controls it collapses, and the
   // app-wide cluster never folds into it (amendment #4).
   it("orders the tail separator → UndoControl → TbGlobalActions, ⋯ elsewhere", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -1000,7 +1000,7 @@ describe("DuplicateQueue — the shell chrome", () => {
 
   // Fold = CSS both ways: every control the ⋯ collapses exists as a bar
   // button AND as a row, and the container query at ≤882 flips which of the
-  // pair is visible. Nothing else may be in there — the tier gate, the scope
+  // pair is visible. Nothing else may be in there - the tier gate, the scope
   // pill, the count and the app-wide tail all stay on the bar at every width.
   it("carries a row for each folded page toggle and nothing else", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -1089,8 +1089,8 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // The separator amendments: D-S1's left flank is populated at every width —
-  // by the toggles above 906 and by the ⋯ that replaces them below it — so
+  // The separator amendments: D-S1's left flank is populated at every width -
+  // by the toggles above 906 and by the ⋯ that replaces them below it - so
   // both rules render at all widths and neither carries a fold class.
   it("both separators render at all widths, neither carrying a fold class", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
@@ -1133,7 +1133,7 @@ describe("DuplicateQueue — the shell chrome", () => {
 
   // The tier trigger's label ellipsizes under pressure and hides entirely at
   // ≤1087, so the button must carry its own accessible name at every width
-  // (WCAG 4.1.2 — a hidden span would leave it empty).
+  // (WCAG 4.1.2 - a hidden span would leave it empty).
   it("the tier button exposes its label as title and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const button = wrapper.find(".dq-tier-wrap .dq-btn");
@@ -1157,7 +1157,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 });
 
-describe("DuplicateQueue — undo puts the queue back", () => {
+describe("DuplicateQueue - undo puts the queue back", () => {
   /** Drive the queue's operation-store subscription as Pinia would. */
   async function runUndoAction(name, args = [], result = {}) {
     const afters = [];
@@ -1169,7 +1169,7 @@ describe("DuplicateQueue — undo puts the queue back", () => {
 
   // The regression this pins: undoing a stack verdict reopened the group
   // server-side and corrected the badge, but the visible list kept showing
-  // one row fewer until a remount — the count said N+1 over N rows.
+  // one row fewer until a remount - the count said N+1 over N rows.
   it("reloads the queue after an undo that reverted a dedup operation", async () => {
     const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
     // The undo toast is the shared receipt, mounted here like every view.
@@ -1423,7 +1423,7 @@ describe("DuplicateQueue — undo puts the queue back", () => {
   });
 });
 
-describe("DuplicateQueue — verdicts inside Compare", () => {
+describe("DuplicateQueue - verdicts inside Compare", () => {
   function compare(wrapper) {
     return wrapper.findComponent({ name: "DedupCompareDialog" });
   }
@@ -1556,7 +1556,7 @@ describe("DuplicateQueue — verdicts inside Compare", () => {
   });
 });
 
-describe("DuplicateQueue — End means the true end", () => {
+describe("DuplicateQueue - End means the true end", () => {
   // The regression this pins: End focused the last LOADED row, so on a paging
   // queue it had to be pressed once per page. The scroll track is already
   // sized from the server total, so one press pins the scroll to the real
@@ -1627,7 +1627,7 @@ describe("DuplicateQueue — End means the true end", () => {
       await wrapper.vm.$nextTick();
     }
 
-    // ONE tail request, offset-only — never a cursor alongside it.
+    // ONE tail request, offset-only - never a cursor alongside it.
     expect(listGroups).toHaveBeenCalledTimes(1);
     const tail = listGroups.mock.calls[0][0];
     expect(tail.offset).toBe(180);
@@ -1801,7 +1801,7 @@ describe("DuplicateQueue — End means the true end", () => {
   });
 });
 
-describe("DuplicateQueue — the Decided page", () => {
+describe("DuplicateQueue - the Decided page", () => {
   it("lists decided groups with their verdict and clears one on demand", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     listGroups.mockResolvedValue({
@@ -1978,7 +1978,7 @@ describe("DuplicateQueue — the Decided page", () => {
   });
 });
 
-describe("DuplicateQueue — filters in the URL", () => {
+describe("DuplicateQueue - filters in the URL", () => {
   it("restores near, threshold and the Decided view from the query", async () => {
     // A full refresh lands here with only the URL; the selection must come
     // back exactly, clamped by the same rules the tier menu enforces.
@@ -2024,7 +2024,7 @@ describe("DuplicateQueue — filters in the URL", () => {
   });
 
   // The regression this pins (user report): the params were mirrored INTO the
-  // URL, but a full reload dropped them again — the mirror ran on the policy
+  // URL, but a full reload dropped them again - the mirror ran on the policy
   // landing, one microtask before openQueue adopted the URL's filters, read
   // the still-default gate as "the user chose the defaults", and replaced the
   // URL without its filter params while the store was only just adopting
@@ -2076,8 +2076,8 @@ describe("DuplicateQueue — filters in the URL", () => {
   // The regression this pins (user report): with the open queue EMPTY,
   // flipping to Decided flashed the decided rows and then fell back to
   // "Queue clear". The mirror's own replace() write (view=decided) re-fired
-  // the scope watcher — a getter returning a fresh array is compared by
-  // identity, so EVERY query write refired it — and syncQueueToRoute, holding
+  // the scope watcher - a getter returning a fresh array is compared by
+  // identity, so EVERY query write refired it - and syncQueueToRoute, holding
   // no rows, fell through its fast path into a full openQueue, which
   // force-reset the flip and reloaded the open queue over the decided rows.
   // With rows in the queue the fast path absorbed the refire, which is why
@@ -2143,8 +2143,8 @@ describe("DuplicateQueue — filters in the URL", () => {
 
     // The flip is a reload of the SAME queue, never a reopen: pre-fix the
     // mirror's write refired syncQueueToRoute, whose openQueue restarted the
-    // scan, reset the tallies, and — depending on how the resulting cascade
-    // interleaved — reloaded the open queue over the decided rows.
+    // scan, reset the tallies, and - depending on how the resulting cascade
+    // interleaved - reloaded the open queue over the decided rows.
     expect(startScan).not.toHaveBeenCalled();
     expect(store.showingDecided).toBe(true);
     expect(store.groups).toHaveLength(1);
@@ -2182,7 +2182,7 @@ describe("DuplicateQueue — filters in the URL", () => {
   });
 });
 
-describe("DuplicateQueue — multi-select", () => {
+describe("DuplicateQueue - multi-select", () => {
   it("ctrl+click selects, the buttons rename, and one verdict takes all", async () => {
     const { wrapper } = await mountQueue([
       group("g1"),
@@ -2318,7 +2318,7 @@ describe("DuplicateQueue — multi-select", () => {
   });
 });
 
-describe("DuplicateQueue — the render window", () => {
+describe("DuplicateQueue - the render window", () => {
   it("follows the scroll, not just the keyboard focus", async () => {
     // The regression this pins: the window was anchored to focusIndex alone,
     // so a mouse user scrolling a 327-group queue saw ~9 rows and then blank
@@ -2419,7 +2419,7 @@ describe("DuplicateQueue — the render window", () => {
   });
 });
 
-describe("DuplicateQueue — the tier gate", () => {
+describe("DuplicateQueue - the tier gate", () => {
   // Nothing about the ladder is hardcoded: the ids, the prerequisites and which
   // tier cannot be switched off all arrive from GET /dedup/policy.
   it("renders the tiers the server published, with tier 1 locked", async () => {
@@ -2438,7 +2438,7 @@ describe("DuplicateQueue — the tier gate", () => {
   });
 });
 
-describe("DuplicateQueue — a read-only session", () => {
+describe("DuplicateQueue - a read-only session", () => {
   // Navigation stays live because reading the queue is not a verdict; the bulk
   // action is a verdict, so it goes.
   it("hides the bulk auto-stack button", async () => {

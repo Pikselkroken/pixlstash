@@ -1,10 +1,10 @@
-// useReviewRoute.js — URL <-> tag-review-overlay synchronisation.
+// useReviewRoute.js - URL <-> tag-review-overlay synchronisation.
 //
 // Mirrors the ImageOverlay `?overlay=<pictureId>` mechanics that live inline in
 // ImageGrid.vue (`_pushOverlayRoute` / `_removeOverlayRoute` / the
 // `route.query.overlay` watcher, ImageGrid.vue ~:3935-3971):
 //
-//   * `router.replace`, never `push` — opening, navigating inside, and closing
+//   * `router.replace`, never `push` - opening, navigating inside, and closing
 //     the overlay must not stack history entries. Back therefore pops to the
 //     history entry that preceded the overlay, and the read-watcher below
 //     reconciles the overlay shut on the way out. Same contract as the image
@@ -16,7 +16,7 @@
 //
 //   ?review=board            → overlay open on the tag-health board
 //   ?review=<reviewId>       → overlay open on that review (an OPEN session or
-//                              an ARCHIVED receipt — same id space, resolved on
+//                              an ARCHIVED receipt - same id space, resolved on
 //                              restore against the loaded lists)
 //   ?review_project=<id>     → board scope: project
 //   ?review_set=<id>         → board scope: set
@@ -64,14 +64,14 @@ function parseCharacter(raw) {
 /**
  * Read the review params out of a route query.
  *
- * `open` is driven by the mere PRESENCE of `?review` — `?review`, `?review=`,
+ * `open` is driven by the mere PRESENCE of `?review` - `?review`, `?review=`,
  * `?review=true`, `?review=board` and `?review=nonsense` all open the overlay on
  * the board. A half-open overlay is never a reachable state.
  */
 export function parseReviewQuery(query = {}) {
   const raw = firstValue(query[REVIEW_KEY]);
   // Vue Router represents a bare `?review` (no `=`) as null, so presence of the
-  // key — not truthiness of its value — is what opens the overlay.
+  // key - not truthiness of its value - is what opens the overlay.
   const open = Object.hasOwn(query, REVIEW_KEY) && raw !== undefined;
   return {
     open,
@@ -127,8 +127,8 @@ function scopeEquals(a = {}, b = {}) {
 /**
  * Point an already-open overlay at `reviewId`.
  *
- * A stale id — a review that has since been archived-and-purged, deleted, or
- * simply never existed — resolves to neither list and falls back to the board.
+ * A stale id - a review that has since been archived-and-purged, deleted, or
+ * simply never existed - resolves to neither list and falls back to the board.
  * It must never leave `store.view` asserting a session that isn't there.
  */
 export function resolveReviewView(store, reviewId) {
@@ -155,7 +155,7 @@ export function resolveReviewView(store, reviewId) {
  * @param {object} route  reactive route (useRoute())
  * @param {object} router router instance (useRouter())
  * @param {object} store  useReviewSessionsStore() instance
- * @param {object} vue    { watch } — injected so the module stays unit-testable
+ * @param {object} vue    { watch } - injected so the module stays unit-testable
  */
 export function useReviewRoute(route, router, store, { watch }) {
   // Guards the read-watcher against our own writes (mirrors ImageGrid's
@@ -190,7 +190,7 @@ export function useReviewRoute(route, router, store, { watch }) {
       // Pre-open: seed the scope directly so the overlay's own `store.load()`
       // fetches the board already scoped (setHealthScope would fire a second,
       // redundant /tag_health request). `pendingRestoreViewId` is consumed by
-      // load() once the session lists have landed — only then can an id be
+      // load() once the session lists have landed - only then can an id be
       // resolved to a session vs an archived receipt vs nothing.
       if (!scopeEquals(store.healthScope, scope))
         store.healthScope = { ...scope };

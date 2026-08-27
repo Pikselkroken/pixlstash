@@ -1,4 +1,4 @@
-// RemixDialog — mode availability, the honest unavailable reasons, and scope.
+// RemixDialog - mode availability, the honest unavailable reasons, and scope.
 //
 // The load-bearing behaviour is that "Same workflow, new seed" is offered ONLY
 // when the source file actually carries an executable graph AND the server's
@@ -383,7 +383,7 @@ describe("RemixDialog unreachable ComfyUI", () => {
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
   });
 
-  it("disables Generate in template mode too — no contact, no generation", async () => {
+  it("disables Generate in template mode too - no contact, no generation", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     // Template mode is the preselected fallback; the block still applies.

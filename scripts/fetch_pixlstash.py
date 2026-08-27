@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fetch_pixlstash.py — Download training/evaluation picture sets from a PixlStash server.
+fetch_pixlstash.py - Download training/evaluation picture sets from a PixlStash server.
 
 Reads configuration from (in order of precedence):
   1. CLI arguments
@@ -9,8 +9,8 @@ Reads configuration from (in order of precedence):
   4. train_config.json keys prefixed with pixlstash_ (for non-secret fields)
 
 Output structure:
-  {cache_dir}/train/   — training set pictures + .txt tag files
-  {cache_dir}/eval/    — evaluation set pictures + .txt tag files
+  {cache_dir}/train/   - training set pictures + .txt tag files
+  {cache_dir}/eval/    - evaluation set pictures + .txt tag files
 
 Files already present in the cache are skipped unless --force is used.
 
@@ -583,7 +583,7 @@ def main() -> None:
     client = PixlStashClient(args.url, args.token, verify_ssl=verify_ssl)
     client.login()
 
-    # Resolve project to an ID (optional — scopes picture set lookup)
+    # Resolve project to an ID (optional - scopes picture set lookup)
     project_id: Optional[int] = None
     if args.project:
         print(f"[INFO] Resolving project '{args.project}'...")

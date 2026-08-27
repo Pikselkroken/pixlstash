@@ -5,7 +5,7 @@
 // `err?.response?.data?.detail || err?.message || "…"` at every catch site.
 // That chain is wrong whenever `detail` is not a string: the backend serves the
 // locked-set refusal as `{code, action, sets, picture_ids}` precisely so the
-// client can write its own copy, and `object || fallback` takes the OBJECT —
+// client can write its own copy, and `object || fallback` takes the OBJECT -
 // which reaches the user as "[object Object]", with the one refusal they could
 // have acted on being the one that breaks.
 //
@@ -34,7 +34,7 @@ export function errorDetail(err) {
  * The sentence to show the user for a failed request.
  *
  * The server's reason if it gave one, then the transport's message, then the
- * caller's own copy. Pass a fallback that says what failed — `err.message` on
+ * caller's own copy. Pass a fallback that says what failed - `err.message` on
  * its own is "Request failed with status code 500".
  *
  * @param {*} err

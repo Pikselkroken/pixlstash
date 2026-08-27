@@ -1,4 +1,4 @@
-// useReviewSessionsStore.js — state for the "Review sessions" overlay.
+// useReviewSessionsStore.js - state for the "Review sessions" overlay.
 //
 // Models tag review as first-class review sessions:
 // a tag-health board (landing view), a rail of open reviews (each = one tag +
@@ -11,7 +11,7 @@
 // Also owns the opt-in gamification ("Pretend this is fun"): a variable-ratio
 // sticker-award schedule whose sticker vocabulary is IMPORTED from the Picture
 // Set palette (setAppearance.js) so sets and stickers never drift. XP/level/
-// streak counters are monotonic — Undo never decrements them, and stickers are
+// streak counters are monotonic - Undo never decrements them, and stickers are
 // never clawed back.
 
 import { ref, computed, onScopeDispose } from "vue";
@@ -56,12 +56,12 @@ const CONFLICT_MIN_OPPOSITE = 2;
 
 // Variable-ratio sticker schedule: after an award, the next one lands a uniform
 // random 40–100 decisions later (mean 70). Originally 2–5 (mean 3.5), which
-// rained stickers during any real review session — scaled 20× down.
+// rained stickers during any real review session - scaled 20× down.
 export const AWARD_GAP_MIN = 40;
 export const AWARD_GAP_MAX = 100;
 
 // Sticker vocabulary: the Picture Set icon + colour palette, restyled by the
-// components as die-cut stickers. Reusing the module is a hard requirement —
+// components as die-cut stickers. Reusing the module is a hard requirement -
 // the arrays are derived, never copied.
 export const STICKER_ICONS = SET_ICONS.map((ic) => ({
   icon: ic.value,
@@ -99,13 +99,13 @@ export function binaryDelta(item, answer) {
 }
 
 // Pair card (true versions of one shot; LEFT is always the tagged side, RIGHT
-// the untagged side — which picture id is which depends on `direction`, exactly
+// the untagged side - which picture id is which depends on `direction`, exactly
 // as in the old overlay). Mapping mirrors the old dispatchDecision():
-//   left  (only the tagged side has it — labels already correct) → dismiss
+//   left  (only the tagged side has it - labels already correct) → dismiss
 //   both  (tag the untagged side too)  → remove: fix-twin (twin is the untagged
 //          side) · add: accept (the suspect is the untagged side)
 //   neither (clear the tagged side)    → remove: accept · add: fix-twin
-//   right (the label is on the wrong image — move it)            → swap
+//   right (the label is on the wrong image - move it)            → swap
 export function pairAction(item, corner) {
   if (corner === "left") return "dismiss";
   if (corner === "right") return "swap";
@@ -214,7 +214,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const error = ref(null);
   // Set by useReviewRoute before it flips `overlayOpen`, so a `?review=<id>`
   // URL can be restored. Consumed (and cleared) by load() once the session
-  // lists have landed — an id can only be resolved to an open session vs an
+  // lists have landed - an id can only be resolved to an open session vs an
   // archived receipt vs nothing once both lists exist.
   const pendingRestoreViewId = ref(null);
 
@@ -247,7 +247,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const healthComputedAt = ref(null);
   const healthLoading = ref(false);
   // True when a new picture, tagger run, or reviewed suggestion has landed
-  // since computed_at — a rebuild is due (an auto-rebuild finder eventually
+  // since computed_at - a rebuild is due (an auto-rebuild finder eventually
   // catches up; this just powers the persistent control's stale tint/tooltip
   // in the meantime). Always false for a scoped (live-computed) response.
   const healthStale = ref(false);
@@ -289,17 +289,17 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const regionInFlight = new Set();
 
   // --- Session consistency ledger ---------------------------------------------
-  // { [tag]: { [pid]: { has, not } } } — how many times this session the user
+  // { [tag]: { [pid]: { has, not } } } - how many times this session the user
   // asserted a picture HAS / does NOT have the tag. Backs the conflict guard.
   const tagVotes = ref({});
 
   // --- Gamification -----------------------------------------------------------
-  const gamify = ref(readGamifyPref()); // persisted — survives reload/reopen
-  const stickers = ref(readStickers()); // the shelf — persists across sessions
+  const gamify = ref(readGamifyPref()); // persisted - survives reload/reopen
+  const stickers = ref(readStickers()); // the shelf - persists across sessions
   const activeAward = ref(null); // sticker mid pop→fly animation, or null
   // NET decision count: XP/level/streak derive from it and Undo decrements it.
   // Celebrations key off decisionTick, an EXPLICIT per-decision event that
-  // undo never re-fires — and stickers are never clawed back either way.
+  // undo never re-fires - and stickers are never clawed back either way.
   const decisionsCount = ref(0);
   const decisionTick = ref(0); // bumps on every real decision (explicit event)
   // Variable-ratio schedule: first decision after enabling always awards, then
@@ -353,7 +353,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       .length;
   }
 
-  // How many CHANGES were made in a review (skips are not changes) — drives
+  // How many CHANGES were made in a review (skips are not changes) - drives
   // the abort dialog's "You made N changes".
   function decidedCountFor(id) {
     const r = receiptFor(id);
@@ -362,19 +362,19 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     // `receiptFor` derives an OPEN review's count from the local tally, which is
     // seeded from the server receipt ONLY when the session is opened this app run
     // (openSession → fetchDetail → seedTallyFromReceipt) and only once that async
-    // load lands. A review aborted straight from the rail without being opened —
-    // or before that seed resolves — therefore reads zero here, so
+    // load lands. A review aborted straight from the rail without being opened -
+    // or before that seed resolves - therefore reads zero here, so
     // openAbortDialog silently skips the Keep/Undo dialog and abortSession keeps
     // changes made in an earlier sitting (the "it just applies them" bug). Fall
     // back to the server's authoritative decided-row count: `progress.done`
     // excludes skips, is present on every list row, and is bumped optimistically
-    // per decision — so the dialog is never wrongly skipped.
+    // per decision - so the dialog is never wrongly skipped.
     const s = sessions.value.find((x) => x.id === id);
     return Math.max(0, s?.progress?.done ?? 0);
   }
 
   // The session receipt for the completion state / abort dialog. It has ONE
-  // authoritative source per review state — never server + tally summed:
+  // authoritative source per review state - never server + tally summed:
   //
   //   * OPEN review  → the live local `tallies[id]`. It is seeded ONCE from the
   //     server's pre-session receipt at open (seedTallyFromReceipt) and then
@@ -450,7 +450,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // sittings while still deriving from a single source (the tally). The one-shot
   // guard means a later fetchDetail (refreshSession refetches the now-live
   // receipt, which already counts this session's decisions) cannot fold those
-  // same decisions in again. Archived reviews are never seeded — their receipt
+  // same decisions in again. Archived reviews are never seeded - their receipt
   // reads the frozen server snapshot directly.
   function seedTallyFromReceipt(id, data) {
     if (seededReceipts.has(id)) return;
@@ -602,7 +602,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   }
 
   // Populate the creation dialog's scope dropdowns. Whatever is cached renders
-  // at once; this only revalidates it. Each list degrades independently — the
+  // at once; this only revalidates it. Each list degrades independently - the
   // store keeps the last good one and logs the failure.
   function fetchScopeOptions() {
     return entityLists.invalidate();
@@ -736,7 +736,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     fetchScopeOptions();
     await fetchSessions();
 
-    // URL restore (?review=<id>). Resolved only now, against the real lists —
+    // URL restore (?review=<id>). Resolved only now, against the real lists -
     // a stale/deleted/unknown id degrades to the board rather than leaving
     // `view` asserting a session that does not exist.
     const restoreId = pendingRestoreViewId.value;
@@ -784,7 +784,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     tagVotes.value = {};
     // Queues/undo stacks are per-review server state + session bookkeeping;
     // drop them so a reopen refetches fresh queues. `details` (the per-session
-    // receipt snapshot) must go too — otherwise a stale open-time receipt
+    // receipt snapshot) must go too - otherwise a stale open-time receipt
     // survives the reopen and re-poisons the completion/abort views. `tallies`
     // and the seed guard reset together so a reopen re-seeds the tally cleanly
     // from a fresh server receipt instead of stacking on last session's counts.
@@ -879,14 +879,14 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     }
   }
 
-  // Refresh appends newly-found suspects — it never rebuilds or resurrects.
+  // Refresh appends newly-found suspects - it never rebuilds or resurrects.
   // New items get a client-side _isNew badge (anything not in the queue before
   // the refresh).
   async function refreshSession(id) {
     try {
       const prevIds = new Set((queueFor(id).items || []).map((it) => it.id));
       // Decided items were popped from the queue but must not come back badged
-      // "new" — reopen/refill can resurface them; count them as known too.
+      // "new" - reopen/refill can resurface them; count them as known too.
       for (const entry of undoStacks.value[id] || [])
         prevIds.add(entry.item.id);
       await refreshReview(id);
@@ -940,7 +940,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   // Discard one archived review's receipt. Decisions were written through on
   // each card during the review, so deleting the receipt only drops the audit
-  // summary — it never reverses a change. Drop it from the local list and, if
+  // summary - it never reverses a change. Drop it from the local list and, if
   // its receipt is the current view, fall back to the board.
   async function deleteArchived(id) {
     try {
@@ -978,13 +978,13 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // a skip moves pending-1/skipped+1 (the item leaves the queue with no
   // decision, but the server still counts the row in its own SKIPPED bucket).
   //
-  // Only the buckets a caller actually owns are recomputed — the rest of the
+  // Only the buckets a caller actually owns are recomputed - the rest of the
   // server's progress object is spread through untouched. `locked` in particular
   // is NEVER owned by a decision: it counts still-PENDING suspects frozen by a
   // locked picture set, which no accept/dismiss/skip/undo can change. Rebuilding
   // `progress` from scratch here dropped it (and `skipped`), so the "N suspects
   // frozen by a locked set" badge in ReviewSessionView vanished on the first
-  // decision — the exact silent-count-drop this bucket exists to explain.
+  // decision - the exact silent-count-drop this bucket exists to explain.
   function bumpProgress(id, { done = 0, pending = 0, skipped = 0 }) {
     sessions.value = sessions.value.map((s) => {
       if (s.id !== id) return s;
@@ -1012,7 +1012,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     bumpProgress(id, { done: 1, pending: -1 });
     recordVotes(item.tag, votes);
     // Gamification fires on the optimistic pop (a failed write never claws a
-    // sticker back — the schedule is about the act of deciding).
+    // sticker back - the schedule is about the act of deciding).
     noteDecision(s.tag);
     try {
       await resolveTagSuggestion(item.id, action);
@@ -1064,7 +1064,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // award progress). Undo covers it (reopen works on SKIPPED rows).
   //
   // The skip endpoint ships in this package, so a 404 is never "not implemented
-  // yet" — it means the suggestion is already gone (a dead/reopened id). In that
+  // yet" - it means the suggestion is already gone (a dead/reopened id). In that
   // case the optimistic removal stands, but there is nothing to reopen: we must
   // NOT record a reversible skip entry, or a later undo()/reopenSkipped() would
   // POST /reopen on a dead id (another 404) and could block reopening the rest.
@@ -1088,7 +1088,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       };
     } catch (e) {
       if (e?.response?.status === 404) {
-        // Already gone server-side — the card stays out of the queue, but it is
+        // Already gone server-side - the card stays out of the queue, but it is
         // not reopenable, so no undo entry is recorded.
         return;
       }
@@ -1106,7 +1106,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     const stack = undoStacks.value[id] || [];
     const skips = stack.filter((e) => e.action === "skip");
     if (!skips.length) return;
-    // Settle every reopen independently — one dead/already-gone id must not
+    // Settle every reopen independently - one dead/already-gone id must not
     // block reopening the rest (a single rejection in Promise.all did exactly
     // that). Fulfilled ids return to the queue; a 404 (already gone) just
     // leaves the skip stack; a hard failure keeps its entry so it can be
@@ -1123,7 +1123,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
         reopened.push(entry);
         settled.add(entry);
       } else if (res.reason?.response?.status === 404) {
-        settled.add(entry); // already gone — nothing to reopen, stop tracking it
+        settled.add(entry); // already gone - nothing to reopen, stop tracking it
       } else {
         hardError = res.reason;
       }
@@ -1227,7 +1227,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       color: STICKER_COLORS[Math.floor(Math.random() * STICKER_COLORS.length)],
       tag: tag ?? null,
     };
-    // Pop near the rail edge, hold ~500ms, fly to the shelf — then land.
+    // Pop near the rail edge, hold ~500ms, fly to the shelf - then land.
     activeAward.value = sticker;
     if (awardTimer) clearTimeout(awardTimer);
     awardTimer = setTimeout(() => {
@@ -1246,7 +1246,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     writeStickers(stickers.value);
   }
 
-  // Empty the shelf (and its persisted copy). Also cancels an award mid-fly —
+  // Empty the shelf (and its persisted copy). Also cancels an award mid-fly -
   // otherwise its pending commit would land one sticker right after the clear.
   function clearStickers() {
     if (awardTimer) {

@@ -39,7 +39,7 @@ class ImageEmbeddingTask(BaseTask):
     # what stopped the folder from being relocatable at all: the shelf would have
     # declared the new location while this table kept naming the old one, so a
     # scorer that had just been moved would be downloaded again. The folder is
-    # asked for at use time instead — see `_aesthetic_config`.
+    # asked for at use time instead - see `_aesthetic_config`.
     AESTHETIC_MODELS = {
         "ViT-L-14": {
             "url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
@@ -81,7 +81,7 @@ class ImageEmbeddingTask(BaseTask):
         self.model = None
         self._last_backend_error_log_at = 0.0
 
-        # Preloading state — images loaded from disk in on_queued() so I/O
+        # Preloading state - images loaded from disk in on_queued() so I/O
         # overlaps with the previous task's GPU inference.
         self._preloaded_images: list = []  # list of (pid, file_path, PIL.Image)
         self._preload_lock = threading.Lock()
@@ -194,7 +194,7 @@ class ImageEmbeddingTask(BaseTask):
     ) -> int:
         """Count pictures needing image embedding or aesthetic score work.
 
-        *suppressed_ids* — pictures whose file cannot be decoded (issue #585) —
+        *suppressed_ids* - pictures whose file cannot be decoded (issue #585) -
         are excluded so progress does not stall at a non-zero "remaining" that can
         never drain.
         """
@@ -229,7 +229,7 @@ class ImageEmbeddingTask(BaseTask):
     ):
         """Fetch pictures needing image embedding or aesthetic score work.
 
-        *suppressed_ids* — undecodable pictures (issue #585) — are excluded from
+        *suppressed_ids* - undecodable pictures (issue #585) - are excluded from
         the candidate window so a handful of corrupt files cannot crowd out real
         work and stall the finder.
         """
@@ -266,7 +266,7 @@ class ImageEmbeddingTask(BaseTask):
     def _mark_decode_failures(self, pids: set[int], batch_files: dict) -> None:
         """Suppress pictures that genuinely could not be decoded (issue #585).
 
-        Only the pids whose image failed to open/decode are passed here — never a
+        Only the pids whose image failed to open/decode are passed here - never a
         transient inference failure (CLIP/GPU OOM), which must keep retrying. A
         failed picture keeps a NULL embedding, which ``fetch_work`` treats as
         still-missing, so without this a corrupt image is re-selected every sweep.
@@ -472,7 +472,7 @@ class ImageEmbeddingTask(BaseTask):
             flat_hashes.append(self._compute_dhash(img))
             flat_pids.append(pid)
 
-        # A None image means the file could not be decoded — suppress those
+        # A None image means the file could not be decoded - suppress those
         # pictures (issue #585) so they are not re-selected every sweep. This is
         # the decode-failure path only; inference failures below still retry.
         self._mark_decode_failures(decode_failed_pids, batch_files)

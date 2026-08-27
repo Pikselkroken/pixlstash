@@ -1,4 +1,4 @@
-// Projects resource — /projects.
+// Projects resource - /projects.
 //
 // A picture belongs to at most one project, which is why membership is read as
 // assignments plus an explicit unassigned list rather than a set per project.

@@ -74,7 +74,7 @@ describe("TagHealthBoard: persistent rebuild control (Spec B)", () => {
     );
   });
 
-  it("is visible with many rows too — never hidden by row count", () => {
+  it("is visible with many rows too - never hidden by row count", () => {
     store.healthRows = [
       healthRow({ tag: "a" }),
       healthRow({ tag: "b" }),
@@ -128,7 +128,7 @@ describe("TagHealthBoard: Verified column removed (Spec E 7a)", () => {
     expect(html).not.toMatch(/Verified/);
     expect(html).not.toContain("77%");
     // 8 data columns now (Verified cut per Spec E, Accuracy scrapped along
-    // with the scoring subsystem) — spot check via the header row cell count.
+    // with the scoring subsystem) - spot check via the header row cell count.
     const headerCells = wrapper.findAll(".rs-board-row--head .rs-board-hdr");
     expect(headerCells.length).toBe(8);
   });
@@ -141,7 +141,7 @@ describe("TagHealthBoard: Why column (Spec E 7c)", () => {
     ];
     const wrapper = mount(TagHealthBoard, { global: globalOpts });
     const why = wrapper.find(".rs-board-why");
-    expect(why.text()).toBe("mostly wrong — tagged but model disagrees");
+    expect(why.text()).toBe("mostly wrong - tagged but model disagrees");
     expect(why.attributes("title")).toBe(why.text());
   });
 });
@@ -150,7 +150,7 @@ describe("TagHealthBoard: default sort tie-break (rawCorrections, not alphabetic
   it("breaks a tied rounded Priority by raw disagreement volume, not tag name", () => {
     // Both round to a Priority of 8 (corrections() uses the discounted _adj
     // fields), but "zebra"'s raw est_wrong + est_missing (15) is well above
-    // "apple"'s (8). Alphabetically "apple" sorts first — proving a fix that
+    // "apple"'s (8). Alphabetically "apple" sorts first - proving a fix that
     // still reads as A-Z order is wrong; the correct order is "zebra" first.
     const zebra = healthRow({
       tag: "zebra",
@@ -238,7 +238,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     expect(btn.attributes("disabled")).toBeDefined();
     expect(btn.classes()).toContain("rs-board-btn--blocked");
 
-    // The reason names the cause AND the remedy — not a bare "unavailable".
+    // The reason names the cause AND the remedy - not a bare "unavailable".
     const title = w.find(".rs-board-action").attributes("title");
     expect(title).toMatch(/nothing to compare/i);
     expect(title).toMatch(/confirm this tag on a few pictures/i);
@@ -324,7 +324,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
   });
 
   it("does not blocked-tag a row that already has an open session", () => {
-    // That row renders "Open", not "Start review" — the session and its cards
+    // That row renders "Open", not "Start review" - the session and its cards
     // already exist, so the would-be-empty reason does not apply to it.
     store.sessions = [{ id: 11, tag: "shirt" }];
     const w = mountRows([
@@ -351,7 +351,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
 });
 
 // The board renders a row for EVERY tag, which is a very long list in a mature
-// vault. The Priority-0 rows collapse behind a disclosure — they are never
+// vault. The Priority-0 rows collapse behind a disclosure - they are never
 // dropped, because a Priority of 0 does not mean a review would find nothing.
 describe("TagHealthBoard: zero-Priority tail disclosure", () => {
   const scored = (tag, v) =>
@@ -387,7 +387,7 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
     expect(more.attributes("aria-expanded")).toBe("false");
     expect(more.attributes("aria-controls")).toBe("rs-board-table");
     expect(w.find("#rs-board-table").exists()).toBe(true);
-    // The rows are collapsed, not filtered — the control says so.
+    // The rows are collapsed, not filtered - the control says so.
     expect(more.attributes("title")).toMatch(/can still find work/i);
   });
 
@@ -420,7 +420,7 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
 
   it("shows every row, and no disclosure, when ALL rows score 0", () => {
     // Collapsing the whole board would leave a header over an empty table,
-    // which reads as "no tags at all" — worse than the density it saves.
+    // which reads as "no tags at all" - worse than the density it saves.
     store.healthRows = [zero("alpha"), zero("bravo"), zero("zulu")];
     const w = mount(TagHealthBoard, { global: globalOpts });
     expect(names(w)).toEqual(["alpha", "bravo", "zulu"]);
@@ -449,7 +449,7 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
 
     await sortSelect.setValue("score");
     // Back on the Priority sort: the tail is collapsed again and the count is
-    // still right — nothing was stranded by the detour.
+    // still right - nothing was stranded by the detour.
     expect(names(w)).toEqual(["alpha", "bravo"]);
     const more = w.find(".rs-board-more");
     expect(more.text()).toContain("Show 3 tags");
@@ -479,7 +479,7 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
 });
 
 // The Set scope filter is a native <select>, whose <option>s can carry neither
-// an icon nor a title — so the lock state has to ride in the label text, or the
+// an icon nor a title - so the lock state has to ride in the label text, or the
 // user scopes the board to a locked set and only hits the block later in the
 // review dialog.
 describe("TagHealthBoard: locked sets in the Set scope filter", () => {
@@ -495,7 +495,7 @@ describe("TagHealthBoard: locked sets in the Set scope filter", () => {
     const setSelect = w.findAll("select.rs-board-scope")[1];
     const labels = setSelect.findAll("option").map((o) => o.text());
 
-    // Natural order preserved — locked sets are NOT sorted to the bottom.
+    // Natural order preserved - locked sets are NOT sorted to the bottom.
     expect(labels).toEqual([
       "Set: Any",
       "Portraits",

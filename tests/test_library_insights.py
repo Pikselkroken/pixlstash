@@ -1,7 +1,7 @@
 """The "About your library" findings (v1.11 Phase 6).
 
 Read-only findings over an already-organised library. What is worth asserting
-about a screen made of prose is not the prose — it is the four things the
+about a screen made of prose is not the prose - it is the four things the
 screen's honesty rests on:
 
 1. **Every check answers in both directions.** A tidy library still gets five
@@ -265,7 +265,7 @@ def test_a_tidy_library_still_gets_every_row_and_all_of_them_are_clear(server):
     }
     assert [f["state"] for f in found.values()] == ["clear"] * 5
     assert all(f["action"] is None for f in found.values())
-    # A clear row still carries the number that made it clear — "nothing to fix"
+    # A clear row still carries the number that made it clear - "nothing to fix"
     # with no evidence behind it is indistinguishable from a check that never ran.
     assert all(f["evidence"] for f in found.values())
 
@@ -385,7 +385,7 @@ def test_the_overlap_action_opens_a_queue_that_actually_holds_the_duplicates(ser
 
     `find_exact_groups_in_session` applies the scope predicate INSIDE
     `HAVING count(*) > 1`, so a queue scoped to one of the two folders sees one
-    copy of each shared file and finds nothing — an empty queue reached from a
+    copy of each shared file and finds nothing - an empty queue reached from a
     finding that just said the two folders are 100% the same pictures. The
     common ancestor holds both copies, and the queue's folder scope is a
     sub-tree prefix match, so it does.
@@ -395,7 +395,7 @@ def test_the_overlap_action_opens_a_queue_that_actually_holds_the_duplicates(ser
     overlap = _findings(server)["overlapping_folders"]
     assert overlap["action"]["kind"] == "duplicates_in_folder"
     scope_path = overlap["action"]["path"]
-    # Neither of the two folders — their parent.
+    # Neither of the two folders - their parent.
     assert scope_path == LIB
 
     groups = _run(
@@ -507,8 +507,8 @@ def test_a_face_nobody_has_named_is_a_finding_and_a_named_one_is_not(server, cli
 
     The finding is the INTERSECTION of "holds a face" and unassigned, because
     that is what `/character/UNASSIGNED?face=with_face` is. The first version
-    counted every picture holding an unnamed face — including ones in a set,
-    which that view excludes — so its own fixture (`_tidy` puts everything in a
+    counted every picture holding an unnamed face - including ones in a set,
+    which that view excludes - so its own fixture (`_tidy` puts everything in a
     set) made the count unreachable from the button.
     """
     _seed(
@@ -536,7 +536,7 @@ def test_a_face_nobody_has_named_is_a_finding_and_a_named_one_is_not(server, cli
             "character_id": "UNASSIGNED",
             "face_filter": "with_face",
             # What the app actually sends. Without it this exercises the one
-            # branch the UI never uses — which is how the stack-collapse defect
+            # branch the UI never uses - which is how the stack-collapse defect
             # below survived a green suite.
             "fields": "grid",
         },
@@ -554,7 +554,7 @@ def test_a_scanned_picture_with_no_face_in_it_is_not_an_unnamed_face(server, cli
     `FaceExtractionTask` writes `face_index=-1, character_id=None` for every
     picture it found no face in. Read as "an unnamed face" that made the
     finding fire on nearly the whole library while its button opened an empty
-    grid — and the fixture could not see it, because it only ever wrote
+    grid - and the fixture could not see it, because it only ever wrote
     `face_index=0`.
     """
     _seed(
@@ -633,7 +633,7 @@ def test_a_stack_whose_leader_sits_in_another_folder_still_shows(server, client)
     `find_unassigned`'s leaders-only fast path keys on the GLOBAL
     `stack_position == 0`. With a folder filter that member can be outside the
     scope, and the whole stack fell out of a grid whose own pictures were right
-    there — the same defect the project-scope branch beside it was written for.
+    there - the same defect the project-scope branch beside it was written for.
     """
     _seed(
         server,
@@ -660,7 +660,7 @@ def test_a_face_on_a_stack_member_still_reaches_the_grid(server, client):
 
     The cover of a stack is usually the tidy shot and the face is on a sibling.
     With `face_filter` outside the leader-scope set the whole stack fell out of
-    `?face=with_face`, so the finding said 1 and its screen showed nothing —
+    `?face=with_face`, so the finding said 1 and its screen showed nothing -
     the same defect as the folder case, one facet over.
     """
     _seed(
@@ -692,7 +692,7 @@ def test_a_face_on_a_stack_member_still_reaches_the_grid(server, client):
 def test_the_ordinary_grid_keeps_a_folder_stack_whose_cover_is_elsewhere(
     server, client
 ):
-    """`?path=` rides on every grid route, including `/` — which goes through
+    """`?path=` rides on every grid route, including `/` - which goes through
     `Picture.find`, not `find_unassigned`. Both take the same rule now."""
     _seed(
         server,
@@ -827,7 +827,7 @@ def test_the_pile_action_opens_a_grid_holding_exactly_the_pile(server, client):
     grid sends as `character_id=UNASSIGNED&file_path_prefix=<folder>`. The
     unassigned branch used to drop `file_path_prefix` outright
     (`Picture.find_unassigned` had no such parameter), so the button opened
-    every unassigned picture in the library under a header naming one folder —
+    every unassigned picture in the library under a header naming one folder -
     green in every other test here, because they all stop at the action object.
     """
     _seed(
@@ -835,8 +835,8 @@ def test_the_pile_action_opens_a_grid_holding_exactly_the_pile(server, client):
         # The pile the finding will name.
         [{"folder": "_unsorted"} for _ in range(insights.PILE_MIN_PICTURES)]
         # Two pictures in the same folder that belong to a PROJECT and nothing
-        # else. The app does not treat that as assignment — the grid shows them
-        # — so the finding must count them too. The first version of this
+        # else. The app does not treat that as assignment - the grid shows them
+        # - so the finding must count them too. The first version of this
         # service restated "assigned" in Python, added project membership to it,
         # and undercounted the pile by exactly these rows. Two rather than one
         # because `Project.name` is unique: a seed helper that made a fresh
@@ -878,7 +878,7 @@ def test_insights_is_owner_only_in_both_directions(server, client):
     is refused.
 
     On the MODULE server. An earlier version stood up a second one "because this
-    needs a login, which the module server does not have" — which the `client`
+    needs a login, which the module server does not have" - which the `client`
     fixture above disproves by logging into exactly that server. A second
     `Server` is ~1.4 s plus a full migration chain, per shard, for nothing.
     """

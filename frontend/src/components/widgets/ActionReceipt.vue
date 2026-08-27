@@ -1,6 +1,6 @@
 <script setup>
 /**
- * The action receipt — a transient pill that narrates what just happened and
+ * The action receipt - a transient pill that narrates what just happened and
  * offers to take it back. One instance, rendered over the grid in the same slot
  * as the floating selection bar.
  *
@@ -9,10 +9,10 @@
  *   • Icon + human summary + Undo + the keyboard shortcut, so the shortcut is
  *     taught at the moment it is useful.
  *   • A hairline drains over the dwell window (5s, 8s for a destructive action).
- *     Hover or focus pauses it — WCAG 2.2.1, and the pause is on the store's
+ *     Hover or focus pauses it - WCAG 2.2.1, and the pause is on the store's
  *     dismissal timer too, so the pill cannot vanish out from under a cursor
  *     that is on its way to Undo.
- *   • Undoing flips the pill IN PLACE to "Undone — …" with Redo. Two receipts
+ *   • Undoing flips the pill IN PLACE to "Undone - …" with Redo. Two receipts
  *     are never stacked; the store holds exactly one and the newest replaces it.
  *   • A one-way operation still gets a receipt, stating the limit. Never a dead
  *     Undo button.
@@ -25,7 +25,7 @@
  * Stacking: when the selection bar is up, the receipt sits above it. The lift is
  * carried as padding on the (pointer-transparent) wrapper, so the wrapper's
  * measured border box is the FULL height this component occupies on the bottom
- * edge — which is exactly what the anchor registry needs to report.
+ * edge - which is exactly what the anchor registry needs to report.
  */
 import { computed, ref } from "vue";
 
@@ -35,7 +35,7 @@ import { useBottomAnchor } from "../../composables/useBottomAnchor";
 const props = defineProps({
   /**
    * Lift the pill clear of another bottom-anchored element (the selection bar),
-   * in pixels. Measured by the caller — never assumed, because the pill wraps
+   * in pixels. Measured by the caller - never assumed, because the pill wraps
    * and grows on coarse pointers.
    */
   liftPx: { type: Number, default: 0 },
@@ -48,8 +48,8 @@ const props = defineProps({
   pillHidden: { type: Boolean, default: false },
 });
 
-// The receipt contract — wording, glyphs, keycaps, the drain window, the
-// hover/focus/hidden-tab pause and the focus-preserving action — is shared with
+// The receipt contract - wording, glyphs, keycaps, the drain window, the
+// hover/focus/hidden-tab pause and the focus-preserving action - is shared with
 // the lightbox's own narration (`OverlayActionReceipt.vue`). This surface owns
 // the single app-wide live region; the lightbox's does not announce.
 const {
@@ -203,7 +203,7 @@ function onUndo(event) {
   box-shadow: var(--elevation-3);
   backdrop-filter: blur(12px);
   pointer-events: auto;
-  /* Deliberately NO overflow: hidden — it would clip both the drain's tail
+  /* Deliberately NO overflow: hidden - it would clip both the drain's tail
      inside the pill's cap radius and the focus ring on the inner controls. */
 }
 
@@ -223,7 +223,7 @@ function onUndo(event) {
 }
 
 /* The coalescing count. Not a badge: a badge overlays its host without shifting
-   layout, and this sits inline in the pill's flow. `+N` rather than `×N` —
+   layout, and this sits inline in the pill's flow. `+N` rather than `×N` -
    "N more merged into this step", which is what coalescing actually did. */
 .r-more {
   font-size: var(--text-2xs);
@@ -326,7 +326,7 @@ function onUndo(event) {
   animation-play-state: paused;
 }
 
-/* Enter is a 250ms rise with no bounce, exit is quicker — the design's timing.
+/* Enter is a 250ms rise with no bounce, exit is quicker - the design's timing.
    It is slower than the selection pill's --dur-2/--dur-1 on purpose: the two
    never co-occur, and a slightly slower arrival reads as "read me". */
 .receipt-enter-active {
@@ -355,7 +355,7 @@ function onUndo(event) {
   /* The drain STAYS. It is essential animation (WCAG 2.3.3): the hairline is
      the time-remaining readout, not decoration, and the global reduced-motion
      collapse would run it to completion in 0.001ms and leave it frozen at
-     scaleX(0) — asserting "expired" about a live receipt. A 2px linear hairline
+     scaleX(0) - asserting "expired" about a live receipt. A 2px linear hairline
      is at the bottom of the vestibular-risk scale. Defensible only because the
      drain is never the deadline on the capability: undo survives the receipt in
      the toolbar control, and hover/focus pauses the clock. */

@@ -16,7 +16,7 @@ const MAX_FOLDER_KEYS = 200;
 const MAX_PROJECT_IDS = 500;
 
 /**
- * Warn at most once per sidebar — a browser that refuses localStorage (private
+ * Warn at most once per sidebar - a browser that refuses localStorage (private
  * mode, disabled storage, quota) would otherwise log on every single toggle.
  */
 function makeStorageWarner() {
@@ -210,7 +210,7 @@ export function useSidebarExpansion() {
       }
     }
     // An empty list means "not loaded yet" as often as it means "no projects",
-    // so never prune on it — that would wipe the restored preference on boot.
+    // so never prune on it - that would wipe the restored preference on boot.
     if (ids.length > 0) pruneProjectIds(ids);
   }
 

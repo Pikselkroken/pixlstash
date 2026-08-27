@@ -5,33 +5,33 @@ Two surfaces live here, and every route is owner-only.
 **The v1.9 Duplicates queue** (:mod:`pixlstash.services.dedup_tier_service` and
 :mod:`pixlstash.services.dedup_verdict_service`):
 
-* ``GET  /dedup/policy``            — tier defaults + bounds; the client renders
+* ``GET  /dedup/policy``            - tier defaults + bounds; the client renders
   its tier switches and threshold slider from these values rather than
   re-hardcoding 0.90 and 0.65.
-* ``GET  /dedup/groups``            — one page of the queue, confidence
+* ``GET  /dedup/groups``            - one page of the queue, confidence
   descending, plus this scope's scan progress for the banner.
 * ``GET  /dedup/stacks/{stack_id}/members``: one page of an existing stack's
   members, for the deck expansion strip. The lazy half of the queue's stack
   contract: a queue row ships each stack's count and leader, never its members.
-* ``POST /dedup/counts``            — the sidebar badge, the per-tier counts, and
+* ``POST /dedup/counts``            - the sidebar badge, the per-tier counts, and
   as many scoped counts as the context menus need, in one request. Read-only
   despite the verb: the scope list does not fit in a URL.
-* ``POST /dedup/scan``              — queue a scoped scan; returns immediately.
-* ``POST /dedup/verdicts/stack``    — stack a group behind a chosen cover.
-* ``POST /dedup/verdicts/keep-separate`` — remember that a group is not
+* ``POST /dedup/scan``              - queue a scoped scan; returns immediately.
+* ``POST /dedup/verdicts/stack``    - stack a group behind a chosen cover.
+* ``POST /dedup/verdicts/keep-separate`` - remember that a group is not
   duplicates; undoable through the operation log (owner override, 2026-07-30)
   and reopenable from the Stacks view.
-* ``POST /dedup/verdicts/batch``       — apply one multi-group UI gesture in one
+* ``POST /dedup/verdicts/batch``       - apply one multi-group UI gesture in one
   transaction and one contiguous undo unit.
-* ``POST /dedup/verdicts/reopen``   — return a decided group to the queue.
-* ``POST /dedup/auto-stack``        — the exact tier's bulk action, one
+* ``POST /dedup/verdicts/reopen``   - return a decided group to the queue.
+* ``POST /dedup/auto-stack``        - the exact tier's bulk action, one
   operation-log batch id so N stacks reverse with one undo.
 
 **The vault-wide sweep dry run** (:mod:`pixlstash.services.dedup_sweep_service`),
 unchanged and still non-destructive:
 
-* ``GET  /dedup/sweep/policy``  — the default confidence policy plus its bounds.
-* ``POST /dedup/sweep/dry-run`` — the vault-wide plan behind "N groups
+* ``GET  /dedup/sweep/policy``  - the default confidence policy plus its bounds.
+* ``POST /dedup/sweep/dry-run`` - the vault-wide plan behind "N groups
   auto-collapse, M need review".
 
 **Nothing in v1.9 deletes a picture.** A verdict is either a stack (additive, and
@@ -186,7 +186,7 @@ class SweepPolicyModel(BaseModel):
             "What to do with a group whose members already live in several "
             "stacks. `report` (default) proposes the merge but always routes it "
             "to review; `merge` treats it as an ordinary outcome subject to the "
-            "remaining gates. Either way the group is represented — unlike the "
+            "remaining gates. Either way the group is represented - unlike the "
             "grid action, which skips it."
         ),
     )
@@ -206,7 +206,7 @@ class SweepPolicyModel(BaseModel):
         The one accommodation: an *unset* ``auto_resolve_likeness`` is lifted to
         ``likeness_threshold`` when the default would fall below it, so raising
         the candidate threshold alone is a valid request. An explicitly supplied
-        pair that contradicts itself still raises — resolving a default is not
+        pair that contradicts itself still raises - resolving a default is not
         the same as overriding what the caller asked for.
         """
         auto_resolve_likeness = self.auto_resolve_likeness
@@ -337,7 +337,7 @@ class SweepGroupResponse(BaseModel):
     )
     likeness_min: float = Field(
         description=(
-            "The group's weakest observed likeness edge — the weak link of a "
+            "The group's weakest observed likeness edge - the weak link of a "
             "transitive chain, and what `auto_resolve_likeness` is compared to."
         )
     )
@@ -1326,7 +1326,7 @@ class ReopenResponse(BaseModel):
         default=None,
         description=(
             "Operation-log batch of the clear, when clearing a `stacked` "
-            "verdict dissolved its stack — the `POST /operations/batches/"
+            "verdict dissolved its stack - the `POST /operations/batches/"
             "{batch_id}/undo` handle. Null when no picture changed "
             "(keep-separate, or a stack the user had already dissolved)."
         ),
@@ -2286,7 +2286,7 @@ def create_router(server) -> APIRouter:
         response_model=VerdictResponse,
     )
     def post_keep_separate_verdict(request: Request, payload: SignatureRequestModel):
-        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # §21 origin discipline, read in the handler - see post_stack_verdict.
         # Recording here is the owner's 2026-07-30 reversal of the #644-era
         # ruling that kept this verdict out of the operation log.
         context = operation_log_service.request_context(request)
@@ -2345,15 +2345,15 @@ def create_router(server) -> APIRouter:
         description=(
             "Clears the memory of a verdict so the group is offered again. "
             "Clearing a `stacked` verdict whose stack still stands also "
-            "dissolves that stack — restoring the recorded pre-verdict stack "
-            "state, so a stack the verdict folded in comes back — because the "
+            "dissolves that stack - restoring the recorded pre-verdict stack "
+            "state, so a stack the verdict folded in comes back - because the "
             "open queue only offers groups whose members span two or more "
             "stack units. That unstack is recorded as one undoable "
             "`dedup.reopen` operation and the returned `batch_id` is its undo "
             "handle; undoing it restacks the pictures and re-marks the "
             "decision. A clear that touches no picture (keep-separate, or a "
             "stack already dissolved by hand) records nothing and returns a "
-            "null `batch_id`. The metadata union is never reverted here — "
+            "null `batch_id`. The metadata union is never reverted here - "
             "that full inverse is the verdict's own undo. The verdict row is "
             "kept and marked reopened rather than deleted, so the decision "
             "history survives."
@@ -2361,7 +2361,7 @@ def create_router(server) -> APIRouter:
         response_model=ReopenResponse,
     )
     def post_reopen_verdict(request: Request, payload: SignatureRequestModel):
-        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # §21 origin discipline, read in the handler - see post_stack_verdict.
         # A clear can now mutate picture stack state and record an operation,
         # so the context values are no longer dead arguments. Body batch_id
         # wins over the ambient gesture header; the service mints srv- when
@@ -2399,7 +2399,7 @@ def create_router(server) -> APIRouter:
     ):
         request_model = payload or AutoStackRequestModel()
         scope = _scope(request_model.scope)
-        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # §21 origin discipline, read in the handler - see post_stack_verdict.
         # This is the most far-reaching mutation on the surface, so it is the one
         # that most needs an attributed audit row.
         context = operation_log_service.request_context(request)
@@ -2443,7 +2443,7 @@ def create_router(server) -> APIRouter:
         summary="Plan a vault-wide near-duplicate sweep",
         description=(
             "Resolves every near-duplicate group in the vault under the supplied "
-            "confidence policy and returns the plan — the data behind "
+            "confidence policy and returns the plan - the data behind "
             '"N groups auto-collapse, M need review". **Nothing is written**: '
             "this is a dry run, and the sweep's resolution is stacking, never "
             "deletion. Groups spanning several existing stacks are reported as "

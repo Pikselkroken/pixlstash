@@ -3,7 +3,7 @@
 Pins the load-bearing §15 invariant (docs/backend_architecture.md): the
 broadcaster runs on a different task than the request, where the
 ``origin_client_id`` contextvar is dead, so it must derive every envelope field
-from the event ``data`` dict ONLY — never from the contextvar. A relocation is
+from the event ``data`` dict ONLY - never from the contextvar. A relocation is
 exactly the kind of change that could silently reintroduce a contextvar read,
 so this test guards against it directly.
 """
@@ -37,7 +37,7 @@ def test_change_kind_and_picture_ids_read_from_data():
 
     # Every declared wire value survives the allowlist. The gate DROPS an
     # unrecognised value rather than raising, so a kind missing from
-    # ``CHANGE_KINDS`` fails silently and the SPA falls back to "updated" —
+    # ``CHANGE_KINDS`` fails silently and the SPA falls back to "updated" -
     # which for a lifecycle change leaves a 404-clickable card behind.
     for kind in WsBroadcasterMixin.CHANGE_KINDS:
         assert WsBroadcasterMixin._change_kind_from({"change_kind": kind}) == kind
@@ -54,7 +54,7 @@ def test_change_kind_and_picture_ids_read_from_data():
 
 def test_broadcaster_ignores_contextvar_reads_data_only():
     """The §15 invariant: even with the origin contextvar set, the envelope
-    helpers derive nothing from it — only from ``data``."""
+    helpers derive nothing from it - only from ``data``."""
     token = origin_client_id_var.set("contextvar-tab-should-be-ignored")
     try:
         # No origin in data -> None, despite the contextvar being live.
@@ -110,7 +110,7 @@ def test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar():
         assert WsBroadcasterMixin._origin_from(data) == "undo-tab"
         assert WsBroadcasterMixin._source_from(data) == "ui"
 
-    # An undo with no originating tab defaults to no origin — never the
+    # An undo with no originating tab defaults to no origin - never the
     # contextvar's live value.
     without_origin = [
         data for _event, data in emitted if data.get("picture_ids") == [3]
@@ -133,7 +133,7 @@ def test_operation_log_emit_announces_the_scrapheap_lifecycle():
 
     ``restored`` must not be ``added``. Both bring a card back, but the SPA
     reads ``added`` as "new to the vault" and flashes the sidebar's NEW marker
-    on the counts that grew — a lie for a picture that was in the library the
+    on the counts that grew - a lie for a picture that was in the library the
     whole time (the reported bug). The value must also survive the broadcaster's
     allowlist, or the hint is dropped and the grid falls back to ``updated``.
     """
@@ -167,7 +167,7 @@ def test_operation_log_emit_announces_the_scrapheap_lifecycle():
     assert by_ids[(2,)]["change_kind"] == "updated"
 
     for data in by_ids.values():
-        # Every kind survives the envelope gate — a dropped hint is the silent
+        # Every kind survives the envelope gate - a dropped hint is the silent
         # failure mode this whole test exists to catch.
         assert WsBroadcasterMixin._change_kind_from(data) == data["change_kind"]
         assert data["origin_client_id"] == "undo-tab"

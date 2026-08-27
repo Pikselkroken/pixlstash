@@ -190,7 +190,7 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
         pic_db = session.get(Picture, _pic_id)
         if pic_db is None:
             return []
-        # Fetch tags via explicit query — avoids triggering the lazy relationship
+        # Fetch tags via explicit query - avoids triggering the lazy relationship
         # on pic_db (which would interact with cascade="all, delete-orphan").
         tag_rows = session.exec(select(Tag).where(Tag.picture_id == _pic_id)).all()
         current_tags = [t.tag for t in tag_rows if t.tag and not is_tag_sentinel(t.tag)]

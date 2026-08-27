@@ -2,7 +2,7 @@
 
 Two gaps this pins, both "the contract declares a method and nothing calls it":
 
-* ``unload()`` is abstract on ``TaggerPlugin`` — every plugin implements it and
+* ``unload()`` is abstract on ``TaggerPlugin`` - every plugin implements it and
   nothing used to call it, so a plugin's model stayed resident for the life of
   the process and *Keep models in memory = off* could not free it. That is a
   multi-GB problem for a VLM captioner. The registry walk now runs from the
@@ -124,7 +124,7 @@ def test_the_idle_sweep_releases_a_loaded_plugin(install_plugins):
 
 def test_a_plugin_that_holds_nothing_is_not_unloaded(install_plugins):
     """``is_loaded()`` gates the call, which is what keeps the walk off a
-    built-in wrapper whose service the engine has already released — and off a
+    built-in wrapper whose service the engine has already released - and off a
     wrapper with no service bound at all, whose ``unload()`` would raise."""
     cold = _StubPlugin("example_cold", loaded=False)
     install_plugins(cold)
@@ -268,7 +268,7 @@ def test_estimate_follows_an_engine_override(install_plugins):
 
 def test_detection_is_still_billed_for_florence(install_plugins):
     """DetectionTask borrows this estimate but always runs Florence-2, whatever
-    plugin is configured to caption — so it names the plugin explicitly."""
+    plugin is configured to caption - so it names the plugin explicitly."""
     plugin = _StubPlugin("example_captioner", vram=7000, batch=8)
     install_plugins(plugin)
     workflow = DescriptionWorkflow(_engine("example_captioner"), image_root=None)
@@ -293,7 +293,7 @@ def test_a_plugin_that_declines_to_answer_leaves_the_old_estimate(
     install_plugins, declines
 ):
     """Unchanged behaviour, and deliberately so (#967): the plugin *does* run
-    here, so the Florence figure is wrong — but the host cannot invent a number
+    here, so the Florence figure is wrong - but the host cannot invent a number
     for a model it knows nothing about, and a plugin that overrides the method
     gets a correct budget. ``plugin_template.py`` says as much to authors."""
     plugin = _StubPlugin("example_captioner", raises=(declines == "raises"), vram=0)
@@ -317,7 +317,7 @@ def test_estimate_stays_zero_on_cpu(install_plugins):
 
 def test_the_vault_idle_sweep_is_the_caller(install_plugins):
     """Wiring check: the walk is reached from the *Keep models in memory = off*
-    sweep, and only once every worker is idle — which is what keeps a plugin's
+    sweep, and only once every worker is idle - which is what keeps a plugin's
     unload from landing on top of its own in-flight load."""
     from pixlstash.vault import Vault
 
@@ -342,8 +342,8 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
 
 def test_joycaption_charges_for_a_cold_start():
     """The shipped VLM is the case the budget exists for: it used to return 0
-    while its weights were merely not loaded yet, which — now that the host
-    reads 0 as "no answer" — would bill ~1 GB of Florence for the 8 GB it is
+    while its weights were merely not loaded yet, which - now that the host
+    reads 0 as "no answer" - would bill ~1 GB of Florence for the 8 GB it is
     about to allocate."""
     from pixlstash.tagger_plugins.joycaption import (
         _BASE_VRAM_MB,

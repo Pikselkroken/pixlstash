@@ -15,7 +15,7 @@ import numpy as np
 # ML imports (torch / open_clip, which itself pulls torch, torchvision and
 # transformers) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
-# server's import path — so importing them at module scope would make server
+# server's import path - so importing them at module scope would make server
 # startup and every single test pay that cost before doing any work.
 
 logger = logging.getLogger(__name__)

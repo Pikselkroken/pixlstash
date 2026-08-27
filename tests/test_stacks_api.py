@@ -120,7 +120,7 @@ def test_remove_last_member_auto_deletes_stack():
         resp = client.post("/stacks", json={"picture_ids": [pic_id1, pic_id2]})
         stack_id = resp.json()["id"]
 
-        # Remove both members — stack should be auto-deleted when only 1 remains
+        # Remove both members - stack should be auto-deleted when only 1 remains
         resp = client.request(
             "DELETE",
             f"/api/v1/stacks/{stack_id}/members",

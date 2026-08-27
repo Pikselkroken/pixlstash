@@ -6,7 +6,7 @@ server, wait for the boot, read the error row under Settings › Auto-tagging.
 
 **This is a development aid and not a security scanner.**  It says nothing
 about whether a plugin is safe to install, because finding out whether it loads
-means *running it*: the module body — and, with ``--image``, the model — execute
+means *running it*: the module body - and, with ``--image``, the model - execute
 in this process, with the caller's permissions, exactly as they would in the
 server's.  Nothing is sandboxed and nothing inspects what the code does, so the
 only safe input is a plugin the caller would have installed anyway.  Anything
@@ -16,11 +16,11 @@ report read as a safety verdict is worse than no report.
 
 That is the exact opposite of :mod:`pixlstash.plugin_install`, which classifies
 a source with ``ast`` and never imports it, because *it* runs before the user
-has agreed to install anything — and pays for that with an inability to see any
+has agreed to install anything - and pays for that with an inability to see any
 import-time failure.  Here the user has named a plugin and asked for it to be
 run, so importing it is the request rather than a side effect of classifying it.
 
-The load itself is :meth:`TaggerPluginManager.load_plugin_from_path` — the
+The load itself is :meth:`TaggerPluginManager.load_plugin_from_path` - the
 server's own loader, not a second implementation that resembles it, so the
 module namespacing, the package ``submodule_search_locations`` and the
 containment of a failing import are the same by construction.  The decisions
@@ -209,7 +209,7 @@ def _ineligible(target: Path) -> list[str]:
 
     ``_load_user_plugins`` filters the directory listing *before* the loader
     this module shares with it, so a name the scan skips loads perfectly here
-    and never loads in the server — silently, which is the failure the whole
+    and never loads in the server - silently, which is the failure the whole
     command exists to remove.
     """
     entry = target.name
@@ -256,15 +256,15 @@ def _wrong_kind_hint(target: Path) -> list[str]:
         return []
     return [
         "this is an image filter, not a captioning plugin. The two have "
-        "different contracts — different base class, different parameter "
-        "schema — and `plugins test` checks only captioning plugins."
+        "different contracts - different base class, different parameter "
+        "schema - and `plugins test` checks only captioning plugins."
     ]
 
 
 def _schema_findings(schema: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return ``(problems, warnings)`` for one plugin's schema.
 
-    A problem stops the plugin working — it crashes, or the control is not
+    A problem stops the plugin working - it crashes, or the control is not
     there. A warning is cosmetic, and failing the command on one would make
     this check less useful than the restart it replaces.
     """
@@ -289,7 +289,7 @@ def _schema_findings(schema: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not (schema["supports_tags"] or schema["supports_descriptions"]):
         # A warning rather than a problem, and the same call `plugins install`
         # makes: it loads and registers exactly as written, it is simply never
-        # reached — which may be a half-finished plugin rather than a broken one.
+        # reached - which may be a half-finished plugin rather than a broken one.
         warnings.append(
             "neither supports_tags nor supports_descriptions is set, so it "
             "registers and nothing ever calls it"
@@ -360,9 +360,9 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
     that a check command does not start a multi-gigabyte fetch nobody asked
     for. **That is a courtesy, not a guarantee**, and the wording everywhere
     else has to match: ``needs_download()`` is the plugin's own answer about
-    its own files, and the download a plugin does in ``init()`` — which is
+    its own files, and the download a plugin does in ``init()`` - which is
     where this repository's own ``from_pretrained_local_first`` does it, and so
-    where a plugin author copying the shipped captioners will do it — happens
+    where a plugin author copying the shipped captioners will do it - happens
     below this line regardless.
 
     Returns:
@@ -388,7 +388,7 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
         if plugin.needs_download(parameters):
             return None, [
                 "needs_download() is True: the plugin says its model files are "
-                "not on this machine. Stopping rather than fetching them — "
+                "not on this machine. Stopping rather than fetching them - "
                 "download it from Settings › Auto-tagging, then run this again."
             ]
     except Exception as exc:
@@ -432,7 +432,7 @@ def _device() -> str:
     about a library the plugin author may not even import directly.
     """
     # Local import: torch is seconds of start-up, and every other verb in this
-    # CLI — including `plugins test` without --image — runs without it.
+    # CLI - including `plugins test` without --image - runs without it.
     try:
         import torch
 

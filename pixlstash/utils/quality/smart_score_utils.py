@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 # the whole band still reads as "1.0" to a user (1.000-1.050 on the [1, 5] scale).
 #
 # The cost is that raw scores in [0, 1] are compressed into [BAND, 1], shifting them up by
-# at most 4 * SCORE_FLOOR_BAND = 0.05 at raw 0 and by 0 at raw 1 — under 0.02 in the
+# at most 4 * SCORE_FLOOR_BAND = 0.05 at raw 0 and by 0 at raw 1 - under 0.02 in the
 # 3-4 band where most pictures sit. The band is kept deliberately small for that reason.
 SCORE_FLOOR_BAND = 0.0125
 SCORE_FLOOR_TAU = 0.25
@@ -172,7 +172,7 @@ class SmartScoreUtils:
         # reachable: a picture only has to score ~79% across the positive terms to hit
         # the ceiling, rather than ~100% on every single one. Trimming a positive weight
         # without redistributing it therefore does not just de-emphasise that signal, it
-        # lowers the whole library — dropping aesthetic and sharpness from 0.30 to 0.20
+        # lowers the whole library - dropping aesthetic and sharpness from 0.30 to 0.20
         # took the sum to 1.07 and, measured over 6,000 real pictures, moved the maximum
         # achievable score to 4.38 with *no* picture reaching 4.5.
         #
@@ -204,13 +204,13 @@ class SmartScoreUtils:
             # {tag: precision} from the latest evaluated TaggerRun; empty → tags use the
             # DEFAULT_TAG_PRECISION fallback in anomaly_penalty.
             "tag_precisions": {},
-            # {tag: acceptance threshold} — the same gate that dropped sub-threshold
+            # {tag: acceptance threshold} - the same gate that dropped sub-threshold
             # predictions upstream, from resolve_anomaly_apply_thresholds. The penalty
             # grades confidence relative to it, so a barely-accepted detection is mild for
             # every tag regardless of where its gate sits. Empty → raw probabilities are
             # graded directly (see anomaly_penalty._confidence_evidence).
             "tag_thresholds": {},
-            # {tag: weight} — the owner's resolved User.smart_score_penalised_tags, from
+            # {tag: weight} - the owner's resolved User.smart_score_penalised_tags, from
             # scoring.smart_score.resolve_penalised_tag_weights. A tag absent from it is not
             # penalised. None falls back to DEFAULT_SMART_SCORE_PENALIZED_TAGS, which is
             # only right for callers with no user config (e.g. unit tests).

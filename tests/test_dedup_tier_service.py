@@ -2,20 +2,20 @@
 
 Covers, per tier and per rule:
 
-* **tier 1 (exact)** — groups on the indexed ``pixel_sha``, refuses to group two
+* **tier 1 (exact)** - groups on the indexed ``pixel_sha``, refuses to group two
   files that share a digest but differ in ``size_bytes`` (the sampled-digest
   guard), and stays blind to the scrapheap;
-* **tier 2 (bucketed near)** — candidate buckets come from the precomputed
+* **tier 2 (bucketed near)** - candidate buckets come from the precomputed
   columns, comparison happens only inside a bucket, and the group's confidence is
   its weakest link;
-* **tier 3 (embedding)** — reuses the shipped likeness edge table;
-* **the tier policy** — exact is always on, each looser tier requires the tier
+* **tier 3 (embedding)** - reuses the shipped likeness edge table;
+* **the tier policy** - exact is always on, each looser tier requires the tier
   above it, and the 0.65 floor is a hard error rather than a silent clamp;
-* **cover selection** — the 2026-07-30 lexicographic ranking: smart score in
+* **cover selection** - the 2026-07-30 lexicographic ranking: smart score in
   quarter-star buckets (unknown ranks neutral, never zero), then pixel count,
   then sharpness, then stars/tags/RAW/bytes, ties to the oldest capture;
-* **evidence** — matching pills and evidence-against pills, both directions;
-* **the queue** — paged by confidence descending, verdict-resolved groups never
+* **evidence** - matching pills and evidence-against pills, both directions;
+* **the queue** - paged by confidence descending, verdict-resolved groups never
   re-offered, and scope-narrowed counts.
 """
 
@@ -195,7 +195,7 @@ def test_group_size_bounds_are_validated():
 
 def test_smart_score_dominates_every_size_advantage():
     """Tier 1 beats tier 2: a 40 MP blurry scan must not outrank a sharp
-    original the scorer rated higher — the exact failure of the old weighted
+    original the scorer rated higher - the exact failure of the old weighted
     sum, where pixels alone could buy the cover."""
     sharp_original = _member(id=1, width=4000, height=3000, smart_score=4.5)
     blurry_scan = _member(
@@ -219,7 +219,7 @@ def test_an_unknown_smart_score_ranks_neutral_never_zero():
     """NULL (not yet computed) and -1.0 (the failed-metric sentinel) both read
     as unknown and rank at the neutral midpoint: an unscored copy still loses
     to a known-good one, still beats a known-bad one, and two unknowns fall
-    through to size — never buried below a scored-terrible sibling."""
+    through to size - never buried below a scored-terrible sibling."""
     unknown = _member(id=1, width=1000, height=1000)
     known_bad = _member(id=2, width=8000, height=8000, smart_score=2.0)
     known_good = _member(id=3, width=1000, height=1000, smart_score=4.0)
@@ -253,7 +253,7 @@ def test_sharpness_decides_at_equal_smart_score_and_pixels():
 
 
 def test_lower_order_signals_break_full_quality_ties():
-    """Stars, then tags, then RAW, then bytes — in that order, only after the
+    """Stars, then tags, then RAW, then bytes - in that order, only after the
     quality and size tiers tie."""
     starred = _member(id=1, score=4)
     tagged = _member(id=2, tag_count=7)
@@ -282,7 +282,7 @@ def test_raw_is_detected_by_format_or_extension():
 
 
 def test_the_legacy_cover_score_field_is_unchanged():
-    """`cover_score` is deprecated wire-compat, not the selection rule — but
+    """`cover_score` is deprecated wire-compat, not the selection rule - but
     while it ships it must keep its documented value."""
     member = _member(width=4000, height=3000, tag_count=2, score=3)
     assert member.megapixels == pytest.approx(12.0)
@@ -379,7 +379,7 @@ def test_candidate_evidence_explains_the_smart_score_and_sharpness_tiers():
     assert any(p["text"] == "Sharpest copy" for p in best_pills)
 
     # 4.26 sits in the same quarter-star bucket as 4.3: an effective tie both
-    # read as best — the pill mirrors the decision unit, not float noise.
+    # read as best - the pill mirrors the decision unit, not float noise.
     mid_pills = tiers.build_candidate_evidence(mid, members, cover_id=1)
     assert mid_pills[0]["text"] == "Best smart score (4.3)"
     assert not any(p["text"] == "Sharpest copy" for p in mid_pills)
@@ -778,7 +778,7 @@ def test_the_scan_ranks_the_cover_on_smart_score_end_to_end(server):
     ids = _seed(
         server,
         [
-            # Bigger, heavily tagged and starred — but the scorer rates it low.
+            # Bigger, heavily tagged and starred - but the scorer rates it low.
             {
                 "pixel_sha": "aaa",
                 "size_bytes": 100,

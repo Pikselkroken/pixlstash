@@ -5,7 +5,7 @@
  * The whole lifecycle: list, add, rename, switch, stop using. It used to be a
  * list and a lesson in the CLI, because adding a library points the server at a
  * folder on disk and that was a terminal job. The routes exist now, so the CLI
- * panel stays but is demoted to reference — the same things from a terminal,
+ * panel stays but is demoted to reference - the same things from a terminal,
  * for a script or a cron job, or anyone who prefers one.
  *
  * **Nothing in this pane can remove a picture or a folder.** `Stop using this`
@@ -13,7 +13,7 @@
  * links pointing at that library revive when the folder is added again. The
  * copy says so at the moment of the decision rather than in a help page.
  *
- * The active library has no `Stop using this` — switch away first. That refusal
+ * The active library has no `Stop using this` - switch away first. That refusal
  * is the registry's, not this dialog's; the item is hidden because offering a
  * gesture that always fails is worse than not offering it.
  *
@@ -132,8 +132,8 @@ const detachCommand = computed(() =>
 );
 
 // Which shell these commands are written for, when it is not "any of them".
-// The Windows desktop declares a PowerShell command — a leading `&` call
-// operator — because no single string runs in both cmd.exe and PowerShell
+// The Windows desktop declares a PowerShell command - a leading `&` call
+// operator - because no single string runs in both cmd.exe and PowerShell
 // (issue #1058), and a command pasted into the wrong one fails with an error
 // that names neither. Read off the command we are about to show rather than
 // from a new API field: the hint IS the deployment's own answer, so the two
@@ -228,7 +228,7 @@ async function stopUsing(library) {
         ? `${shareCount} share ${shareCount === 1 ? "link" : "links"} ` +
           `${shareCount === 1 ? "points" : "point"} at it. ` +
           `${shareCount === 1 ? "It stops" : "They stop"} working until you add ` +
-          "the folder again, and then works again — nothing is revoked."
+          "the folder again, and then works again - nothing is revoked."
         : "",
     confirmLabel: "Forget it",
   });
@@ -278,7 +278,7 @@ async function copyCommand(command) {
   );
 }
 
-// Reopening the dialog otherwise shows "Copied" — and announces it — for a
+// Reopening the dialog otherwise shows "Copied" - and announces it - for a
 // button nobody pressed this time.
 watch(commandsOpen, (isOpen) => {
   if (!isOpen) copiedCommand.value = "";
@@ -500,8 +500,8 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       </p>
 
       <p v-if="showOneLibraryPrimer" class="libraries-note">
-        You have one library. Add another to keep separate sets of pictures —
-        client work and experiments, say — and switch between them here.
+        You have one library. Add another to keep separate sets of pictures -
+        client work and experiments, say - and switch between them here.
       </p>
     </SettingsSection>
 

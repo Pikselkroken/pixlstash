@@ -474,7 +474,7 @@ def test_flush_hash_update_is_constant_queries(server):
     """The hook costs the same number of statements for 2 pictures as for 20.
 
     The old shape was five SELECTs plus one UPDATE per dirty picture, so this
-    count was exactly ``6 * N`` — 12 here versus 120 — all of it inside the open
+    count was exactly ``6 * N`` - 12 here versus 120 - all of it inside the open
     write transaction on the single writer thread.
     """
     small_ids = _create_pictures(server, 2)

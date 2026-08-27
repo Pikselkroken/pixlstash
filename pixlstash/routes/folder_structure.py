@@ -1,4 +1,4 @@
-"""The folder-structure read — v1.11 Phase 2.
+"""The folder-structure read - v1.11 Phase 2.
 
 Wire contract: ``docs/integration_architecture.md`` §20. The signals themselves
 live in ``pixlstash.services.folder_structure_service``; this module is the
@@ -66,7 +66,7 @@ class FolderStructureReadStatusResponse(BaseModel):
     stage: str
     """``walking`` | ``faces`` | ``done``.
 
-    There is no ``sidecars`` stage — that signal is counted from the walk's own
+    There is no ``sidecars`` stage - that signal is counted from the walk's own
     listing. A read with no inference engine never reaches ``faces`` either: it
     goes straight from ``walking`` to ``done``, so the bar stays indeterminate
     throughout.
@@ -97,11 +97,11 @@ class FolderStructureCommitRequest(BaseModel):
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
     """``reference`` (default): register the scanned root as an ordinary
-    reference folder, indexed in place — right for a folder external to the
+    reference folder, indexed in place - right for a folder external to the
     library's own storage.
 
     ``local_import``: the scanned root IS the active library's own
-    `image_root` (or a folder inside it) — the "Add a library" flow's
+    `image_root` (or a folder inside it) - the "Add a library" flow's
     "pictures" verdict, where the folder a fresh vault was just created in
     already held loose files. Those pictures become ordinary MANAGED pictures
     (relative `file_path`) instead of reference-folder ones. The commit fails
@@ -116,7 +116,7 @@ class FolderStructureCommitStartResponse(BaseModel):
 
 class FolderStructureCommitStopResponse(BaseModel):
     status: str
-    """``abandoned`` or ``deferred`` — the stop was accepted. As with the
+    """``abandoned`` or ``deferred`` - the stop was accepted. As with the
     read's cancel, accepted is not the same as stopped: the commit unwinds at
     its next chunk boundary, so `status` legitimately still reports `running`
     for a moment afterwards."""
@@ -128,7 +128,7 @@ class FolderStructureCommitStatusResponse(BaseModel):
     """``queued`` | ``running`` | ``completed`` | ``failed`` | ``abandoned`` |
     ``deferred``. The last two are the owner's own two ways of stopping a
     running commit (DELETE below): `abandoned` gives up on it, `deferred` is
-    "organise later" — indexing stands, the mapping was not applied. Neither
+    "organise later" - indexing stands, the mapping was not applied. Neither
     unwinds what is already indexed, and in reference mode the folder's scan
     runs to completion on its own regardless of what this screen does next."""
 
@@ -166,8 +166,8 @@ def create_router(server) -> APIRouter:
 
         The blocklist runs on the **realpath**, not on the string the caller
         sent. Validating the raw path alone would let ``/home/me/link-to-etc``
-        through and hand ``/etc`` — 400-odd directories, walked recursively and
-        with every image-extensioned file in them decoded — to a route whose
+        through and hand ``/etc`` - 400-odd directories, walked recursively and
+        with every image-extensioned file in them decoded - to a route whose
         whole justification is that it is contained. That is what
         ``validate_reference_folder_accessible`` is for, and it is why this
         route is deliberately *stricter* than ``GET /filesystem/browse``: browse
@@ -221,7 +221,7 @@ def create_router(server) -> APIRouter:
         there is one model in memory rather than two.
 
         **It does not queue politely.** ``FaceDetectionTask.priority`` is
-        ``URGENT`` — "skip ahead of everything" — so every batch of the read
+        ``URGENT`` - "skip ahead of everything" - so every batch of the read
         jumps the queue ahead of background work. Defensible (the owner is
         watching a progress bar) but worth knowing rather than assuming, and it
         is why the read carries a deadline: an URGENT task that cannot finish
@@ -273,7 +273,7 @@ def create_router(server) -> APIRouter:
             detect = _face_detector()
             if detect is None:
                 logger.warning(
-                    "Folder-structure read: no inference engine — the face signal "
+                    "Folder-structure read: no inference engine - the face signal "
                     "will be skipped and no folder will be proposed as a Person."
                 )
             task_id = str(uuid.uuid4())
@@ -323,7 +323,7 @@ def create_router(server) -> APIRouter:
             state["status"] = "running"
         try:
             result = read.run()
-        except BaseException as exc:  # noqa: BLE001 — the slot must never wedge
+        except BaseException as exc:  # noqa: BLE001 - the slot must never wedge
             logger.error(
                 "Folder-structure read %s failed (%s): %s",
                 task_id,
@@ -336,7 +336,7 @@ def create_router(server) -> APIRouter:
                 state["status"] = "failed"
                 state["error"] = f"{type(exc).__name__}: {exc}"
             # Anything that is not an ordinary Exception is still not this
-            # thread's to swallow — but the slot is marked failed FIRST, or a
+            # thread's to swallow - but the slot is marked failed FIRST, or a
             # KeyboardInterrupt or a MemoryError leaves it "running" forever and
             # every later read is refused with 409. The deadline cannot help
             # here: it lives inside run(), which did not return.
@@ -465,7 +465,7 @@ def create_router(server) -> APIRouter:
         should_stop = lambda: _stop_requested(task_id)  # noqa: E731
         try:
             if mode == "local_import":
-                # No reference folder to register — the "registering" stage
+                # No reference folder to register - the "registering" stage
                 # is simply skipped, straight into "indexing".
                 commit_service.validate_local_import_root(server, root_path)
                 commit_service.record_commit_stage(server, task_id, "indexing")
@@ -535,8 +535,8 @@ def create_router(server) -> APIRouter:
             return
         except commit_service.CommitError as exc:
             # The durable record is deliberately LEFT PENDING. A failure here is
-            # usually transient — a scan that outran its timeout, a folder that
-            # was not mounted yet — and losing the intent is the thing this
+            # usually transient - a scan that outran its timeout, a folder that
+            # was not mounted yet - and losing the intent is the thing this
             # record exists to prevent, so the next start-up tries once more.
             # A commit that keeps failing is stopped by the owner, not by us
             # guessing which failures are permanent.
@@ -547,7 +547,7 @@ def create_router(server) -> APIRouter:
                     state["error"] = str(exc)
                     state["status"] = "failed"
             return
-        except BaseException as exc:  # noqa: BLE001 — the slot must never wedge
+        except BaseException as exc:  # noqa: BLE001 - the slot must never wedge
             logger.error(
                 "Folder-structure commit %s failed (%s): %s",
                 task_id,
@@ -651,7 +651,7 @@ def create_router(server) -> APIRouter:
             "mode=reference (default): registers the read's root folder for "
             "in-place indexing. mode=local_import: imports the pictures "
             "already under the ACTIVE library's own image_root as ordinary "
-            "managed pictures instead — for the 'Add a library' flow's "
+            "managed pictures instead - for the 'Add a library' flow's "
             "'pictures' verdict, refused unless the root is image_root itself "
             "or inside it. Either way no file is moved, renamed or copied; "
             "then the accepted projects, people, sets and tags are created "
@@ -669,7 +669,7 @@ def create_router(server) -> APIRouter:
 
             Does not mark it committed. Called here, before `assignments` is
             even parsed, so a 400 on malformed input never burns the read's
-            one commit — the actual commit-reservation re-checks (and this
+            one commit - the actual commit-reservation re-checks (and this
             time sets) `committed` again, right before the commit starts.
             """
             with server.folder_structure_lock:
@@ -707,7 +707,7 @@ def create_router(server) -> APIRouter:
         # the lock, immediately before the commit actually starts: two
         # requests racing this same task_id cannot both pass, because the
         # loser sees `committed` already true. Marked the instant a commit
-        # STARTS, not once it finishes — a commit already running or already
+        # STARTS, not once it finishes - a commit already running or already
         # done must refuse a second one against the same read, or
         # `apply_mapping` runs twice over the same pictures and creates
         # duplicate projects, people, sets, tags and memberships. See
@@ -748,8 +748,8 @@ def create_router(server) -> APIRouter:
             }
 
         # Written before the thread starts, so the window this record exists
-        # for — the crash between "the owner pressed the button" and "the
-        # pictures are organised" — is covered from its first instant.
+        # for - the crash between "the owner pressed the button" and "the
+        # pictures are organised" - is covered from its first instant.
         commit_service.record_pending_commit(
             server,
             task_id=task_id,
@@ -810,7 +810,7 @@ def create_router(server) -> APIRouter:
         summary="Stop a running folder-structure commit",
         description=(
             "`stop=abort` gives up on the commit; `stop=defer` is 'organise "
-            "later' — the indexing already done stands and the mapping is not "
+            "later' - the indexing already done stands and the mapping is not "
             "applied. Neither un-indexes anything: no file is touched either "
             "way, and every picture already indexed stays indexed. The commit "
             "unwinds at its next chunk boundary, so a following status poll "

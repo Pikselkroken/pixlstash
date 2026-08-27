@@ -1,4 +1,4 @@
-// ComfyUI resource — /comfyui/*.
+// ComfyUI resource - /comfyui/*.
 //
 // PixlStash's own backend proxies ComfyUI; these are PixlStash routes, not
 // calls to a ComfyUI server. Paths are relative: the shared apiClient adds the
@@ -103,7 +103,7 @@ export async function getPictureWorkflow(pictureId) {
  *
  * `preflight` reports whether the recipe's models and LoRAs are present on the
  * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
- * reached at all — it does NOT mean the recipe passed its checks.
+ * reached at all - it does NOT mean the recipe passed its checks.
  *
  * `node_classes` is the distinct list of ComfyUI node classes the graph would
  * execute. It is read from the file, so it is populated even when the

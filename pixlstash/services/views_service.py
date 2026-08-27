@@ -1,4 +1,4 @@
-"""PixlStash Views — the library's sets, people and projects as folders of links.
+"""PixlStash Views - the library's sets, people and projects as folders of links.
 
 A view folder holds one link per member picture, pointing at the file where the
 owner already keeps it. Nothing is copied, no original moves, and deleting the
@@ -9,20 +9,20 @@ that a filesystem cannot give on its own, and it is why the tree is worth having
 **Views are additional to the owner's own tree, never a replacement for it.**
 
 Why the location is checked before anything is written (the v1.11 spike, measured
-on this machine's real filesystems — see ``docs/spikes/views-links.md``):
+on this machine's real filesystems - see ``docs/spikes/views-links.md``):
 
 * Link support is a property of the **view root's** filesystem, not the library's.
   A symlink is a stored path, so it points across devices happily; measured OK
   from ext4 to a second physical drive. A library on a NAS or an external disk is
   therefore fine as long as the view root itself can hold links.
-* exFAT and VFAT have **neither** symlinks nor hard links — both raise ``EPERM``,
+* exFAT and VFAT have **neither** symlinks nor hard links - both raise ``EPERM``,
   measured on a freshly formatted volume of each. So a hard link is not the
   fallback for the external-drive case; there is no fallback, and the answer is to
   refuse that location by name rather than write half a tree.
 * A hard link never crosses a device (``EXDEV``, measured against three real
   drives), and it keeps a deleted original's bytes alive under the view folder.
   It is used only when the view root is on the same device as the file and
-  symlinks are unavailable — which is the Windows-without-Developer-Mode case.
+  symlinks are unavailable - which is the Windows-without-Developer-Mode case.
 * Windows symlink creation needs ``SeCreateSymbolicLinkPrivilege`` (administrator
   or Developer Mode). Rather than predict it, :func:`probe_link_support` asks the
   filesystem by attempting one link in the chosen directory.
@@ -72,7 +72,7 @@ MARKER_TEXT = (
 
 #: Directory names that mark a cloud-sync root. A sync client follows a link and
 #: uploads the file's content again rather than syncing the link, so publishing
-#: into one would copy the whole library into the owner's cloud quota — the exact
+#: into one would copy the whole library into the owner's cloud quota - the exact
 #: duplication views exist to avoid.
 #: Deliberately NOT ``.dropbox``: the Dropbox client keeps that one in the home
 #: directory, not in the synced folder, so treating it as a marker refused every
@@ -100,7 +100,7 @@ _SYNC_DIR_NAMES = {
 }
 
 #: One publish at a time. The route's handler is sync, so FastAPI runs it in a
-#: threadpool and two saves can overlap — and a rebuild removes a subtree before
+#: threadpool and two saves can overlap - and a rebuild removes a subtree before
 #: it writes it, so overlapping ones would delete each other's work and leave a
 #: tree neither request asked for. Nothing outside the views root is at risk
 #: either way; this is about the result being the one that was requested.
@@ -125,7 +125,7 @@ class PublishReport:
     folders: int = 0
     links: int = 0
     skipped_missing: int = 0
-    #: View folders where at least one link could not be made — NOT folders that
+    #: View folders where at least one link could not be made - NOT folders that
     #: are absent. A folder here exists and is incomplete, which is the thing the
     #: owner has to be told, because a partial tree reads as a whole one.
     skipped_unlinkable: list[str] = field(default_factory=list)
@@ -156,7 +156,7 @@ def safe_component(name: str, fallback: str) -> str:
 
     It is also truncated, which is not cosmetic. A component over ``NAME_MAX``
     is ``ENAMETOOLONG`` on Linux, and a views path is already four segments deep
-    before the name — an unremarkable set name plus a long filename clears
+    before the name - an unremarkable set name plus a long filename clears
     Windows' 260-character ``MAX_PATH`` between them. Truncating loses a suffix;
     not truncating loses the folder.
     """
@@ -172,7 +172,7 @@ def _unique(taken: set[str], candidate: str, suffix: str) -> str:
     It loops rather than suffixing once, because the disambiguated form can
     itself be taken: an entity genuinely called ``0412 (7).png`` collides with
     the name picture 7 would be given, and a single pass would hand back a
-    duplicate — an ``EEXIST`` at link time, reported to the owner as if the
+    duplicate - an ``EEXIST`` at link time, reported to the owner as if the
     filesystem had refused the link.
     """
     if candidate not in taken:
@@ -199,7 +199,7 @@ def _sync_root_marker(directory: str) -> Optional[str]:
     The walk stops **below** the home directory, and that bound is the whole
     reason this check is usable. Sync clients keep configuration in ``$HOME``
     (``~/.dropbox``) and their synced tree beside it (``~/Dropbox``), so a walk
-    that reached ``$HOME`` — let alone ``/`` — reported every path a Dropbox user
+    that reached ``$HOME`` - let alone ``/`` - reported every path a Dropbox user
     could possibly pick as synced, with no override and a message asserting
     something untrue of the folder they chose. Anything at or above ``$HOME`` is
     not a sync root; something under it may be.
@@ -240,7 +240,7 @@ def same_root(a: Optional[str], b: Optional[str]) -> bool:
     picker returns ``/home/me/Views`` one time and ``/home/me/Views/`` the next,
     Windows and macOS spell the same directory in several cases, and ``.``
     components survive a round trip through JSON. Any of those made the caller
-    believe the folder had *changed* — so it published the new tree and then
+    believe the folder had *changed* - so it published the new tree and then
     removed it again as "the old one", reporting success over an empty folder.
     """
     if not a or not b:
@@ -328,7 +328,7 @@ def probe_link_support(directory: str, target_file: str) -> tuple[Optional[str],
     answer is measured rather than predicted because it depends on the
     filesystem (exFAT and VFAT refuse both), on whether the two paths share a
     device (a hard link cannot cross one) and, on Windows, on whether this
-    process holds ``SeCreateSymbolicLinkPrivilege`` — which administrator rights
+    process holds ``SeCreateSymbolicLinkPrivilege`` - which administrator rights
     or Developer Mode grant and nothing in the file's metadata reveals.
 
     Returns:
@@ -414,7 +414,7 @@ def _group(rows) -> list[tuple]:
     """Fold ``(id, name, picture)`` rows into one entry per entity.
 
     A picture with two faces of the same character appears twice in the join, so
-    membership is deduplicated by picture id here rather than in SQL — the query
+    membership is deduplicated by picture id here rather than in SQL - the query
     stays one readable join and the set is small.
     """
     grouped: dict[int, tuple[str, dict[int, Picture]]] = {}
@@ -474,12 +474,12 @@ def _prune(directory: str) -> list[str]:
     **This is the rule that stands between a rebuild and someone's pictures.**
     ``shutil.rmtree`` is not link-aware: it deletes a regular file as happily as
     a symlink, so a rebuild that used it would destroy anything the owner had
-    dropped into a view folder — and every line of this feature's copy invites
+    dropped into a view folder - and every line of this feature's copy invites
     them to treat these folders as ordinary ones. So the deletes are decided per
     entry, and the test is exact rather than heuristic:
 
-    * a **symlink** is removed — it is a path, and unlinking it loses nothing;
-    * a regular file with ``st_nlink > 1`` is removed — another name for those
+    * a **symlink** is removed - it is a path, and unlinking it loses nothing;
+    * a regular file with ``st_nlink > 1`` is removed - another name for those
       bytes exists elsewhere, which is exactly what a hard link into the library
       is, so unlinking this one loses nothing;
     * **anything else stays**, and is named to the caller. A regular file whose
@@ -514,7 +514,7 @@ def _prune(directory: str) -> list[str]:
             except OSError as exc:
                 logger.info("Views: keeping %s, which did not come away: %s", path, exc)
                 if not os.path.lexists(path):
-                    # It went away between the walk and the unlink — a viewer
+                    # It went away between the walk and the unlink - a viewer
                     # tidying up, another process, the owner. Nothing is kept,
                     # and re-``lstat``ing to find that out would raise inside
                     # this handler and abort the whole publish.
@@ -560,7 +560,7 @@ def _link_target(mode: str, source: str, view_dir: str) -> str:
     library and its views together keeps every link valid; across devices a
     relative path is either impossible (different drive letters on Windows) or
     absurd, so the absolute path is stored. A hard link takes the real path
-    either way — it is an inode reference, not a path.
+    either way - it is an inode reference, not a path.
     """
     if mode != SYMLINK:
         return source
@@ -655,8 +655,8 @@ def _publish_locked(
             try:
                 os.makedirs(view_dir, exist_ok=True)
             except OSError as exc:
-                # One folder PixlStash cannot create — a Windows reserved name
-                # like ``CON``, a path over the length limit, a permission — is
+                # One folder PixlStash cannot create - a Windows reserved name
+                # like ``CON``, a path over the length limit, a permission - is
                 # that folder's problem. Naming it beats a 500 that loses the
                 # whole tree, and beats a tree that quietly lacks it.
                 logger.info("Views: could not create %s: %s", view_dir, exc)

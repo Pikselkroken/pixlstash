@@ -8,13 +8,13 @@ Phase 5 and ``docs/backend_architecture.md`` §26 "The move journal".
 
 ``ReferenceFolderScanTask`` writes an :class:`ExternalMoveReview` row for
 every move it attributes to the owner (``record_pending_reviews``). Nothing
-else happens automatically — every read here classifies each row LIVE against
+else happens automatically - every read here classifies each row LIVE against
 the picture's current facets and the root's current layout
 (:func:`pixlstash.utils.library_layout.reconcile_move`), never against a
 snapshot taken when the row was written, so a picture whose memberships
 changed since the move is judged on what is true now.
 
-Applying a review only ever changes the three memberships this reconciles —
+Applying a review only ever changes the three memberships this reconciles -
 project, set and person. **Tag is deliberately not reconciled**: the default
 layout never places by tag, Phase 4c (custom layouts) has not shipped, and a
 tag-typed folder is therefore unreachable through the product today. A future
@@ -60,7 +60,7 @@ OP_EXTERNAL_MOVE_RECONCILE = "pictures.external_move.reconcile"
 
 
 # ---------------------------------------------------------------------------
-# Recording — called from ReferenceFolderScanTask
+# Recording - called from ReferenceFolderScanTask
 # ---------------------------------------------------------------------------
 
 
@@ -69,7 +69,7 @@ def record_pending_reviews(
 ) -> list[int]:
     """Queue *moves* for reconciliation. ``(picture_id, old_path, new_path)`` each.
 
-    Caller's job to have already decided the root has a layout — every move
+    Caller's job to have already decided the root has a layout - every move
     the reference-folder scan follows lands here regardless, but only a
     laid-out root has any assignment for a folder to contradict, so recording
     for the rest would grow the queue for nothing ever readable off it.
@@ -89,7 +89,7 @@ def record_pending_reviews(
 
 
 # ---------------------------------------------------------------------------
-# Classification — live, every read
+# Classification - live, every read
 # ---------------------------------------------------------------------------
 
 
@@ -98,7 +98,7 @@ def _reconciliation_context(session: Session, picture_ids: Iterable[int]) -> dic
 
     A picture is absent from the result when it no longer exists (deleted
     between the move and the review) or its reference folder no longer has a
-    layout — both mean there is nothing left to classify.
+    layout - both mean there is nothing left to classify.
     """
     ids = sorted({int(p) for p in picture_ids})
     if not ids:
@@ -142,7 +142,7 @@ def _classify(
 ) -> dict[int, tuple[Optional[ReconciledMove], dict]]:
     """Return ``{review.id: (reconciled_or_None, current_facets)}``.
 
-    ``reconciled`` is ``None`` when the picture or its layout is gone — the
+    ``reconciled`` is ``None`` when the picture or its layout is gone - the
     caller's cue to drop the row rather than show or act on it.
     """
     context = _reconciliation_context(session, (r.picture_id for r in reviews))
@@ -169,14 +169,14 @@ def _serialize_pairs(pairs: tuple[tuple[Facet, str], ...]) -> list[dict]:
 def pending_summary_in_session(session: Session) -> dict:
     """Return the reconciliation queue, bucketed and ready for the review screen.
 
-    Every row is reclassified against current state on every call — there is
+    Every row is reclassified against current state on every call - there is
     no cache to invalidate. Rows that no longer reconcile to anything
     (``MoveOutcome.NONE``, or the picture/layout is gone) are deleted here:
     that is not a side effect the caller has to know about, it is what "the
     queue holds exactly what is still pending" means.
 
-    An ``off_layout`` row carries no decision — there is nothing for a reader
-    to act on, ever — so unlike ``unambiguous``/``ambiguous`` it does not wait
+    An ``off_layout`` row carries no decision - there is nothing for a reader
+    to act on, ever - so unlike ``unambiguous``/``ambiguous`` it does not wait
     for a human. It is shown for :data:`RETENTION_S` (the same window the
     move journal keeps a claimed row for) and then pruned on its own, the same
     way a ``picture_move`` row ages out: kept long enough to be seen at least
@@ -236,7 +236,7 @@ def pending_moves(vault: "Vault") -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Applying — one membership write per facet, reused from the picture routes'
+# Applying - one membership write per facet, reused from the picture routes'
 # own mutation shape (routes/pictures/_crud.py: set_project_for_pictures)
 # ---------------------------------------------------------------------------
 
@@ -369,9 +369,9 @@ def _add_person(session: Session, picture: Picture, character_id: int) -> bool:
     fallback is the right amount of machinery, not a shortcut.
 
     **Never reassigns a face that already names someone.** An addition is
-    supposed to be the safe half of a reconciliation — it cannot make any
+    supposed to be the safe half of a reconciliation - it cannot make any
     existing folder untrue (``library_layout.reconcile_move``'s whole
-    argument for treating it as automatically unambiguous) — and that
+    argument for treating it as automatically unambiguous) - and that
     guarantee only holds if it never costs another person their face. A group
     shot with Sara's face largest and Mira's smallest, moved into a folder
     that adds Mira, must gain Mira without losing Sara; stealing the largest
@@ -461,8 +461,8 @@ def _apply_or_dismiss(
     Returns:
         ``(changed_picture_ids, skipped_review_ids)``. A review lands in
         ``skipped_review_ids`` when it genuinely had a removal or addition to
-        make — not the harmless ``NONE``/``OFF_LAYOUT`` case, which has
-        nothing to apply and is never "skipped" — but every one of those
+        make - not the harmless ``NONE``/``OFF_LAYOUT`` case, which has
+        nothing to apply and is never "skipped" - but every one of those
         changes was refused, most likely by :func:`_resolve_entity_id`
         declining a non-unique ``Character``/``PictureSet`` name. The row is
         cleared from the queue either way, because it was explicitly acted on
@@ -508,7 +508,7 @@ def apply_reviews(vault: "Vault", review_ids: list[int], **request_context) -> d
     """Apply the given pending reviews and clear them from the queue.
 
     Reconciliation is recomputed fresh inside the same DB-queue slot as the
-    mutation, never trusted from an earlier GET — a picture whose memberships
+    mutation, never trusted from an earlier GET - a picture whose memberships
     changed in between is applied against what is true now.
     """
     ids = sorted({int(r) for r in review_ids if r is not None})
@@ -534,7 +534,7 @@ def apply_reviews(vault: "Vault", review_ids: list[int], **request_context) -> d
     if skipped_ids:
         logger.warning(
             "External-move reconciliation: %d review(s) were cleared from the "
-            "queue without applying — an entity name resolved to none or more "
+            "queue without applying - an entity name resolved to none or more "
             "than one row: %s",
             len(skipped_ids),
             skipped_ids,

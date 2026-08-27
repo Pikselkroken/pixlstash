@@ -2,18 +2,18 @@
 
 Covers:
 
-* **stack** — members land in one stack led by the chosen cover, excluded members
+* **stack** - members land in one stack led by the chosen cover, excluded members
   are untouched, and the metadata union runs (tags, sets, score);
-* **keep separate** — no picture row changes, and the decision survives a rescan;
-* **reopen** — the group comes back and the decision history is kept;
-* **bulk auto-stack** — exact tier only, one batch id across the whole run, and
+* **keep separate** - no picture row changes, and the decision survives a rescan;
+* **reopen** - the group comes back and the decision history is kept;
+* **bulk auto-stack** - exact tier only, one batch id across the whole run, and
   the dry run writes nothing;
-* **the operation log (§21)** — one verdict is exactly one row (no double-record
+* **the operation log (§21)** - one verdict is exactly one row (no double-record
   through `routes/stacks.py`), undo reverses the stacking *and* the metadata
   union, the snapshot covers stack siblings the group never named, and a whole
   bulk run reverses with a single batch undo;
-* **the non-destructive invariant** — no verdict deletes a picture, ever;
-* **locked sets** — the metadata union is refused rather than half-applied.
+* **the non-destructive invariant** - no verdict deletes a picture, ever;
+* **locked sets** - the metadata union is refused rather than half-applied.
 """
 
 import gc
@@ -554,8 +554,8 @@ def test_auto_stack_never_touches_the_near_tier(server):
 
     The near group holds two pictures of ITS OWN (no overlap with the exact
     pair): a near group sharing the exact pair's members would stop posing a
-    decision the moment auto-stack stacked them — the pending-decision filter's
-    stack-units rule — which is correct but proves nothing about the near tier.
+    decision the moment auto-stack stacked them - the pending-decision filter's
+    stack-units rule - which is correct but proves nothing about the near tier.
     """
     _seed(
         server,
@@ -768,7 +768,7 @@ def test_the_snapshot_covers_stack_siblings_the_group_never_named(server):
 
     The duplicate pair is 0 and 1. Picture 0 sits in stack A with sibling 2;
     picture 1 sits in stack B with sibling 3. The verdict's cover is 0, so stack
-    B is **folded into A** and sibling 3 — which the group never named — is
+    B is **folded into A** and sibling 3 - which the group never named - is
     reparented. An undo that snapshotted only the group's own members would
     leave 3 stranded in A with B gone.
 
@@ -861,7 +861,7 @@ def test_keep_separate_records_exactly_one_operation(server):
 
     It changes no picture facet, so the row goes through the empty-diff path:
     empty before/after payloads, the member ids as targets, and the batch id
-    stored on the verdict row — the correlation the post-restore hook needs.
+    stored on the verdict row - the correlation the post-restore hook needs.
     """
     ids = _seed(
         server,
@@ -898,7 +898,7 @@ def test_reopen_records_no_operation_when_it_touches_no_pictures(server):
     Keep-separate never touched a picture, so its clear is pure verdict
     memory: recording it would make undo-of-clear a second, confusing way to
     re-decide the group while there is nothing to restore. (A clear that DOES
-    unstack records one operation — pinned in the clear-decision section.)
+    unstack records one operation - pinned in the clear-decision section.)
     """
     _seed(
         server,
@@ -918,7 +918,7 @@ def test_reopen_records_no_operation_when_it_touches_no_pictures(server):
 def test_undoing_a_keep_separate_reopens_the_group_and_redo_re_resolves(server):
     """Both directions: undo returns the group to the queue, redo re-decides it.
 
-    The pictures are untouched in every direction — keep-separate never had a
+    The pictures are untouched in every direction - keep-separate never had a
     picture facet to restore; the verdict row and the group's resolved flag are
     the whole reversible state, carried by the post-restore hook.
     """
@@ -963,7 +963,7 @@ def test_batch_undo_restores_a_mixed_stack_and_keep_separate_gesture(server):
     """One gesture batch spanning both verdict kinds reverses as one undo.
 
     Each hook is scoped to its own verdict kind, so the stack hook restores the
-    stacked group and the keep-separate hook restores the kept-separate one —
+    stacked group and the keep-separate hook restores the kept-separate one -
     both explicitly, through their own operations, in a single batch undo.
     """
     ids = _seed_two_exact_groups(server)
@@ -1159,7 +1159,7 @@ def test_a_stack_verdict_records_the_actor_and_origin(server):
     """The service must carry through what the handler read from the request.
 
     §21 is explicit that actor / source / origin_client_id come from the request,
-    in the handler, and are passed down — the contextvar is dead on the DB worker
+    in the handler, and are passed down - the contextvar is dead on the DB worker
     thread. Before this, every dedup operation recorded `actor=None,
     source="external"`, degrading the audit trail for the most far-reaching
     mutation on the surface.
@@ -1214,12 +1214,12 @@ def test_bulk_auto_stack_attributes_every_row_in_the_batch(server):
 
 
 def test_undo_restores_a_scrapheaped_stack_siblings_position(server):
-    """Regression for the CSO's C1 — pins ``include_deleted=True``.
+    """Regression for the CSO's C1 - pins ``include_deleted=True``.
 
     ``normalize_stack_positions`` renumbers **every** member of an affected
     stack, soft-deleted ones included (§21.1). If the undo snapshot expanded the
     stack without ``include_deleted=True``, the scrapheaped sibling's renumbered
-    position would be an unrecorded change that undo could not reverse — and the
+    position would be an unrecorded change that undo could not reverse - and the
     whole suite stayed green without it.
     """
     ids = _seed(
@@ -1272,7 +1272,7 @@ def test_undo_restores_a_scrapheaped_stack_siblings_position(server):
 def test_the_dry_run_summary_counts_covers_that_gain_metadata(server):
     """The design's consent dialog promises a "covers gaining metadata" row.
 
-    Derived from the planned verdicts in the dry run's own snapshot — the union
+    Derived from the planned verdicts in the dry run's own snapshot - the union
     is never executed, and nothing is written.
     """
     ids = _seed(
@@ -1840,7 +1840,7 @@ def test_clearing_a_stacked_decision_returns_the_group_to_the_queue(server):
 
     Reopen used to stamp the verdict and unresolve the group but leave the
     pictures stacked, and the live-groups filter requires the members to span
-    two stack units — so the cleared group vanished from Decided AND never
+    two stack units - so the cleared group vanished from Decided AND never
     reappeared in the queue. Clearing a stacked decision must dissolve the
     stack the verdict created.
     """
@@ -2026,8 +2026,8 @@ def test_undo_of_a_clear_restacks_and_re_decides_and_redo_clears_again(server):
 def test_clearing_one_group_of_a_bulk_batch_leaves_the_others_alone(server):
     """A bulk auto-stack coalesces many groups into ONE batch id.
 
-    Clearing one group must revert only that group's stacking — never its batch
-    siblings' — and must leave the sibling verdicts decided.
+    Clearing one group must revert only that group's stacking - never its batch
+    siblings' - and must leave the sibling verdicts decided.
     """
     ids = _seed_two_exact_groups(server)
     _scan(server)

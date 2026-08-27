@@ -1,4 +1,4 @@
-// useLockedSetsStore.js — which pictures are frozen by a locked picture set.
+// useLockedSetsStore.js - which pictures are frozen by a locked picture set.
 //
 // A picture set can be "locked" to freeze its label data (see the picture-set
 // locking spec). A picture in at least one locked set is read-only everywhere
@@ -8,7 +8,7 @@
 //
 // Grid picture objects do not carry their set ids (Picture.grid_fields() omits
 // them), so instead of widening every grid payload we keep one small store fed
-// by GET /picture_sets/locked-members — it only touches locked sets, which are
+// by GET /picture_sets/locked-members - it only touches locked sets, which are
 // few. The store is refreshed on app start and on the same triggers the sidebar
 // uses (a sidebar refresh / a CHANGED_PICTURES → pictures_changed ws event),
 // wired from App.vue.
@@ -29,7 +29,7 @@ export function buildLockReason(setNames) {
   if (!names.length) return "";
   const joined = names.join(", ");
   return (
-    `Locked — this picture is in the locked set '${joined}'. To edit it, ` +
+    `Locked - this picture is in the locked set '${joined}'. To edit it, ` +
     `unlock the set: right-click the set in the sidebar and choose Unlock, ` +
     `or untick Locked in Edit set.`
   );
@@ -37,7 +37,7 @@ export function buildLockReason(setNames) {
 
 // Tooltip copy for a picture shown only as a *reference* (a review twin /
 // neighbour) that happens to be in a locked set. It explains why the reference
-// carries no controls — distinct from `buildLockReason`, which tells the user
+// carries no controls - distinct from `buildLockReason`, which tells the user
 // how to unlock an editable-but-frozen picture. Single-sourced so the review
 // cards never re-word it. Multiple locking sets are joined with commas.
 export function buildReferenceReason(setNames) {
@@ -45,7 +45,7 @@ export function buildReferenceReason(setNames) {
     .filter((n) => n != null && String(n).length > 0)
     .map((n) => String(n));
   if (!names.length) return "";
-  return `Reference only — this picture is in the locked set '${names.join(", ")}'.`;
+  return `Reference only - this picture is in the locked set '${names.join(", ")}'.`;
 }
 
 export const useLockedSetsStore = defineStore("lockedSets", () => {
@@ -82,7 +82,7 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
     return map;
   });
 
-  // Ids of all locked sets — for greying/locking set rows in the sidebar and
+  // Ids of all locked sets - for greying/locking set rows in the sidebar and
   // in the add-to-set control.
   const lockedSetIds = computed(
     () => new Set(sets.value.map((s) => s?.id).filter((id) => id != null)),
@@ -112,13 +112,13 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
     const requestEpoch = epoch;
     try {
       const data = (await getLockedMembers()) ?? {};
-      // The credential changed while this was in flight — these are the
+      // The credential changed while this was in flight - these are the
       // previous session's locked sets and must not be shown to the next one.
       if (requestEpoch !== epoch) return;
       sets.value = Array.isArray(data.sets) ? data.sets : [];
     } catch (e) {
       // Lock badges/gating are advisory over a hard server-side 423 guard, so a
-      // failed refresh must never break the grid — log and keep the last known
+      // failed refresh must never break the grid - log and keep the last known
       // state rather than clearing it (which would silently drop lock badges).
       console.warn(
         "useLockedSetsStore: failed to load locked members; keeping last state",

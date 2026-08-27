@@ -27,7 +27,7 @@ class Character(SQLModel, table=True):
     # column and NOT a foreign key: pictures are hard-deleted on scrapheap purge
     # and by maintenance, and with PRAGMA foreign_keys=ON a real FK would abort
     # those deletes for every character that happened to pin the picture. A
-    # dangling id is harmless instead — GET /characters/{id}/thumbnail only
+    # dangling id is harmless instead - GET /characters/{id}/thumbnail only
     # honours the pin when that picture still carries a face of this character,
     # and otherwise falls back to the automatic choice.
     thumbnail_picture_id: Optional[int] = Field(default=None)

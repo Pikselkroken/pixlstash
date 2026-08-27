@@ -22,7 +22,7 @@ series of scoring changes on this branch invalidates every stored value:
 
 This migration NULL-resets the column once; the finder then recomputes every picture
 against the current formula on the next run. Mirrors
-``0062_recompute_smart_score_calibrated_anomaly``. Schema-only otherwise — no columns are
+``0062_recompute_smart_score_calibrated_anomaly``. Schema-only otherwise - no columns are
 added or removed.
 
 Revision ID: 0076_recompute_smart_score_after_stale_tag_edits

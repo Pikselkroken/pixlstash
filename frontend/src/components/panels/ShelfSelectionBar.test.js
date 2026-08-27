@@ -19,7 +19,7 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 //
 // `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
 // UNRESOLVED component renders its default slot and silently drops its named
-// ones — so the count button and the Assign button, which are `#activator`
+// ones - so the count button and the Assign button, which are `#activator`
 // content, would not exist at all and every assertion about them would pass
 // vacuously. The stub renders both slots, which is what the real menu does once
 // it is open.
@@ -71,7 +71,7 @@ function selectRows(rows) {
  * One verb on the pill, by name rather than by its label.
  *
  * The pill's verbs are ICONS with their words in the tooltip and in the context
- * menu (#904), so there is no text to match on — `data-verb` is the hook, and
+ * menu (#904), so there is no text to match on - `data-verb` is the hook, and
  * it is also what stops a test passing because two buttons happened to share a
  * word.
  */
@@ -138,7 +138,7 @@ describe("the selection bar", () => {
 
   it("names every icon verb, and does not lean on the tooltip to do it", async () => {
     // The pill's verbs are icons, so `aria-label` is the only thing naming
-    // them — and it has to be the VERB, stable across selections, because the
+    // them - and it has to be the VERB, stable across selections, because the
     // `title` beside it is the refusal and changes with what is selected.
     // `title` is not a reliable accessible name and does not exist on touch.
     selectRows([row(1, "present")]);
@@ -165,7 +165,7 @@ describe("the selection bar", () => {
     await verb(wrapper, "forget").trigger("click");
     await verb(wrapper, "rename").trigger("click");
     expect(wrapper.emitted("forget")).toHaveLength(1);
-    // Rename is disabled at two rows, so nothing is emitted — which is the
+    // Rename is disabled at two rows, so nothing is emitted - which is the
     // other half of the same contract.
     expect(wrapper.emitted("rename")).toBeUndefined();
   });
@@ -341,7 +341,7 @@ describe("the selection bar", () => {
   });
 
   it("OFFERS Stack on a row that is already stacked, as a fuse", async () => {
-    // This used to be a refusal — "something here is already part of a run" —
+    // This used to be a refusal - "something here is already part of a run" -
     // and it was the gate that made stacking two stacks impossible. Fusing is
     // the operation the bar now exists to offer, so the button has to be live
     // and has to say which of the two things it will do.
@@ -467,8 +467,8 @@ describe("the delete verb", () => {
   });
 
   it("reads permanence off the press, not off the tracked key state", async () => {
-    // The label may be a moment stale — a blur with Shift down never fires its
-    // keyup — and a stale label must never turn a trash into an unlink.
+    // The label may be a moment stale - a blur with Shift down never fires its
+    // keyup - and a stale label must never turn a trash into an unlink.
     registerFolder("user");
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
@@ -603,8 +603,8 @@ describe("the two verbs that act inside a run", () => {
   });
 
   it("refuses both on a whole run, and points at Ungroup", () => {
-    // Every member selected IS the run — that is what selecting a collapsed
-    // row does — and "take a run out of itself" is not a gesture.
+    // Every member selected IS the run - that is what selecting a collapsed
+    // row does - and "take a run out of itself" is not a gesture.
     selectInRun([1, 2]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(wrapper.vm.selectedMembers).toHaveLength(0);

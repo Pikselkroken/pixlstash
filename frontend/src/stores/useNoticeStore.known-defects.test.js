@@ -8,22 +8,22 @@ import { useNoticeStore } from "./useNoticeStore";
 //
 // Each was written to the SPEC and shipped as `it.fails` while the bug was live.
 // All three are fixed, so the markers are gone and these are ordinary
-// assertions — the reproductions are kept verbatim because they are the precise
+// assertions - the reproductions are kept verbatim because they are the precise
 // conditions the bugs needed, and none of them is obvious from the code.
 //
-//   D1  §5 "errors outrank"   — an error was queued behind non-errors whenever
+//   D1  §5 "errors outrank"   - an error was queued behind non-errors whenever
 //                               the pending queue was non-empty, and a bystander
 //                               notice was destroyed for nothing on the way.
 //                               FIXED: the error is inserted into the visible
 //                               window and the bystander is demoted, not killed.
-//   D2  §9.3 pause/resume     — a coalesced repeat cancelled a hover / focus
+//   D2  §9.3 pause/resume     - a coalesced repeat cancelled a hover / focus
 //                               pause, so the card auto-dismissed out from under
 //                               the cursor (WCAG 2.2.1).
 //                               FIXED: the per-notice `paused` flag survives a
 //                               coalesce.
-//   D3  §9.2 timers off-screen— a notice DEMOTED out of the visible window by a
+//   D3  §9.2 timers off-screen - a notice DEMOTED out of the visible window by a
 //                               cap drop kept its running timer and expired
-//                               unseen — §9.2's bug in the demotion direction.
+//                               unseen - §9.2's bug in the demotion direction.
 //                               FIXED: timers are reconciled in both
 //                               directions, and a demoted notice's window is
 //                               restored in full.
@@ -38,10 +38,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("D1 (fixed) — an error is never queued behind a full pending queue (§5)", () => {
+describe("D1 (fixed) - an error is never queued behind a full pending queue (§5)", () => {
   // The bug: push() freed a slot when notices.length >= maxVisible, but
   // `notices` counts PENDING notices too, and the freed slot went to the next
-  // notice in push order — not to the error, which is appended last.
+  // notice in push order - not to the error, which is appended last.
   it("promotes an error into the visible window immediately", () => {
     const store = useNoticeStore();
     for (let i = 1; i <= 5; i++) {
@@ -70,11 +70,11 @@ describe("D1 (fixed) — an error is never queued behind a full pending queue (�
   });
 });
 
-describe("D2 (fixed) — coalescing preserves a hover/focus pause (§9.3)", () => {
+describe("D2 (fixed) - coalescing preserves a hover/focus pause (§9.3)", () => {
   // The bug: push()'s coalescing branch called clearTimer(existing.id), which
   // deleted the whole timer entry INCLUDING its `paused: true` flag, and the
   // timer reconcile then started a fresh countdown. The card expired while the
-  // cursor was still on it — exactly what WCAG 2.2.1 forbids.
+  // cursor was still on it - exactly what WCAG 2.2.1 forbids.
   it("keeps a hover-paused notice on screen when a repeat coalesces", () => {
     const store = useNoticeStore();
     const id = store.push({ level: "success", text: "Saved.", key: "save" });
@@ -87,7 +87,7 @@ describe("D2 (fixed) — coalescing preserves a hover/focus pause (§9.3)", () =
   });
 
   // The global (document.hidden) pause survives, because startTimer() re-checks
-  // `globallyPaused`. Only the per-notice flag is lost — recorded here so a fix
+  // `globallyPaused`. Only the per-notice flag is lost - recorded here so a fix
   // is not mistaken for a regression in the global path.
   it("global pause survives a coalesced repeat (this half is correct)", () => {
     const store = useNoticeStore();
@@ -99,7 +99,7 @@ describe("D2 (fixed) — coalescing preserves a hover/focus pause (§9.3)", () =
   });
 });
 
-describe("D3 (fixed) — a demoted notice's timer is stopped (§9.2)", () => {
+describe("D3 (fixed) - a demoted notice's timer is stopped (§9.2)", () => {
   // The bug: the timer reconcile only ever STARTED timers for the currently
   // visible window; it never stopped the timer of a notice just pushed out of
   // it. Reachable in the shipped UI: NoticeHost's
@@ -118,7 +118,7 @@ describe("D3 (fixed) — a demoted notice's timer is stopped (§9.2)", () => {
 
     vi.advanceTimersByTime(200); // "a" and "b" expire on schedule
     // "c" was never displayed for its full window, so it must survive to be
-    // promoted — not expire behind the other two.
+    // promoted - not expire behind the other two.
     expect(store.notices.map((n) => n.text)).toEqual(["c"]);
   });
 });

@@ -15,7 +15,7 @@
             : 'rgba(var(--v-theme-on-background), 0.4)'
         "
         :title="
-          dScore > 0 ? `Rated ${dScore} — click to change` : 'Click to rate'
+          dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
         "
         style="cursor: pointer; vertical-align: middle; display: flex"
         @click.stop="cycleRating()"

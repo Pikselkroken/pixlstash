@@ -1,4 +1,4 @@
-// Stacks resource — /stacks.
+// Stacks resource - /stacks.
 //
 // A stack groups near-duplicate pictures behind one grid tile. Creating a
 // stack takes the member ids; dissolving one removes every member, which is

@@ -115,7 +115,7 @@ class _IdleFinder:
         self._find_delay_s = find_delay_s
         # Interruptible delay. The wedged-thread tests use delays far longer
         # than the join they are testing, so a plain sleep() left the planner
-        # thread alive for the rest of the pytest session — see _stopped().
+        # thread alive for the rest of the pytest session - see _stopped().
         self._release = threading.Event()
 
     def finder_name(self) -> str:
@@ -168,7 +168,7 @@ def test_finder_removed_mid_cycle_does_not_kill_the_loop():
     Module fixtures detach backfill finders from a live planner. The loop used
     to capture ``len(self._task_finders)`` and then index the live list, so a
     removal in between raised ``IndexError`` inside the planner thread, which
-    died with no report — and every later import answered "Face worker is not
+    died with no report - and every later import answered "Face worker is not
     running", naming a condition that was not the problem.
     """
     victim = _IdleFinder("Victim")
@@ -881,8 +881,8 @@ def test_a_failed_submit_does_not_arm_the_drain_for_work_that_never_ran():
     completes synchronously calls back before `submit()` returns. That arming
     has to be undone when the submit fails: nothing ran, so the burst never
     earned its callback. Left armed, the flag is claimed by the next
-    `find_task() -> None` — the finder reports no work, in-flight is zero,
-    exhausted is true — and the drain fires for a task that was never submitted.
+    `find_task() -> None` - the finder reports no work, in-flight is zero,
+    exhausted is true - and the drain fires for a task that was never submitted.
     For the tagger that means tearing down a CUDA arena that was never built.
     """
     finder = _OneShotFinder()

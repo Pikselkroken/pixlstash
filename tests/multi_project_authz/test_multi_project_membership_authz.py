@@ -1,4 +1,4 @@
-"""Issue #125 — multi-project characters / picture sets, and what it does to scope.
+"""Issue #125 - multi-project characters / picture sets, and what it does to scope.
 
 Making a character or picture set reachable from several projects **widens** what
 a project-scoped share token can see: a token for project B now reaches an entity
@@ -74,7 +74,7 @@ def test_membership_is_written_to_both_representations(env):
     body = owner.get(f"{API}/characters/{env['char_id']}").json()
     assert body["project_ids"] == both
     assert body["project_id"] == both[0], (
-        "the legacy FK must keep naming the primary project — it is not dropped "
+        "the legacy FK must keep naming the primary project - it is not dropped "
         "until a later cleanup release"
     )
 
@@ -84,7 +84,7 @@ def test_membership_is_written_to_both_representations(env):
 
 
 def test_leaving_one_project_keeps_the_other(env):
-    """Dropping P2 leaves the entity in P1 — the FK follows, and the entity does
+    """Dropping P2 leaves the entity in P1 - the FK follows, and the entity does
     not become unassigned."""
     owner, projects = env["owner"], env["projects"]
     r = owner.patch(
@@ -226,7 +226,7 @@ def test_picture_set_by_project_and_name_both_directions(env):
 
 
 # ---------------------------------------------------------------------------
-# Scope: list routes (SCOPED_LIST — the token narrows the listing in-handler)
+# Scope: list routes (SCOPED_LIST - the token narrows the listing in-handler)
 # ---------------------------------------------------------------------------
 
 
@@ -319,7 +319,7 @@ def test_project_picture_sets_listing_both_directions(env):
 
 
 def test_locked_members_listing_both_directions(env):
-    """``GET /picture_sets/locked-members`` narrows by project too — a locked
+    """``GET /picture_sets/locked-members`` narrows by project too - a locked
     shared set is visible to its secondary project's token and to nobody else."""
     owner, anon, tokens = env["owner"], env["anon"], env["tokens"]
     r = owner.patch(f"{API}/picture_sets/{env['set_id']}", json={"locked": True})
@@ -397,7 +397,7 @@ def test_deleting_a_project_leaves_the_other_membership_intact(env):
 
 
 # ---------------------------------------------------------------------------
-# R1 — `project_ids` is membership metadata about *other* projects
+# R1 - `project_ids` is membership metadata about *other* projects
 # ---------------------------------------------------------------------------
 #
 # Every serialisation of a multi-project entity carries the full membership list.
@@ -438,7 +438,7 @@ def _set_project_ids(client, env, headers=None):
 
 
 def test_project_ids_narrowed_to_the_tokens_own_project(env):
-    """A project-scoped token reads the shared entity (200 — over-blocking would
+    """A project-scoped token reads the shared entity (200 - over-blocking would
     be its own regression) but learns only its own project id from
     ``project_ids``; the owner keeps the full membership list."""
     owner, anon, tokens, projects = (
@@ -494,7 +494,7 @@ def test_project_ids_narrowed_to_the_tokens_own_project(env):
 def test_project_ids_is_empty_for_entity_scoped_tokens(env):
     """The other rung of the ladder: a character- or picture-set-scoped token has
     no project visibility at all, so ``project_ids`` serialises as ``[]``. It
-    still reads its own entity — the narrowing must not turn into a refusal."""
+    still reads its own entity - the narrowing must not turn into a refusal."""
     anon, mint = env["anon"], env["mint"]
     char_headers = _bearer(mint("character", env["char_id"]))
     set_headers = _bearer(mint("picture_set", env["set_id"]))
@@ -562,8 +562,8 @@ def _set_payloads(client, env, headers=None, project_label=None):
 def test_scalar_project_id_is_derived_from_the_narrowed_list(env):
     """R1b: the legacy scalar ``project_id`` must never name a project the token
     has no grant for. It is derived from the narrowed ``project_ids`` at every
-    serialisation site — the primary project for the owner, the token's own
-    project for a project token, ``None`` for an entity-scoped token — never
+    serialisation site - the primary project for the owner, the token's own
+    project for a project token, ``None`` for an entity-scoped token - never
     read straight off the model."""
     owner, anon, tokens, projects, mint = (
         env["owner"],
@@ -608,7 +608,7 @@ def test_scalar_project_id_is_derived_from_the_narrowed_list(env):
 
 
 # ---------------------------------------------------------------------------
-# R1c (issue #708) — the two channels the R1 narrowing did not cover
+# R1c (issue #708) - the two channels the R1 narrowing did not cover
 # ---------------------------------------------------------------------------
 #
 # R1 narrowed ``project_ids`` / ``project_id`` wherever an entity is serialised.
@@ -617,7 +617,7 @@ def test_scalar_project_id_is_derived_from_the_narrowed_list(env):
 # * a payload *keyed* by project id (``POST /projects/membership``) and the two
 #   sites that still read the scalar straight off the model
 #   (``GET /projects/{id}/picture_sets``, ``GET /characters/{id}/project_id``);
-# * the ``project_id`` **filter**, which needs no payload at all — the presence
+# * the ``project_id`` **filter**, which needs no payload at all - the presence
 #   or count of rows answers "does project N hold this?" for a token that is
 #   403'd on ``GET /projects/N``. That one is enforced centrally by the authz
 #   gate (``enforce_project_filter_scope``), so it covers every route that takes
@@ -648,7 +648,7 @@ def test_membership_payload_project_keys_are_narrowed(env):
     disclosure. An entity-scoped token gets none of them (and still gets its own
     picture back); a project token gets only its own; the owner keeps everything.
 
-    ``unassigned_picture_ids`` is derived from the *narrowed* mapping — a picture
+    ``unassigned_picture_ids`` is derived from the *narrowed* mapping - a picture
     filed only under an invisible project must come back as unassigned, never as
     a hole in both lists, which would re-leak what the narrowing removed.
     """
@@ -697,7 +697,7 @@ def test_membership_payload_project_keys_are_narrowed(env):
                 f"{payload['project_assignments']}"
             )
             if scope != "character":
-                # In-scope pictures must still come back — narrowing the project
+                # In-scope pictures must still come back - narrowing the project
                 # keys must not turn into refusing the caller's own data.
                 assert env["pic_a"] in payload["unassigned_picture_ids"], (
                     f"a {scope} token lost its own picture: {payload}"
@@ -706,7 +706,7 @@ def test_membership_payload_project_keys_are_narrowed(env):
 
 def test_project_filter_param_is_refused_without_project_visibility(env):
     """A character- / set- / picture-scoped token may not filter by *any*
-    project id — a real one, an unrelated one, a non-existent one, or the
+    project id - a real one, an unrelated one, a non-existent one, or the
     ``UNASSIGNED`` sentinel. The same 403 for all four, so the refusal itself
     is not an oracle. The unfiltered request must still succeed."""
     anon, projects, mint = env["anon"], env["projects"], env["mint"]
@@ -734,7 +734,7 @@ def test_project_filter_param_is_refused_without_project_visibility(env):
                         f"got {r.status_code}: {r.text[:200]}"
                     )
                 # Over-blocking check: without the parameter the route still
-                # answers (200 — possibly with an empty, scope-filtered body).
+                # answers (200 - possibly with an empty, scope-filtered body).
                 r = anon.get(path, headers=headers)
                 assert r.status_code in (200, 403), r.text
                 if path in (
@@ -751,7 +751,7 @@ def test_project_filter_param_is_refused_without_project_visibility(env):
 def test_project_token_keeps_filtering_by_its_own_project(env):
     """The in-scope direction: a project token filters by its own project on
     every one of those routes exactly as before, and the owner is never
-    narrowed — including by ``UNASSIGNED``, which only a scoped token is
+    narrowed - including by ``UNASSIGNED``, which only a scoped token is
     refused."""
     owner, anon, tokens, projects = (
         env["owner"],
@@ -807,7 +807,7 @@ def test_project_token_keeps_filtering_by_its_own_project(env):
 
 def test_project_set_listing_scalar_is_narrowed(env):
     """``GET /projects/{id_or_name}/picture_sets`` serialised the set's *primary*
-    project id, which for a set shared by P1+P2 is P1 — handed to a P2 token
+    project id, which for a set shared by P1+P2 is P1 - handed to a P2 token
     listing its own project. The scalar comes from the narrowed list here too."""
     owner, anon, tokens, projects = (
         env["owner"],
@@ -845,7 +845,7 @@ def test_project_set_listing_scalar_is_narrowed(env):
 
 def test_character_project_id_field_route_is_narrowed(env):
     """``GET /characters/{id}/{field}`` returns any column by name, including the
-    scalar ``project_id`` — the one character serialisation R1 did not reach."""
+    scalar ``project_id`` - the one character serialisation R1 did not reach."""
     owner, anon, tokens, projects, mint = (
         env["owner"],
         env["anon"],
@@ -1088,7 +1088,7 @@ def test_picture_search_and_likeness_group_rows_are_narrowed(env):
         # it. There is deliberately no wait for the likeness pipeline to
         # quiesce first: the finders that write this table are detached for the
         # module's lifetime (`_detach_volatile_finders`), so there is nothing
-        # left to race with — and polling for quiescence is far slower than the
+        # left to race with - and polling for quiescence is far slower than the
         # per-test Server it replaced.
         session.exec(delete(PictureLikeness))
         session.exec(delete(PictureLikenessQueue))
@@ -1320,7 +1320,7 @@ def test_picture_set_sort_variants_narrow_their_rows(env):
 
 
 # ---------------------------------------------------------------------------
-# R1d (issue #708, sign-off condition 2) — the project named in a PATH segment
+# R1d (issue #708, sign-off condition 2) - the project named in a PATH segment
 # ---------------------------------------------------------------------------
 #
 # ``enforce_project_filter_scope`` reads ``request.query_params``, so it cannot
@@ -1337,7 +1337,7 @@ def test_picture_set_sort_variants_narrow_their_rows(env):
 #
 # Three (respectively two) distinguishable answers are a project-existence and
 # project-membership oracle for a token that ``GET /projects/N`` deliberately
-# 403s — the same disclosure R1/R1c close, arriving through a path segment.
+# 403s - the same disclosure R1/R1c close, arriving through a path segment.
 # ``enforce_project_path_scope`` now runs on the resolved id first, so every
 # refusal is byte-identical.
 #
@@ -1401,7 +1401,7 @@ def test_project_path_routes_are_not_an_existence_oracle(env):
                     answers[label] = (r.status_code, r.text)
                 distinct = set(answers.values())
                 assert len(distinct) == 1, (
-                    f"{scope} token can tell the probes apart on {template} — "
+                    f"{scope} token can tell the probes apart on {template} - "
                     f"that is the oracle: "
                     + "; ".join(
                         f"{k} -> {v[0]} {v[1][:80]}" for k, v in answers.items()
@@ -1411,7 +1411,7 @@ def test_project_path_routes_are_not_an_existence_oracle(env):
 
 def test_project_token_is_not_told_which_other_projects_exist(env):
     """A *project* token has visibility of exactly one project, so the same
-    indistinguishability must hold for every project that is not its own —
+    indistinguishability must hold for every project that is not its own -
     including one that does not exist."""
     anon, tokens = env["anon"], env["tokens"]
 
@@ -1444,7 +1444,7 @@ def test_project_token_is_not_told_which_other_projects_exist(env):
 
 
 def test_project_path_routes_still_serve_a_token_that_sees_the_project(env):
-    """In-scope direction — over-blocking is its own regression. A project token
+    """In-scope direction - over-blocking is its own regression. A project token
     still reads its own project, its own project's set listing, and both
     name-derived routes under its own project's name."""
     anon, tokens, projects = env["anon"], env["tokens"], env["projects"]
@@ -1488,7 +1488,7 @@ def test_project_path_routes_still_serve_a_token_that_sees_the_project(env):
 
 def test_owner_keeps_the_404s_on_the_project_path_routes(env):
     """The uniform 403 is for *scoped* tokens only. The owner is unrestricted, so
-    the routes keep their ordinary, informative 404s — turning those into 403s
+    the routes keep their ordinary, informative 404s - turning those into 403s
     for everyone would be a usability regression, not a fix."""
     owner = env["owner"]
 
@@ -1513,19 +1513,19 @@ def test_owner_keeps_the_404s_on_the_project_path_routes(env):
 
 
 # ---------------------------------------------------------------------------
-# R2 — a picture added to an already-multi-project entity joins *every* project
+# R2 - a picture added to an already-multi-project entity joins *every* project
 # ---------------------------------------------------------------------------
 #
 # Six write paths used to read the scalar primary FK to decide which
 # ``PictureProjectMember`` row to create, so a picture added *after* the entity
 # went multi-project silently joined the primary project only: the secondary
 # project's token was 403'd and the owner's own ``?project_id=`` listing omitted
-# it. That is an under-grant, never a leak — but it is the feature's headline case
+# it. That is an under-grant, never a leak - but it is the feature's headline case
 # and invisible to the operator. Each path is pinned in both directions.
 
 
 def _assert_picture_reaches_both_projects(env, picture_id, where):
-    """The picture is anchored in P1 *and* P2 — and still not in P3."""
+    """The picture is anchored in P1 *and* P2 - and still not in P3."""
     owner, anon, tokens, projects = (
         env["owner"],
         env["anon"],
@@ -1566,7 +1566,7 @@ def _assert_picture_reaches_both_projects(env, picture_id, where):
 
 
 def test_add_member_to_shared_set_joins_every_project(env):
-    """``POST /picture_sets/{id}/members/{picture_id}`` — the reviewer's original
+    """``POST /picture_sets/{id}/members/{picture_id}`` - the reviewer's original
     reproduction: a picture added *after* the set became P1+P2."""
     r = env["owner"].post(f"{API}/picture_sets/{env['set_id']}/members/{env['pic_b']}")
     assert r.status_code in (200, 201), r.text
@@ -1603,7 +1603,7 @@ def test_bulk_replace_members_joins_every_project(env):
 
 
 def test_face_assignment_to_shared_character_joins_every_project(env):
-    """``POST /characters/{id}/faces`` — the character twin of the set paths."""
+    """``POST /characters/{id}/faces`` - the character twin of the set paths."""
     face_id = _make_face(env["server"], env["pic_b"])
     r = env["owner"].post(
         f"{API}/characters/{env['char_id']}/faces", json={"face_ids": [face_id]}
@@ -1666,7 +1666,7 @@ def _staged_import(env, open_body, filename, timeout_s=60) -> int:
 
 
 def test_import_into_shared_set_joins_every_project(env):
-    """``PictureImportTask._apply_set`` — the drop-target import path must read the
+    """``PictureImportTask._apply_set`` - the drop-target import path must read the
     same membership as the route it mirrors."""
     picture_id = _staged_import(env, {"set_id": env["set_id"]}, "import-into-set.png")
     _assert_picture_reaches_both_projects(
@@ -1675,7 +1675,7 @@ def test_import_into_shared_set_joins_every_project(env):
 
 
 def test_import_into_shared_character_joins_every_project(env):
-    """``PictureImportTask._apply_character`` — the character drop target."""
+    """``PictureImportTask._apply_character`` - the character drop target."""
     picture_id = _staged_import(
         env, {"character_id": env["char_id"]}, "import-into-char.png"
     )

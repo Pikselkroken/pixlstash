@@ -337,7 +337,7 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
-/** The empty library's "Choose a folder…" — a reference folder, read in place.
+/** The empty library's "Choose a folder…" - a reference folder, read in place.
  *
  * Not the add-folder type chooser: its other option is an import folder, which
  * copies files in, and the button that reaches this promises the opposite.
@@ -351,7 +351,7 @@ function openAddReferenceFolder() {
 // floating element currently visible inside the notice column's footprint, plus
 // its gap. The elements themselves register through `useBottomAnchor` (the
 // SelectionBar pill, and the grid breadcrumb below 600px), each reporting a
-// MEASURED height from a ResizeObserver — the pill wraps and grows on coarse
+// MEASURED height from a ResizeObserver - the pill wraps and grows on coarse
 // pointers, so a constant would let a notice overlap it.
 const appViewportEl = ref(null);
 const { inset: floatingBottomInset } = useFloatingBottomInset();
@@ -378,7 +378,7 @@ async function handleLocalImport({ files, projectId } = {}) {
   photosDialogOpen.value = false;
   await nextTick();
   // `undefined` means "the caller did not say", and the answer is the project
-  // being looked at — which is what both drop paths pass
+  // being looked at - which is what both drop paths pass
   // (useWindowFileImport.js, useGridDragDrop.js) and what PhotosImportDialog is
   // handed as its default. Defaulted here rather than at each caller so a
   // caller that omits it cannot silently land pictures outside the project the
@@ -408,7 +408,7 @@ watch(
 );
 
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
-// project picker) must not navigate or change the grid — the route is the
+// project picker) must not navigate or change the grid - the route is the
 // single source of truth. These handlers therefore only mirror the value
 // into the store (used for sidebar scoping); they never push a route.
 // Grid navigation happens via explicit entry clicks (handleViewProject,
@@ -447,7 +447,7 @@ onMounted(async () => {
     })
     .catch(() => {});
   // fetchConfig() (GET /users/me/config) and librariesStore.refresh() (GET
-  // /libraries) are independent reads with no shared state — each already
+  // /libraries) are independent reads with no shared state - each already
   // handles its own errors internally. Awaiting them one after another used
   // to serialize two network round trips in front of refreshSidebar() and
   // connectUpdatesSocket() below for no reason; fire them and move on so the
@@ -467,7 +467,7 @@ onMounted(async () => {
   // Select the scoped resource when a share token is active. This normalises
   // what is SELECTED only; what the grid is scoped BY is
   // `useViewStore.scopeProjectToSession`, which runs on every route tick rather
-  // than once here (issue #717 — a share link carries whatever pathname the
+  // than once here (issue #717 - a share link carries whatever pathname the
   // owner minted it from, and a mount-time write loses to the next navigation).
   // The project branch below therefore agrees with that store rather than
   // competing with it, and still covers the routes it parses no view from.
@@ -749,8 +749,8 @@ defineExpose({
       <!-- The notice surface. LAST child of `.app-viewport` on purpose
            (notice-surface.md §8): its buttons then come last in DOM order, so a
            keyboard user reaches them after the page content, not before it. It
-           is global — it renders over the lightbox, the review overlay and
-           Settings — so it must not be nested inside the grid column. -->
+           is global - it renders over the lightbox, the review overlay and
+           Settings - so it must not be nested inside the grid column. -->
       <NoticeHost :on-dark="noticeOnDark" />
     </div>
     <button

@@ -26,7 +26,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("useWheelZoom — entry and measurement", () => {
+describe("useWheelZoom - entry and measurement", () => {
   it("enters at fit, centred, and reports the fit percentage", () => {
     const zoom = measured(useWheelZoom());
     expect(zoom.scale.value).toBe(0.5);
@@ -35,7 +35,7 @@ describe("useWheelZoom — entry and measurement", () => {
     expect(zoom.percentLabel.value).toBe("50%");
   });
 
-  it("does nothing before measurement — no wheel, no snap, empty label", () => {
+  it("does nothing before measurement - no wheel, no snap, empty label", () => {
     const zoom = useWheelZoom();
     expect(wheel(zoom, -100)).toBe(false);
     zoom.toggleSnap();
@@ -70,7 +70,7 @@ describe("useWheelZoom — entry and measurement", () => {
     expect(zoom.scale.value).toBe(1.25);
   });
 
-  it("the effective ceiling is max(maxScale, fitScale) — a tiny image whose fit exceeds 800% opens legally", () => {
+  it("the effective ceiling is max(maxScale, fitScale) - a tiny image whose fit exceeds 800% opens legally", () => {
     const zoom = useWheelZoom();
     zoom.setMeasurements({
       containerWidth: 800,
@@ -89,7 +89,7 @@ describe("useWheelZoom — entry and measurement", () => {
   });
 });
 
-describe("useWheelZoom — floor policy", () => {
+describe("useWheelZoom - floor policy", () => {
   it("rest: a big out-wheel at the floor rests at fit and never exits", () => {
     const onExit = vi.fn();
     const zoom = measured(useWheelZoom({ floorPolicy: "rest", onExit }));
@@ -130,7 +130,7 @@ describe("useWheelZoom — floor policy", () => {
   });
 });
 
-describe("useWheelZoom — pan clamp", () => {
+describe("useWheelZoom - pan clamp", () => {
   it("clamps the drag so the image edge never crosses the viewport edge", () => {
     const zoom = measured(useWheelZoom());
     zoom.snapTo(1); // 1600×1200 shown in 800×600 → range ±400/±300
@@ -146,14 +146,14 @@ describe("useWheelZoom — pan clamp", () => {
     expect(zoom.offset.value).toEqual({ x: 0, y: 0 });
   });
 
-  it("does not pan at fit — the range is zero", () => {
+  it("does not pan at fit - the range is zero", () => {
     const zoom = measured(useWheelZoom());
     zoom.panBy(50, 50);
     expect(zoom.offset.value).toEqual({ x: 0, y: 0 });
   });
 });
 
-describe("useWheelZoom — the settle announcer", () => {
+describe("useWheelZoom - the settle announcer", () => {
   it("announces a wheel gesture once, 500 ms after the last change", () => {
     vi.useFakeTimers();
     const zoom = measured(useWheelZoom());
@@ -177,7 +177,7 @@ describe("useWheelZoom — the settle announcer", () => {
     expect(zoom.announcement.value).toBe("Zoom fit, 50%");
   });
 
-  it("a snap cancels a pending wheel settle — one announcement, not two", () => {
+  it("a snap cancels a pending wheel settle - one announcement, not two", () => {
     vi.useFakeTimers();
     const zoom = measured(useWheelZoom());
     wheel(zoom, -100);
@@ -188,7 +188,7 @@ describe("useWheelZoom — the settle announcer", () => {
   });
 });
 
-describe("useWheelZoom — snap toggle", () => {
+describe("useWheelZoom - snap toggle", () => {
   it("toggles fit → 100% → fit", () => {
     const zoom = measured(useWheelZoom());
     zoom.toggleSnap();

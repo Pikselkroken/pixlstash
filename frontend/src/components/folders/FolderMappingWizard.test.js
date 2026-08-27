@@ -1,4 +1,4 @@
-// Wizard shell — step transitions and, crucially, what `mode` a scan/resume
+// Wizard shell - step transitions and, crucially, what `mode` a scan/resume
 // ends up with, since that is what the Preview step's commit sends over the
 // wire (integration_architecture.md §22, FolderMappingPreviewStep.test.js).
 //
@@ -6,7 +6,7 @@
 // shape "Add a library"'s "pictures" verdict saves before switching the
 // active library and reloading (AddLibraryDialog.vue): it means "skip
 // choosing a folder, start scanning this known path fresh, and remember
-// local_import" — not "reattach to an in-flight scan".
+// local_import" - not "reattach to an in-flight scan".
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -117,7 +117,7 @@ describe("resuming a local_import entry (empty taskId)", () => {
   it("skips the choose step and starts a fresh scan at that path", async () => {
     const wrapper = await settle(mountWizard({ resume }));
 
-    // Never "choose" — the folder is already known.
+    // Never "choose" - the folder is already known.
     expect(wrapper.find(".mapping-wizard__choose").exists()).toBe(false);
     const scan = wrapper.find(".scan-stub");
     expect(scan.attributes("data-path")).toBe(resume.path);

@@ -1,4 +1,4 @@
-// MovesReview — the reconciliation queue screen (v1.11 Phase 5).
+// MovesReview - the reconciliation queue screen (v1.11 Phase 5).
 //
 // The screen is a thin view over useMovesStore (its own test covers fetch /
 // apply / dismiss semantics); what is worth pinning here is what the VIEW
@@ -41,7 +41,7 @@ beforeEach(() => {
   dismissMoves.mockReset().mockResolvedValue({ dismissed_review_ids: [] });
 });
 
-describe("MovesReview — unambiguous", () => {
+describe("MovesReview - unambiguous", () => {
   it("reads a same-facet swap as one arrow, not two separate tags", async () => {
     const wrapper = await mountScreen(
       summary({
@@ -79,7 +79,7 @@ describe("MovesReview — unambiguous", () => {
   });
 });
 
-describe("MovesReview — ambiguous", () => {
+describe("MovesReview - ambiguous", () => {
   const AMBIGUOUS_ITEM = {
     review_id: 7,
     picture_id: 70,
@@ -112,7 +112,7 @@ describe("MovesReview — ambiguous", () => {
     // This is the design mock's own example: the picture already belongs to
     // the folder it moved into, so there is nothing to ADD, only something
     // to LEAVE. A button reading "Leave it" here would be applying a removal
-    // under a label that describes doing nothing — exactly what shipped once.
+    // under a label that describes doing nothing - exactly what shipped once.
     const wrapper = await mountScreen(summary({ ambiguous: [AMBIGUOUS_ITEM] }));
     const buttons = wrapper.findAll(".mv-row--ambiguous button");
     const resolve = buttons.find((b) => !b.text().includes("Keep both"));
@@ -133,8 +133,8 @@ describe("MovesReview — ambiguous", () => {
   });
 });
 
-describe("MovesReview — off-layout", () => {
-  it("offers no action at all — already followed, nothing to decide", async () => {
+describe("MovesReview - off-layout", () => {
+  it("offers no action at all - already followed, nothing to decide", async () => {
     const wrapper = await mountScreen(
       summary({
         off_layout: [
@@ -148,14 +148,14 @@ describe("MovesReview — off-layout", () => {
   });
 });
 
-describe("MovesReview — nothing pending", () => {
+describe("MovesReview - nothing pending", () => {
   it("says so rather than rendering empty cards", async () => {
     const wrapper = await mountScreen(summary());
     expect(wrapper.text()).toContain("Nothing to reconcile");
   });
 });
 
-describe("MovesReview — a failed fetch", () => {
+describe("MovesReview - a failed fetch", () => {
   it("shows the error rather than reading as an empty, clean queue", async () => {
     // useMovesStore.fetchPending() catches its own failure into store.error
     // and never rethrows, so the screen has to read that back rather than

@@ -198,7 +198,7 @@ def test_get_characters_invalid_project_id_returns_400():
 
 
 def test_character_scoped_token_may_not_filter_by_project():
-    """Issue #708 F3 — this test previously pinned the vulnerability.
+    """Issue #708 F3 - this test previously pinned the vulnerability.
 
     It used to assert that a character-scoped token filtering
     ``/characters?project_id=<id>`` got its character back, and that the same
@@ -207,7 +207,7 @@ def test_character_scoped_token_may_not_filter_by_project():
     project exists and that its character is filed under it. Both requests are
     now refused by the authz gate (``enforce_project_filter_scope``), which is
     the behaviour this test pins instead. The unfiltered listing, which is what
-    the share UI actually issues, must keep working — over-blocking would be its
+    the share UI actually issues, must keep working - over-blocking would be its
     own regression.
     """
     temp_dir, client, server = _setup()
@@ -238,7 +238,7 @@ def test_character_scoped_token_may_not_filter_by_project():
         headers = {"Authorization": f"Bearer {char_token}"}
 
         # Naming the project it is filed under, the UNASSIGNED sentinel, and a
-        # project id that does not exist all get the same 403 — so the refusal
+        # project id that does not exist all get the same 403 - so the refusal
         # itself answers nothing.
         for probe in (str(project_id), "UNASSIGNED", "99999999"):
             resp = token_client.get(f"/characters?project_id={probe}", headers=headers)
@@ -342,7 +342,7 @@ def test_moving_character_to_new_project_disassociates_pictures_from_old():
 
 def test_moving_character_keeps_pictures_shared_with_another_character_in_old_project():
     """A picture also containing a second character still in project A is kept in
-    A when the first character is moved out — only orphaned pictures leave."""
+    A when the first character is moved out - only orphaned pictures leave."""
     temp_dir, client, server = _setup()
     try:
         project_a = client.post("/projects", json={"name": "Shared Char A"}).json()[
@@ -435,7 +435,7 @@ def _link_face_with_bbox(server, pic_id, char_id):
     """Assign a face with a REAL bbox, which the thumbnail crop needs.
 
     ``_link_face`` above writes ``"0,0,10,10"``, which ``Face.bbox`` cannot
-    parse (it is JSON) — fine for the assignment tests that use it, useless for
+    parse (it is JSON) - fine for the assignment tests that use it, useless for
     a render.
 
     ``face_index`` sits above anything detection produces: import runs the face
@@ -538,7 +538,7 @@ def test_pinned_thumbnail_picture_overrides_the_automatic_choice():
             == 200
         )
 
-        # The list endpoint carries it too — that is where the editor reads the
+        # The list endpoint carries it too - that is where the editor reads the
         # current pin from when it opens.
         listed = [c for c in client.get("/characters").json() if c["id"] == char_id]
         assert listed[0]["thumbnail_picture_id"] == pinned
@@ -636,7 +636,7 @@ def test_pinning_a_picture_without_this_persons_face_is_rejected():
         assert resp.status_code == 400
 
         # A scrapheaped picture keeps its faces, so it passes a face-only check
-        # — and the renderer would still skip it, leaving a pin nothing can
+        # - and the renderer would still skip it, leaving a pin nothing can
         # honour. Refused for the same reason and with the same status.
         assert client.delete(f"/pictures/{first_pic}").status_code == 200
         resp = client.patch(

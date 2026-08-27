@@ -3,7 +3,7 @@
 // `setModelIcon` is where the thumbnail verb actually failed: it built the
 // FormData correctly and then let the transport's JSON default rewrite it into
 // `{"file":{}}` (see `utils/apiClient.js`). The transport now clears that
-// header, so what is worth guarding HERE is the half this module owns — the
+// header, so what is worth guarding HERE is the half this module owns - the
 // body really is a multipart form, and the bytes really are under the field
 // name the route reads (`file: UploadFile = File(...)`, `routes/model_icons.py`).
 

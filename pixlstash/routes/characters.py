@@ -244,7 +244,7 @@ class CharacterResponse(BaseModel):
     project_id: Optional[int] = PydanticField(
         default=None,
         description=(
-            "The character's primary project — the lowest id in ``project_ids``, "
+            "The character's primary project - the lowest id in ``project_ids``, "
             "or null when it belongs to no project. Kept for backwards "
             "compatibility; prefer ``project_ids``, which lists every project."
         ),
@@ -279,7 +279,7 @@ class CharacterListItemResponse(BaseModel):
     project_id: Optional[int] = PydanticField(
         default=None,
         description=(
-            "The character's primary project — the lowest id in ``project_ids``, "
+            "The character's primary project - the lowest id in ``project_ids``, "
             "or null when it belongs to no project. Kept for backwards "
             "compatibility; prefer ``project_ids``, which lists every project."
         ),
@@ -319,7 +319,7 @@ class CharacterListItemResponse(BaseModel):
         default=None,
         description=(
             "The same count as ``image_count``, narrowed to the project named by "
-            "this row's ``project_id`` — or, when ``project_id`` is ``null``, to "
+            "this row's ``project_id`` - or, when ``project_id`` is ``null``, to "
             "pictures that belong to no project at all. Populated only when the "
             "request passes ``include_counts=true``; ``null`` otherwise. Same "
             "number as ``GET /characters/{id}/summary?project_id=<project_id>`` "
@@ -433,7 +433,7 @@ def create_router(server) -> APIRouter:
                 the payload mentions neither key. ``None`` for a create.
 
         Returns:
-            ``(target_project_ids, provided)`` — the full target membership set,
+            ``(target_project_ids, provided)`` - the full target membership set,
             and whether the payload asked for a project change at all.
 
         Raises:
@@ -551,7 +551,7 @@ def create_router(server) -> APIRouter:
         selected project and one cached list response serves both view modes.
 
         ``project_image_count`` is computed against the project this response
-        actually reports in ``project_id`` — the *narrowed* primary project,
+        actually reports in ``project_id`` - the *narrowed* primary project,
         not the raw ``Character.project_id`` column, since
         :func:`narrow_project_fields` hides project ids a scoped token may not
         learn (issue #125 / R1b). That keeps the two fields self-consistent for
@@ -874,7 +874,7 @@ def create_router(server) -> APIRouter:
             "Updates character fields and clears dependent picture text embeddings "
             "when identity data changes.\n\n"
             "**Project membership.** Send ``project_ids`` (a list) to set the full "
-            "set of projects the character belongs to — a character may be in "
+            "set of projects the character belongs to - a character may be in "
             "several at once. The legacy single ``project_id`` is still accepted "
             "and means the same as a one-element ``project_ids``; ``null`` on "
             "either key removes the character from every project. ``project_ids`` "
@@ -887,7 +887,7 @@ def create_router(server) -> APIRouter:
             "``GET /characters/{id}/thumbnail`` crops the face from; ``null`` "
             "restores the automatic choice (the highest-scoring picture of this "
             "person). The picture must carry a face assigned to this character "
-            "and must not be in the scrapheap, or the call answers 400 — the "
+            "and must not be in the scrapheap, or the call answers 400 - the "
             "renderer skips deleted pictures, so a pin naming one could never "
             "be honoured."
         ),
@@ -945,8 +945,8 @@ def create_router(server) -> APIRouter:
                 # is about IDENTITY: the name and description are baked into
                 # every derived caption and text embedding of this person's
                 # pictures, so changing them has to throw those away. The
-                # thumbnail pin is not identity — it decides which existing crop
-                # is shown — and letting it flip this flag would null the
+                # thumbnail pin is not identity - it decides which existing crop
+                # is shown - and letting it flip this flag would null the
                 # description and text_embedding of EVERY picture the person
                 # appears in on a single click, deleting hand-written
                 # descriptions and queueing a library-wide re-derive.
@@ -1024,7 +1024,7 @@ def create_router(server) -> APIRouter:
                         # member of a stack moves the whole stack's membership.
                         picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
                         # Reference-aware add/remove/repoint across every project
-                        # joined and left — shared with picture set updates.
+                        # joined and left - shared with picture set updates.
                         reconcile_entity_projects_change(
                             session,
                             picture_ids=picture_ids,
@@ -1247,7 +1247,7 @@ def create_router(server) -> APIRouter:
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
-            # Scope guard on the PROJECT half of the path — the picture-set twin
+            # Scope guard on the PROJECT half of the path - the picture-set twin
             # in picture_sets.py::get_picture_set_by_name has the same guard for
             # the same reason (#708 condition 2): the 404 branches below answer
             # from the project space, which a character-scoped token may not
@@ -1276,7 +1276,7 @@ def create_router(server) -> APIRouter:
 
         result = server.vault.db.run_immediate_read_task(fetch)
         # Scope guard (BOLA): a resource-scoped token may only read its own
-        # character — the id-based twin (get_character_by_id) already does this.
+        # character - the id-based twin (get_character_by_id) already does this.
         _require_scope_allows_character(request, int(result["id"]))
         return result
 
@@ -1375,7 +1375,7 @@ def create_router(server) -> APIRouter:
                     )
                 )
                 # A pinned picture wins outright, but only while it still holds
-                # a face of this character (the same query, narrowed) — the pin
+                # a face of this character (the same query, narrowed) - the pin
                 # is a plain id, so a purged or reassigned picture has to fall
                 # through to the automatic choice rather than 404 the person's
                 # avatar.
@@ -1409,7 +1409,7 @@ def create_router(server) -> APIRouter:
                     # picture the render below crops (it can fall through to the
                     # reference set or to `char.faces`). Pinning the picture the
                     # query already named would therefore leave the key
-                    # unchanged and serve the old crop — the most likely click
+                    # unchanged and serve the old crop - the most likely click
                     # of all, since the grid is ordered by the same scorer.
                     "pinned_picture_id": (
                         int(pinned_id) if pinned_id is not None else None

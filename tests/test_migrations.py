@@ -118,11 +118,11 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
 
-        # Step 1 — apply every migration, then strip the snapshot
+        # Step 1 - apply every migration, then strip the snapshot
         # infrastructure to make the DB look like a real v1.4.1 install
         # (baseline migration uses SQLModel.metadata.create_all(), so a
         # plain ``upgrade 0048`` would still create snapshot/changelog/
-        # metadata_hash from the *current* model graph — defeating the
+        # metadata_hash from the *current* model graph - defeating the
         # point of the test).
         up_to_head = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
         assert up_to_head.returncode == 0, (
@@ -156,7 +156,7 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
                 "metadata_hash must NOT exist at 0048"
             )
 
-            # Step 2 — insert a couple of real picture rows (fill the
+            # Step 2 - insert a couple of real picture rows (fill the
             # NOT NULL columns the schema requires).
             # Note: import_excluded was dropped by migration 0052; the table
             # built above (current model via baseline create_all) no longer has
@@ -170,14 +170,14 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
             )
             conn.commit()
 
-        # Step 3 — upgrade to head; 0049 must run against the existing DB.
+        # Step 3 - upgrade to head; 0049 must run against the existing DB.
         up_to_head = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
         assert up_to_head.returncode == 0, (
             f"alembic upgrade head from 0048 failed:\n"
             f"stdout: {up_to_head.stdout}\nstderr: {up_to_head.stderr}"
         )
 
-        # Step 4 — verify data preservation and new schema.
+        # Step 4 - verify data preservation and new schema.
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
             rows = list(
                 conn.execute("SELECT id, original_file_name FROM picture ORDER BY id")
@@ -222,7 +222,7 @@ def test_alembic_0051_migrates_deleted_file_log_to_path_sha():
     column is dropped (privacy).
 
     Fresh DBs build the table from the current model, so only a real deployed
-    DB ever has ``file_path`` — reproduced here by hand-building it and stamping
+    DB ever has ``file_path`` - reproduced here by hand-building it and stamping
     the alembic version to the revision just before 0051.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -287,7 +287,7 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
     as *proof* that a review would yield nothing and disables "Start review". A
     ``server_default="0"`` backfill would make every pre-existing row assert that
     proof it does not have, disabling the button vault-wide until the next
-    rebuild. NULL means "not measured", which the gate leaves alone — absence of
+    rebuild. NULL means "not measured", which the gate leaves alone - absence of
     evidence is not evidence of emptiness.
 
     Only a real deployed DB ever hits this path: a fresh DB builds tag_health
@@ -348,7 +348,7 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
             # notnull flag (index 3) must be 0 and there must be no default (4).
             assert info["ground_truth"][3] == 0, "ground_truth must be nullable"
             assert info["ground_truth"][4] is None, (
-                "ground_truth must have no server default — a 0 default is "
+                "ground_truth must have no server default - a 0 default is "
                 "indistinguishable from a measured zero"
             )
             row = conn.execute(
@@ -476,7 +476,7 @@ def test_alembic_0087_backfills_entity_project_membership():
 _REVISION_BEFORE_TOKEN_RESET = "0085_recompute_smart_score_restored_builtin_anchors"
 # The revision a 1.9 development install predating the splice is stamped at.
 # Alembic walks forward only, so such a database is already downstream of the
-# spliced-in reissue migration and will never run it — hence the stamp-back
+# spliced-in reissue migration and will never run it - hence the stamp-back
 # recovery route exercised below.
 _REVISION_AFTER_THE_SPLICE = "0089_add_dedupverdict_reopen_batch_id"
 
@@ -651,7 +651,7 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
     Alembic walks forward only. A 1.9 development install took the pre-merge
     path ``0085 -> 0086_add_operation_log -> 0087 -> 0088 -> 0089``, so it is
     already downstream of ``0086_reissue_api_tokens`` and upgrading will never
-    run it — the tokens would simply stay. The chain does not carry a second
+    run it - the tokens would simply stay. The chain does not carry a second
     reissue migration for this; the fix is operational: stamp the database back
     to 0085 and upgrade.
 
@@ -659,7 +659,7 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
     guarded (they inspect existing tables / columns / indexes before creating
     anything), so a second pass over them is a no-op rather than an error. This
     test is the check on that claim, and it is the only thing protecting those
-    installs — if it fails, the recovery instruction is wrong.
+    installs - if it fails, the recovery instruction is wrong.
     """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
@@ -719,7 +719,7 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
 
 
 # ---------------------------------------------------------------------------
-# 0090 — usertoken.public_id
+# 0090 - usertoken.public_id
 # ---------------------------------------------------------------------------
 
 _REVISION_BEFORE_PUBLIC_ID = "0089_add_dedupverdict_reopen_batch_id"
@@ -727,7 +727,7 @@ _REVISION_PUBLIC_ID = "0090_add_usertoken_public_id"
 # The three indexes the table already carried. They are asserted after the
 # migration because dropping and re-creating the table (the ``AUTOINCREMENT``
 # route that was rejected in favour of this additive column) would have taken
-# them with it silently — losing ``ix_usertoken_token_prefix`` in particular
+# them with it silently - losing ``ix_usertoken_token_prefix`` in particular
 # would deoptimise the token lookup path rather than fail visibly.
 _PRE_EXISTING_TOKEN_INDEXES = {
     "ix_usertoken_user_id",
@@ -771,7 +771,7 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
     The column exists so a reference that outlives a token row cannot come to
     name a *different* token: SQLite hands out the lowest free integer primary
     key, so a deleted token's id is reissued to the next one created. The
-    migration is additive precisely so that fixing that costs nothing else —
+    migration is additive precisely so that fixing that costs nothing else -
     the ids, the hashes, the foreign key and all three pre-existing indexes are
     asserted here to pin that no table rebuild happened.
     """
@@ -812,7 +812,7 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
 
         shape = _usertoken_shape(db_path)
 
-        # Ids and hashes are untouched — this is an added column, not a rebuild.
+        # Ids and hashes are untouched - this is an added column, not a rebuild.
         assert [(row[0], row[1]) for row in shape["rows"]] == [
             (1, "hash-1"),
             (2, "hash-2"),
@@ -847,7 +847,7 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
 
 
 def test_0090_public_id_uniqueness_is_enforced():
-    """Two tokens cannot share a public id — the index is a real constraint."""
+    """Two tokens cannot share a public id - the index is a real constraint."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
@@ -890,7 +890,7 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
     replays every revision from 0086 forward over a database that has already
     run them. If the backfill were unconditional it would hand every token a
     *new* identity on that replay, which is exactly the "an identifier came to
-    mean something else" failure the column exists to prevent — and it would
+    mean something else" failure the column exists to prevent - and it would
     orphan every session the running server had linked to those tokens.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -1105,7 +1105,7 @@ def test_a_populated_library_upgrades_through_the_picture_table_rebuild():
     copies the table, ``DROP``s the original and renames. The vault engine runs
     with ``PRAGMA foreign_keys=ON`` (``database.init_database``), so that
     ``DROP`` raises "FOREIGN KEY constraint failed" as soon as any row
-    references the table — which is every real library, and the committed e2e
+    references the table - which is every real library, and the committed e2e
     fixture. It brought the whole `e2e` lane down: the server could not boot.
 
     A fresh database has nothing referencing ``picture``, so `upgrade head` on
@@ -1156,7 +1156,7 @@ def test_a_library_carrying_dangling_rows_still_opens():
 
     ``PRAGMA foreign_key_check`` reports the whole database, and
     ``command.upgrade`` runs on every vault open, so a guard that refuses any
-    violation refuses one it did not cause — permanently, with no repair path.
+    violation refuses one it did not cause - permanently, with no repair path.
     Rows written before their FK existed, or by any path with enforcement off,
     are exactly that. The committed fixture already ships some (``guest_score``
     -> ``usertoken``); migration 0093 clears those, so this adds one that
@@ -1312,7 +1312,7 @@ def test_the_standalone_engine_refuses_a_broken_foreign_key_too():
     """The guard must not be gated on enforcement having been on.
 
     ``alembic.ini`` builds its own engine with no connect listener, so SQLite
-    leaves foreign keys off there — and that is the snapshot upgrade path
+    leaves foreign keys off there - and that is the snapshot upgrade path
     (``services/restore/schema_upgrade``), the one migration input that did not
     come from this process. It cannot roll back (each migration commits as it
     goes, with no external transaction), but it must still refuse: its caller

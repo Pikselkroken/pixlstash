@@ -35,7 +35,7 @@
 </template>
 
 <script setup>
-// Read-only receipt for an archived review — the audit trail the health
+// Read-only receipt for an archived review - the audit trail the health
 // board's overturn rate feeds on.
 import { computed } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -49,7 +49,7 @@ const store = useReviewSessionsStore();
 const receipt = computed(() => store.receiptFor(props.review.id));
 
 function formatWhen(iso) {
-  if (!iso) return "—";
+  if (!iso) return " - ";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   return d.toLocaleDateString(undefined, {

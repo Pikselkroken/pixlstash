@@ -175,7 +175,7 @@ describe("watching one to its end", () => {
     // #1018: a failed read is "status unknown", not "stop observing forever".
     // Giving up on one left `busy` true off a stale `running` snapshot, which
     // disabled every move entry point AND the adoption path that could have
-    // recovered it — so the tab could only be freed by a reload.
+    // recovered it - so the tab could only be freed by a reload.
     const store = useModelMovesStore();
     await store.start(2, ITEMS);
     getModelMoveStatus
@@ -215,7 +215,7 @@ describe("watching one to its end", () => {
   it("reports the finish even when the refresh behind it fails", async () => {
     // The move landed and the receipt is the news. The two reads that follow it
     // are a repaint, and letting one of them reject out of a timer callback is
-    // an unhandled rejection nobody is positioned to catch — so it is caught
+    // an unhandled rejection nobody is positioned to catch - so it is caught
     // and said out loud here instead.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const store = useModelMovesStore();
@@ -244,7 +244,7 @@ describe("watching one to its end", () => {
   it("does not let a reading throw out of the timer callback", async () => {
     // A terminal snapshot whose `results` is not a list: the tally of "did
     // anything fail?" throws on it, from inside a timer callback where there is
-    // nobody left to catch it. That receipt is lost either way — an unhandled
+    // nobody left to catch it. That receipt is lost either way - an unhandled
     // rejection that also strands the loop is the part that must not happen.
     const store = useModelMovesStore();
     await store.start(2, ITEMS);
@@ -315,7 +315,7 @@ describe("watching one to its end", () => {
 
   it("abandons a reading already in flight when the session resets", async () => {
     // Host paths and folder ids are owner-only, so the new session has no
-    // standing to watch a job the old one started — including the answer to a
+    // standing to watch a job the old one started - including the answer to a
     // request it had already sent.
     const store = useModelMovesStore();
     await store.start(2, ITEMS);
@@ -342,7 +342,7 @@ describe("watching one to its end", () => {
 
   it("does not leave a second loop behind when a move follows a reset", async () => {
     // The abandoned reading lands after the new session has started a move of
-    // its own, so "is anything still being watched?" is the wrong question —
+    // its own, so "is anything still being watched?" is the wrong question -
     // something is, just not this loop's job. Two loops on one job is two
     // requests a second and two receipts for the same finish.
     const store = useModelMovesStore();
@@ -405,8 +405,8 @@ describe("the move receipt", () => {
   });
 
   it("names a file that moved without its training previews", () => {
-    // The server keeps such a file `moved` on purpose — losing a preview must
-    // not cost the weights — so the status tallies cannot see it and a receipt
+    // The server keeps such a file `moved` on purpose - losing a preview must
+    // not cost the weights - so the status tallies cannot see it and a receipt
     // built from them alone would call this a clean move. `importReceipt` says
     // the same thing on the import side; a loss visible on one verb and silent
     // on the other is the half-finished version of this.

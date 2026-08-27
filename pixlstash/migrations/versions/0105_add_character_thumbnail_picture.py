@@ -1,4 +1,4 @@
-"""Add ``character.thumbnail_picture_id`` — the pinned thumbnail picture.
+"""Add ``character.thumbnail_picture_id`` - the pinned thumbnail picture.
 
 ``GET /characters/{id}/thumbnail`` used to have no input but the data: it took
 the character's highest-scoring reference picture and cropped the face out of

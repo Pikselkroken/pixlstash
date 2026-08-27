@@ -48,12 +48,12 @@ describe("whyText", () => {
 
   it("picks the dominant signal: missing > wrong > mismatch", () => {
     const r = row({ est_wrong: 3, est_missing: 10, mismatch: 1 });
-    expect(whyText(r)).toBe("mostly missing — model is confident but untagged");
+    expect(whyText(r)).toBe("mostly missing - model is confident but untagged");
   });
 
   it("picks wrong when it dominates missing and mismatch", () => {
     const r = row({ est_wrong: 10, est_missing: 2, mismatch: 1 });
-    expect(whyText(r)).toBe("mostly wrong — tagged but model disagrees");
+    expect(whyText(r)).toBe("mostly wrong - tagged but model disagrees");
   });
 
   it("picks mismatch when it dominates wrong and missing", () => {
@@ -70,7 +70,7 @@ describe("whyText", () => {
       est_missing_adj: 8,
       mismatch: 0,
     });
-    expect(whyText(r)).toBe("mostly missing — model is confident but untagged");
+    expect(whyText(r)).toBe("mostly missing - model is confident but untagged");
   });
 
   it("falls back to a lopsided overturn_rate when there's no wrong/missing/mismatch signal", () => {
@@ -79,7 +79,7 @@ describe("whyText", () => {
 
     const dismissed = row({ overturn_rate: 0.1 });
     expect(whyText(dismissed)).toBe(
-      "past suggestions mostly dismissed (10%) — low signal",
+      "past suggestions mostly dismissed (10%) - low signal",
     );
   });
 
@@ -140,7 +140,7 @@ describe("zeroYieldReason", () => {
   });
 
   it("does not fire on a row that predates the ground_truth field", () => {
-    // undefined is not evidence of emptiness — the button stays enabled.
+    // undefined is not evidence of emptiness - the button stays enabled.
     const r = row({ est_missing: 0 });
     expect(r.ground_truth).toBeUndefined();
     expect(zeroYieldReason(r)).toBeNull();
@@ -178,7 +178,7 @@ describe("zeroTailStart", () => {
   });
 
   it("only counts the CONTIGUOUS trailing run, never interior zeros", () => {
-    // An interior zero belongs to the visible head — the tail is positional.
+    // An interior zero belongs to the visible head - the tail is positional.
     const rows = [{ v: 5 }, { v: 0 }, { v: 2 }, { v: 0 }];
     expect(zeroTailStart(rows, score)).toBe(3);
   });
@@ -217,7 +217,7 @@ describe("rawCorrections", () => {
 
   it("can differ between two rows whose corrections() rounds to the same value", () => {
     // 8.4 -> rounds to 8; 8.0 -> stays 8. Same displayed Priority, different
-    // raw disagreement volume — the case the tie-break exists to resolve.
+    // raw disagreement volume - the case the tie-break exists to resolve.
     const a = row({ est_wrong_adj: 8.4, est_missing_adj: 0, mismatch: 0, est_wrong: 12, est_missing: 3 });
     const b = row({ est_wrong_adj: 8, est_missing_adj: 0, mismatch: 0, est_wrong: 8, est_missing: 0 });
     expect(corrections(a)).toBe(corrections(b));

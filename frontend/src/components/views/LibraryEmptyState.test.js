@@ -2,7 +2,7 @@
 //
 // The shape of the answer, not the wording: three routes, folder first, and the
 // accent on exactly one. That it renders in the grid at all, and that its
-// buttons reach anything, is ImageGridLibraryEmptyState.test.js — this file
+// buttons reach anything, is ImageGridLibraryEmptyState.test.js - this file
 // would pass with the whole thing disconnected from the app.
 
 import { describe, it, expect, vi } from "vitest";
@@ -129,7 +129,7 @@ describe("what the buttons do", () => {
     // This shipped as `image/*,video/*`, which is narrower than the app: a zip
     // and a caption file are both supported imports, and the picker greyed them
     // out. `accept` is advisory rather than a filter, so the cost of getting it
-    // wrong is not a rejected file — it is a route nobody finds.
+    // wrong is not a rejected file - it is a route nobody finds.
     const input = mountState().find(".library-empty__file-input");
 
     expect(input.attributes("accept")).toBe(IMPORT_FILE_ACCEPT);

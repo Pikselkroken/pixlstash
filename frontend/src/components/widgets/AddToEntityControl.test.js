@@ -1,4 +1,4 @@
-// AddToEntityControl.vue — two suites, kept together deliberately.
+// AddToEntityControl.vue - two suites, kept together deliberately.
 //
 // * **#646, the shared entity-list cache.** The menu is `v-if`-mounted, so every
 //   open destroys and recreates these controls. These cases pin render-from-cache
@@ -145,7 +145,7 @@ describe("AddToEntityControl", () => {
 
     expect(rowNames(reopened)).toEqual(["Portraits", "Landscapes"]);
     expect(reopened.find(".ate-empty").exists()).toBe(false);
-    // C3: revalidate-on-open is mandatory — a scoped session gets no ws events,
+    // C3: revalidate-on-open is mandatory - a scoped session gets no ws events,
     // so this is its only invalidation path.
     expect(listPictureSets).toHaveBeenCalledTimes(2);
 
@@ -163,7 +163,7 @@ describe("AddToEntityControl", () => {
     await wrapper.find("button.ate-btn").trigger("click");
     await flushPromises();
 
-    // The list is up while membership is still in flight — it must not gate it.
+    // The list is up while membership is still in flight - it must not gate it.
     expect(rowNames(wrapper)).toEqual(["Portraits", "Landscapes"]);
     expect(wrapper.findAll(".ate-item--checked")).toHaveLength(0);
 
@@ -198,7 +198,7 @@ describe("AddToEntityControl", () => {
 
   // The character reader also produces `picturesWithFaces`, which gates whether
   // a character row can read as checked at all. It used to be assigned inside
-  // the reader — i.e. BEFORE fetchMembers' selection guard — so a superseded
+  // the reader - i.e. BEFORE fetchMembers' selection guard - so a superseded
   // response discarded its membership but still wrote its face ids, silently
   // un-ticking the current selection's rows.
   it("discards both halves of a superseded character membership response", async () => {
@@ -244,7 +244,7 @@ describe("AddToEntityControl", () => {
     addPictureToSet.mockRejectedValueOnce({
       response: { status: 404, data: { detail: "Picture set not found" } },
     });
-    // "Landscapes" — the row this selection is not yet in.
+    // "Landscapes" - the row this selection is not yet in.
     await wrapper.findAll("button.ate-item")[1].trigger("click");
     await flushPromises();
 
@@ -307,7 +307,7 @@ describe("pinned New person row", () => {
     const pinned = pinnedCreateButton(wrapper);
     expect(pinned.exists()).toBe(true);
     expect(pinned.text()).toContain("New person…");
-    // An action, not one of the listbox's options — so it carries no role and
+    // An action, not one of the listbox's options - so it carries no role and
     // sits outside the listbox element.
     expect(pinned.attributes("role")).toBeUndefined();
     expect(pinned.element.closest("[role=listbox]")).toBe(null);
@@ -582,7 +582,7 @@ describe("floatMenu", () => {
     // `placement="right"`, which the prop doc has always called incompatible.
     // Both symptoms follow from honouring it: `sizeMenu` parks the panel BELOW
     // the row instead of beside it, and teleporting takes it out of the `.ate`
-    // root the flyout hovers off — so moving the pointer towards it fires
+    // root the flyout hovers off - so moving the pointer towards it fires
     // `mouseleave` and shuts it before it arrives. Refused here, where every
     // caller routes through, rather than at each call site.
     const { wrapper, host } = await mountInScroller({
@@ -635,7 +635,7 @@ describe("floatMenu", () => {
 
   it("flips a flyout at the right edge when it is opened without a hover", async () => {
     // The flip used to be measured in `onFlyoutMouseenter` alone, so a flyout
-    // opened by click or by Enter — the whole keyboard path — kept whatever the
+    // opened by click or by Enter - the whole keyboard path - kept whatever the
     // last hover left behind, which on a first open is "not flipped", and the
     // panel painted off the right of the screen with nothing to clamp it.
     const { wrapper, host } = mountFlyout(window.innerWidth);
@@ -650,7 +650,7 @@ describe("floatMenu", () => {
     // The other half of the same defect, and the one a keyboard user cannot
     // work around: a flyout opened where it fitted, then a window resize (or an
     // orientation change) that leaves it hard against the edge. Nothing else
-    // recomputes the side — `sizeMenu` is what the resize listener calls, so it
+    // recomputes the side - `sizeMenu` is what the resize listener calls, so it
     // has to.
     const { wrapper, host } = mountFlyout(400);
     await wrapper.find(".ate-btn").trigger("click");
@@ -753,7 +753,7 @@ describe("floatMenu", () => {
 // The control was pointer-only in practice: `role="menu"` wrapped a text input,
 // bulk membership had no ARIA state outside face mode, closing dropped focus on
 // <body>, and the grid host's roving focus never reached the trigger. These
-// cases pin the contract the control now owns itself — hosts only have to let
+// cases pin the contract the control now owns itself - hosts only have to let
 // it through, which ImageGridContextMenu.test.js covers on its side.
 
 describe("keyboard operation and ARIA structure", () => {
@@ -813,7 +813,7 @@ describe("keyboard operation and ARIA structure", () => {
     const trigger = wrapper.find(".ate-btn");
     expect(trigger.attributes("aria-haspopup")).toBe("listbox");
     expect(trigger.attributes("aria-controls")).toBe(listbox.attributes("id"));
-    // Every row is an option of that listbox — nothing is left loose.
+    // Every row is an option of that listbox - nothing is left loose.
     expect(listbox.findAll(".ate-item")).toHaveLength(rows(wrapper).length);
   });
 

@@ -8,7 +8,7 @@ Review's OPEN-per-tag pattern) plus the TagHealth board columns that surface
 its computed AP/F1 metrics. Additive, no data migration: TagHealth is a
 wholesale-replaced cache (rebuild_tag_health deletes and reinserts every row),
 so existing rows simply carry NULL for the new eval_* columns until the next
-POST /tag_health/rebuild — no targeted NULL-reset is needed here.
+POST /tag_health/rebuild - no targeted NULL-reset is needed here.
 
 Revision ID: 0069_add_tag_eval_slice
 Revises: 0068_add_picture_split

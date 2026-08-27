@@ -42,7 +42,7 @@ class SslSetupMixin:
                     [x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]
                 )
                 # The external listener binds 0.0.0.0 and is reached by LAN IP,
-                # so cover localhost AND the loopback/LAN addresses in the SAN —
+                # so cover localhost AND the loopback/LAN addresses in the SAN -
                 # otherwise every remote HTTPS connection is a hostname *mismatch*
                 # (worse than a plain untrusted-CA warning).
                 san = [x509.DNSName("localhost")]

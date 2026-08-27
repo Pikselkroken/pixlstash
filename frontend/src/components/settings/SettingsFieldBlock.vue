@@ -16,7 +16,7 @@ defineProps({
   title: { type: String, default: "" },
   desc: { type: String, default: "" },
   // Align the control to the top of the block instead of pinning it to the
-  // bottom — used when two side-by-side blocks must line their content tops up.
+  // bottom - used when two side-by-side blocks must line their content tops up.
   top: { type: Boolean, default: false },
 });
 </script>
@@ -47,7 +47,7 @@ defineProps({
   margin-top: auto;
 }
 
-/* Top-align instead — for content (e.g. plugin tables) that must line up at
+/* Top-align instead - for content (e.g. plugin tables) that must line up at
    the top of both columns rather than the bottom. */
 .field-block__control--top {
   margin-top: var(--space-3);

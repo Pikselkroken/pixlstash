@@ -111,7 +111,7 @@ class TaggerPlugin(ABC):
             min (float|int): Minimum value for numeric types.
             max (float|int): Maximum value for numeric types.
             step (float|int): Step size for numeric types.
-            options (list[dict]): Required for ``"select"`` — each entry is
+            options (list[dict]): Required for ``"select"`` - each entry is
                 ``{"value": ..., "label": ...}``.
 
         Returns:
@@ -141,7 +141,7 @@ class TaggerPlugin(ABC):
         ):
             raise TypeError(
                 f"{type(self).__name__}.models must be a list of "
-                "{'name': ..., 'license': ...} dicts — one entry per model, "
+                "{'name': ..., 'license': ...} dicts - one entry per model, "
                 "a list even when there is only one"
             )
         return {
@@ -245,7 +245,7 @@ class TaggerPlugin(ABC):
         that never overrode the method, and the two cannot be told apart. On a
         CUDA engine a 0 is therefore read as *no answer*: the host charges the
         Florence-2 figure instead, which is not your model's. That is a
-        deliberate over-charge for a CPU-only plugin (harmless — it may delay
+        deliberate over-charge for a CPU-only plugin (harmless - it may delay
         your batch, never break it) and a serious **under**-charge for a GPU
         model that returned 0 because it was not resident yet, which is the
         OOM this budget exists to prevent. So: return a real figure whenever
@@ -317,6 +317,6 @@ class TaggerPlugin(ABC):
                 inference mid-batch.
 
         Returns:
-            ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            ``{path: caption_str}`` - value is ``None`` on per-image failure.
         """
         raise NotImplementedError(f"{self.name} does not support descriptions")

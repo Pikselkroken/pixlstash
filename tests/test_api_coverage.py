@@ -438,7 +438,7 @@ def test_add_remove_tag_to_picture():
 
 def test_patch_picture_with_tags_key_does_not_500():
     # Regression: PATCH /pictures/{id} carrying a `tags` key used to 500 for
-    # everyone — hasattr(pic, "tags") lazy-loaded the tags relationship on a
+    # everyone - hasattr(pic, "tags") lazy-loaded the tags relationship on a
     # session-detached Picture (DetachedInstanceError) before any handler ran.
     temp_dir, client, server = _setup()
     try:

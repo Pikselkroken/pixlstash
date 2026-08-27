@@ -1,7 +1,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, toValue } from "vue";
 
 // "New version available" check, shared by the sidebar brand (browser) and the
-// desktop title bar. Only one of those is the active owner at a time — the
+// desktop title bar. Only one of those is the active owner at a time - the
 // `enabled` flag no-ops the fetch/interval for the inactive one so the check
 // never runs twice. `installType` and `checkForUpdates` may be refs or getters.
 
@@ -35,7 +35,7 @@ function isRemoteNewer(current, remote) {
 }
 
 // Telemetry endpoint. The install type lives in the PATH (not the query
-// string) because Cloudflare zone analytics can only filter on path — see
+// string) because Cloudflare zone analytics can only filter on path - see
 // issue #402. The response body is identical across all buckets.
 const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
 // Install-type buckets allowed in the telemetry path; anything else (or
@@ -105,8 +105,8 @@ export function useVersionCheck(installType, checkForUpdates, enabled = true) {
     const url = `${LATEST_VERSION_BASE_URL}/${encodeURIComponent(appVersion)}/${bucket}.json`;
     // Stamp the attempt before the request, not after a successful parse. A
     // failing check is the one that must not repeat, and stamping inside
-    // `.then()` inverted that: any response that would not parse as JSON — a
-    // 404 page for a bucket with no manifest is the reachable case — left the
+    // `.then()` inverted that: any response that would not parse as JSON - a
+    // 404 page for a bucket with no manifest is the reachable case - left the
     // throttle unset and re-fired the check on every page load. Latent so far
     // (every shipped bucket has a manifest, so every check got JSON), and this
     // is what stops the first missing manifest from being an outbound loop. The

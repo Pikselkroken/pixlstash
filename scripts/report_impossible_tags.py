@@ -6,8 +6,8 @@ SQLite read-only mode and never writes. Shares the exact classifier the scan ser
 (pixlstash.utils.service.person_tags) so the report can't drift from what would ship.
 
 It prints, for the chosen scope:
-  * base rates — person-tagged pictures, and how many have no detected face,
-  * per named-filter counts — People-tags-on-"no humans" / Face-tags-no-face /
+  * base rates - person-tagged pictures, and how many have no detected face,
+  * per named-filter counts - People-tags-on-"no humans" / Face-tags-no-face /
     People-tags-on-an-object (pictures and tags each would flag),
   * a histogram of which person-tags occur on no-face pictures (refine PERSON_TAGS), and
   * samples to spot-check each signal.
@@ -166,7 +166,7 @@ def main():
     print(f"  of those, no detected face:  {len(candidates)}  (the candidate set)")
 
     if not candidates:
-        print("\nNo candidates — nothing to strip.")
+        print("\nNo candidates - nothing to strip.")
         return
 
     pics_per_source: Counter = Counter()
@@ -220,7 +220,7 @@ def main():
     for source in (SOURCE_NO_HUMANS, SOURCE_NO_FACE, SOURCE_OBJECT):
         if not samples[source]:
             continue
-        print(f"\nSample — {_FILTER_NAMES[source]}:")
+        print(f"\nSample - {_FILTER_NAMES[source]}:")
         for pid, desc, flag in samples[source]:
             snippet = (desc or "").replace("\n", " ")[:80]
             print(f"  #{pid}  {snippet!r}  → strip {flag}")

@@ -37,7 +37,7 @@
 //
 // While Compare is open the per-group keys stay live (`Enter`/`S`, `K`,
 // `1`-`9`, `X`, `Escape`), because Compare exists so the decision is made
-// without a second trip — and `Up`/`Down` switch the COMPARED GROUP in
+// without a second trip - and `Up`/`Down` switch the COMPARED GROUP in
 // place, since the dialog renders the focused group and shows exactly where
 // you went. A verdict there keeps Compare open and the auto-advance flips it
 // to the next group; the view closes it only when the queue runs out. Only
@@ -308,7 +308,7 @@ export function createDedupKeyHandler({
       // ── The blink compare, when it is up, owns the flip keys ────────────
       // Escape peels one layer (zoom → compare → queue), arrows and digits
       // flip the candidate IN PLACE so differences read as motion, P toggles
-      // actual pixels. Enter/S fall through to the verdict keys below —
+      // actual pixels. Enter/S fall through to the verdict keys below -
       // deciding from inside the zoom is the point of having it.
       if (zoom.isOpen()) {
         if (key === "escape") {
@@ -375,7 +375,7 @@ export function createDedupKeyHandler({
       // ── Up/Down switch GROUPS from inside Compare ─────────────────────
       // The dialog renders the focused group, so a focus move flips it in
       // place (zoom and fit reset per group, exactly as on a verdict's
-      // advance) — no place is lost, the dialog shows where you went. The
+      // advance) - no place is lost, the dialog shows where you went. The
       // ZOOM layer above keeps ALL its arrows for candidate flipping: two
       // meanings for one axis in one layer is how a key stops being
       // trusted. Clamped at the queue's ends like every focus move (the
@@ -396,12 +396,12 @@ export function createDedupKeyHandler({
       if (!group) return;
       // A verdict from inside Compare does NOT close Compare: the store's
       // auto-advance moves the focus to the next open group and the dialog,
-      // which renders the focused group, flips to it in place — a run of
+      // which renders the focused group, flips to it in place - a run of
       // decisions is made without reopening anything. The zoom layer closes
       // (the next group starts un-zoomed by contract), and the view closes
       // the dialog itself once the queue has nothing left to show.
       // S is a SYNONYM of Enter (amendment #3): the owner kept pressing S
-      // meaning Stack — a capture slip, not ignorance — and S's strongest
+      // meaning Stack - a capture slip, not ignorance - and S's strongest
       // reading IS Stack, so the slip is now self-healing.
       if (key === "enter" || key === "s") {
         claim(event);

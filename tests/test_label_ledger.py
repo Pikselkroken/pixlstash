@@ -1,9 +1,9 @@
 """Tests for the human-label ledger on TagPrediction.
 
 Verifies that every human accept/reject path records a durable, symmetric POS/NEG
-supervision signal (``label_state``/``label_source='human'``) — including the paths that
+supervision signal (``label_state``/``label_source='human'``) - including the paths that
 previously dropped the negative entirely (removing a tag, dismissing an "add" suggestion)
-— and that the tagger never clobbers a human label.
+- and that the tagger never clobbers a human label.
 """
 
 import gc
@@ -177,7 +177,7 @@ def test_manual_remove_records_neg_that_survives_lost_tag():
 
 
 def test_manual_add_of_content_tag_is_not_recorded():
-    """Non-anomaly content tags are outside the tagger's space — no ledger pollution."""
+    """Non-anomaly content tags are outside the tagger's space - no ledger pollution."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)

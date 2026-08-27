@@ -142,8 +142,8 @@ describe("parseRouteView", () => {
     // `?path=` is the folder facet for folders that have no id: a subfolder,
     // and a folder an "About your library" finding points at. It rides on
     // every grid route for the same reason `?stack_state=` does, which is what
-    // makes `/character/UNASSIGNED?path=…` — the unassigned pictures in ONE
-    // folder — expressible at all.
+    // makes `/character/UNASSIGNED?path=…` - the unassigned pictures in ONE
+    // folder - expressible at all.
     const onAll = parseRouteView(
       routeOf("all-pictures", {}, { path: "/home/me/library/_unsorted" }),
     );

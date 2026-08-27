@@ -15,7 +15,7 @@ class LayoutMoveFinder(SimpleMissingFinder):
 
     One task in flight. The unit of work is renaming files on the owner's disk,
     and two passes racing each other over the same tree is not worth the
-    parallelism — a batch of 200 file renames is fast, and the debounce means
+    parallelism - a batch of 200 file renames is fast, and the debounce means
     the work arrives in clumps rather than continuously.
     """
 

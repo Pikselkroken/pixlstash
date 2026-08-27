@@ -120,7 +120,7 @@ describe("scanning", () => {
 
   it("does not even submit a scan when the folder added is an output root", async () => {
     // The server answers a source folder's scan with `skipped`, so submitting
-    // one spends a task to do nothing — and the toast that promises it would be
+    // one spends a task to do nothing - and the toast that promises it would be
     // describing work that never happens. Its runs are read live instead.
     createModelFolder.mockResolvedValue(
       folder({ id: 2, kind: "source", path: "/runs" }),

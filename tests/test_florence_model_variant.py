@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the configurable Florence-2 checkpoint (issue #512).
 
-These tests never load a model: they exercise the variant plumbing only —
+These tests never load a model: they exercise the variant plumbing only -
 the service's variant switch, the VRAM figure the gate charges, the plugin
 parameter schema, and the engine property that reads the user's setting.
 """

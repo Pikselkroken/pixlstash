@@ -1,9 +1,9 @@
-"""`pixlstash-cli plugins create` — scaffolding a plugin pull request.
+"""`pixlstash-cli plugins create` - scaffolding a plugin pull request.
 
 Nothing here reaches the network or GitHub: the "checkout" is a directory laid
 out like the plugins repository, and the one test that needs real branching
 runs ``git init`` in ``tmp_path``.  What is actually under test is the rewrite
-— the folder, the module filename, the class, the header and the README — plus
+- the folder, the module filename, the class, the header and the README - plus
 the refusals that stop someone spending an afternoon on a pull request the
 repository would turn down for its name.
 """

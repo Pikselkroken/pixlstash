@@ -29,8 +29,8 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
     Iterates all reference folders in the database and queues a
     :class:`ReferenceFolderScanTask` for the first folder that is either:
 
-    - ``pending_mount`` — has never been scanned since being added; or
-    - ``active`` — was last scanned more than ``_RESCAN_INTERVAL_S`` seconds ago.
+    - ``pending_mount`` - has never been scanned since being added; or
+    - ``active`` - was last scanned more than ``_RESCAN_INTERVAL_S`` seconds ago.
 
     Folders with ``mount_error`` status are re-attempted on a shorter interval
     so that a previously missing mount can be picked up quickly without

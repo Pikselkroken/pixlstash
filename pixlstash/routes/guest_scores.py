@@ -3,8 +3,8 @@
 READ-token users may submit star scores (0-5) for pictures.  Scores are stored
 in the guest_session / guest_score tables and never touch picture.score.
 
-POST /pictures/guest-scores  — write exception for READ tokens
-GET  /pictures/guest-scores  — retrieve this session's scores (READ tokens)
+POST /pictures/guest-scores  - write exception for READ tokens
+GET  /pictures/guest-scores  - retrieve this session's scores (READ tokens)
 """
 
 import re
@@ -155,7 +155,7 @@ def create_router(server) -> APIRouter:
 
         body: dict[str, Any] = await request.json()
 
-        # Validate session_id — rebind from the match group so the value used
+        # Validate session_id - rebind from the match group so the value used
         # downstream is the regex-validated string, not raw user input.
         _raw_session_id = body.get("session_id", "")
         _session_id_match = (
@@ -225,7 +225,7 @@ def create_router(server) -> APIRouter:
             existing = session.get(GuestSession, session_id)
 
             if existing is None:
-                # Brand-new session — check active concurrent limit first
+                # Brand-new session - check active concurrent limit first
                 active_count = server.auth.count_active_guest_sessions()
                 if active_count >= max_concurrent:
                     raise HTTPException(
@@ -259,7 +259,7 @@ def create_router(server) -> APIRouter:
                 session.add(new_session)
                 session.flush()
             else:
-                # Returning session — check it belongs to the same token to
+                # Returning session - check it belongs to the same token to
                 # prevent cross-token score writes via a replayed session_id.
                 if existing.token_public_id != token_public_id:
                     raise HTTPException(
@@ -314,7 +314,7 @@ def create_router(server) -> APIRouter:
                 session_id,
                 is_https,
             )
-            # HttpOnly cookie — server-generated token, not the user-supplied
+            # HttpOnly cookie - server-generated token, not the user-supplied
             # session_id, so no user-controlled value reaches set_cookie().
             response.set_cookie(
                 "guest_session",
@@ -324,7 +324,7 @@ def create_router(server) -> APIRouter:
                 samesite="lax",
                 **({"secure": True} if is_https else {}),
             )
-            # Non-HttpOnly sentinel — JS reads this to detect consent without
+            # Non-HttpOnly sentinel - JS reads this to detect consent without
             # being able to read the session_id itself
             response.set_cookie(
                 "guest_session_active",

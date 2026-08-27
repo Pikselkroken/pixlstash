@@ -36,7 +36,7 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
         # needed and a picture flows here the moment its quality is in.
         #
         # Discover work and pre-fetch all required data inside a single
-        # immediate read session — no write-queue involvement.
+        # immediate read session - no write-queue involvement.
         work = self._db.run_immediate_read_task(
             self._find_and_prefetch,
             self._db.image_root,

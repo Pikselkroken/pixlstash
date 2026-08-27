@@ -7,7 +7,7 @@ row saying what the file *is* plus one ``model_file`` row per copy saying where
 it *lives*.
 
 There is no per-kind branch, because there is no per-kind table. ``file_kind``
-carries what the header proved — ``adapter``, ``checkpoint`` or ``unknown`` —
+carries what the header proved - ``adapter``, ``checkpoint`` or ``unknown`` -
 and only two things follow from it:
 
 * an **adapter** and an **unknown** are hashed on sight, so ``sha256`` is their
@@ -21,7 +21,7 @@ and only two things follow from it:
 ``unknown`` is stored as ``unknown`` and never promoted: a marker-free file too
 small to be a base model is most likely an adapter format we have not met yet,
 so it stays visible and correctable on the shelf. A correction the owner makes
-is never re-derived away — every column a person can edit is written with
+is never re-derived away - every column a person can edit is written with
 ``COALESCE`` on the *stored* value, and ``file_kind`` is not rewritten at all,
 because the row is keyed by content and the parser would only ever repeat the
 guess the owner just overruled.
@@ -32,12 +32,12 @@ keeps the name, triggers and attachments the user gave it and re-linking is
 automatic when the file comes back. Anything we could not *look* at is a
 different fact and gets a different state: ``unreachable``, meaning "we do not
 know". That applies to a whole folder we cannot open and, just as importantly,
-to a subdirectory inside one we can — a NAS mounted under a registered folder
+to a subdirectory inside one we can - a NAS mounted under a registered folder
 must not read as a deletion the moment it drops.
 
 ``kind = 'source'`` folders are skipped entirely. They are ai-toolkit output
 roots, scanned for importable *runs* by :mod:`pixlstash.utils.aitoolkit_run` and
-never catalogued in place — the same distinction the product already makes
+never catalogued in place - the same distinction the product already makes
 between a reference folder and an import folder.
 """
 
@@ -85,14 +85,14 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 # Above this, a file is hashed later by MissingCheckpointHashFinder instead of
 # during the scan.
 #
-# The question was always about SIZE — "it may be 24 GB and the shelf must not
-# stall behind it" — and `file_kind == 'checkpoint'` was a usable proxy for it
+# The question was always about SIZE - "it may be 24 GB and the shelf must not
+# stall behind it" - and `file_kind == 'checkpoint'` was a usable proxy for it
 # only while `checkpoint` was the one large kind. It stopped being one the
 # moment text encoders got a kind of their own: a 23 GB T5 is precisely the read
 # the finder exists to defer, and it would have gone back to being paid inline.
 #
 # 2 GiB is where the stall starts to be worth deferring, not a boundary between
-# kinds — nothing here needs one, because this is only ever asked about the
+# kinds - nothing here needs one, because this is only ever asked about the
 # non-adapter kinds. An image VAE and a CLIP measure a few hundred MB and are
 # hashed inline; a base model, a large text encoder and a multi-gigabyte video
 # VAE all sit above it and are left to the finder, which is right for each of
@@ -107,14 +107,14 @@ _WRITE_BATCH = 200
 # ...and however long a record may wait for that batch to fill. The count alone
 # bounds the transaction; it does not bound *visibility*, and on a real folder
 # those are wildly different numbers. A 91-file folder is one commit, at the very
-# end, while the scan spends nearly all of its minutes hashing adapters inline —
+# end, while the scan spends nearly all of its minutes hashing adapters inline -
 # so ``MissingCheckpointHashFinder`` saw zero rows at any point during a measured
 # 6.11 GB scan and could only start once the scan had finished. The two now
 # overlap instead of running nose to tail.
 #
 # Time, not a smaller count, because the cost driver is per-file hashing time:
 # ten 4 GB adapters are ten files and several minutes, so any count that bounded
-# latency for them would be one. Commits are cheap enough to spend freely —
+# latency for them would be one. Commits are cheap enough to spend freely -
 # measured on the hub (WAL, synchronous=NORMAL) at **0.06 ms marginal per extra
 # commit** over 1,800 files, i.e. committing every single file costs 100 ms on a
 # scan that reads tens of gigabytes. ``_WRITE_BATCH`` is therefore left alone: it
@@ -293,7 +293,7 @@ class ModelFolderScanner:
         The single-file half of :meth:`scan_folder`, for the file ``POST
         /model-files`` has itself copied in: the row is written by the same
         ``_describe`` → ``_write_batch`` path a walk uses, so an added file and a
-        scanned one are one kind of row rather than two dialects of it — same
+        scanned one are one kind of row rather than two dialects of it - same
         header parse, same ``ON CONFLICT(sha256)`` join onto an existing model.
 
         **It sweeps nothing.** A walk marks every row it did not see ``missing``;
@@ -303,7 +303,7 @@ class ModelFolderScanner:
         Args:
             folder_id: The registered folder the file now sits in.
             abs_path: The file itself, already inside that folder.
-            relpath: Its path relative to the folder root — the ``model_file``
+            relpath: Its path relative to the folder root - the ``model_file``
                 key, so the caller's containment decides it.
             sha256: The file's digest, when the caller already has it because it
                 just wrote and verified these bytes. It is used rather than
@@ -425,7 +425,7 @@ class ModelFolderScanner:
         A directory that cannot be listed is collected into *blocked* rather
         than discarded. ``os.walk`` swallows those errors by default, which
         would make an unplugged mount under a registered folder indistinguishable
-        from a deletion — the one thing this module promises never to do.
+        from a deletion - the one thing this module promises never to do.
         """
 
         def on_error(exc: OSError) -> None:
@@ -458,13 +458,13 @@ class ModelFolderScanner:
         ``known_digest`` is the second way of not hashing, beside the
         unchanged-file fast path below: :meth:`register_file`'s caller has just
         written and verified these bytes, so it holds the digest already. A walk
-        never has one — it found a file it knows nothing about — and passes
+        never has one - it found a file it knows nothing about - and passes
         ``None``.
 
         A file already recorded at this relpath whose size *and* mtime both still
         match is taken as unchanged and is not re-hashed: re-reading every byte
         of 1,800 adapters on each sweep would make the scan cost the whole
-        folder. Size alone is not enough — a same-size in-place edit would leave
+        folder. Size alone is not enough - a same-size in-place edit would leave
         ``model.sha256`` naming bytes that are no longer on disk, in the column
         Civitai lookup and the public ``{sha256}/file`` route both resolve on.
 
@@ -836,7 +836,7 @@ class ModelFolderScanner:
         Strictly **older than** this scan's stamp, not merely different from it.
         With ``!=`` two scans running at once each sweep away the rows the other
         just stamped, and a shelf whose files are all on disk reads as entirely
-        missing — measured at 4 of 5 unsynchronised runs flipping every file.
+        missing - measured at 4 of 5 unsynchronised runs flipping every file.
         ``<`` makes a concurrent scan's newer stamp survive, which is correct in
         both directions and across processes: a row is only demoted by the scan
         that walked the folder and did not find it. The residual case, a file

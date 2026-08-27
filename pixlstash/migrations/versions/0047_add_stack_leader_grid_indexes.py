@@ -70,7 +70,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — baseline migration creates the table.  Nothing to do.
+        # Fresh install - baseline migration creates the table.  Nothing to do.
         return
 
     existing_indexes = {idx["name"] for idx in inspector.get_indexes("picture")}

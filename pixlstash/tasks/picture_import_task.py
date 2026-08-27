@@ -135,7 +135,7 @@ class PictureImportTask(BaseTask):
 
     @property
     def priority(self) -> TaskPriority:
-        # User-initiated, latency-sensitive ingest — ahead of the finder-driven
+        # User-initiated, latency-sensitive ingest - ahead of the finder-driven
         # background lanes, mirroring DetectionTask.
         return TaskPriority.HIGH
 
@@ -162,7 +162,7 @@ class PictureImportTask(BaseTask):
         # Placement on write (v1.11 Phase 4b): where the library's layout says
         # a picture with these assignments belongs. Resolved once for the whole
         # batch, because every picture in it gets the same project and set, and
-        # empty for a library with no layout — which is every library until its
+        # empty for a library with no layout - which is every library until its
         # owner chooses one.
         subfolder = resolve_placement(
             self._db, project_id=self._project_id, set_id=self._set_id

@@ -203,7 +203,7 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
 
 
 def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.Row]:
-    """Every recipe filed under one topology — the library view's expand."""
+    """Every recipe filed under one topology - the library view's expand."""
     return hub.fetchall(
         "SELECT structural_hash, hash_version, node_count, first_seen_at "
         "FROM workflow_recipe WHERE topology_hash = ? ORDER BY first_seen_at",

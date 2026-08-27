@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 ORT_ARENA_SHARE = {
     "wd14": 0.40,
     # None: uncapped. InsightFace was capped at 0.15 for one evening and it
-    # failed in the field within the hour — "Available memory of 43939328 is
+    # failed in the field within the hour - "Available memory of 43939328 is
     # smaller than requested bytes of 102908160": five sessions sharing one
     # limit, and `kSameAsRequested` fragmenting the detector's arena until a
     # 98 MB request found 42 MB free. Its arena never ballooned (recognition

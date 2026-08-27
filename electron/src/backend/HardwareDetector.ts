@@ -68,12 +68,12 @@ async function hasAmdPciDevice(): Promise<boolean> {
         const cls = (await readFile(`${base}/class`, 'utf8')).trim().toLowerCase();
         if (cls.startsWith('0x03')) return true;
       } catch {
-        // No class file but vendor is AMD — treat as a candidate GPU.
+        // No class file but vendor is AMD - treat as a candidate GPU.
         return true;
       }
     }
   } catch (e) {
-    // /sys not present (non-Linux, container) — not an error worth surfacing.
+    // /sys not present (non-Linux, container) - not an error worth surfacing.
     console.warn('[hardware] could not scan /sys/bus/pci/devices for an AMD GPU:', e);
   }
   return false;
@@ -87,7 +87,7 @@ async function hasAmdRocmGpu(): Promise<string | null> {
     const { stdout } = await execFileP('rocminfo', [], { timeout: 4000 });
     if (/gfx\d+/i.test(stdout)) return 'AMD GPU (ROCm)';
   } catch {
-    /* rocminfo not installed — fall through to the sysfs vendor probe */
+    /* rocminfo not installed - fall through to the sysfs vendor probe */
   }
   if (await hasAmdPciDevice()) return 'AMD GPU (ROCm)';
   return null;
@@ -103,7 +103,7 @@ async function hasAmdRocmGpu(): Promise<string | null> {
  * probe so the download/overlay flow can be tested without the matching GPU. It
  * is injected into `accelerators` ahead of CPU (deduped, real probes still run
  * and keep their priority), and sets a synthetic `gpuName`. It never influences
- * the install index — the overlay still resolves through the hardcoded
+ * the install index - the overlay still resolves through the hardcoded
  * TORCH_INDEX map keyed by this validated `Accel`.
  */
 export async function detectHardware(forcedAccel: Accel | null = null): Promise<Hardware> {

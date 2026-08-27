@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""prewarm_watermark_cache.py — Pre-generate watermarked image files for the demo.
+"""prewarm_watermark_cache.py - Pre-generate watermarked image files for the demo.
 
 Visits every picture through a share token so the server writes
 {stem}_watermarked.{ext} files next to the originals. Those files are then
@@ -91,7 +91,7 @@ def main() -> None:
     ok, failed = prewarm(token, pictures, session)
     elapsed = time.monotonic() - t0
 
-    print(f"\nDone in {elapsed:.1f}s — {ok} OK, {failed} failed.")
+    print(f"\nDone in {elapsed:.1f}s - {ok} OK, {failed} failed.")
     if failed:
         sys.exit(1)
 

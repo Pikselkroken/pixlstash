@@ -8,7 +8,7 @@ image embedding already stored on every picture:
 ``good`` / ``bad`` are fixed text-prompt embeddings, so they are precomputed once here
 and bundled as ``.npy`` files (mirroring ``data/anchors/builtin_good.npy``). That keeps
 ``SmartScoreUtils.calculate_smart_score_batch_numpy`` engine-free and deterministic at
-scoring time — just two dot products. Re-run this whenever the CLIP model changes.
+scoring time - just two dot products. Re-run this whenever the CLIP model changes.
 
 Usage:
     python -m scripts.generate_clipiqa_prompts        # writes the two .npy files

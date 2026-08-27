@@ -1,11 +1,11 @@
-"""`pixlstash-cli plugins` — install, test, list and remove.
+"""`pixlstash-cli plugins` - install, test, list and remove.
 
 No `Server` here on purpose: every one of these tests is a file copy and an
 `ast.parse`, so the whole module runs in well under a second and never needs a
 vault, a hub or a model.
 
 `plugins test` is the one verb that *imports* the plugin, so its tests execute
-a plugin's module body — the shipped `plugin_template.py`, which loads without
+a plugin's module body - the shipped `plugin_template.py`, which loads without
 a model, and copies of it with one mistake spliced in.
 """
 
@@ -491,8 +491,8 @@ def published(monkeypatch):
     """Serve a codeload zip holding exactly the files one test names.
 
     The shared `fake_repository` is the repository as it really is; this is for
-    the shapes it cannot hold at once — a name collision, a folder that will not
-    parse — without changing what every other test in the module sees.
+    the shapes it cannot hold at once - a name collision, a folder that will not
+    parse - without changing what every other test in the module sees.
     """
 
     def serve(files: dict[str, str]) -> None:
@@ -947,7 +947,7 @@ def test_remove_asks_which_kind_when_both_hold_the_name(plugin_root, capsys):
 # ----------------------------------------------------------------------
 
 #: The starter a contributor copies. Every check below is a real mistake made
-#: to it, so the fixtures cannot drift away from what people actually write —
+#: to it, so the fixtures cannot drift away from what people actually write -
 #: and the pass case guards the shipped template itself.
 TEMPLATE = Path(tagger_plugins.__file__).parent / "plugin_template.py"
 
@@ -956,7 +956,7 @@ def _template(*mutations: tuple[str, str]) -> str:
     """Return the shipped template with each ``(old, new)`` spliced in.
 
     The count assertion is the point: a mutation that silently matched
-    nothing — or matched a docstring instead of the code — would leave the
+    nothing - or matched a docstring instead of the code - would leave the
     test passing against an unbroken plugin and read as coverage.
     """
     source = TEMPLATE.read_text(encoding="utf-8")
@@ -1052,7 +1052,7 @@ def test_a_cosmetic_fault_is_reported_without_failing_the_command(
 
     A missing `label` renders the parameter's `name` (`field.label ||
     field.name`), and a plugin with no capability flag registers exactly as
-    written — it is simply never reached. `plugins install` warns about the
+    written - it is simply never reached. `plugins install` warns about the
     second and installs it; this agrees with that rather than inventing a
     stricter contract for the same plugin.
     """
@@ -1101,7 +1101,7 @@ def test_a_name_discovery_skips_is_refused_however_well_it_loads(
     """The scan filters the directory listing above the loader they share.
 
     So this file imports and registers perfectly here and is never looked at
-    by the server — silently, which is the failure the command exists for.
+    by the server - silently, which is the failure the command exists for.
     """
     source = _write(tmp_path / name, _template())
 
@@ -1117,7 +1117,7 @@ def test_a_name_an_installed_plugin_already_holds_is_a_problem(
     """One of the two silently loses; the checker cannot see it from the load.
 
     This manager scans no directory on purpose, so the server's own duplicate
-    refusal can never fire here — the installed names are read statically
+    refusal can never fire here - the installed names are read statically
     instead, without importing anybody's plugin.
     """
     _write(plugin_root / "tagger-plugins" / "user" / "my_captioner.py", CAPTIONER)
@@ -1152,7 +1152,7 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     it cannot fail this. It seeds ``self._device = "cpu"`` in ``__init__`` and
     falls back to ``max_tokens or 128``, so a caption reading
     ``(128 tokens, cpu)`` is exactly what you get when ``setup()``, ``init()``
-    and the merged defaults are all skipped — every assertion here passed with
+    and the merged defaults are all skipped - every assertion here passed with
     each of those three deleted from plugin_check until the sentinels below
     were spliced in.
     """
@@ -1198,7 +1198,7 @@ def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, caps
     """No capability flag means no method to call, so there is nothing to load.
 
     `init()` is made to raise, so the run reports `init() raised` and fails the
-    command if it is reached at all — which it was, before the capability check
+    command if it is reached at all - which it was, before the capability check
     moved above the download-and-init pair.
     """
     source = _write(
@@ -1224,7 +1224,7 @@ def test_a_torch_that_will_not_answer_does_not_take_the_command_down(monkeypatch
     """The plugin's own init() gives a better error than a traceback from here.
 
     An installed-but-unloadable torch raises `OSError` rather than
-    `ImportError` — a missing CUDA shared library is the usual way — so the
+    `ImportError` - a missing CUDA shared library is the usual way - so the
     narrower catch let it escape and end the command before the plugin could
     report its own missing dependency.
     """
@@ -1244,8 +1244,8 @@ def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys)
     """A check command has no business starting a multi-gigabyte fetch.
 
     This is the courtesy, not a guarantee: `needs_download()` is the plugin's
-    own answer, and a plugin that downloads inside `init()` — which is where
-    `from_pretrained_local_first` does it — is past this gate already.
+    own answer, and a plugin that downloads inside `init()` - which is where
+    `from_pretrained_local_first` does it - is past this gate already.
     """
     source = _write(
         tmp_path / "mine.py", _template(("        return False", "        return True"))
@@ -1264,7 +1264,7 @@ def test_schema_types_match_the_component_that_renders_them():
 
     The whole value of the schema check is that it agrees with what actually
     renders, and nothing else in this repository would notice the two drifting
-    — a type added to the component would be reported here as unrenderable,
+    - a type added to the component would be reported here as unrenderable,
     and one removed from it would sail through. Pinned the way
     `_SUBDIRS` is pinned to the registries.
 
@@ -1333,8 +1333,8 @@ def test_the_installer_writes_where_the_registries_read():
 def _header_literals(path: Path) -> dict[str, dict[str, object]]:
     """Return ``{class_name: {attr: value}}`` for the header of each class.
 
-    Reads the source the way a tool outside PixlStash has to — ``ast`` only,
-    no import — so an attribute computed at runtime shows up as absent here.
+    Reads the source the way a tool outside PixlStash has to - ``ast`` only,
+    no import - so an attribute computed at runtime shows up as absent here.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     headers: dict[str, dict[str, object]] = {}
@@ -1384,7 +1384,7 @@ def _shipped_plugin_sources() -> list[Path]:
             package / "tagger_plugins" / "plugin_template.py",
         }
     )
-    # Parametrising over an empty list is `1 skipped` and exit 0 — the glob
+    # Parametrising over an empty list is `1 skipped` and exit 0 - the glob
     # coming back empty (a renamed folder, a packaging change) would drop every
     # image plugin from this check without failing anything. Count instead.
     assert len(sources) >= 12, f"only found {len(sources)} shipped plugin sources"
@@ -1510,7 +1510,7 @@ def test_the_windows_desktop_derives_its_name_since_nothing_declares_one(
     """Issue #1058: on Windows the app declares nothing, on purpose.
 
     The command that works there is this very interpreter, so it is derived
-    rather than announced — and through the same helper that fills the Settings
+    rather than announced - and through the same helper that fills the Settings
     panel, so the panel and the CLI's own output cannot drift apart.
     """
     resources = tmp_path / "resources"

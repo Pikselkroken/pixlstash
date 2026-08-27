@@ -1,9 +1,9 @@
 <script setup>
 /**
- * Wizard step 3 ("Preview") — the accepted mapping, before anything is
+ * Wizard step 3 ("Preview") - the accepted mapping, before anything is
  * written. Commits nothing until "Yes, build this library" is pressed; see
  * integration_architecture.md §22. Moves, renames and copies zero files
- * either way — committing registers the folder for in-place indexing and
+ * either way - committing registers the folder for in-place indexing and
  * writes database rows only.
  */
 import { computed, onUnmounted, ref, watch } from "vue";
@@ -26,7 +26,7 @@ const props = defineProps({
   // "reference" registers the scanned root as an external reference folder;
   // "local_import" imports its pictures as ordinary managed pictures of the
   // active library instead (v1.11 Phase 3, "Bring them in" on a freshly
-  // created library — integration_architecture.md §22).
+  // created library - integration_architecture.md §22).
   mode: { type: String, default: "reference" },
 });
 
@@ -36,7 +36,7 @@ const committing = ref(false);
 // The wizard makes its dialog undismissable while this is true: a commit,
 // once started, runs to completion server-side regardless of what this
 // screen does next (§22), so Escape or a backdrop click must not be able to
-// quietly abandon the UI while it keeps running — that is what let the same
+// quietly abandon the UI while it keeps running - that is what let the same
 // read's task id come back through the sidebar's resume flow and get
 // committed a second time.
 watch(committing, (value) => emit("update:committing", value));
@@ -64,7 +64,7 @@ const grouped = computed(() => {
 // the scanned root stays external and the library's own directory is
 // untouched. For a local import the scanned root already IS the library's own
 // root (that is the only case the server allows it), so the fact worth
-// stating instead is what these pictures become — ordinary library pictures,
+// stating instead is what these pictures become - ordinary library pictures,
 // not an external reference folder the owner could later "stop using".
 const lastFact = computed(() =>
   props.mode === "local_import"
@@ -133,15 +133,15 @@ async function commit(assignments = props.assignments) {
 }
 
 /**
- * "Organise later" — index everything now, decide what the folders mean some
+ * "Organise later" - index everything now, decide what the folders mean some
  * other day.
  *
  * Before the import starts this is a commit with NO assignments, which is the
  * whole correction: closing the wizard instead used to leave a library that
  * had been created and never filled, and an empty library is what "Cancel"
  * means, not what "later" means. Once the import is running the same words
- * mean the same thing — keep every picture already indexed, apply none of the
- * mapping — which is what `stop=defer` does server-side.
+ * mean the same thing - keep every picture already indexed, apply none of the
+ * mapping - which is what `stop=defer` does server-side.
  */
 async function organiseLater() {
   if (!committing.value) {
@@ -214,11 +214,11 @@ onUnmounted(() => {
           {{ ungroupedCount.size }} project(s), set(s) and people are created or matched
         </div>
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark">—</span>
+          <span class="preview-step__fact-mark"> - </span>
           no file is copied, moved or renamed
         </div>
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark">—</span>
+          <span class="preview-step__fact-mark"> - </span>
           {{ lastFact }}
         </div>
       </div>
@@ -229,7 +229,7 @@ onUnmounted(() => {
     <div v-if="committing" class="preview-step__progress">
       <v-progress-circular indeterminate size="18" width="2" color="accent" />
       <span>
-        <template v-if="stage === 'indexing'">indexing pictures — {{ processed }} of {{ total }}</template>
+        <template v-if="stage === 'indexing'">indexing pictures - {{ processed }} of {{ total }}</template>
         <template v-else-if="stage === 'registering'">registering the folder…</template>
         <template v-else-if="stage === 'assigning'">creating projects, people, sets and tags…</template>
         <template v-else>working…</template>
@@ -245,7 +245,7 @@ onUnmounted(() => {
       </AppButton>
       <!-- Organise later stays available WHILE the import runs: it is the
            answer to "this is taking ages and I do not want to watch", and it
-           means the same thing at both moments — index it all, map it later. -->
+           means the same thing at both moments - index it all, map it later. -->
       <AppButton variant="secondary" @click="organiseLater">
         Organise later
       </AppButton>
@@ -259,7 +259,7 @@ onUnmounted(() => {
     <p class="preview-step__actions-note">
       <template v-if="committing">
         Organise later keeps every picture indexed so far and leaves the
-        folder mapping for another day. Abort gives up on the import — nothing
+        folder mapping for another day. Abort gives up on the import - nothing
         already indexed is removed, and no file is touched either way.
       </template>
       <template v-else>
@@ -287,7 +287,7 @@ onUnmounted(() => {
 
 .preview-step__title {
   /* NOT --font-pixel: a step heading is chrome. Tiny5 is the wordmark, a brand
-     moment and an empty-state headline — nothing a person reads a sentence in. */
+     moment and an empty-state headline - nothing a person reads a sentence in. */
   margin: 0;
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);

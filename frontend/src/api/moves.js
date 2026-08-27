@@ -1,6 +1,6 @@
-// Moves made outside PixlStash — the reconciliation queue (v1.11 Phase 5).
+// Moves made outside PixlStash - the reconciliation queue (v1.11 Phase 5).
 //
-// One GET, classified live on every call — there is no cache behind it, so
+// One GET, classified live on every call - there is no cache behind it, so
 // "look again" is just another GET, same as /insights. Apply and dismiss both
 // take review_id values straight from that GET's response.
 
@@ -14,7 +14,7 @@ import { unwrap } from "../utils/unwrap";
  * @returns {Promise<Object>} `{ unambiguous, ambiguous, off_layout }`, each a
  *   list of `{ review_id, picture_id, old_path, new_path, removals,
  *   additions, current }`. `current` is only populated for the ambiguous
- *   bucket — the picture's own names for the facet a removal is ambiguous
+ *   bucket - the picture's own names for the facet a removal is ambiguous
  *   about, e.g. why leaving one project's folder does not say which project
  *   the owner left.
  */

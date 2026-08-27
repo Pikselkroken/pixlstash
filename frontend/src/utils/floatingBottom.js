@@ -42,7 +42,7 @@ export const SELBAR_FALLBACK_H_PX = 56;
  *   clear of the centred card, so it contributes 0).
  * @param {boolean} [options.narrow=false] - is the viewport ≤ 600px?
  * @param {number} [options.gap=FLOATING_BOTTOM_GAP_PX] - gap above the tallest.
- * @returns {number} pixels. `0` when nothing is parked there — NOT `gap`, so the
+ * @returns {number} pixels. `0` when nothing is parked there - NOT `gap`, so the
  *   stack rests at exactly `--space-5` when the bottom edge is clear.
  */
 export function computeFloatingBottomInset({

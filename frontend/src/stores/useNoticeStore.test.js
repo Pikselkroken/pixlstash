@@ -11,7 +11,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("useNoticeStore — basics", () => {
+describe("useNoticeStore - basics", () => {
   it("pushes a notice and returns its id", () => {
     const store = useNoticeStore();
     const id = store.push({ level: "info", text: "hello", timeout: 0 });
@@ -45,7 +45,7 @@ describe("useNoticeStore — basics", () => {
     expect(store.notices[0].level).toBe("info");
   });
 
-  // §9.5 — a blank card tells the user nothing and hides the call-site bug.
+  // §9.5 - a blank card tells the user nothing and hides the call-site bug.
   it("refuses an empty-text notice and logs it", () => {
     const store = useNoticeStore();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -58,7 +58,7 @@ describe("useNoticeStore — basics", () => {
   });
 });
 
-describe("resolveTimeout — reading-time floor (§6 rule 2)", () => {
+describe("resolveTimeout - reading-time floor (§6 rule 2)", () => {
   it("keeps a sticky timeout sticky", () => {
     expect(resolveTimeout({ baseTimeout: 0, text: "boom" })).toBe(0);
   });
@@ -77,7 +77,7 @@ describe("resolveTimeout — reading-time floor (§6 rule 2)", () => {
     expect(resolveTimeout({ baseTimeout: 6000, text: "hi" })).toBe(6000);
   });
 
-  // §6 rule 1 — a 3s window to hit "Undo" fails WCAG 2.2.1.
+  // §6 rule 1 - a 3s window to hit "Undo" fails WCAG 2.2.1.
   it("forces any notice with an action to be sticky", () => {
     expect(
       resolveTimeout({ baseTimeout: 3000, text: "done", hasAction: true }),
@@ -85,7 +85,7 @@ describe("resolveTimeout — reading-time floor (§6 rule 2)", () => {
   });
 });
 
-describe("useNoticeStore — sticky errors (§6)", () => {
+describe("useNoticeStore - sticky errors (§6)", () => {
   it("never auto-dismisses an error", () => {
     const store = useNoticeStore();
     store.error("Couldn't delete the picture.");
@@ -114,7 +114,7 @@ describe("useNoticeStore — sticky errors (§6)", () => {
   });
 });
 
-describe("useNoticeStore — coalescing (§9.1)", () => {
+describe("useNoticeStore - coalescing (§9.1)", () => {
   it("collapses repeats with the same key into one card with a count", () => {
     const store = useNoticeStore();
     for (let i = 0; i < 50; i++) {
@@ -159,7 +159,7 @@ describe("useNoticeStore — coalescing (§9.1)", () => {
   });
 });
 
-describe("useNoticeStore — cap and pending queue (§9.2)", () => {
+describe("useNoticeStore - cap and pending queue (§9.2)", () => {
   it("renders at most maxVisible notices but keeps the rest queued", () => {
     const store = useNoticeStore();
     for (let i = 0; i < 6; i++) store.push({ text: `n${i}`, timeout: 0 });
@@ -213,7 +213,7 @@ describe("useNoticeStore — cap and pending queue (§9.2)", () => {
     expect(store.maxVisible).toBe(3);
   });
 
-  // §5 — an error is never queued behind a success. The oldest non-error yields
+  // §5 - an error is never queued behind a success. The oldest non-error yields
   // its visible slot, but is DEMOTED rather than destroyed: the insert is what
   // buys the room, so there is nothing to be gained by losing the message.
   it("displaces the oldest non-error to make room for an error", () => {
@@ -238,7 +238,7 @@ describe("useNoticeStore — cap and pending queue (§9.2)", () => {
   });
 });
 
-describe("useNoticeStore — pause and resume (§9.3, WCAG 2.2.1)", () => {
+describe("useNoticeStore - pause and resume (§9.3, WCAG 2.2.1)", () => {
   it("pauses a countdown and banks the remaining time", () => {
     const store = useNoticeStore();
     const id = store.info("hover me");
@@ -280,7 +280,7 @@ describe("useNoticeStore — pause and resume (§9.3, WCAG 2.2.1)", () => {
   });
 });
 
-describe("useNoticeStore — action contract (§9.4)", () => {
+describe("useNoticeStore - action contract (§9.4)", () => {
   it("invoking the action dismisses the notice", () => {
     const store = useNoticeStore();
     const handler = vi.fn();
@@ -329,7 +329,7 @@ describe("useNoticeStore — action contract (§9.4)", () => {
   });
 });
 
-describe("useNoticeStore — dismissByKey (§9.6 scoped notices)", () => {
+describe("useNoticeStore - dismissByKey (§9.6 scoped notices)", () => {
   it("dismisses the notice carrying the key and leaves the rest", () => {
     const store = useNoticeStore();
     store.push({ text: "scoped", timeout: 0, key: "locked-card" });
@@ -369,7 +369,7 @@ describe("useNoticeStore — dismissByKey (§9.6 scoped notices)", () => {
   });
 });
 
-describe("useNoticeStore — explicit timeout outranks the action rule (§6 rule 1)", () => {
+describe("useNoticeStore - explicit timeout outranks the action rule (§6 rule 1)", () => {
   it("keeps action⇒sticky as the default", () => {
     expect(
       resolveTimeout({ baseTimeout: 3000, text: "done", hasAction: true }),

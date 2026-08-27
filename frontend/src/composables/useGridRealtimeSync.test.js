@@ -36,7 +36,7 @@ function makeHarness(overrides = {}) {
         return selectedSort.value.includes("SMART_SCORE");
       if (f === "character_likeness")
         return selectedSort.value.includes("CHARACTER_LIKENESS");
-      // Detections are an opt-in overlay layer, never a sort/filter field —
+      // Detections are an opt-in overlay layer, never a sort/filter field -
       // mirror App.vue.pictureChangeFieldAffectsView.
       if (f === "detections") return false;
       if (f === "pixels") return false;
@@ -288,7 +288,7 @@ describe("useGridRealtimeSync decision table", () => {
   });
 });
 
-describe("useGridRealtimeSync — card-content-only updates (detections)", () => {
+describe("useGridRealtimeSync - card-content-only updates (detections)", () => {
   it("own-origin detections echo -> targeted refresh per id (not suppressed)", () => {
     const h = makeHarness();
     const res = h.sync.handleMessage({
@@ -571,7 +571,7 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
   });
 });
 
-describe("useGridRealtimeSync — pills deferred while the overlay is open", () => {
+describe("useGridRealtimeSync - pills deferred while the overlay is open", () => {
   it("external sort-affecting update defers to overlay close, raises no pill", () => {
     const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: true });
     const res = h.sync.handleMessage({
@@ -647,7 +647,7 @@ describe("useGridRealtimeSync — pills deferred while the overlay is open", () 
   });
 });
 
-describe("useGridRealtimeSync — empty-id untargetable changes (restore-all)", () => {
+describe("useGridRealtimeSync - empty-id untargetable changes (restore-all)", () => {
   it("empty-id external add -> reload when the overlay is closed", () => {
     const h = makeHarness();
     const res = h.sync.handleMessage({
@@ -709,7 +709,7 @@ describe("useGridRealtimeSync — empty-id untargetable changes (restore-all)", 
   });
 });
 
-describe("useGridRealtimeSync — batch update fetch-storm cap", () => {
+describe("useGridRealtimeSync - batch update fetch-storm cap", () => {
   // Mirrors MAX_TARGETED_UPDATE in useGridRealtimeSync.js.
   const THRESHOLD = 50;
   const manyIds = Array.from({ length: THRESHOLD + 1 }, (_, i) => i + 1);
@@ -767,7 +767,7 @@ describe("useGridRealtimeSync — batch update fetch-storm cap", () => {
 
 // A manual scheduler accumulates flush callbacks and only runs them on
 // `tick()`, so a burst of events stays buffered (as it would inside the real
-// 200ms debounce in App.vue) until we flush — letting us assert coalescing.
+// 200ms debounce in App.vue) until we flush - letting us assert coalescing.
 function makeCoalescingHarness(overrides = {}) {
   const grid = {
     insertGridImagesById: vi.fn(),
@@ -825,7 +825,7 @@ function makeCoalescingHarness(overrides = {}) {
   return { sync, grid, wsStore, reload, refreshSidebar, selectedSort, tick };
 }
 
-describe("useGridRealtimeSync — coalescing window", () => {
+describe("useGridRealtimeSync - coalescing window", () => {
   it("100 foreign updates for one id -> a single refreshGridImage on flush", () => {
     const h = makeCoalescingHarness();
     for (let i = 0; i < 100; i++) {
@@ -838,7 +838,7 @@ describe("useGridRealtimeSync — coalescing window", () => {
         picture_ids: [42],
       });
     }
-    // Nothing applied yet — still inside the window.
+    // Nothing applied yet - still inside the window.
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
     h.tick();
     // Deduped to the single distinct id.
@@ -911,7 +911,7 @@ describe("useGridRealtimeSync — coalescing window", () => {
 
   it("coalesced per-id batch over MAX_TARGETED_UPDATE escalates to one reload", () => {
     const h = makeCoalescingHarness();
-    // 51 distinct ids, one event each — each event is sub-cap, but the window's
+    // 51 distinct ids, one event each - each event is sub-cap, but the window's
     // distinct-id total crosses MAX_TARGETED_UPDATE (50).
     for (let id = 1; id <= 51; id++) {
       h.sync.handleMessage({
@@ -930,7 +930,7 @@ describe("useGridRealtimeSync — coalescing window", () => {
 });
 
 // ---------------------------------------------------------------------------
-// change_kind: "restored" — a scrapheap comeback is not an import
+// change_kind: "restored" - a scrapheap comeback is not an import
 // ---------------------------------------------------------------------------
 //
 // A picture coming back out of the Scrapheap puts a card back, exactly as an
@@ -940,7 +940,7 @@ describe("useGridRealtimeSync — coalescing window", () => {
 // true of a picture that has been in the library the whole time, which is why
 // `restored` is a kind of its own.
 
-describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
+describe("useGridRealtimeSync - restored (scrapheap comeback)", () => {
   function restored(overrides = {}) {
     return {
       type: "pictures_changed",
@@ -963,7 +963,7 @@ describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
     expect(h.grid.removeImagesById).not.toHaveBeenCalled();
   });
 
-  it("reinserts without the new-picture flash — it is a comeback, not an arrival", () => {
+  it("reinserts without the new-picture flash - it is a comeback, not an arrival", () => {
     const h = makeHarness();
     h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
     const [, options] = h.grid.insertGridImagesById.mock.calls[0];
@@ -984,7 +984,7 @@ describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
     const h = makeHarness();
     h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
     // The counts really did change (All Pictures up, Scrapheap down), so the
-    // sidebar must re-read — it just must not call it new.
+    // sidebar must re-read - it just must not call it new.
     expect(h.refreshSidebar).toHaveBeenCalledWith(false);
 
     h.refreshSidebar.mockClear();
@@ -1073,7 +1073,7 @@ describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
   });
 });
 
-describe("useGridRealtimeSync — a rotate's pixels changed", () => {
+describe("useGridRealtimeSync - a rotate's pixels changed", () => {
   // The card's thumbnail URL comes from the batch-thumbnail endpoint, never
   // from /metadata, so refreshGridImage alone repaints the pre-rotate bitmap.
   // The forward rotate hides this because the tab that issued it refreshes the
@@ -1112,7 +1112,7 @@ describe("useGridRealtimeSync — a rotate's pixels changed", () => {
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([13]);
   });
 
-  it("never reloads the grid or raises a pill — a turned photo does not move", () => {
+  it("never reloads the grid or raises a pill - a turned photo does not move", () => {
     const h = makeHarness();
     h.sync.handleMessage({
       type: "pictures_changed",

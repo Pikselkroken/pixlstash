@@ -1,8 +1,8 @@
 """Hashing a registered checkpoint, and the collision that must never raise.
 
 ``model.sha256`` is UNIQUE and filled in by a background task long after the row
-is created, so two rows for one file — the same checkpoint in two folders, or
-the duplicate an interrupted move is *designed* to leave behind — meet at the
+is created, so two rows for one file - the same checkpoint in two folders, or
+the duplicate an interrupted move is *designed* to leave behind - meet at the
 moment the second one is hashed. Two rules under test throughout:
 
 1. that meeting is a **merge**, decided in the finder's own task, and never an
@@ -182,7 +182,7 @@ class TestCollisionIsAMerge:
     def test_a_merge_that_empties_a_run_leaves_no_stack_of_one(self, hub, tmp_path):
         # A duplicate can be one file of a run. The losing row is deleted here,
         # which takes a member out of a stack without the stack module being
-        # asked — and a run of two left with one file is a grouping the shelf
+        # asked - and a run of two left with one file is a grouping the shelf
         # draws as a plain row and nobody can see or undo.
         first = write_model(tmp_path / "one" / "a.safetensors")
         second = write_model(tmp_path / "two" / "b.safetensors")
@@ -298,7 +298,7 @@ class TestFinder:
 
     def test_a_folder_pixlstash_declared_is_never_handed_out(self, hub, tmp_path):
         """A declared root is described by an index, not walked, so its
-        `relpath` is whatever the index calls one entry — for the HuggingFace
+        `relpath` is whatever the index calls one entry - for the HuggingFace
         cache that is `models--org--name`, a DIRECTORY. Those rows are the
         owner's to reclassify now (`builtin_caches`), so one corrected to
         `checkpoint` would match on `file_kind` and send the worker to open a

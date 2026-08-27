@@ -1,9 +1,9 @@
-// Folder-structure resource — v1.11 Phases 2 and 3: read a folder tree,
+// Folder-structure resource - v1.11 Phases 2 and 3: read a folder tree,
 // propose what each level is, and commit an accepted mapping.
 //
 // Both halves are task-id-polling shells (integration_architecture.md §11):
 // the POST starts work in the background and returns a task id, the GET
-// polls status. Neither ever writes a file — the read proposes, and the
+// polls status. Neither ever writes a file - the read proposes, and the
 // commit's only filesystem-adjacent effect is registering the root for
 // in-place indexing, the same mechanism reference folders already use.
 //
@@ -56,7 +56,7 @@ export async function cancelFolderStructureRead(taskId) {
 
 /**
  * Commit an accepted mapping over a settled read. Registers the read's root
- * for in-place indexing and creates the accepted projects/people/sets/tags —
+ * for in-place indexing and creates the accepted projects/people/sets/tags -
  * no file is moved, renamed or copied.
  *
  * @param {string} taskId - the settled read's task id.
@@ -67,7 +67,7 @@ export async function cancelFolderStructureRead(taskId) {
  * @param {"reference"|"local_import"} [mode] - `"reference"` (default)
  *   registers the scanned root as an external reference folder, indexed in
  *   place. `"local_import"` instead imports its pictures as ordinary managed
- *   pictures of the active library — only valid when the scanned root is
+ *   pictures of the active library - only valid when the scanned root is
  *   inside that library's own image root (v1.11 Phase 3, "Bring them in" on
  *   a freshly created library).
  * @returns {Promise<Object>} `{ task_id }`.
@@ -85,7 +85,7 @@ export async function startFolderStructureCommit(
 
 /**
  * Poll a commit's progress. `result` is null until `status` is `completed`.
- * `abandoned` and `deferred` are the owner's own two ways of stopping one —
+ * `abandoned` and `deferred` are the owner's own two ways of stopping one -
  * see `stopFolderStructureCommit`. In reference mode the folder's own scan
  * runs to completion regardless of what the screen does next.
  *

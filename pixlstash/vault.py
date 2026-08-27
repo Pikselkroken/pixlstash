@@ -110,7 +110,7 @@ class Vault:
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
         # Creation only: existing directories keep their modes, whatever they
-        # are — the user may deliberately share their image folder with a media
+        # are - the user may deliberately share their image folder with a media
         # server or sync agent. Not makedirs(mode=0o700): since Python 3.7 that
         # mode reaches only the LEAF, so intermediates of a deep new image_root
         # came out 0775 under Ubuntu's umask 002 and the guarded open then
@@ -156,7 +156,7 @@ class Vault:
         # The restore path needs it: a full restore replaces the database file,
         # which invalidates every piece of authentication state held in memory
         # (see AuthService.reset_after_restore and §18.5). Stays ``None`` for a
-        # Vault built without a Server — tests, the CLI tools — and the restore
+        # Vault built without a Server - tests, the CLI tools - and the restore
         # path treats that as "nothing to reset".
         self.auth_service = None
 
@@ -199,7 +199,7 @@ class Vault:
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
         # Bridges an interactive tag edit that NULLs a smart_score to the immediate,
-        # origin-stamped grid refresh emitted when its background rescore lands — so the
+        # origin-stamped grid refresh emitted when its background rescore lands - so the
         # edited card updates in place instead of waiting for the whole backfill to drain
         # (see _on_task_completed's SmartScoreTask branch). Created before the
         # disable_background_workers early-return because the mutation handlers that
@@ -284,8 +284,8 @@ class Vault:
         # The one finder here that works on the HUB rather than on this vault:
         # a model folder is a fact about the machine, so the checkpoints it
         # registers are shared by every library. Registered only when the vault
-        # was opened through a hub registration (a Vault built without one — the
-        # CLI tools, most tests — has no hub to reach), and harmless in the
+        # was opened through a hub registration (a Vault built without one - the
+        # CLI tools, most tests - has no hub to reach), and harmless in the
         # multi-library case because only one vault is live at a time.
         if registered_hub is not None:
             from pixlstash.tasks.missing_checkpoint_hash_finder import (
@@ -413,7 +413,7 @@ class Vault:
             vault.notify(Vault.VaultEventType.NEW_PICTURE)
         """
         # Waking the planner means "there may be work to pick up". A VRAM_OOM is
-        # the opposite statement — the GPU is full — and waking on it would send
+        # the opposite statement - the GPU is full - and waking on it would send
         # the planner looking for more GPU work three times per failing task, at
         # the one moment there is no room for any.
         if (
@@ -673,7 +673,7 @@ class Vault:
         """Set the scrapheap auto-purge window at runtime.
 
         Takes effect on the next ScrapheapRetentionPurgeFinder cycle. It never
-        purges anything synchronously — a config save must not destroy files.
+        purges anything synchronously - a config save must not destroy files.
 
         Args:
             retention_days: Days an UNPROTECTED soft-deleted picture stays in
@@ -875,7 +875,7 @@ class Vault:
             if pic is None:
                 return False
             # Resetting the description overwrites frozen label/curation data with
-            # a redescribe sentinel — refuse on a picture in a locked set.
+            # a redescribe sentinel - refuse on a picture in a locked set.
             enforce_pictures_not_locked(
                 session, [picture_id], "reset the description of a locked picture"
             )
@@ -994,7 +994,7 @@ class Vault:
                     )
                 # INTERACTIVE path: rescored ids that a user tag edit invalidated get an
                 # immediate, origin-stamped CHANGED_PICTURES so the initiating tab
-                # reconciles the card in place — independent of the global drain gate
+                # reconciles the card in place - independent of the global drain gate
                 # below. Only *persisted* ids are consulted, so an id the CAS in
                 # _persist_scores skipped (still NULL) is never announced as rescored.
                 # Ids that were never registered (background-only rescores, or interactive
@@ -1019,8 +1019,8 @@ class Vault:
                     # Exclude ids already announced origin-stamped above: re-announcing
                     # them origin-less here would raise the "view changed externally" pill
                     # on the very tab that made the edit (a self-pill). Unregistered
-                    # ids — genuine background rescores, or interactive ids demoted when
-                    # the registry was full — still ride this bulk emit so their cards
+                    # ids - genuine background rescores, or interactive ids demoted when
+                    # the registry was full - still ride this bulk emit so their cards
                     # refresh; over-suppressing them would strand real external changes.
                     drain_ids = [
                         pid for pid in picture_ids if int(pid) not in announced_ids
@@ -1466,7 +1466,7 @@ class Vault:
             elif worker_type == TaskType.MODEL_FOLDER_SCAN:
                 # User-triggered (no finder): live counters straight off the
                 # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
-                # in model files, not pictures — the shelf lives in the hub and
+                # in model files, not pictures - the shelf lives in the hub and
                 # the generic library total would be meaningless here.
                 label = "model_folder_scan"
                 active_scan_tasks = (
@@ -1576,14 +1576,14 @@ class Vault:
                 # below it inherited the library's picture count as its own
                 # total and a hardcoded `missing = 0`, so reading tens of
                 # gigabytes off disk for minutes rendered as "N / N, nothing
-                # remaining, 0/s" on a row that still said running — which is
+                # remaining, 0/s" on a row that still said running - which is
                 # what made a healthy long task look like a stuck one.
                 finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "checkpoints_hashed"
             elif worker_type == TaskType.ORIENTATION:
                 # Without its own count this row fell into `planner_managed`
-                # below — `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
+                # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
                 # while 6,462 pictures were still NULL and the finder was
                 # working through them 128 at a time; every batch made the
                 # row pop back in, apparently finished.
@@ -1855,7 +1855,7 @@ class Vault:
             logger.warning("Aggressive unload failed for InferenceEngine: %s", exc)
         # The engine unloads the services it owns by name; a tagger plugin's
         # model is reachable only through the registry, and until this it was
-        # not reachable at all — a plugin captioner stayed resident for the
+        # not reachable at all - a plugin captioner stayed resident for the
         # life of the process and this setting could not free it (#967).
         try:
             unload_loaded_tagger_plugins()

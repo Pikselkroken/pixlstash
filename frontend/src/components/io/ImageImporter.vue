@@ -43,7 +43,7 @@ import { errorDetail } from "../../utils/apiError";
 // The public API (startImport + the four emits) is unchanged so existing call
 // sites keep working. Drop-target association (project / set / character) is
 // passed through startImport options into openStagingSession and applied
-// server-side on commit. There is no per-file results[] array — the grid
+// server-side on commit. There is no per-file results[] array - the grid
 // refreshes off the WS broadcast, so import-finished carries counts but an
 // empty results list. Media, .zip archives and .txt sidecars all stream.
 
@@ -343,7 +343,7 @@ function finalizeError(message) {
 // registered in startImport). It stops the in-flight upload by aborting the
 // active request controller; the batch loop's cancel checks then unwind cleanly
 // through finalizeCancelled (no error toast). This can only stop the PRE-COMMIT
-// upload — once committed, the import is a background server task the client
+// upload - once committed, the import is a background server task the client
 // cannot stop (see the abortable notes in startImport / useTasksStore).
 function handleCancelImport() {
   if (!importActive.value) return;
@@ -382,7 +382,7 @@ function prefersReducedMotion() {
 /**
  * FLIP the count chip into the Tasks-tab import row. Resolves when the flight
  * finishes (or immediately when reduced motion is on, or the destination row
- * isn't rendered — e.g. the stats sidebar is collapsed — so the dialog just
+ * isn't rendered - e.g. the stats sidebar is collapsed - so the dialog just
  * fades and the toolbar activity light signals the backgrounded work).
  */
 function flyChipToTaskRow(runId) {
@@ -453,7 +453,7 @@ function flyChipToTaskRow(runId) {
 /**
  * The safe transition: register the import as a task-manager row, drop the
  * upload guard, and auto-hide the dialog while the chip flies into the row.
- * The flight IS the dismissal — there is no manual "continue in background".
+ * The flight IS the dismissal - there is no manual "continue in background".
  */
 async function transitionToBackground(runId, total) {
   transitioned = true;
@@ -552,7 +552,7 @@ async function startImport(files, options = {}) {
 
   try {
     // ── Phase A: open a staging session, then STREAM every batch into it. The
-    // bytes are unsafe until commit — the beforeunload guard is armed. ──
+    // bytes are unsafe until commit - the beforeunload guard is armed. ──
     const session = await openStagingSession({
       backendUrl: props.backendUrl,
       projectId: options.projectId ?? null,
@@ -701,7 +701,7 @@ async function startImport(files, options = {}) {
       return;
     }
 
-    // All bytes are staged — commit the SAFE HANDOFF to the background import.
+    // All bytes are staged - commit the SAFE HANDOFF to the background import.
     uploadBytesUploaded.value = uploadBytesTotal.value;
     _stopStallTimer();
 
@@ -794,7 +794,7 @@ async function startImport(files, options = {}) {
       throw new Error("Import timed out");
     }
 
-    // Summarise from the terminal status. There is no per-file results[] — the
+    // Summarise from the terminal status. There is no per-file results[] - the
     // grid reconciles the new pictures off the backend's CHANGED_PICTURES /
     // PICTURE_IMPORTED WebSocket broadcast, which the grid already consumes.
     const importedCount = finalStatus.importedCount ?? 0;
@@ -832,7 +832,7 @@ async function startImport(files, options = {}) {
     setTimeout(() => tasksStore.clearImportRun(finishedRunId), 2600);
 
     // The public emit contract is unchanged, but the streaming-staging contract
-    // returns no per-file results — the grid refreshes off the WS broadcast, so
+    // returns no per-file results - the grid refreshes off the WS broadcast, so
     // `results` is empty. (Consumers that relied on results[].picture_id, e.g.
     // SideBar drop-to-set/character association, no longer receive ids here.)
     emit("import-finished", {
@@ -889,7 +889,7 @@ defineExpose({ startImport });
         <div>
           <div class="note-title">Keep this tab open while files upload</div>
           <div class="note-sub">
-            Your pictures aren't on the server yet — leaving now would stop the
+            Your pictures aren't on the server yet - leaving now would stop the
             upload.
           </div>
         </div>
@@ -926,7 +926,7 @@ defineExpose({ startImport });
         </div>
       </div>
 
-      <!-- Import bar (olive primary = safe). A pending preview here — Phase B
+      <!-- Import bar (olive primary = safe). A pending preview here - Phase B
            fills in the task manager after the dialog auto-hides. -->
       <div class="bar-section">
         <div class="bar-label">
@@ -968,7 +968,7 @@ defineExpose({ startImport });
    desktop title bar; sits above the grid.
 
    `--z-modal` is the rung: this is a modal dialog and its scrim. It no longer
-   needs to out-number the title bar — it never overlapped it anyway (it starts
+   needs to out-number the title bar - it never overlapped it anyway (it starts
    at `top: var(--titlebar-h)`), and the strip now holds `--z-titlebar` above
    every modal by value. */
 .dlg-scrim {

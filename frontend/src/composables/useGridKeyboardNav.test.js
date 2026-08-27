@@ -101,7 +101,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("useGridKeyboardNav — review-overlay guard (F1)", () => {
+describe("useGridKeyboardNav - review-overlay guard (F1)", () => {
   it("no-ops Delete, scoring digits, and Ctrl+A while the review overlay is open", () => {
     const { handleKeyDown, deps, deleteSelected, applyScoresForSelection } =
       makeNav({ reviewOverlayOpen: true });
@@ -148,7 +148,7 @@ const NINE_IMAGES = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((id) => ({
   id,
 }));
 
-describe("useGridKeyboardNav — justified vertical navigation", () => {
+describe("useGridKeyboardNav - justified vertical navigation", () => {
   it("moves DOM focus with the keyboard cursor", () => {
     const { handleKeyDown, focusCursor } = makeNav({ cursorIdx: 0 });
 
@@ -239,12 +239,12 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
 // Scrapheap ghosts
 // ---------------------------------------------------------------------------
 //
-// A ghosted tile is on screen but inert — already in the Scrapheap, held there
+// A ghosted tile is on screen but inert - already in the Scrapheap, held there
 // only while its undo is one click away. The cursor SKIPS them: parking on one
 // would make every following key (Space, Enter, a digit) silently do nothing,
 // which is indistinguishable from a broken feature.
 
-describe("useGridKeyboardNav — ghosted tiles", () => {
+describe("useGridKeyboardNav - ghosted tiles", () => {
   it("skips a ghosted tile in the direction of travel", () => {
     const { handleKeyDown, deps } = makeNav({
       images: NINE_IMAGES,
@@ -287,7 +287,7 @@ describe("useGridKeyboardNav — ghosted tiles", () => {
     });
     handleKeyDown(keyEvent({ key: "ArrowRight", shiftKey: true }));
     // The cursor skips the ghost at 1 and lands on 2; the span 0..2 then drops
-    // the ghost silently — a count that included it would be the surprise.
+    // the ghost silently - a count that included it would be the surprise.
     expect(deps.selectedImageIds.value).toEqual(["a", "c"]);
   });
 

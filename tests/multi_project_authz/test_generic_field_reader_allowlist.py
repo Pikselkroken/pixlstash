@@ -58,7 +58,7 @@ from tests.multi_project_authz.shared_env import (
 # this needs, and its scoped tokens are the ones the leak was reproduced with.
 # The autouse `env` fixture reaches these tests from the package conftest, which
 # is the only sharing mechanism that keeps working when `env` grows a dependency
-# — copying it out of the other module's namespace did not.
+# - copying it out of the other module's namespace did not.
 
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 

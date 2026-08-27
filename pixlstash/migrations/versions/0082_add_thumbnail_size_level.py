@@ -4,7 +4,7 @@ v1.8.0 unifies the grid thumbnail-size controls behind a single per-user size
 index (0..6, larger index = fewer/larger thumbnails, default ``3`` = Medium).
 This migration adds:
 
-* ``user.thumbnail_size_level`` — the per-user unified size index.
+* ``user.thumbnail_size_level`` - the per-user unified size index.
 
 Existing installs already carry a legacy ``user.columns`` preference (a raw
 column count). To preserve each user's chosen density, the new column is
@@ -48,8 +48,8 @@ def _columns_to_size_index(columns: int) -> int:
     """Map a raw ``columns`` count to the nearest canonical size index.
 
     Ties break toward the LARGER representative column count, i.e. the smaller
-    size index (checking indices in ascending order — which is descending column
-    count — and only replacing on a strictly smaller distance gives that).
+    size index (checking indices in ascending order - which is descending column
+    count - and only replacing on a strictly smaller distance gives that).
     """
     best_index = _DEFAULT_SIZE
     best_distance = None
@@ -66,7 +66,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "user" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates ``user`` with all
+        # Fresh install - the baseline migration creates ``user`` with all
         # current model columns (thumbnail_size_level present); nothing to do.
         return
 
@@ -96,7 +96,7 @@ def upgrade() -> None:
                 {"size": size_index, "id": row_id},
             )
     else:
-        # No legacy ``columns`` column to read from — stamp the default so no row
+        # No legacy ``columns`` column to read from - stamp the default so no row
         # is left NULL.
         op.execute("UPDATE user SET thumbnail_size_level = 3")
 

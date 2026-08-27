@@ -48,7 +48,7 @@ def _fake_server(config, password_set=True):
     By default the stand-in reports an owner password is set, so the external
     listener may bind. Pass ``password_set=False`` to simulate the auto-logged-in
     desktop owner who never set a password (the external listener must then
-    refuse to bind — see test_external_listener_refused_without_owner_password).
+    refuse to bind - see test_external_listener_refused_without_owner_password).
     """
     password_hash = "bcrypt-hash" if password_set else None
     auth = SimpleNamespace(
@@ -125,7 +125,7 @@ def test_external_listener_refused_without_owner_password():
     )
     configs, banner = Server._build_electron_configs(server, "127.0.0.1", 50104)
 
-    # Only the loopback listener — the external one was refused.
+    # Only the loopback listener - the external one was refused.
     assert len(configs) == 1
     assert configs[0].host == "127.0.0.1"
     assert banner == [("Window", "http://127.0.0.1:50104")]
@@ -161,7 +161,7 @@ def _fake_lifespan_server(config, password_set=True):
         vault=SimpleNamespace(start=lambda: None, close=lambda: None),
         # lifespan pings telemetry right after vault.start() (cf4da2bf). These
         # tests only exercise the ready/remote-access logging, so the ping is a
-        # no-op here — consent and payload are covered by the telemetry suite.
+        # no-op here - consent and payload are covered by the telemetry suite.
         _maybe_send_telemetry_ping=lambda: None,
     )
 
@@ -198,7 +198,7 @@ def test_lifespan_reports_remote_access_active_with_password(monkeypatch, caplog
 
 def test_lifespan_warns_remote_access_inactive_without_password(monkeypatch, caplog):
     """Regression: without an owner password the external listener is refused, so
-    the ready log must NOT claim remote access is enabled — it warns instead.
+    the ready log must NOT claim remote access is enabled - it warns instead.
 
     This is the dishonest-log bug: the listener was refused for lack of a
     password (see test_external_listener_refused_without_owner_password) yet the

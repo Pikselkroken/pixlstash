@@ -155,7 +155,7 @@ class TestPinnedRoutes:
             # MissingLikenessFinder._likeness_state, and siblings), and those
             # probes have nothing to do with this request. A bare
             # "nothing was read" assertion therefore fails on any machine slow
-            # enough for one to land inside the request — which is what CI is:
+            # enough for one to land inside the request - which is what CI is:
             # this call took 0.63 s there and collected 15 unrelated reads.
             #
             # The claim under test is the one in the name: the guest lookup

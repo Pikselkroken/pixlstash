@@ -127,7 +127,7 @@ def test_tag_addition_changes_hash(server):
 
 
 # ---------------------------------------------------------------------------
-# Set / project membership: SHOULD change the hash — a full restore reverts
+# Set / project membership: SHOULD change the hash - a full restore reverts
 # membership, so the preview / identical-state detection must see it.
 # ---------------------------------------------------------------------------
 
@@ -153,7 +153,7 @@ def test_set_membership_change_changes_hash(server):
     )
 
     # Removing it again must return to the original hash (deterministic). Use
-    # an ORM delete — like the real routes — so the after-flush hook fires
+    # an ORM delete - like the real routes - so the after-flush hook fires
     # (a Core bulk delete bypasses the unit-of-work and would not recompute).
     def _remove(session):
         m = session.exec(
@@ -190,13 +190,13 @@ def test_project_membership_change_changes_hash(server):
 
 
 # ---------------------------------------------------------------------------
-# Face mutation: SHOULD change the hash — this is the docs-2.md claim
+# Face mutation: SHOULD change the hash - this is the docs-2.md claim
 # ---------------------------------------------------------------------------
 
 
 def test_face_addition_changes_hash(server):
     """Adding a Face dirty-marks the picture (via
-    ``_before_flush_hash_tracker``) — therefore the hash MUST change, not
+    ``_before_flush_hash_tracker``) - therefore the hash MUST change, not
     just recompute to the same value. If the digest doesn't include any
     face-derived state, the UI's identical-state detection silently lies
     for face-only edits."""
@@ -222,7 +222,7 @@ def test_face_addition_changes_hash(server):
         "Adding a Face to a picture must change its metadata_hash; "
         f"got identical hashes before={initial!r} after={after!r}. "
         "The before-flush tracker dirties on Face changes but the digest "
-        "ignores faces — UI 'identical to snapshot' detection lies for "
+        "ignores faces - UI 'identical to snapshot' detection lies for "
         "face-only edits."
     )
 

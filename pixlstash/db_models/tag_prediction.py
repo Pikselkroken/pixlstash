@@ -22,7 +22,7 @@ class TagPrediction(SQLModel, table=True):
         tag: The label name.
         confidence: Raw sigmoid probability in [0, 1].
         model_version: Epoch string, e.g. "epoch-43".
-        status: "PENDING", "CONFIRMED", or "REJECTED" — review-UI state. NOTE this
+        status: "PENDING", "CONFIRMED", or "REJECTED" - review-UI state. NOTE this
             is *not* a reliable human signal: the background TagTask auto-flips it
             from the applied tags. Read the label ledger below for supervision.
 
@@ -36,7 +36,7 @@ class TagPrediction(SQLModel, table=True):
         labeled_at: When the label was last set by a human/propagation/model.
         label_model_version: Snapshot of the tagger version whose output the human
             was adjudicating at decision time (None for a pure-manual decision with
-            no prediction on file). Frozen — the tagger never overwrites it, unlike
+            no prediction on file). Frozen - the tagger never overwrites it, unlike
             the live ``model_version``.
         label_confidence: Snapshot of the raw confidence the human saw at decision
             time (None if there was no prediction to adjudicate).

@@ -141,8 +141,8 @@ def _unescape_mount_field(field: str) -> str:
 def _linux_mounts() -> dict[str, tuple[str, str]]:
     """``/proc/mounts`` as mount point → (device node, filesystem type).
 
-    One parse for the two questions the drive band asks — what this volume is
-    called, and what kind of storage it is — because both answers are in the
+    One parse for the two questions the drive band asks - what this volume is
+    called, and what kind of storage it is - because both answers are in the
     same three fields of the same line. Reading the file twice for them would
     be two syscalls to learn what one already said.
 
@@ -228,7 +228,7 @@ def _windows_volume_label(mount_point: str) -> Optional[str]:
         logger.debug("GetVolumeInformationW failed for %r (%s).", mount_point, exc)
         return None
     # Parenthesised: `or` binds tighter than the conditional, so the bare
-    # expression already returned None on failure — but it reads as though it
+    # expression already returned None on failure - but it reads as though it
     # might not, and a reviewer should not have to check the grammar to see
     # that a failed call cannot leak a stale buffer.
     return (buffer.value or None) if ok else None
@@ -270,7 +270,7 @@ def _linux_is_removable(device_name: str) -> bool:
 
     A ``False`` here is weaker than a ``True``: an SSD in a USB enclosure
     reports 0, so the band calls it a local disk. That is the direction to be
-    wrong in — it makes no claim about speed rather than a false one.
+    wrong in - it makes no claim about speed rather than a false one.
     """
     candidates = (
         os.path.join(_SYS_BLOCK_CLASS, device_name, "removable"),
@@ -332,8 +332,8 @@ def device_kind(mount_point: str) -> Optional[str]:
     plain disk glyph. The band must never print "Unknown" for this.
 
     What is deliberately NOT here is the SSD-versus-platter question the speed
-    of a disk actually turns on. Linux will answer it —
-    ``/sys/block/<dev>/queue/rotational`` is one more one-byte read — but it
+    of a disk actually turns on. Linux will answer it -
+    ``/sys/block/<dev>/queue/rotational`` is one more one-byte read - but it
     answers wrongly in exactly the setups where being wrong costs most: a VM's
     virtio disk reports rotational on an NVMe host, an LVM or LUKS mapper
     reports its own default rather than the disk underneath, and a SATA SSD in
@@ -441,8 +441,8 @@ def space_shortfall(path: str, needed_bytes: int) -> Optional[tuple[int, int]]:
 
     A sanity check, not a guarantee: free space can change under us, and a
     caller working from an estimate is only ever approximately right. It exists
-    to catch the case worth catching — a 200 GB library aimed at a disk with
-    2 GB left — before an hour of copying ends in ENOSPC half-written.
+    to catch the case worth catching - a 200 GB library aimed at a disk with
+    2 GB left - before an hour of copying ends in ENOSPC half-written.
 
     An unreadable path is reported as a shortfall of ``(needed, 0)`` rather than
     passed silently: not being able to measure is a reason to ask, given the

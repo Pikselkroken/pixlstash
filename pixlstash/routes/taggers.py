@@ -1,10 +1,10 @@
 """Routes for the tagger plugin system.
 
 Provides:
-    GET  /taggers                          — list all registered plugins + current settings
-    GET  /taggers/plugin-diagnostics       — scanned folders + load failures (local owner)
-    POST /taggers/{name}/download          — kick off an artifact download for a plugin
-    DELETE /taggers/{name}/artifacts/{id}  — remove a downloaded artifact
+    GET  /taggers                          - list all registered plugins + current settings
+    GET  /taggers/plugin-diagnostics       - scanned folders + load failures (local owner)
+    POST /taggers/{name}/download          - kick off an artifact download for a plugin
+    DELETE /taggers/{name}/artifacts/{id}  - remove a downloaded artifact
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class TaggerListResponse(BaseModel):
 
 
 class TaggerPluginDiagnosticsResponse(BaseModel):
-    """Everything about plugin *installation* — a §16.3 host-path disclosure.
+    """Everything about plugin *installation* - a §16.3 host-path disclosure.
 
     Deliberately its own route rather than fields on ``GET /taggers``, which
     used to be ANY_TOKEN and handed a share-link holder the owner's home
@@ -54,7 +54,7 @@ class TaggerPluginDiagnosticsResponse(BaseModel):
     carries; this one is stricter still because a host path is the §16.3
     locality class.) Both halves disclose it. ``plugin_dirs`` says so plainly,
     and a ``load_errors`` message is built from an exception raised by
-    third-party code at import — an ``OSError`` out of a plugin's module body
+    third-party code at import - an ``OSError`` out of a plugin's module body
     carries whatever absolute path it was reaching for. Sanitising that text is
     guesswork; not serving it to a share token is not.
     """
@@ -178,7 +178,7 @@ def create_router(server) -> APIRouter:
         """Return the scanned folders and every plugin that failed to import.
 
         LOCAL_OWNER_ONLY: both halves name paths on the server's disk, which is
-        the §16.3 disclosure class. Nothing is lost by gating them — acting on
+        the §16.3 disclosure class. Nothing is lost by gating them - acting on
         either means editing a file in that folder and restarting.
         """
         server.auth.ensure_secure_when_required(request)

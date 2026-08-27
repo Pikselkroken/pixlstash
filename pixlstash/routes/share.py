@@ -1,11 +1,11 @@
-"""Public share endpoint — serves a picture by an embedded share token.
+"""Public share endpoint - serves a picture by an embedded share token.
 
 Route: GET /share/{token_slug}
 
 The *token_slug* is the raw token value with the picture's file extension
 appended (e.g. ``abc123xyz.jpg``).  This produces an embeddable, camera-roll-
 friendly URL that looks like a normal image link.  No session cookie or
-``?token=`` query parameter is required — the token IS the authentication.
+``?token=`` query parameter is required - the token IS the authentication.
 """
 
 import logging
@@ -82,7 +82,7 @@ def create_router(server) -> APIRouter:
 
         apply_wm = bool(getattr(matched_token, "watermark", False))
 
-        # Transcode HEIC/HEIF to JPEG — browsers cannot display these natively.
+        # Transcode HEIC/HEIF to JPEG - browsers cannot display these natively.
         # For watermarked images, re-encode in the original format so the URL
         # extension and Content-Type remain consistent.
         if fmt_lower in ("heic", "heif") or apply_wm:

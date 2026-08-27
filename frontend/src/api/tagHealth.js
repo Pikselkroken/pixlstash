@@ -1,4 +1,4 @@
-// Tag-health board resource — /tag_health.
+// Tag-health board resource - /tag_health.
 //
 // The board reads a server-side cache. While that cache is (re)building the
 // GET keeps answering with `building: true` and a progress fraction, which is

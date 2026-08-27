@@ -46,7 +46,7 @@ def test_the_walk_reaches_every_command():
     """Guards the guardrails: these walk argparse internals.
 
     ``_actions`` and ``_choices_actions`` are private, so a change in argparse
-    would not raise here — the loops below would simply find nothing and pass.
+    would not raise here - the loops below would simply find nothing and pass.
     A floor on what the walk reaches turns that silence into a failure.
     """
     walked = {path for path, _parser in _all_parsers()}

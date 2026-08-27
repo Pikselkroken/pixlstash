@@ -2,13 +2,13 @@
 
 The sidebar used to bust the character-thumbnail cache with a fresh
 ``?cb=<now>`` on every refresh, which guaranteed freshness by re-downloading
-every thumbnail on every sidebar refresh — expensive against a route whose
+every thumbnail on every sidebar refresh - expensive against a route whose
 picture lookup is already slow (issue #651). Dropping the buster made the URL
 stable, which is only safe if the response says how it may be reused.
 
 Starlette's ``FileResponse`` sets an ``ETag`` but answers no conditional request
 (verified against starlette 1.3.1: its only conditional logic is ``If-Range``),
-and these routes sent no ``Cache-Control`` at all — so browsers fell back to
+and these routes sent no ``Cache-Control`` at all - so browsers fell back to
 *heuristic* caching and a regenerated thumbnail could stay stale for an
 unbounded window with no revalidation.
 
@@ -108,7 +108,7 @@ def test_helper_serves_the_new_bytes_when_the_thumbnail_is_regenerated(tmp_path)
 
 
 def test_no_etag_when_the_file_cannot_be_stated(tmp_path, caplog):
-    """A missing file yields no validator — and says so, rather than failing."""
+    """A missing file yields no validator - and says so, rather than failing."""
     missing = str(tmp_path / "missing.png")
 
     assert file_etag(missing) is None
@@ -193,7 +193,7 @@ def _link_face(server, pic_id, char_id):
 
 
 def test_character_thumbnail_revalidates_instead_of_going_stale():
-    """GET /characters/{id}/thumbnail — the route the sidebar polls."""
+    """GET /characters/{id}/thumbnail - the route the sidebar polls."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _import_one_picture(client)
@@ -211,7 +211,7 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         etag = first.headers.get("etag")
         assert etag
 
-        # Second read comes off the on-disk cache — the branch the sidebar hits
+        # Second read comes off the on-disk cache - the branch the sidebar hits
         # on every refresh, and the one that must answer conditionally.
         second = client.get(f"/characters/{char_id}/thumbnail")
         assert second.status_code == 200

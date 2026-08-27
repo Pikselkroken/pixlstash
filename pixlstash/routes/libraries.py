@@ -10,7 +10,7 @@ Everything else is ``LOCAL_OWNER_ONLY``: ``inspect`` and ``POST /libraries``
 because they take a caller-supplied host path and read or write the host
 filesystem (the §16.3 class), ``DELETE`` and ``POST /libraries/active`` because
 they reset every connected client's session or take a library's share links
-offline — authority over other principals' state rather than only the caller's.
+offline - authority over other principals' state rather than only the caller's.
 ``PATCH`` writes one hub column and touches no filesystem, but it is a
 management verb on the same surface and the Settings pane gates the whole ``⋯``
 menu on ``can_manage``; putting it on a looser tier would buy nothing and give
@@ -147,7 +147,7 @@ class LibraryInspection(BaseModel):
         description=(
             "attached: this exact folder is already registered. overlaps: a "
             "registered library contains it, or it contains one. vault: it "
-            "holds a vault nothing is using — attach it. pictures: a folder of "
+            "holds a vault nothing is using - attach it. pictures: a folder of "
             "pictures with no vault. empty: no pictures and no vault."
         )
     )
@@ -312,8 +312,8 @@ def create_router(server) -> APIRouter:
         ``validate_reference_folder_accessible``, which realpaths before it
         checks; this follows it, not ``filesystem/browse``'s ordering.
 
-        Resolution is the registry's own ``resolve_path`` — the same symlink
-        resolution registrations are stored under — because the value is about
+        Resolution is the registry's own ``resolve_path`` - the same symlink
+        resolution registrations are stored under - because the value is about
         to be compared against registry rows, and normalising it any other way
         would make "already attached" miss.
 
@@ -329,7 +329,7 @@ def create_router(server) -> APIRouter:
         # Refused here rather than left to the blocklist check below, which now
         # runs on the resolved path and so can never see a relative one:
         # `resolve_path` calls `abspath`, which would quietly resolve "Pictures"
-        # against the *server's* working directory — never what the caller meant.
+        # against the *server's* working directory - never what the caller meant.
         # `~` is expanded first, since it is absolute once expanded.
         expanded = os.path.expanduser(candidate)
         if not os.path.isabs(expanded):
@@ -358,8 +358,8 @@ def create_router(server) -> APIRouter:
         """The folder's picture total, or ``(0, False)`` when nobody asked.
 
         The empty branch is decided by ``found == 0``, so a skipped count always
-        lands on ``empty``. That is safe only because the caller that skips it —
-        ``POST /libraries`` re-checking the rule — treats ``empty``, ``pictures``
+        lands on ``empty``. That is safe only because the caller that skips it -
+        ``POST /libraries`` re-checking the rule - treats ``empty``, ``pictures``
         and ``vault`` identically: all three are ``can_add``, and only the two
         refusals decided above the count change what it does.
         """
@@ -500,7 +500,7 @@ def create_router(server) -> APIRouter:
         # message in library_switch_service.py says the same for the same
         # reason and is corrected with it.
         library = server.library_registry.by_uuid(library_uuid)
-        # `by_uuid` deliberately returns detached rows — that is how a uuid stays
+        # `by_uuid` deliberately returns detached rows - that is how a uuid stays
         # meaningful across a detach for the tokens stamped with it. These routes
         # want the attached set, the one `GET /libraries` shows: without this,
         # DELETE on an already-detached library answers 200 "ok" for a no-op, and
@@ -516,9 +516,9 @@ def create_router(server) -> APIRouter:
         "/libraries/inspect",
         summary="Ask what a folder is",
         description=(
-            "Answers which of five things a folder is — already attached, "
+            "Answers which of five things a folder is - already attached, "
             "overlapping an attached library, an unregistered vault, a folder "
-            "of pictures, or empty — so one picker can offer the right action "
+            "of pictures, or empty - so one picker can offer the right action "
             "instead of asking the owner to choose a mode first. Reads only."
         ),
         tags=["libraries"],
@@ -540,9 +540,9 @@ def create_router(server) -> APIRouter:
         description=(
             "Attaches the folder when it already holds a vault, and starts a "
             "fresh library in it when it does not. No file is moved, renamed or "
-            "copied either way. The folder must already exist — the picker's "
+            "copied either way. The folder must already exist - the picker's "
             "`New folder` button makes one, so this route never creates a "
-            "directory the owner did not point at — and starting a fresh "
+            "directory the owner did not point at - and starting a fresh "
             "library there restricts it to the owner (0700), because it is "
             "about to hold the vault database. The folder is re-inspected here "
             "rather than trusted from the picker's answer, so one that became "
@@ -644,7 +644,7 @@ def create_router(server) -> APIRouter:
     def detach_library(request: Request, library_uuid: str):
         server.auth.ensure_secure_when_required(request)
         # The gate does not do this for us: these routes are HUB_ONLY, which is
-        # what exempts them from the switch's 503 — deliberately, so the registry
+        # what exempts them from the switch's 503 - deliberately, so the registry
         # stays answerable when there is no open vault to recover from. Detach is
         # the one that cannot take the exemption. It reads `is_active` to refuse
         # the active library, and mid-swap that flag is being moved: a detach

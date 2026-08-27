@@ -240,7 +240,7 @@ const canSubmit = computed(() => {
 
 // Folded, not `Boolean(row.kind)`: the hub CHECK makes an adapter's kind NOT
 // NULL but not non-empty, so a whitespace-only one is truthy and would count as
-// already set — leaving Save enabled on a verb with nothing to write.
+// already set - leaving Save enabled on a verb with nothing to write.
 const everySelectedRowAlreadyHasAKind = computed(() =>
   store.selectedRows.every((row) => Boolean(adapterKindKey(row.kind))),
 );
@@ -259,14 +259,14 @@ watch(
     // Compared FOLDED. The shelf now draws `lora` and `LoRA` under one group
     // header, in one checkbox, with both Kind cells reading `LoRA`, so a raw
     // comparison here opened this field blank on a selection the rest of the
-    // screen presents as one algorithm — and blank means "they disagree".
+    // screen presents as one algorithm - and blank means "they disagree".
     // Seeded with the first row's own spelling, so saving converges the two.
     const sharedKind = rows.every(
       (row) => adapterKindKey(row.kind) === adapterKindKey(rows[0]?.kind),
     );
     kind.value = sharedKind ? rows[0]?.kind || "" : "";
     // Seeded from the selection when it agrees, and left EMPTY when it does not
-    // — with a line saying so, because an empty box that means "they differ"
+    // - with a line saying so, because an empty box that means "they differ"
     // and an empty box that means "none" are the same box otherwise.
     const sets = rows.map((row) =>
       (Array.isArray(row.capabilities) ? row.capabilities : []).join(","),

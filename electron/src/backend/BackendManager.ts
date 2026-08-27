@@ -24,7 +24,7 @@ function basePep440(version: string): string {
 
 /**
  * Condense a verbose pip "Downloading <wheel> (820.3 MB)" line into
- * "Downloading torch (820.3 MB)" — just the package name (no version/platform
+ * "Downloading torch (820.3 MB)" - just the package name (no version/platform
  * tags or %-encoding) and the size, for a readable, short progress caption.
  */
 function prettyDownload(line: string): string {
@@ -58,7 +58,7 @@ export const OVERLAY_ACCELS: Accel[] = ['cu128', 'rocm'];
  * torchvision are pinned, and the exact-match-vs-lagging-index fallback.
  *
  * The index ALWAYS comes from the hardcoded {@link TORCH_INDEX} map keyed by the
- * validated `Accel` — never from caller-supplied data. `availableTorch` is the
+ * validated `Accel` - never from caller-supplied data. `availableTorch` is the
  * public torch versions the index publishes (newest first), used only to decide
  * between an exact pin and the lagging-index fallback; it can never introduce a
  * new index.
@@ -88,7 +88,7 @@ export function buildOverlayPipArgs(
   }
   // Pin torch to the bundled *public* version, dropping the +cpu/+cu128 local
   // tag (the GPU index serves its own local build). If the GPU index lags the
-  // bundled CPU build — its torch version isn't published there yet — fall back
+  // bundled CPU build - its torch version isn't published there yet - fall back
   // to the index's newest and let pip choose the matching torchvision. The
   // overlay fully shadows the bundled torch, so an exact version match isn't
   // required, only a self-consistent torch+torchvision pair.
@@ -102,18 +102,18 @@ export function buildOverlayPipArgs(
   }
   if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
     // NOT the bundle's ORT version: onnxruntime-gpu has a CUDA-flavor axis the
-    // version number doesn't express — PyPI serves one flavor per release, and
+    // version number doesn't express - PyPI serves one flavor per release, and
     // 1.27.0 moved to CUDA 13 (links libcudart.so.13) while the cu128 overlay's
     // nvidia stack only ships libcudart.so.12, so `import onnxruntime` ImportErrors
     // and the whole backend dies at startup (insightface imports it in the
     // pixlstash import chain; live incident 2026-07-20). Pin per accel to the last
-    // build of that accel's CUDA generation instead — see ORT_GPU_PIN in config.ts.
+    // build of that accel's CUDA generation instead - see ORT_GPU_PIN in config.ts.
     const ortPin = ORT_GPU_PIN[accel];
     if (!ortPin) {
       // A new GPU accel was mapped to onnxruntime-gpu without recording which
       // CUDA generation it needs. Falling back to the bundle version is exactly
       // the incident above, so fail loudly at install time instead.
-      throw new Error(`No onnxruntime-gpu pin recorded for ${accel} — add it to ORT_GPU_PIN`);
+      throw new Error(`No onnxruntime-gpu pin recorded for ${accel} - add it to ORT_GPU_PIN`);
     }
     args.push(`onnxruntime-gpu==${ortPin}`);
   }
@@ -126,12 +126,12 @@ export function buildOverlayPipArgs(
  *  - torch/torchvision/onnxruntime: owned by the overlay itself, so the bundle's
  *    CPU pins must not constrain them.
  *  - Build tooling (setuptools/pip/wheel): constraining these serves no runtime
- *    alignment purpose, and the CUDA torch wheels declare `setuptools<82` — with
+ *    alignment purpose, and the CUDA torch wheels declare `setuptools<82` - with
  *    the bundled env frozen at setuptools>=82 the constraint made every overlay
  *    install ResolutionImpossible (seen live 2026-07-20: bundled 83.0.0 vs
  *    torch 2.11.0+cu128). pip is free to put a satisfying setuptools in the
  *    overlay instead, which is the long-standing installed state anyway.
- * Constraints files also reject direct references (`pkg @ url` / local paths —
+ * Constraints files also reject direct references (`pkg @ url` / local paths -
  * e.g. the pixlstash wheel) and option/comment lines, so only plain
  * `name==version` pins survive.
  */
@@ -149,7 +149,7 @@ export function filterConstraintsFreeze(frozen: string): string {
 
 /** The message shown when a broken GPU overlay is bypassed at launch. */
 export const OVERLAY_FALLBACK_MESSAGE =
-  'GPU acceleration failed to load — running on CPU. Reinstall it from Settings.';
+  'GPU acceleration failed to load - running on CPU. Reinstall it from Settings.';
 
 /** Injected effects for {@link launchWithOverlayFallback}, so it is unit-testable. */
 export interface OverlayFallbackHooks {
@@ -170,13 +170,13 @@ export interface OverlayFallbackHooks {
  * fails WITH a GPU overlay active. A broken overlay must never prevent launch:
  * e.g. an overlay whose onnxruntime-gpu is the wrong CUDA generation makes
  * `import onnxruntime` throw at module load, which kills the whole backend
- * during startup (insightface imports it in pixlstash's import chain — live
+ * during startup (insightface imports it in pixlstash's import chain - live
  * incident 2026-07-20). In that case we deactivate the overlay (the dir is kept
- * on disk for reinstall/inspection — only the active-accel state is cleared),
+ * on disk for reinstall/inspection - only the active-accel state is cleared),
  * tell the user, and retry once without it.
  *
  * Cannot loop by construction: the retry is the literal `hooks.start(null)` call
- * in the catch block — there is no recursion and no second catch, so if the
+ * in the catch block - there is no recursion and no second catch, so if the
  * bundled-env launch also fails, that error propagates to the caller's existing
  * fatal path (a genuine packaging error, not an overlay problem). A failure with
  * `accel === null` rethrows immediately: no overlay was involved, so there is
@@ -189,7 +189,7 @@ export async function launchWithOverlayFallback(
   try {
     await hooks.start(accel);
   } catch (e) {
-    if (accel === null) throw e; // bundled env failed — nothing to fall back to
+    if (accel === null) throw e; // bundled env failed - nothing to fall back to
     if (hooks.shouldFallback?.(e) === false) throw e;
     const log = hooks.log ?? ((m: string) => console.error(m));
     log(
@@ -199,7 +199,7 @@ export async function launchWithOverlayFallback(
     );
     await hooks.deactivateOverlay();
     hooks.notify(OVERLAY_FALLBACK_MESSAGE);
-    // Exactly one retry, overlay-free. NOT wrapped in another try — a failure
+    // Exactly one retry, overlay-free. NOT wrapped in another try - a failure
     // here is a genuine packaging error and must reach the caller's fatal path.
     await hooks.start(null);
   }
@@ -209,7 +209,7 @@ export async function launchWithOverlayFallback(
  * Manages the on-demand GPU wheel overlays. The bundled env (CPU on Windows/
  * Linux, Metal on macOS) always works; this installs torch/onnxruntime-gpu for a
  * discrete GPU into a `userData/backends/<accel>` directory that ServerProcess
- * injects via PYTHONPATH. Nothing is hosted by us — wheels come from PyPI and
+ * injects via PYTHONPATH. Nothing is hosted by us - wheels come from PyPI and
  * PyTorch's index.
  */
 export class BackendManager {

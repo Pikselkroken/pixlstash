@@ -116,7 +116,7 @@ import {
 // Group a button each, labelled with the value each currently holds, so the two
 // sections that used to share one popover are drawn separately. Same component
 // either way, because the toggles, the labels and the store writes are the same
-// — only which section is on screen differs (#904).
+// - only which section is on screen differs (#904).
 const props = defineProps({
   /** `"sort"`, `"group"`, or `"all"` for both in one panel. */
   section: { type: String, default: "all" },
@@ -160,7 +160,7 @@ function toggleDirection() {
 }
 
 /* Only the Group section needs the extra room: its three columns left ~51px of
-   label at 320px, so "Base model" — the middle one — ellipsized, and it wants
+   label at 320px, so "Base model" - the middle one - ellipsized, and it wants
    ~76px at --text-sm. 420px gives ~126px tracks, ~84px of label, clearing it
    on a wide fallback font too. Sort stays 320px, matching the Show popover
    beside it in the same bar. Below ~447px of viewport the 94vw cap wins and

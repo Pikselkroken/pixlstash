@@ -1,4 +1,4 @@
-"""Regression test for GitHub issue #585 — "Invalid Images break tasks".
+"""Regression test for GitHub issue #585 - "Invalid Images break tasks".
 
 A corrupt/undecodable image used to be retried forever: a ``Missing*Finder``
 re-selects any picture whose target column is unset, the task cannot decode the
@@ -98,7 +98,7 @@ def _run_failed_decode(vault, pic_id: int, file_path: str) -> None:
 
     A ``None`` preloaded image is exactly what the preload thread produces for a
     corrupt file. This branch writes the empty-blob 'failed' marker and calls the
-    shared ``mark_unprocessable`` choke point — without ever touching CLIP.
+    shared ``mark_unprocessable`` choke point - without ever touching CLIP.
     """
     task = ImageEmbeddingTask(
         database=vault.db,
@@ -247,7 +247,7 @@ def test_585_thumbnail_task_suppresses_corrupt_image(tmp_path):
         assert result == {"changed_count": 0}
 
         # ...but the picture is now suppressed, so after the claim is released
-        # the finder no longer re-selects it — the old endless-retry loop —
+        # the finder no longer re-selects it - the old endless-retry loop -
         # and the progress count reaches 0 so the bar can complete.
         assert vault.db.unprocessable_images.is_suppressed(pic_id)
         finder.on_task_complete(task, None)

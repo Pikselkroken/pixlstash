@@ -3,7 +3,7 @@
 // The assertions worth having are about the states that LOOK alike and are not:
 // an entity with adapters, an entity with none, an entity that does not exist
 // yet, a caller the owner-only shelf refuses, and a read that simply failed.
-// Only the second may say "none" — every one of the others saying it would be a
+// Only the second may say "none" - every one of the others saying it would be a
 // claim about the entity drawn from something that is not about the entity.
 //
 // Several of these assert what LANDS rather than what was requested. A test
@@ -132,7 +132,7 @@ describe("AdapterTray", () => {
     // one list appended to the other.
     expect(cards[0].find(".adapter-card__name").text()).toBe("ivy");
     expect(cards[1].find(".adapter-card__meta").text()).toBe("flux.1-dev");
-    // A missing base model is rendered, not dropped — a blank cell is the
+    // A missing base model is rendered, not dropped - a blank cell is the
     // failure mode the shelf's naming rules exist to avoid.
     expect(cards[0].find(".adapter-card__meta").text()).toBe(
       "Base model not set",
@@ -281,8 +281,8 @@ describe("AdapterTray", () => {
   it("drops the old entity's cards the moment it is pointed at a new one", async () => {
     // The sequence guard alone only stops a late answer from WINNING. The rows
     // already on screen belong to the previous person, and without clearing
-    // them before the await they sit under the new person's name — with a
-    // confident "1 attached" over them — for as long as the read takes.
+    // them before the await they sit under the new person's name - with a
+    // confident "1 attached" over them - for as long as the read takes.
     const heldEight = [];
     listAdapters.mockImplementation(({ characterId, fileKind }) => {
       if (characterId === 7) {
@@ -298,9 +298,9 @@ describe("AdapterTray", () => {
 
     await wrapper.setProps({ entityId: 8 });
     await flushPromises();
-    // Entity 8's read has NOT answered yet. The section stays — it earned its
+    // Entity 8's read has NOT answered yet. The section stays - it earned its
     // place on the first read and tearing it down every time would be the
-    // appear-and-vanish the `settled` gate exists to stop — but it claims
+    // appear-and-vanish the `settled` gate exists to stop - but it claims
     // nothing: no cards, no count, and NOT the "no adapters yet" line, which
     // would be a statement about entity 8 made before entity 8 answered.
     expect(wrapper.find(".adapter-tray").exists()).toBe(true);
@@ -349,7 +349,7 @@ describe("AdapterTray", () => {
   it("never prints 'no adapters yet' when a read failed and the rest was empty", async () => {
     // The reproduced defect: the surviving kind legitimately returns nothing,
     // the other kind 500s, and the tray told the owner their person uses no
-    // adapters — while the shelf was showing that person's mark on three rows.
+    // adapters - while the shelf was showing that person's mark on three rows.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAdapters.mockImplementation(({ fileKind }) =>
       fileKind === "adapter"
@@ -364,7 +364,7 @@ describe("AdapterTray", () => {
 
   it("reports the fault, not whichever refusal came first in the array", async () => {
     // One kind 403s and the other 500s. The 403 carries no `detail`, so picking
-    // it by position costs the reader the one sentence that said what broke —
+    // it by position costs the reader the one sentence that said what broke -
     // and which they got would be decided by the order of a constant.
     //
     // Asserted on the TEXT, not on the error line existing: both orderings show
@@ -390,7 +390,7 @@ describe("AdapterTray", () => {
     // The four-cell matrix's missing corner. One flight is refused and the
     // other succeeds with nothing: `total` is false so the refused branch is
     // skipped, and a fault filtered to non-403s is undefined so the error
-    // branch was skipped too — and the tray printed "No adapters yet".
+    // branch was skipped too - and the tray printed "No adapters yet".
     //
     // A refusal beside a SUCCESS is not a session that may not read the shelf;
     // it is a session that changed underneath two concurrent requests. That is
@@ -429,7 +429,7 @@ describe("AdapterTray", () => {
   it("does not hide a partial refusal behind the rows that did arrive", async () => {
     // The same corner with the surviving kind non-empty: one card and no
     // indication the list is short is a silent failure, which CLAUDE.md forbids
-    // outright — and it is the shape a reader is least likely to question.
+    // outright - and it is the shape a reader is least likely to question.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAdapters.mockImplementation(({ fileKind }) =>
       fileKind === "adapter"
@@ -445,8 +445,8 @@ describe("AdapterTray", () => {
   it("keeps a refused section hidden across a re-read instead of blinking it", async () => {
     // `refused` is what this session was told about the shelf, not a claim
     // about the entity. Clearing it before each read walked the tray back
-    // through visible — a bare heading over empty space, then gone again, on
-    // every open — which is the appear-and-vanish the gate exists to stop.
+    // through visible - a bare heading over empty space, then gone again, on
+    // every open - which is the appear-and-vanish the gate exists to stop.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAdapters.mockRejectedValue({ response: { status: 403 } });
     const wrapper = await mountTray({ entityId: 7 });
@@ -505,9 +505,9 @@ describe("AdapterTray", () => {
     ]);
     const cards = (await mountTray()).findAll(".adapter-card");
     expect(cards[0].attributes("title")).toBe(
-      "Cyanwood Style — cw_v3.safetensors",
+      "Cyanwood Style - cw_v3.safetensors",
     );
-    expect(cards[1].attributes("title")).toBe("ivy — ivy.safetensors");
+    expect(cards[1].attributes("title")).toBe("ivy - ivy.safetensors");
     expect(cards[2].attributes("title")).toBe("000002750.safetensors");
   });
 
@@ -518,7 +518,7 @@ describe("AdapterTray", () => {
     //
     // `constructor` is in the list because `in` walks the prototype chain: it
     // passes an `entityType in FILTER_KEY` guard, resolves to a function, and
-    // spreads into the request as a key no route declares — which FastAPI drops,
+    // spreads into the request as a key no route declares - which FastAPI drops,
     // so the "filtered" read answers with every adapter on the machine.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const entityType of ["characters", "constructor", "toString", ""]) {
@@ -593,7 +593,7 @@ describe("AdapterTray", () => {
   it("dates a stack by its newest member, as the shelf does", async () => {
     // A six-step run registered in January whose newest file landed yesterday
     // is a recent thing. Ordering it by the cover's `added_at` puts it at the
-    // bottom here and the top of the shelf — one relation, two orders, off one
+    // bottom here and the top of the shelf - one relation, two orders, off one
     // payload.
     serveAdapters([
       adapter({
@@ -650,7 +650,7 @@ describe("AdapterTray", () => {
 
   it("does not report a failure against an entity it has stopped pointing at", async () => {
     // The read is still in flight when the id goes away. Letting it land would
-    // log — and count — a failure for an entity nobody is looking at.
+    // log - and count - a failure for an entity nobody is looking at.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const held = [];
     listAdapters.mockImplementation(
@@ -672,7 +672,7 @@ describe("AdapterTray", () => {
 
   it("leads the failure line with what failed, then the server's reason", async () => {
     // Whether this is ALL of the adapters or some of them is the part the
-    // reader needs, and no server detail says it — so our sentence comes first
+    // reader needs, and no server detail says it - so our sentence comes first
     // and the server's is appended.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAdapters.mockRejectedValue({

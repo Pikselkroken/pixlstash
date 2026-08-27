@@ -622,7 +622,7 @@ def test_registry_ignores_a_plugin_class_the_file_only_imported():
     with tempfile.TemporaryDirectory() as temp_dir:
         helper_dir = os.path.join(temp_dir, "helpers")
         # Named `filmgrain` after the built-in below, so shipping the imported
-        # class would replace that built-in — the compounding failure #968
+        # class would replace that built-in - the compounding failure #968
         # describes, since a user plugin also wins a name collision.
         _write(
             helper_dir,
@@ -671,7 +671,7 @@ def test_a_user_plugin_shadowing_a_built_in_is_reported_against_the_user_file():
         manager = _manager(temp_dir)
         manager.reload()
 
-        # User still wins, deliberately — but it is now visible, and it is the
+        # User still wins, deliberately - but it is now visible, and it is the
         # user file that is named rather than the built-in it displaced.
         assert type(manager.get_plugin("filmgrain")).__name__ == "MyGrain"
         errors = manager.list_errors()

@@ -162,12 +162,12 @@ class VersionResponse(BaseModel):
     install_type: str = Field(
         description=(
             "How this server was installed, for active-install telemetry. "
-            "Always exactly one of: `docker` (the reliable signal — set via "
+            "Always exactly one of: `docker` (the reliable signal - set via "
             "the `PIXLSTASH_IN_DOCKER=1` env flag or the presence of "
             "`/.dockerenv`), `pip` (the default for a plain Python/pip "
             "install), `electron` (the cross-platform desktop app, which "
             "declares `PIXLSTASH_INSTALL_TYPE=electron`), or `other` (the "
-            "uncertain fallback — e.g. the Windows Inno Setup build that "
+            "uncertain fallback - e.g. the Windows Inno Setup build that "
             "declares `PIXLSTASH_INSTALL_TYPE=other`). Clients should treat "
             "any unrecognised value as `other`."
         ),
@@ -252,7 +252,7 @@ class Server(
             are machine-global by design, so a Server on a temp config dir would
             otherwise describe whichever engines the developer's home happens to
             hold (``test_workers_api`` caught it as ``assert 3 == 0``). Pointing
-            them at a temp directory instead is no longer an option — since #905
+            them at a temp directory instead is no longer an option - since #905
             the downloaders read the same accessor, so a temp directory means
             every engine is downloaded again.
     """
@@ -273,9 +273,9 @@ class Server(
         check uses two independent positive signals and treats either as proof
         of a containerised run:
 
-        1. ``PIXLSTASH_IN_DOCKER == "1"`` — set explicitly by our own images
+        1. ``PIXLSTASH_IN_DOCKER == "1"`` - set explicitly by our own images
            (primary signal).
-        2. The presence of ``/.dockerenv`` — a marker file the Docker runtime
+        2. The presence of ``/.dockerenv`` - a marker file the Docker runtime
            creates in every container root, present even if the env flag was
            lost (e.g. an overridden entrypoint or a stripped environment).
 
@@ -344,15 +344,15 @@ class Server(
 
         Resolution order:
 
-        0. :data:`DEV_MACHINE_ENV_VAR` — declares the *machine* rather than the
+        0. :data:`DEV_MACHINE_ENV_VAR` - declares the *machine* rather than the
            channel, so it outranks everything below it. Reported as ``dev``,
            which the metrics collector subtracts from active installs.
-        1. ``PIXLSTASH_INSTALL_TYPE`` override — if set to one of the allowed
+        1. ``PIXLSTASH_INSTALL_TYPE`` override - if set to one of the allowed
            values it wins outright, letting an installer declare its channel
            (e.g. ``other`` for the Windows build) without a code change. An
            empty or invalid value is ignored (and logged) so a typo can never
            leak a junk value into telemetry.
-        2. Docker detection (:meth:`running_in_docker`) — the reliable signal.
+        2. Docker detection (:meth:`running_in_docker`) - the reliable signal.
         3. Default to ``pip``.
 
         The return value is guaranteed to be a member of ``INSTALL_TYPES``.
@@ -408,7 +408,7 @@ class Server(
                 open when the active one's vault has gone missing.
         """
         # Boot-time instrumentation (issue: v1.11.0 startup latency). Local,
-        # operator-visible stage timings only — no telemetry, nothing leaves
+        # operator-visible stage timings only - no telemetry, nothing leaves
         # the process. Same perf_counter-and-log shape TaskRunner already uses
         # for per-task timing (pixlstash/task_runner.py). Started before the
         # gc.collect() below so GC time is counted as its own stage rather
@@ -450,7 +450,7 @@ class Server(
         #
         # The desktop app launches this backend purely as a private, in-process
         # service: a free *ephemeral* port on 127.0.0.1, spoken to over plain
-        # HTTP (see electron/src/backend/ServerProcess.ts — it hardcodes
+        # HTTP (see electron/src/backend/ServerProcess.ts - it hardcodes
         # http://127.0.0.1:<port>, health-checks it over node:http, and only
         # whitelists http loopback). That internal transport is intrinsic to the
         # loopback and must NOT be derived from server-config: a config whose
@@ -458,7 +458,7 @@ class Server(
         # internal connection into HTTPS, or the shell can never reach it.
         #
         # The loopback scheme/host/port are therefore derived independently in
-        # run() (see _run_electron_listeners) — always plain HTTP on the
+        # run() (see _run_electron_listeners) - always plain HTTP on the
         # PIXLSTASH_HOST/PIXLSTASH_PORT the shell forces. require_ssl /
         # ssl_keyfile / ssl_certfile are left untouched here because they now
         # govern only the optional *external* listener the desktop app can
@@ -516,7 +516,7 @@ class Server(
         # developer's home happens to hold.
         if Server.DEFAULT_DECLARE_MODEL_ROOTS:
             # PixlStash's own engines: we downloaded them, so we know what they
-            # are without reading a header — and half of them are ONNX or `.pt`,
+            # are without reading a header - and half of them are ONNX or `.pt`,
             # which the scanner does not yield at all. Cheap: existence checks
             # and a handful of upserts, no hashing.
             try:
@@ -658,7 +658,7 @@ class Server(
         # Captures the originating tab's ``X-Client-Id`` header into
         # ``request.state.origin_client_id`` / ``origin_client_id_var`` so
         # mutation handlers can echo it back on the WebSocket event envelope.
-        # Echo-matching only — never used for authz/scoping.
+        # Echo-matching only - never used for authz/scoping.
         self.api.add_middleware(OriginClientMiddleware)
         # Centralised authorization gate (Phase 1 of the authz refactor;
         # docs/backend_architecture.md §16.2). Attached as a router-level
@@ -704,7 +704,7 @@ class Server(
         self.folder_structure_commit = None
         self.folder_structure_commit_lock = threading.Lock()
         # An import killed between indexing and assigning left a library half
-        # made and no way to ask for the rest — the accepted mapping only ever
+        # made and no way to ask for the rest - the accepted mapping only ever
         # lived in this slot. It is written to the vault now, so start-up can
         # finish the job. Here rather than in the router factory that defines
         # it, because that factory runs before the two lines above.
@@ -807,7 +807,7 @@ class Server(
         """Close the vault AND the hub.
 
         The one supported teardown outside a ``with`` block. Closing only the
-        vault (``server.vault.close()``) leaks the hub's SQLite connection —
+        vault (``server.vault.close()``) leaks the hub's SQLite connection -
         harmless on POSIX, where an open file can still be unlinked, but fatal
         on Windows, where TemporaryDirectory cleanup then fails with a sharing
         violation on ``hub.db``. That leak was every remaining failure in
@@ -1041,19 +1041,19 @@ class Server(
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
         # Thumbnail generation is NOT run here anymore. It used to block startup
-        # (awaited before vault.start()), which on a large library — or after the
-        # v1.8.0 upgrade reset thumbnails to NULL — held the server unusable for
+        # (awaited before vault.start()), which on a large library - or after the
+        # v1.8.0 upgrade reset thumbnails to NULL - held the server unusable for
         # many minutes. It was also redundant: the blocking pass wrote only the
         # file, never the thumbnail_width/square_crop columns, so the background
         # MissingThumbnailFinder (keyed on thumbnail_width IS NULL) regenerated
-        # every picture again. That finder now solely owns generation — it runs
+        # every picture again. That finder now solely owns generation - it runs
         # after vault.start() (non-blocking) and reports progress via
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
         self._maybe_send_telemetry_ping()
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
             # The desktop window uses the ephemeral loopback HTTP port (env), not
-            # the configured host/port — those describe the optional external
+            # the configured host/port - those describe the optional external
             # listener and only apply when it is enabled. Report what is actually
             # serving rather than the config, which previously logged a phantom
             # https://0.0.0.0:<port> URL even with remote access off.
@@ -1103,7 +1103,7 @@ class Server(
                 port,
             )
         yield
-        # Shutdown logic — only clear _ws_loop if this lifespan instance set it
+        # Shutdown logic - only clear _ws_loop if this lifespan instance set it
         if was_set_by_us:
             self._ws_loop = None
         if self._shutdown_on_lifespan and hasattr(self, "vault"):
@@ -1135,7 +1135,7 @@ class Server(
                 "log_file": default_log_path,
                 "require_ssl": False,
                 # ssl_keyfile / ssl_certfile are added by the require_ssl
-                # gating block below — only when SSL is actually enabled.
+                # gating block below - only when SSL is actually enabled.
                 # Whether the desktop app exposes a second, external listener on
                 # host:port (loopback access is always on; see run()). Ignored by
                 # the standalone server, which binds host:port directly.
@@ -1226,7 +1226,7 @@ class Server(
         # SSL key/cert paths live in the config *only* when SSL is enabled.
         # When require_ssl is off they are never read (see _ensure_ssl_certificates
         # and the uvicorn launch, both guarded by require_ssl), so persisting
-        # them just clutters the user's config — and re-injecting them on every
+        # them just clutters the user's config - and re-injecting them on every
         # boot means a user who deletes them sees them reappear. Add the
         # defaults when SSL is on; strip them when it is off so existing
         # pollution self-heals on the next write.
@@ -1264,7 +1264,7 @@ class Server(
     def _add_cors_exception_handler(self):
         # No HTTPException handler here on purpose. One used to rebuild every
         # HTTPException as a fresh JSONResponse to re-add the CORS pair, and in
-        # doing so dropped exc.headers — so no route's Retry-After ever reached
+        # doing so dropped exc.headers - so no route's Retry-After ever reached
         # a client (#1097). It was never needed: FastAPI's default handler
         # already forwards exc.headers, and CORSMiddleware sits outside
         # ExceptionMiddleware, so it stamps Access-Control-Allow-Origin and
@@ -1386,7 +1386,7 @@ class Server(
         # Pass the configured limit/window through, but fall back to ``None``
         # (NOT inline numbers) when a key is unset so the middleware uses its
         # module-level ``_LIMIT`` / ``_WINDOW`` defaults. Those constants are the
-        # single source of truth for the defaults and the documented test hook —
+        # single source of truth for the defaults and the documented test hook -
         # patching ``rate_limiter._LIMIT`` / ``_WINDOW`` only takes effect when
         # the instance value is ``None``.
         rate_limit_cfg = self._server_config.get("rate_limit_max_requests")
@@ -1492,7 +1492,7 @@ class Server(
         # dependency (dependencies=[Depends(self.authz)]). This is the single
         # wiring point for the centralised, deny-by-default authorization model
         # (Phase 1; docs/backend_architecture.md §16.2). In Step 1 the gate is
-        # report-only, so it denies nothing — it only observes undeclared routes.
+        # report-only, so it denies nothing - it only observes undeclared routes.
         gate = [Depends(self.authz)]
         self.api.include_router(
             create_config_router(self),
@@ -1704,7 +1704,7 @@ class Server(
             tags=["snapshots"],
             dependencies=gate,
         )
-        # Public share endpoint — no API prefix; auth is embedded in the URL token.
+        # Public share endpoint - no API prefix; auth is embedded in the URL token.
         self.api.include_router(
             create_share_router(self),
             tags=["share"],

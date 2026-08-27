@@ -4,7 +4,7 @@
  *
  * Presentational only: no API calls, no store, no router. The parent drives it
  * from an AUTHORITATIVE server preview (POST /pictures/scrapheap/delete-preview)
- * — never from the virtualized grid — so the protected-original file list and
+ * - never from the virtualized grid - so the protected-original file list and
  * counts are complete regardless of virtualization / grid_lite. The parent owns
  * the DELETE request and closes the dialog once it completes.
  *
@@ -41,10 +41,10 @@ const props = defineProps({
   lockedCount: { type: Number, default: 0 },
   /**
    * Absolute on-disk file paths of the protected originals. May be the full list
-   * or a capped subset — `protectedCount` is authoritative for the "+N more".
+   * or a capped subset - `protectedCount` is authoritative for the "+N more".
    */
   protectedPaths: { type: Array, default: () => [] },
-  /** DELETE request in flight — disables the actions and shows loading. */
+  /** DELETE request in flight - disables the actions and shows loading. */
   busy: { type: Boolean, default: false },
 });
 
@@ -73,7 +73,7 @@ const lockedNote = computed(() => buildLockedPurgeNote(props.lockedCount));
 
 // What each action ACTUALLY destroys. The preview's locked / protected /
 // unprotected buckets are disjoint and sum to `totalCount`, so these are sums of
-// the server's own classification — never `totalCount` minus something. See
+// the server's own classification - never `totalCount` minus something. See
 // `deleteForeverDestroyCounts`.
 const destroyCounts = computed(() =>
   deleteForeverDestroyCounts({
@@ -97,13 +97,13 @@ const standardBody = computed(() => {
 const protectedBody = computed(() => {
   const p = props.protectedCount;
   // The headline count is what "Delete all" destroys (protected + unprotected),
-  // NOT `totalCount` — locked pictures are counted in the total but survive.
+  // NOT `totalCount` - locked pictures are counted in the total but survive.
   const count = destroyCounts.value.deleteAll;
   const isAre =
     p === 1 ? "is a reference-folder original" : "are reference-folder originals";
   const itThem = p === 1 ? "it" : "them";
   const fileFiles = p === 1 ? "file" : "files";
-  return `This permanently deletes ${count} pictures. ${p} of ${itThem} ${isAre} — deleting ${itThem} also destroys the original ${fileFiles} on disk. This cannot be undone.`;
+  return `This permanently deletes ${count} pictures. ${p} of ${itThem} ${isAre} - deleting ${itThem} also destroys the original ${fileFiles} on disk. This cannot be undone.`;
 });
 
 const refWarnTitle = computed(() =>
@@ -113,7 +113,7 @@ const refWarnTitle = computed(() =>
 );
 
 // Show every path we were given; the scroll container caps the height. When the
-// server capped the list, `protectedCount` exceeds it — surface the remainder.
+// server capped the list, `protectedCount` exceeds it - surface the remainder.
 const moreCount = computed(() =>
   Math.max(0, props.protectedCount - props.protectedPaths.length),
 );
@@ -128,7 +128,7 @@ const typeHint = computed(
 );
 
 const deleteAllLabel = computed(
-  () => `Delete all — incl. ${props.protectedCount} protected`,
+  () => `Delete all - incl. ${props.protectedCount} protected`,
 );
 // `unprotectedCount` is already the exact destroyable figure: the preview's
 // buckets are disjoint (locked-first), so a locked picture is never counted as
@@ -151,7 +151,7 @@ function onModelValue(value) {
 }
 
 function confirmStandard() {
-  // No protected originals — include_protected is moot; false purges everything.
+  // No protected originals - include_protected is moot; false purges everything.
   emit("confirm", { includeProtected: false });
 }
 function confirmDeleteAll() {
@@ -265,7 +265,7 @@ function confirmDeleteUnprotected() {
 </template>
 
 <style scoped>
-/* Confirm dialog (Delete forever) — standard dialog pattern, tokenized. */
+/* Confirm dialog (Delete forever) - standard dialog pattern, tokenized. */
 .confirm {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
@@ -298,7 +298,7 @@ function confirmDeleteUnprotected() {
 }
 
 /* Locked-set note. Deliberately `info`-tinted, NOT `error`: nothing is at risk
-   here — these pictures survive. Same panel shape as `.ref-warn` below. */
+   here - these pictures survive. Same panel shape as `.ref-warn` below. */
 .lock-note {
   display: flex;
   align-items: flex-start;
@@ -313,7 +313,7 @@ function confirmDeleteUnprotected() {
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* Reference-folder original warning — strong, specific: this is your photo on
+/* Reference-folder original warning - strong, specific: this is your photo on
    disk, not just a library entry. error-tinted panel, tokenized. */
 .ref-warn {
   display: block;
@@ -364,7 +364,7 @@ function confirmDeleteUnprotected() {
   padding: 0;
 }
 
-/* Type-to-confirm — the typed guard is required only when protected originals
+/* Type-to-confirm - the typed guard is required only when protected originals
    are in the set. */
 .type-confirm {
   display: flex;
@@ -396,7 +396,7 @@ function confirmDeleteUnprotected() {
   border-color: rgba(var(--v-theme-accent), 0.55);
 }
 
-/* Action buttons — quiet cancel, outline unprotected-only, destructive delete-all. */
+/* Action buttons - quiet cancel, outline unprotected-only, destructive delete-all. */
 .btn {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);

@@ -84,7 +84,7 @@ def _make_folder(server, folder_dir, layout=None):
     row with NULL there is due for a scan *immediately*, and every folder in the
     database is a candidate. So between this insert and the first ``_run_scan``
     the planner is free to scan the same folder concurrently, and both passes
-    import the same files — the CI gate failed on exactly that, twice, with
+    import the same files - the CI gate failed on exactly that, twice, with
     ``assert 2 == 1`` and ``assert 4 == 2``: every row doubled.
 
     Stamping ``last_scanned`` now puts the folder outside the finder's rescan
@@ -343,7 +343,7 @@ def test_an_unhashed_unchanged_file_blocks_matching(server, tmp_path):
     """A stable row with no pixel_sha means 'unknown collision', not 'no collision'.
 
     ``pixel_sha`` is nullable and backfilled in the background, so a present
-    unchanged file can be invisible to the ambiguity count — and it is exactly
+    unchanged file can be invisible to the ambiguity count - and it is exactly
     the file whose existence would have refused the match.
     """
     folder_dir = str(tmp_path / "refs")
@@ -441,7 +441,7 @@ def test_a_move_in_a_laid_out_folder_is_queued_for_reconciliation(server, tmp_pa
     """v1.11 Phase 5: a laid-out root's move is a fact worth reconciling.
 
     The queue only needs the file to have moved and the root to have a
-    layout — classifying what it means happens later, live, in
+    layout - classifying what it means happens later, live, in
     move_reconciliation_service (see tests/test_library_layout.py).
     """
     folder_dir = str(tmp_path / "refs")
@@ -617,7 +617,7 @@ def test_dismissing_a_move_clears_the_queue_without_changing_membership(
 
 
 def test_the_http_routes_round_trip_an_unambiguous_move(server, tmp_path):
-    """GET /moves/pending, POST /moves/apply — the wiring, not the classification.
+    """GET /moves/pending, POST /moves/apply - the wiring, not the classification.
 
     Everything about *what* gets classified is tested at the service level
     above; this is the one place that proves the route table, the response
@@ -670,7 +670,7 @@ def test_the_http_routes_round_trip_an_unambiguous_move(server, tmp_path):
 def test_applying_a_move_to_a_non_unique_set_name_is_skipped_not_guessed(
     server, tmp_path
 ):
-    """Set names are not DB-unique — a collision must be refused, not applied.
+    """Set names are not DB-unique - a collision must be refused, not applied.
 
     The refusal happens at entity resolution, after the picture already left
     the queue by review_id, so the caller has to be able to tell "applied

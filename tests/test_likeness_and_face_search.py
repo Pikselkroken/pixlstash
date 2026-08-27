@@ -140,7 +140,7 @@ def test_score_character_likeness_combine_param():
 
             # A valid combine strategy passes validation. (It may still 503 in
             # an environment without an inference engine, so assert only that it
-            # is not rejected as a bad request — the happy path is covered by
+            # is not rejected as a bad request - the happy path is covered by
             # test_score_character_likeness_basic.)
             resp = client.post(
                 f"{API_PREFIX}/pictures/score_character_likeness",
@@ -402,7 +402,7 @@ def test_face_search_basic():
             # Exclude sentinel records (face_index == -1), which have no embedding.
             faces = [f for f in all_faces if f.get("face_index", 0) != -1]
             if not faces:
-                # No real faces detected in random noise images — nothing to assert
+                # No real faces detected in random noise images - nothing to assert
                 return
             face_id = faces[0]["id"]
 
@@ -564,7 +564,7 @@ def test_face_search_by_character_ranks_and_excludes_assigned():
 
 def test_face_search_names_the_best_matching_face():
     """The reported face_id is the face that produced the picture's score, not
-    just the picture's first face — a bulk assignment writes to that row."""
+    just the picture's first face - a bulk assignment writes to that row."""
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path=server_config_path) as server:

@@ -28,7 +28,7 @@ vi.mock("../../stores/useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows: vi.fn() }),
 }));
 
-// The move job is the store's, not the dialog's — the dialog only starts one.
+// The move job is the store's, not the dialog's - the dialog only starts one.
 const relocate = vi.fn();
 let moveBusy = false;
 vi.mock("../../stores/useModelMovesStore", () => ({
@@ -115,7 +115,7 @@ const INSIGHTFACE = folder({
 
 // The HuggingFace cache: `fixed`, because its location is `HF_HOME` and another
 // tool owns it. The row that must never carry Move, and the reason the verb is
-// read from the server rather than derived from `kind` — this is `foreign` too.
+// read from the server rather than derived from `kind` - this is `foreign` too.
 const HF_CACHE = folder({
   id: 6,
   path: "/home/g/.cache/huggingface/hub",
@@ -248,8 +248,8 @@ describe("relocation", () => {
   });
 
   it("sends the picked path for the InsightFace packs like any other row", async () => {
-    // The one row whose path means something different on the server — it names
-    // the InsightFace *root*, not the folder — which is deliberately invisible
+    // The one row whose path means something different on the server - it names
+    // the InsightFace *root*, not the folder - which is deliberately invisible
     // here: the dialog sends what the owner picked and the server does the rest.
     const wrapper = await open([INSIGHTFACE]);
     await moveButton(wrapper).trigger("click");
@@ -285,7 +285,7 @@ describe("forgetting", () => {
     await forget.trigger("click");
     expect(forgetModelFolder).not.toHaveBeenCalled();
     // And the row says why. `rowReason` used to gate this on `relocatable`, so
-    // this row was blocked and silent — the exact combination that reads as a
+    // this row was blocked and silent - the exact combination that reads as a
     // broken button.
     expect(wrapper.get(".mf-row .helptip").classes()).not.toContain(
       "helptip--empty",

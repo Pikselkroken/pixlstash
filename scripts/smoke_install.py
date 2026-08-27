@@ -19,7 +19,7 @@ What it proves:
 What it deliberately does NOT prove: anything needing ML models. The server is
 booted with ``disable_background_workers``, the same lever
 ``frontend/e2e/serve_e2e_backend.py`` uses, so no model is downloaded. Worker
-startup and real inference stay in the manual plan and in the GPU jobs — a
+startup and real inference stay in the manual plan and in the GPU jobs - a
 smoke test that pulled multi-GB weights on three operating systems would be
 slow enough that it stopped being run, which is the failure mode this whole
 exercise is trying to remove.
@@ -147,7 +147,7 @@ def dump_log(log_path: Path, reason: str) -> None:
         log_path (Path): File the server's stdout/stderr was captured to.
         reason (str): Why the log is being dumped.
     """
-    logger.error("%s — captured server output follows:", reason)
+    logger.error("%s - captured server output follows:", reason)
     try:
         logger.error("%s", log_path.read_text(encoding="utf-8", errors="replace"))
     except OSError as exc:
@@ -247,7 +247,7 @@ def assert_spa_served(base_url: str, log_path: Path) -> None:
 
     # The built shell is tiny and its only stable marker is the mount point
     # Vite leaves in place. Its absence means pixlstash/frontend/dist did not
-    # make it into the wheel — the package-data drift this check exists for.
+    # make it into the wheel - the package-data drift this check exists for.
     if '<div id="app"' not in body:
         dump_log(log_path, "GET / did not return the built SPA shell")
         raise SmokeFailure(

@@ -8,7 +8,7 @@ constant number of grouped queries, so the fan-out can be deleted.
 
 A performance fix must not quietly change behaviour (CLAUDE.md), and here the
 behaviour IS a number, so the tests below pin the inline counts against the
-per-id summary endpoints they replace — including the cases where a naive
+per-id summary endpoints they replace - including the cases where a naive
 implementation drifts:
 
 * a picture in **several** projects (a per-project count must not be a share of
@@ -193,11 +193,11 @@ class _GroupedCountQueryCounter:
 def env():
     """Owner client with the awkward shapes the counts have to survive.
 
-    * ``P1``/``P2``/``P3`` — three projects; ``P3`` holds nothing, so a missing
+    * ``P1``/``P2``/``P3`` - three projects; ``P3`` holds nothing, so a missing
       group is proven to default to 0 rather than to disappear.
-    * ``shared`` — a character in P1 and P2 (primary P1).
-    * ``loner`` — a character in no project at all (primary NULL).
-    * ``p2_only`` — a character in P2 only.
+    * ``shared`` - a character in P1 and P2 (primary P1).
+    * ``loner`` - a character in no project at all (primary NULL).
+    * ``p2_only`` - a character in P2 only.
     * pictures: one in BOTH P1 and P2, one in P1 only, two in P2 only, one
       unassigned, one soft-deleted, and one carrying two faces of the same
       character.
@@ -288,7 +288,7 @@ def test_character_counts_are_the_expected_numbers(env):
     """Pinned literally, so a change that keeps both sides equally wrong fails.
 
     ``SharedChar`` is on 5 non-deleted pictures (one of them twice, via two
-    faces) and its primary project is P1, which holds 2 of them — not P2's 3,
+    faces) and its primary project is P1, which holds 2 of them - not P2's 3,
     and not the whole 5. ``LonerChar`` has no project, so its project scope is
     "belongs to no project": 2 of its 2 non-deleted pictures.
     """
@@ -417,7 +417,7 @@ def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env)
     """In-scope 200 with the right global number; nothing else in the list.
 
     ``image_count`` must equal what the *same token* gets from
-    ``/characters/{id}/summary`` — the endpoint it is already granted — which
+    ``/characters/{id}/summary`` - the endpoint it is already granted - which
     is the whole authorization argument for serving it inline: no new fact is
     disclosed. That cross-check is the point of this test and must keep
     working.
@@ -593,7 +593,7 @@ def test_project_scoped_token_counts_match_its_own_summaries(env):
         )
 
     # SharedChar's primary project is P1 (2 pictures), but this token is told
-    # P2 — so the count it gets must be P2's 3, not the primary project's 2.
+    # P2 - so the count it gets must be P2's 3, not the primary project's 2.
     by_name = {row["name"]: row for row in rows}
     assert by_name["SharedChar"]["project_image_count"] == 3
 

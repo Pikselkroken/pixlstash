@@ -291,7 +291,7 @@ def test_writeback_honours_a_legitimate_existing_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# In-place rotate — the first sink that overwrites an ORIGINAL file (#950)
+# In-place rotate - the first sink that overwrites an ORIGINAL file (#950)
 # ---------------------------------------------------------------------------
 
 
@@ -328,8 +328,8 @@ def test_rotate_refuses_to_overwrite_a_file_outside_the_vault_root(
     """`Picture.file_path` is a database value, and rotate WRITES to it.
 
     `resolve_picture_path` hands an absolute path straight back and joins a
-    relative one without normalising, so a wrong row — a faulty import, an
-    edited DB — resolves wherever it says. Every sibling destructive sink checks
+    relative one without normalising, so a wrong row - a faulty import, an
+    edited DB - resolves wherever it says. Every sibling destructive sink checks
     containment first; this one overwrites the user's original bytes, so it is
     the last place that should take the row's word for it.
     """
@@ -417,7 +417,7 @@ def test_rotate_refuses_a_symlink_inside_the_root_that_points_outside(server, tm
     """The topology `path_is_within` accepts on purpose and a write sink cannot.
 
     The harm is a read escape, not a write one: `os.replace` replaces a symlink
-    rather than following it, so the outside file is never rewritten — but
+    rather than following it, so the outside file is never rewritten - but
     `read_orientation` follows it, and the rotate then lands a copy of that
     file's bytes inside the library under the link's name, carrying its mode and
     owner across. Asserting the link is still a link is what fails on the

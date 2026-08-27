@@ -134,7 +134,7 @@ def _drain_stream(client, *, batch_limit: int, extra_params: str = ""):
         offset = new_offset
     else:
         raise AssertionError(
-            "stream did not finish within 100 calls — done flag never True"
+            "stream did not finish within 100 calls - done flag never True"
         )
     return pictures, calls
 
@@ -296,7 +296,7 @@ def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
 
 def test_stream_done_includes_partial_final_batch_smaller_than_limit():
     """If the final SQL batch returns fewer rows than batch_limit, done must
-    be True on that same response — without an extra empty call."""
+    be True on that same response - without an extra empty call."""
     tmp, client, server = _setup_server()
     try:
         ids, _ = _seed_pictures(server, total=12)

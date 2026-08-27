@@ -10,7 +10,7 @@ connection module with an explicitly multi-process contract:
 * **WAL** so a reader never blocks the writer and vice versa;
 * **a busy timeout** so the loser of a write race waits instead of raising
   "database is locked";
-* **short transactions only** — every write in :mod:`pixlstash.hub.registry` is
+* **short transactions only** - every write in :mod:`pixlstash.hub.registry` is
   a single statement or a single ``with`` block. Nothing holds the write lock
   across user interaction or filesystem work.
 
@@ -48,7 +48,7 @@ APP_NAME = "pixlstash"
 # sub-millisecond; this is headroom for a busy filesystem, not for long
 # transactions. Deliberately shorter than the vault's 30 s
 # (:data:`pixlstash.database.SQLITE_BUSY_TIMEOUT_S`), which is sized for
-# background batches holding a write transaction — a hub write that waits 5 s
+# background batches holding a write transaction - a hub write that waits 5 s
 # is a bug worth surfacing, not something to wait out.
 HUB_BUSY_TIMEOUT_S = 5
 
@@ -276,7 +276,7 @@ class HubDatabase:
             raise HubPermissionError(str(exc)) from exc
         # The guard fd must outlive the connection. POSIX advisory locks are
         # per-process, per-inode: closing ANY fd this process holds on the hub
-        # file releases every fcntl lock the process has on it — including the
+        # file releases every fcntl lock the process has on it - including the
         # ones SQLite took for self._conn (sqlite.org/howtocorrupt.html §2.2).
         # The hub is explicitly multi-process (server + CLI), so a lock-stripped
         # connection lets another process treat the hub as unused and delete its

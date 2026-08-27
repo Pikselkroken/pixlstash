@@ -7,7 +7,7 @@ is what that requirement exists to prevent, so the server composes the command
 from its own deployment and the UI renders it verbatim.
 
 The result is host information (an install path, or a container name), so it is
-sent only to a caller that passes the locality check — see plan §11 q3 and the
+sent only to a caller that passes the locality check - see plan §11 q3 and the
 route's declaration in :mod:`pixlstash.authz.registry`.
 """
 
@@ -79,7 +79,7 @@ def desktop_windows_command(hub_path: str | None) -> str | None:
 
     **This is what makes the desktop CLI usable on Windows at all** (issue
     #1058). The obvious command to print is the app's own launcher, and it is
-    what this module used to be handed in ``PIXLSTASH_CLI_COMMAND`` — but
+    what this module used to be handed in ``PIXLSTASH_CLI_COMMAND`` - but
     ``PixlStash.exe`` is linked for the Windows GUI subsystem, so no shell waits
     for it: the prompt returns immediately and the CLI's output then lands on
     top of it, leaving the cursor mid-line. The bundled ``python.exe`` is a
@@ -93,7 +93,7 @@ def desktop_windows_command(hub_path: str | None) -> str | None:
     interpreter path is durable.
 
     Detection is the ``runtime.json`` the desktop build writes beside its
-    ``python/`` directory — a file only that build produces, so a system Python
+    ``python/`` directory - a file only that build produces, so a system Python
     can never match.
 
     Args:
@@ -151,7 +151,7 @@ def cli_hint(verb: str = "libraries list", hub_path: str | None = None) -> str:
         verb: The command to show, group included. ``libraries list`` is the
             safe one to put in front of a user who has not read the docs yet.
         hub_path: This deployment's hub, when the caller knows it. Only the
-            bundled Windows desktop runtime needs it — see
+            bundled Windows desktop runtime needs it - see
             :func:`desktop_windows_command`.
 
     Returns:

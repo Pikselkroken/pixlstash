@@ -2,8 +2,8 @@
 
 What these protect is a completeness property, not a performance one. CI named
 individual test files in ``.github/workflows/ci.yml``, and the result was that
-59 of the 99 files in ``tests/`` — including authz-gate, host-capability and
-fail-closed suites — ran only in a non-blocking release-prep sweep. Nothing
+59 of the 99 files in ``tests/`` - including authz-gate, host-capability and
+fail-closed suites - ran only in a non-blocking release-prep sweep. Nothing
 failed when a new test file was added without touching the workflow, so nothing
 stopped the drift, and PR #588 added a test that would have landed ungated.
 
@@ -22,7 +22,7 @@ someone says which, and that is a failure:
 * ``test_shard_counts_match_the_matrix`` fails if a matrix is resized without
   updating the ``i/N`` divisor, which would silently drop a slice.
 * ``test_shards_partition_the_collected_suite`` proves the sharding itself is a
-  partition — every collected test in exactly one shard — by actually running
+  partition - every collected test in exactly one shard - by actually running
   pytest's collection, not by re-implementing the arithmetic.
 
 ``--ci-shard`` no longer deals by position: it places tests
@@ -33,7 +33,7 @@ input to the partition, and eight independent processes have to derive the
 identical partition from it, so the guardrails below cover the degraded inputs
 as well as the happy one: an absent, truncated, wrongly-shaped or
 negative-valued map, and tests the map has never heard of. All of them must
-still yield a complete, disjoint partition — a slower gate is an acceptable
+still yield a complete, disjoint partition - a slower gate is an acceptable
 outcome, a dropped test is not.
 
 The second property these protect is the release-prep sweep's *ordering*
@@ -121,7 +121,7 @@ _GATE_JOB = "backend"
 # (tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy
 # asserts every data route carries an AccessPolicy). The behavioural half did
 # not: these seven files sat in DEFERRED_FROM_GATE, so their only run was
-# `backend_release_sweep` — `continue-on-error: true`, and triggered only during
+# `backend_release_sweep` - `continue-on-error: true`, and triggered only during
 # release prep. A test in test_authz_gate_step4.py that asserted on a route
 # which does not exist was therefore red for five days with nothing to report
 # it. The gap was not "the test was wrong"; it was "nothing blocking ever ran
@@ -129,7 +129,7 @@ _GATE_JOB = "backend"
 #
 # Re-deferring one of these is exactly the move that hid that bug, so it fails
 # `test_security_suites_cannot_be_quietly_deferred` below. If a suite here goes
-# red, fix it or delete it — parking it is not available. Adding a file here is
+# red, fix it or delete it - parking it is not available. Adding a file here is
 # fine and encouraged; removing one is a security decision that needs the
 # authz sign-off in CLAUDE.md, not a CI tidy-up.
 MUST_BLOCK_ON_EVERY_PR = frozenset(
@@ -142,7 +142,7 @@ MUST_BLOCK_ON_EVERY_PR = frozenset(
         # The loopback/IP-locality check must fail CLOSED when locality is
         # undecidable; a silent fail-open here re-opens the host-capability tier.
         "test_ip_locality_fail_closed.py",
-        # Streaming variant of the picture list — a separate code path from the
+        # Streaming variant of the picture list - a separate code path from the
         # paged list, and historically its own BOLA vector.
         "test_pictures_stream.py",
         # The token-level half of share-link scoping: the only suite that mints a
@@ -191,7 +191,7 @@ RELEASE_CRITICAL_MUST_BLOCK = frozenset(
 # still runs in the informational `backend_release_sweep`, so the coverage is
 # visible; it just does not block a PR.
 #
-# This list is not documentation — it is half of a partition. `tests/` must be
+# This list is not documentation - it is half of a partition. `tests/` must be
 # exactly GATED + DEFERRED, and the test below fails otherwise, so a newly added
 # test file cannot quietly belong to neither. Moving a file OFF this list and
 # into the ci.yml gate is the intended direction of travel; the end state is an
@@ -253,7 +253,7 @@ DEFERRED_FROM_GATE = frozenset(
 # never timed costs a little shard skew and no coverage at all, because
 # `_time_balanced_shard_assignment` seeds every test on its round-robin position
 # and charges the unknown ones the median. Failing the build over that would
-# make refreshing the map a correctness obligation, which it is not — and would
+# make refreshing the map a correctness obligation, which it is not - and would
 # do it non-locally, on whichever PR happens to run next rather than on the one
 # that added the file. That is not hypothetical: #832 added
 # tests/test_security_supported_versions.py and merged on a check that predated
@@ -446,7 +446,7 @@ def test_model_cache_saves_every_path_it_restores():
     absent from the save list, so ``warm_models_windows`` downloaded the WD14
     and PixlStash taggers and saved an entry without them. That entry then went
     on hitting its primary key, so the save step (`hit != 'true'`) never ran
-    again and could never repair it — every Windows shard re-fetched the
+    again and could never repair it - every Windows shard re-fetched the
     taggers, which is the HuggingFace stampede the warm job exists to prevent.
     """
     action = yaml.safe_load(
@@ -515,8 +515,8 @@ def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> 
     """Name every gated file the map has not timed; fail only once too few remain.
 
     Split out of the balance test so both branches can be exercised directly.
-    The failing branch is otherwise unreachable from a green tree — the map is
-    normally near-complete — and an unexercised fail branch is a guardrail on
+    The failing branch is otherwise unreachable from a green tree - the map is
+    normally near-complete - and an unexercised fail branch is a guardrail on
     paper, which is the specific way this repo has been bitten before.
 
     Args:
@@ -534,7 +534,7 @@ def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> 
             f"{len(unrecorded)} of {len(gated)} gated test files have no "
             f"recorded durations: {unrecorded}. Every test in them is placed by "
             "round-robin fallback at the median cost, so this balance assertion "
-            "says nothing about them. That costs shard skew, never coverage — "
+            "says nothing about them. That costs shard skew, never coverage - "
             "refresh the map by dispatching "
             ".github/workflows/record-test-durations.yml when it is convenient."
         )
@@ -544,7 +544,7 @@ def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> 
         f"The durations map now times only {coverage:.0%} of the {len(gated)} "
         f"gated files, below the {MINIMUM_GATE_COVERAGE:.0%} floor. Below that "
         "the balance asserted below is a measurement of a shrinking subset "
-        "rather than of the gate — which is exactly how it reported a perfect "
+        "rather than of the gate - which is exactly how it reported a perfect "
         "1.000 over 76% of the gate. Refresh the map by dispatching "
         f".github/workflows/record-test-durations.yml. Missing: {unrecorded}"
     )
@@ -572,7 +572,7 @@ def test_every_test_file_is_classified(workflow):
     """Every file under ``tests/`` is either gated or explicitly deferred.
 
     This is the forcing function. The gate is an allowlist, so on its own it
-    would drift exactly as before — a new test file simply would not appear in
+    would drift exactly as before - a new test file simply would not appear in
     CI and nothing would say so. Requiring ``tests/`` to equal GATED + DEFERRED
     turns "I forgot" into a red test, and makes deferring a file a decision
     someone has to write down.
@@ -580,7 +580,7 @@ def test_every_test_file_is_classified(workflow):
     Discovery recurses. Suites that share one heavy environment live in a
     sub-package with their own ``conftest.py`` (``tests/multi_project_authz/``),
     and a non-recursive glob would let every file in one drop out of CI without
-    anything going red — the exact drift this test exists to stop.
+    anything going red - the exact drift this test exists to stop.
     """
     gated = _gated_files(workflow)
     discovered = {
@@ -592,7 +592,7 @@ def test_every_test_file_is_classified(workflow):
     assert not unclassified, (
         "These test files are neither gated in .github/workflows/ci.yml nor "
         f"listed in DEFERRED_FROM_GATE: {unclassified}. Add each one to the "
-        "`backend` job's file list (preferred — it then blocks PRs), or to "
+        "`backend` job's file list (preferred - it then blocks PRs), or to "
         "DEFERRED_FROM_GATE with a reason if it is not green yet. Do not leave "
         "it unclassified: that is how the suite silently fell out of CI before."
     )
@@ -619,7 +619,7 @@ def test_security_suites_cannot_be_quietly_deferred(workflow):
     ``test_every_test_file_is_classified`` above accepts *either* answer for
     any file: gated, or deferred with a reason. For the behavioural authz and
     fail-closed suites only one answer is acceptable, because deferral is the
-    exact mechanism that hid a broken authz assertion for five days — the
+    exact mechanism that hid a broken authz assertion for five days - the
     suites ran only in ``backend_release_sweep``, which is
     ``continue-on-error: true`` and only triggers during release prep.
 
@@ -648,7 +648,7 @@ def test_security_suites_cannot_be_quietly_deferred(workflow):
     assert not ungated, (
         f"These security suites are not on the blocking `backend` gate: "
         f"{ungated}. They prove the AuthzGate actually ENFORCES the policies it "
-        "declares — declaration completeness is already guarded every PR by "
+        "declares - declaration completeness is already guarded every PR by "
         "test_architecture_guardrails.py, this is the other half. Put them back "
         "in the `backend` job's file list in .github/workflows/ci.yml."
     )
@@ -817,8 +817,8 @@ def test_each_job_uses_the_sharding_mode_it_needs(workflow):
 
     This is the load-bearing assertion of the whole sweep design. The sweep
     exists to catch an order- or shard-dependence that the gate's round-robin
-    dealing could introduce or mask. Re-using ``--ci-shard`` there — the
-    obvious "simplification" — would shard the detector with the algorithm it
+    dealing could introduce or mask. Re-using ``--ci-shard`` there - the
+    obvious "simplification" - would shard the detector with the algorithm it
     is auditing and quietly reduce the sweep to a slower duplicate of the gate.
     """
     for job_name, expected_option in _SHARD_MODE_BY_JOB.items():
@@ -838,7 +838,7 @@ def test_shard_counts_match_the_matrix(workflow, job_name):
 
     A matrix grown from 6 to 8 entries while the command still says ``/6``
     would run shards 7 and 8 as duplicates of nothing and never run two slices
-    of the suite at all — a silent coverage hole with a green tick on it.
+    of the suite at all - a silent coverage hole with a green tick on it.
     """
     job = workflow["jobs"][job_name]
     shards = _shard_matrix(job)
@@ -876,7 +876,7 @@ def test_shards_partition_the_collected_suite():
 
     Collected for real (via ``--collect-only`` on a couple of cheap modules)
     rather than by re-deriving the round-robin here, so this fails if the
-    conftest hook regresses — which is the thing that would actually drop
+    conftest hook regresses - which is the thing that would actually drop
     tests.
     """
     targets = [
@@ -920,11 +920,11 @@ def test_block_shards_are_a_complete_disjoint_order_preserving_partition():
     the sweep depends on are checked at the boundaries too (fewer items than
     shards, exact multiples, and everything in between):
 
-    * complete — every position lands in some block;
-    * disjoint — no position lands in two;
-    * order-preserving — each block is a contiguous ascending slice, which is
+    * complete - every position lands in some block;
+    * disjoint - no position lands in two;
+    * order-preserving - each block is a contiguous ascending slice, which is
       the property that makes the sweep an ordering control at all;
-    * balanced — block sizes differ by at most one.
+    * balanced - block sizes differ by at most one.
     """
     for count in range(0, 40):
         for total in range(1, 9):
@@ -1014,7 +1014,7 @@ def test_shard_modes_are_mutually_exclusive():
     """Passing both modes must fail, not silently pick one.
 
     Whichever one won, the run would be quietly testing something other than
-    what the workflow asked for — and for the sweep that means the ordering
+    what the workflow asked for - and for the sweep that means the ordering
     control is gone with a green tick on it.
     """
     result = subprocess.run(
@@ -1186,7 +1186,7 @@ def test_time_balanced_assignment_is_deterministic():
     The shards decide independently, one process per runner, and never
     compare notes. If the decision depended on dict/set
     iteration order, a hash seed, or the order the data happened to be written
-    in, two shards could disagree and a test would be run twice or not at all —
+    in, two shards could disagree and a test would be run twice or not at all -
     with a green tick on it either way.
     """
     nodeids = _synthetic_nodeids(300)
@@ -1297,13 +1297,13 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     """The whole point, asserted: LPT flattens the shards, round-robin does not.
 
     Modelled over the committed map at whatever shard count the gate currently
-    declares, read from the workflow rather than hardcoded — a resize must
+    declares, read from the workflow rather than hardcoded - a resize must
     re-prove the balance, not silently keep asserting it about the old N.
     Balance matters MORE as N falls: with fewer, larger buckets a single
     misplaced slow file moves the critical path further.
 
     The positional baseline is computed in sorted-nodeid order, which is a
-    stand-in for collection order rather than the real thing — good enough to
+    stand-in for collection order rather than the real thing - good enough to
     show the difference in kind, and it is the *balanced* side that carries the
     assertion. If a single test ever grows past a shard's share this fails, and
     it should: no assignment can balance that, and the fix is the test.
@@ -1313,7 +1313,7 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     reported 1.000 while 28 of 119 gated files were absent, and every test in
     those files was being placed by round-robin fallback rather than by the
     balance this claims to prove. So the coverage of the gate is reported every
-    run and asserted against ``MINIMUM_GATE_COVERAGE`` — a handful of freshly
+    run and asserted against ``MINIMUM_GATE_COVERAGE`` - a handful of freshly
     added files is a refresh chore and warns, a map that has stopped describing
     the gate fails.
     """
@@ -1350,7 +1350,7 @@ def test_negligible_tests_do_not_all_land_on_one_shard():
     goes to the same runner. Measured on the real map before the per-test floor
     was added: 648 tests on shard 6 against ~153 on each of the others. Total
     recorded load was perfectly level and the deal was still a valid partition,
-    so nothing else in this file noticed — a *balanced* wrong answer is the
+    so nothing else in this file noticed - a *balanced* wrong answer is the
     hardest kind to see.
     """
     nodeids = _synthetic_nodeids(800)
@@ -1532,7 +1532,7 @@ def test_duration_parser_reads_the_ids_pytest_actually_prints():
     """The recorder must not quietly skip tests whose ids are awkward.
 
     Requiring the nodeid to be a single non-space token dropped 19 real tests
-    from an otherwise complete map — every one of them a parametrised id
+    from an otherwise complete map - every one of them a parametrised id
     containing spaces. Nothing failed: the map simply had a hole, and the tests
     in it were balanced as if brand new, forever. The GitHub log prefix is
     covered here too, since ``gh run view --log`` is the intended refresh path.
@@ -1568,7 +1568,7 @@ def test_block_shard_mode_never_consults_the_durations_map(monkeypatch):
     recorded time would preserve the partition and destroy the only property
     the sweep exists to provide. Asserting "the blocks are still contiguous"
     would not catch a well-behaved reordering, so this asserts the stronger
-    thing — block mode does not so much as *read* the data — by making the
+    thing - block mode does not so much as *read* the data - by making the
     read explode.
     """
 
@@ -1593,7 +1593,7 @@ def test_block_shard_mode_never_consults_the_durations_map(monkeypatch):
 def test_hook_partitions_the_collection_with_the_committed_map():
     """End to end through the real hook: the shards tile the collection.
 
-    Deliberately a fixed N rather than the gate's current one — this exercises
+    Deliberately a fixed N rather than the gate's current one - this exercises
     the hook itself, so it should keep testing a multi-shard split even if the
     matrix is later resized down to two.
     """
@@ -1615,7 +1615,7 @@ def test_shard_selection_is_reproducible_across_processes():
     """Two independent pytest processes select the identical shard.
 
     The unit tests above prove the algorithm is deterministic; this proves the
-    *process* is, which is the form the gate actually relies on — eight
+    *process* is, which is the form the gate actually relies on - eight
     interpreters, eight collections, one agreed partition.
     """
     targets = [
@@ -1650,7 +1650,7 @@ def test_shard_selection_is_reproducible_across_processes():
 def test_backend_flags_record_the_durations_the_sharder_needs(workflow):
     """CI must keep emitting the data the committed map is rebuilt from.
 
-    Dropping ``--durations`` would not break a single run — it would quietly
+    Dropping ``--durations`` would not break a single run - it would quietly
     make the map unrefreshable, so it would rot until the gate was back to a
     count-balanced deal with a stale file explaining why it should not be.
     """
@@ -1699,7 +1699,7 @@ def test_invalid_shard_spec_is_rejected(option, spec):
 # `_warn_or_fail_on_map_coverage` is the only thing standing between a rotting
 # map and a balance figure computed over a shrinking subset. Its failing branch
 # never fires on a healthy tree, so without these it would be asserted by
-# nobody — the exact shape the guardrail was written to replace.
+# nobody - the exact shape the guardrail was written to replace.
 
 
 def _coverage_case(recorded: int, total: int = 100) -> tuple[set[str], set[str]]:

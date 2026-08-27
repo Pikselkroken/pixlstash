@@ -2,7 +2,7 @@
 
 Exactly one ``kind='managed'`` folder always exists, so a fresh install has a
 place to drop a file into and a place to import a run into. It is created on
-first run, it is relocatable, and it is not removable — there is no association
+first run, it is relocatable, and it is not removable - there is no association
 to dissolve, only a place for the bytes to be.
 
 The negative cases matter more than the positive one here. ``ensure_managed_folder``

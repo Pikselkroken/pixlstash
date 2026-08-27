@@ -666,7 +666,7 @@ const DEFAULT_TAGS_SUFFIX = "_tags.txt";
 const DEFAULT_DESCRIPTION_SUFFIX = "_description.txt";
 
 const props = defineProps({
-  /** "import" or "reference" — determines API endpoints, labels, and form fields */
+  /** "import" or "reference" - determines API endpoints, labels, and form fields */
   type: { type: String, required: true },
   open: { type: Boolean, default: false },
   /** null → create mode; a folder object → edit mode */
@@ -674,11 +674,11 @@ const props = defineProps({
   inDocker: { type: Boolean, default: false },
   /** "cpu" for the CPU-only Docker image; any other value uses the GPU image. */
   dockerVariant: { type: String, default: "gpu" },
-  /** Registered paths for this folder type — used to disable already-registered entries in browse */
+  /** Registered paths for this folder type - used to disable already-registered entries in browse */
   registeredPaths: { type: Array, default: () => [] },
-  /** Registered folder objects for this folder type — used for Docker command generation */
+  /** Registered folder objects for this folder type - used for Docker command generation */
   registeredFolders: { type: Array, default: () => [] },
-  /** Registered folder objects for the other folder type — used to include their mounts in restart commands */
+  /** Registered folder objects for the other folder type - used to include their mounts in restart commands */
   registeredSiblingFolders: { type: Array, default: () => [] },
   imageRoot: { type: String, default: null },
 });
@@ -1124,7 +1124,7 @@ async function detectSidecars(path) {
       detectInfo.value = "";
     }
   } catch {
-    // Detection is best-effort — ignore errors (e.g. an inaccessible path).
+    // Detection is best-effort - ignore errors (e.g. an inaccessible path).
   }
 }
 
@@ -1608,7 +1608,7 @@ async function copyToClipboard(value, successMessage) {
 /* Pending is not disabled (visual-language.md §11): the shared AppButton keeps
    its label legible while busy, but Save/Remove/Confirm Remove here are stock
    Vuetify v-btn, whose own `--loading` styling sets `.v-btn__content { opacity: 0
-   }` — blanking the label entirely instead of just dimming it. Restore it so
+   }` - blanking the label entirely instead of just dimming it. Restore it so
    these three match the pending contract the rest of #647's forms carry. */
 .btn-save :deep(.v-btn--loading .v-btn__content),
 .btn-save :deep(.v-btn--loading .v-btn__prepend),

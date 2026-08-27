@@ -5,8 +5,8 @@ project membership, so a picture moved between sets/projects is correctly
 detected as changed by the restore preview and snapshot identical-state
 detection. Existing hashes were computed with the previous algorithm (columns +
 tags + faces only); reset them to NULL so they are recomputed with the current
-algorithm. The hash is repopulated lazily — by the ``after_flush`` hook on the
-next write and by ``RestoreService.compare_hashes`` on demand — so no
+algorithm. The hash is repopulated lazily - by the ``after_flush`` hook on the
+next write and by ``RestoreService.compare_hashes`` on demand - so no
 application logic belongs here. Data-only; no schema change.
 
 Revision ID: 0050_reset_metadata_hash_membership

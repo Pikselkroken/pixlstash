@@ -4,7 +4,7 @@
 // the list is offered but never imposed (the column is free text, so a string
 // nobody has heard of must survive being typed), matching ignores spelling so
 // `sdxl` finds `SDXL 1.0`, and Enter takes the highlight rather than the raw
-// text — the last is the one that would still pass with the logic inverted if
+// text - the last is the one that would still pass with the logic inverted if
 // the test only checked that Enter commits.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";

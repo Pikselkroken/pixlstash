@@ -260,7 +260,7 @@ const announcement = computed(() => {
 }
 
 /* On the failed card the button's own error fill sits on an error background
-   and all but disappears — which would hide the only way out of a card that is
+   and all but disappears - which would hide the only way out of a card that is
    held until it is dismissed. A wash of the card's own ink delineates it, and
    the ink itself is the pair the theme already contrast-checks. */
 .progress-overlay--error .progress-overlay__abort {

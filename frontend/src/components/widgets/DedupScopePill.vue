@@ -100,8 +100,8 @@ const countText = computed(() =>
 }
 
 /* ── Shared toolbar collapse (docs/design/toolbar-responsive-decisions.md).
-   The pill never folds while a scope is active — a filtered list that does
-   not say it is filtered is the bug this pill exists to prevent — so on a
+   The pill never folds while a scope is active - a filtered list that does
+   not say it is filtered is the bug this pill exists to prevent - so on a
    narrow bar it compresses to the kind icon + dismiss, the full label
    surviving as the pill's tooltip.
 

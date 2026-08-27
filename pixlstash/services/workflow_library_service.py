@@ -27,7 +27,7 @@ def topology_picture_counts(session: Session) -> dict[str, int]:
     **This count is unscoped and must not be returned to a scoped token as it
     stands.** It reads every non-deleted picture in the vault, so a route
     exposing it to a picture-, set- or project-scoped token would disclose the
-    size of the whole library — the deny-by-default rule in
+    size of the whole library - the deny-by-default rule in
     ``docs/backend_architecture.md`` §16 exists because that class of omission
     has recurred here. A caller that needs a scoped answer adds the narrowing
     parameter then, against a real policy; inventing one now with no route to

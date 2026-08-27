@@ -3,7 +3,7 @@
 // to let them be reached and then get out of the way:
 //
 // * its roving focus must include the `.ate-btn` triggers, which are not
-//   `.ctx-item` — while it walked `.ctx-item` alone, arrow keys skipped Project,
+//   `.ctx-item` - while it walked `.ctx-item` alone, arrow keys skipped Project,
 //   Person and Set entirely and assignment was pointer-only;
 // * ArrowRight must open the focused trigger's flyout and land in its search box;
 // * its capture-phase Escape handler must exempt events from inside `.ate-menu`,

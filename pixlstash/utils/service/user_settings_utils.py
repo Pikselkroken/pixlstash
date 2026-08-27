@@ -82,7 +82,7 @@ def serialize_user_config(user) -> dict:
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
     # predates a newly-added setting simply falls back to the default rather
-    # than raising — keeps serialisation resilient to schema growth.
+    # than raising - keeps serialisation resilient to schema growth.
     config = {
         key: (
             getattr(source, key, None)

@@ -211,7 +211,7 @@ def test_pictures_export_folder_writes_files_and_opens_it():
         assert written, "expected at least one exported file in the destination"
 
         # A folder export's task is collected on the first "completed" status
-        # read (there is no download step to trigger it) — a second status
+        # read (there is no download step to trigger it) - a second status
         # poll must 404, not report the same task forever.
         from tests.utils import API_PREFIX
 
@@ -271,7 +271,7 @@ def test_pictures_export_folder_rejects_missing_destination():
 
 def test_pictures_export_folder_rejects_non_empty_destination():
     """A folder export writes plain files and silently overwrites a same-named
-    one already there (unlike a ZIP, which tolerates duplicate members) — a
+    one already there (unlike a ZIP, which tolerates duplicate members) - a
     non-empty destination must be refused rather than risk overwriting
     something that isn't part of this export."""
     temp_dir, client, server = _setup()

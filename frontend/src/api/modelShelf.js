@@ -1,4 +1,4 @@
-// Model shelf resource — /adapters and /checkpoints.
+// Model shelf resource - /adapters and /checkpoints.
 //
 // Two route blocks, one table (see `pixlstash/routes/model_shelf.py`). They
 // converge on the same query filtered by `file_kind`; the blocks stay apart
@@ -84,7 +84,7 @@ export async function listCheckpoints({ baseModel, q } = {}) {
  * Both halves in one flat sorted list: the labels the server ships (so the
  * field completes on a fresh install, where nothing has been recorded yet) and
  * every distinct string this machine already records that folds to none of
- * them. The whole list, not a per-keystroke query — it is a few dozen strings
+ * them. The whole list, not a per-keystroke query - it is a few dozen strings
  * and the field filters it as the user types.
  *
  * @returns {Promise<Array<string>>} the `base_models` array of the body.
@@ -97,7 +97,7 @@ export async function listBaseModelCompletions() {
 /**
  * Write curated columns onto one or more models.
  *
- * Three of the shelf's verbs land here — Rename, Set base model, Set kind —
+ * Three of the shelf's verbs land here - Rename, Set base model, Set kind -
  * because all three write one column and differ in nothing else. **Only the
  * keys present in `changes` are sent**, so setting a base model across a
  * selection cannot blank the names in it, and an explicit `null` is a *clear*
@@ -187,7 +187,7 @@ export async function deleteModels(ids, { permanent = false } = {}) {
  *
  * The one shelf call that acts on the machine rather than on the library, so
  * it is loopback-only at the gate: a shelf opened over the LAN cannot drive
- * the server's desktop, and neither can a headless one — that comes back 500
+ * the server's desktop, and neither can a headless one - that comes back 500
  * rather than pretending a window opened somewhere.
  *
  * @param {number} id - hub `model.id`. A collapsed stack passes its cover, so

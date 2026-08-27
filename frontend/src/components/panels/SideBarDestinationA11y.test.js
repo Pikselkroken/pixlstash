@@ -7,7 +7,7 @@
 // unreachable too.
 //
 // They are `<button>`s now, which is what buys Tab reach and Enter/Space
-// activation — neither of which jsdom simulates, so what is asserted here is
+// activation - neither of which jsdom simulates, so what is asserted here is
 // the element type that provides them, plus the `aria-current` that no element
 // type provides for free. Both directions: the active destination announces as
 // current, the inactive ones say nothing, and clicking still does what it did.

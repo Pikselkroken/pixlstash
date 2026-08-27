@@ -2,11 +2,11 @@
 
 Two layers:
 
-* the rank coefficient on its own, against hand-computable contingency tables —
+* the rank coefficient on its own, against hand-computable contingency tables -
   tau-b is the part where a sign error or a wrong tie correction would be
   invisible in a rendered heatmap;
 * the endpoint, which has to place pictures in the right cells, treat score 0 and
-  NULL alike as unrated, and — the load-bearing one — NOT apply the score /
+  NULL alike as unrated, and - the load-bearing one - NOT apply the score /
   smart-score-bucket filters to itself, because a widget whose own click
   collapses it to a single cell is a dead end.
 """
@@ -71,7 +71,7 @@ def test_tau_b_is_none_when_a_variable_is_constant():
     """One populated row means the user rated everything the same.
 
     There is no pair that differs on that axis, so the coefficient is undefined
-    rather than 0 — reporting 0 would claim "no relationship" from no evidence.
+    rather than 0 - reporting 0 would claim "no relationship" from no evidence.
     """
     assert _kendall_tau_b([[3, 4, 5], [0, 0, 0], [0, 0, 0]]) is None
 

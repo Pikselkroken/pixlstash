@@ -24,7 +24,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
-# 20 maximally-distinct colors — hue-interleaved so consecutive entries are ~180° apart
+# 20 maximally-distinct colors - hue-interleaved so consecutive entries are ~180° apart
 _PALETTE = [
     "#e53935",  # red          (~0°)
     "#00acc1",  # cyan         (~185°)
@@ -54,7 +54,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "pictureset" not in inspector.get_table_names():
-        # Fresh install — baseline migration creates the table with all
+        # Fresh install - baseline migration creates the table with all
         # columns via SQLModel.metadata.create_all(); nothing to do here.
         return
 

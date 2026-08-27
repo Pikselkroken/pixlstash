@@ -1,4 +1,4 @@
-// Rotate a photo in place — the copy and the gates, as pure functions.
+// Rotate a photo in place - the copy and the gates, as pure functions.
 //
 // Four surfaces offer the same action (the lightbox toolbar, its `[` / `]`
 // shortcuts, the grid context menu and the selection bar's overflow) and every
@@ -6,7 +6,7 @@
 // picture be rotated at all*, and *what does the control say when it cannot*.
 // Answering them four times is how a control ends up enabled on one surface and
 // greyed on another, so they are answered once here and tested without a
-// mounted view — the same argument `keepCoverOnly.js` makes for its own copy.
+// mounted view - the same argument `keepCoverOnly.js` makes for its own copy.
 //
 // The context menu and the selection menu are held to a stricter rule still:
 // #403's parity spec fails the build if a multi-picture selection can reach an
@@ -16,7 +16,7 @@
 // **In-place rotate is an EXIF edit, not a re-encode.** The backend rewrites the
 // orientation tag and copies every other byte through, which is why it is
 // instant and lossless. What it needs in exchange is that every renderer agrees
-// on the tag — and the browser only does for JPEG. Measured 2026-08-18: both
+// on the tag - and the browser only does for JPEG. Measured 2026-08-18: both
 // Chromium 148 and Firefox 150 ignore a PNG's `eXIf` orientation exactly as
 // they ignore WebP's. That is NOT what gates this list, though: the media route
 // serves anything the browser will not turn already transposed
@@ -37,7 +37,7 @@ export const ROTATE_CCW = "ccw";
  * The operation type the server records for a rotate.
  *
  * Used to arm the receipt's second sentence, which is consumed by the FIRST
- * receipt whose op type matches — a mismatch drops the note rather than
+ * receipt whose op type matches - a mismatch drops the note rather than
  * carrying it onto an unrelated action, so a drift here is silent. Keep it in
  * step with the backend's operation log.
  */
@@ -54,9 +54,9 @@ const IN_PLACE_ROTATABLE_FORMATS = new Set(["jpg", "jpeg", "png"]);
  * told only "no" would have to rediscover that on their own.
  */
 export const ROTATE_FORMAT_REASON =
-  "PNG and JPEG only — use Filters > Rotate to make a rotated copy";
+  "PNG and JPEG only - use Filters > Rotate to make a rotated copy";
 export const ROTATE_REFERENCE_FOLDER_REASON =
-  "Reference-folder files are never written to — use Filters > Rotate to make a rotated copy";
+  "Reference-folder files are never written to - use Filters > Rotate to make a rotated copy";
 
 /**
  * Can this picture's own file be rotated in place?
@@ -119,14 +119,14 @@ export function rotateMenuLabel(direction, count) {
 /**
  * The receipt's second sentence: what the rotate did NOT touch.
  *
- * On the same pill as what it did, never a notice of its own — two surfaces for
+ * On the same pill as what it did, never a notice of its own - two surfaces for
  * one action means the user reads the reassuring half and dismisses the half
  * that needed a decision. The two buckets are the server's own and are
  * disjoint: `unsupported_picture_ids` is a file this rotate will not write (a
  * format whose orientation tag cannot be spliced, or a reference-folder
  * original), which the Filters route can still serve; `skipped_picture_ids` is
  * a picture that was not there to turn, which is a different problem with a
- * different fix. A LOCKED selection reaches neither bucket — the endpoint
+ * different fix. A LOCKED selection reaches neither bucket - the endpoint
  * refuses the whole request, which surfaces as an error rather than a note.
  *
  * @param {Object|null} result - the endpoint's response body.

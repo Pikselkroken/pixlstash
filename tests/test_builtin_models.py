@@ -121,7 +121,7 @@ def test_declaring_writes_a_row_per_engine_and_states_which_are_present(
     server_hub, tmp_path
 ):
     """No parsing and no hashing: an engine that is on disk is `present`, one
-    that has not been fetched yet is `not_downloaded` — which is the normal state
+    that has not been fetched yet is `not_downloaded` - which is the normal state
     for about half of them, since the ViT-L/14 scorer arrives only with the CLIP
     model that needs it, and NEVER `missing`, which the shelf draws as a fault
     (#926)."""
@@ -174,8 +174,8 @@ def test_an_unclaimed_file_gets_a_row_the_owner_can_actually_reach(
     """#927: the readout knew about `best.pt` and nothing called it.
 
     Two halves, and the second is the one that makes the first useful. It has to
-    appear at all — a file that is on the shelf's own folder and not on the
-    shelf is one the owner cannot act on — and it has to appear as `unknown`
+    appear at all - a file that is on the shelf's own folder and not on the
+    shelf is one the owner cannot act on - and it has to appear as `unknown`
     rather than `engine`, because every shelf verb refuses an engine row. A
     leftover declared as ours would be visible and still untouchable.
     """
@@ -214,7 +214,7 @@ def test_a_sizing_failure_leaves_the_size_a_previous_run_read(
     `None` and not `0`.
 
     A zero would win the COALESCE and overwrite a figure a previous start read
-    correctly, and the shelf would then say a 339 MB leftover takes no disk —
+    correctly, and the shelf would then say a 339 MB leftover takes no disk -
     from a `stat` that failed for a moment on the one folder the downloaders
     are actively writing into.
     """
@@ -242,7 +242,7 @@ def test_a_file_we_could_not_look_at_is_unreachable_not_undownloaded(
 
     A permission denial or an IO error is us being unable to LOOK, and reporting
     that as `not_downloaded` would hide a real filesystem fault behind a
-    download glyph — the same false reassurance #926 fixed, in the other
+    download glyph - the same false reassurance #926 fixed, in the other
     direction.
     """
     real_stat = os.stat
@@ -276,7 +276,7 @@ def test_declaring_again_does_not_wipe_a_name_the_owner_gave_a_leftover(
     An engine restates its name on every start because nobody may rename one.
     An unclaimed file declares no name at all, so restating it outright would
     reset whatever the owner typed on the one row class here they are allowed
-    to curate — every server start, silently.
+    to curate - every server start, silently.
     """
     (tmp_path / "best.pt").write_bytes(b"y" * 20)
     declare_builtin_models(server_hub, str(tmp_path))
@@ -363,7 +363,7 @@ def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tm
     The managed store is relocatable as a whole and never per file, which is
     what `root_only` says. A path the owner had already registered as an
     ordinary `user` folder carries `per_item`, and an ON CONFLICT that updated
-    only `kind` and `owner` would leave that standing — the built-in folder
+    only `kind` and `owner` would leave that standing - the built-in folder
     claimed for PixlStash while still advertising that its engines may be moved
     out one at a time. Reported by the review of #876.
     """
@@ -385,7 +385,7 @@ def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tm
 
 
 def test_a_file_that_disappears_stops_claiming_to_be_present(server_hub, tmp_path):
-    """Declared, not scanned — but the state still has to tell the truth.
+    """Declared, not scanned - but the state still has to tell the truth.
 
     `not_downloaded` rather than `missing` even here: we re-fetch a declared
     engine the moment something needs it, so a deleted one is pending, not lost,
@@ -406,7 +406,7 @@ def test_a_file_that_disappears_stops_claiming_to_be_present(server_hub, tmp_pat
 
 
 def test_the_checkpoint_hash_worker_never_picks_up_an_engine(server_hub, tmp_path):
-    """Engines carry no `sha256` by design — we know what they are without one —
+    """Engines carry no `sha256` by design - we know what they are without one -
     so they match the finder's plain `sha256 IS NULL` like any unhashed
     checkpoint. Without the exclusion this hands a 339 MB tagger and a pile of
     ONNX to the hash worker to read, and writes a digest onto a row that never
@@ -461,7 +461,7 @@ def test_insightface_declares_what_is_on_disk_and_what_we_know_about(
     assert rows["InsightFace antelopev2"]["state"] == "present"
     assert rows["InsightFace antelopev2"]["file_size"] == 64
     assert rows["InsightFace antelopev2"]["kind"] == "face"
-    # Known but not downloaded: a state, not a warning — and it has to be said
+    # Known but not downloaded: a state, not a warning - and it has to be said
     # with a word the shelf does not draw as a fault (#926).
     for pack in KNOWN_MODEL_PACKS:
         assert rows[f"InsightFace {pack}"]["state"] == "not_downloaded"
@@ -491,7 +491,7 @@ def test_a_machine_that_has_never_run_face_detection_declares_nothing(
     server_hub, tmp_path, caplog
 ):
     """InsightFace creates the directory on its first download, so an absent one
-    is a normal machine and must not raise on the start-up path — nor warn."""
+    is a normal machine and must not raise on the start-up path - nor warn."""
     with caplog.at_level("WARNING"):
         assert declare_insightface_packs(server_hub, str(tmp_path / "nope")) is None
     assert _warnings(caplog) == [], caplog.text
@@ -604,7 +604,7 @@ def test_a_repo_deleted_from_the_cache_stops_claiming_its_bytes(
 
     The scanner marks what it did not see `missing` on every walk, and it skips
     these folders because they carry an `owner`. So a repo that leaves the
-    HuggingFace index — `huggingface-cli delete-cache` — would otherwise keep a
+    HuggingFace index - `huggingface-cli delete-cache` - would otherwise keep a
     `present` row claiming 32 GB that is not on the disk, which is exactly the
     number `present_bytes` reports on the folder list.
     """
@@ -756,14 +756,14 @@ def _repo(repo_id, snapshot=None):
     r = _Repo()
     r.repo_id = repo_id
     r.repo_type = "model"
-    # A frozenset, like the real one — the ordering trap this code had to fix.
+    # A frozenset, like the real one - the ordering trap this code had to fix.
     r.revisions = frozenset({_Rev()}) if snapshot else frozenset()
     return r
 
 
 def test_our_own_downloaders_repos_are_facts_not_guesses():
     """Restated here for the same reason `builtin_models` restates filenames, so
-    the duplicate is pinned against the modules that own the real constants —
+    the duplicate is pinned against the modules that own the real constants -
     imported in the test, where the torch/onnxruntime cost is free."""
     from pixlstash.services.model_features import OUR_REPOS, feature_for_repo
     from pixlstash.tagger_plugins.wd14 import WD14_HF_REPO
@@ -787,7 +787,7 @@ def test_a_text_encoder_is_not_labelled_a_captioner(tmp_path):
 
     `T5ForConditionalGeneration` shares its suffix with every vision-language
     captioner, so matching the suffix alone put "Captioning" on
-    `google/flan-t5-base` — a text encoder that captions nothing — in the column
+    `google/flan-t5-base` - a text encoder that captions nothing - in the column
     a reader uses to decide what is safe to delete. A vision tower is required.
     """
     from pixlstash.services.model_features import feature_for_repo
@@ -855,7 +855,7 @@ def test_a_model_that_serves_two_features_declares_both():
     """The rule this table exists for: a multi-capability model genuinely cannot
     be filed under one heading, so it says both and the shelf lists it twice.
 
-    Florence-2 is the worked example — ONE setting and one set of weights drive
+    Florence-2 is the worked example - ONE setting and one set of weights drive
     `FlorenceService.get_captions` and `.detect_objects`, the latter being what
     `DetectionTask` runs. A single label answers "what breaks if I delete this"
     wrongly for exactly the rows a reader is deciding about.
@@ -956,7 +956,7 @@ def test_declaring_a_cache_writes_the_whole_capability_set(
     server_hub, tmp_path, monkeypatch
 ):
     """The join table is what the shelf reads to list a model under each feature
-    it serves, so the declaration has to fill it — and `model.kind` keeps the
+    it serves, so the declaration has to fill it - and `model.kind` keeps the
     primary label so the Kind column and the curation verbs are unchanged."""
     _hf_cache(
         monkeypatch,
@@ -986,7 +986,7 @@ def test_a_capability_the_declaration_drops_stops_being_listed(
 ):
     """The declaration is the authority, so the set is restated wholesale rather
     than merged. Without that, a model that stopped serving a feature would
-    still be listed under it forever — and re-declaring is what every start-up
+    still be listed under it forever - and re-declaring is what every start-up
     does, so the leak would be permanent rather than rare."""
     from pixlstash.services import builtin_caches
 
@@ -1023,7 +1023,7 @@ def test_only_the_repos_pixlstash_fetches_are_declared_as_engines(
     server_hub, tmp_path, monkeypatch
 ):
     """The HuggingFace cache is shared with every other tool on the machine, and
-    `engine` is the claim "PixlStash downloaded this for itself" — the claim
+    `engine` is the claim "PixlStash downloaded this for itself" - the claim
     every shelf verb refuses on. Stamped over the whole cache it locked the owner
     out of their own models: correcting the Kind of a checkpoint they downloaded
     came back "1 of these are engines PixlStash downloaded for itself", about a
@@ -1053,7 +1053,7 @@ def test_a_found_repo_keeps_the_correction_its_owner_made(
 ):
     """The half that makes the curation stick. Every start-up re-declares the
     cache, so a declaration that restated its own guess would revert the edit
-    between one launch and the next — the owner would see it land and then find
+    between one launch and the next - the owner would see it land and then find
     it undone, which is worse than the refusal it replaced."""
     from pixlstash.services.model_shelf_service import update_models
 
@@ -1086,7 +1086,7 @@ def test_a_repo_we_already_mislabelled_as_ours_is_handed_back(
     server_hub, tmp_path, monkeypatch
 ):
     """Every existing install has these rows stored as `engine` already, and the
-    rule above deliberately stops restating a found repo's file kind — so
+    rule above deliberately stops restating a found repo's file kind - so
     without this the fix would only ever reach a cache declared for the first
     time, and the owner who reported it would still be locked out. Safe to do
     silently because `engine` is not a value any verb can set."""
@@ -1120,8 +1120,8 @@ def test_our_own_engines_are_still_the_declaration_to_state(
         "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
     )["model_id"]
 
-    # No verb offers this — `_refuse_builtin_engines` still refuses every one of
-    # them — so it is written underneath to pin what a re-declaration does.
+    # No verb offers this - `_refuse_builtin_engines` still refuses every one of
+    # them - so it is written underneath to pin what a re-declaration does.
     with server_hub.transaction() as conn:
         conn.execute(
             "UPDATE model SET display_name = 'Mine now', kind = 'lora' WHERE id = ?",
@@ -1139,7 +1139,7 @@ def test_our_own_engines_are_still_the_declaration_to_state(
 
 def test_forgetting_a_model_takes_its_capabilities_with_it(server_hub, tmp_path):
     """Foreign keys are on for the hub, so `model_capability` is not a row that
-    leaks quietly if it is forgotten — it ABORTS the delete. Both directions
+    leaks quietly if it is forgotten - it ABORTS the delete. Both directions
     matter: the delete must succeed, and nothing must be left behind."""
     from pixlstash.services.model_shelf_service import forget_models
 
@@ -1169,7 +1169,7 @@ def test_re_declaring_an_unchanged_set_writes_nothing(
     server_hub, tmp_path, monkeypatch
 ):
     """Every root here is re-declared on every server start, and the set changes
-    about never — so an unchanged declaration must not rewrite the rows.
+    about never - so an unchanged declaration must not rewrite the rows.
 
     This is not only churn. Rewriting ~35 entries' capabilities on every Server
     a process builds was enough extra hub write traffic to take the Windows CI
@@ -1222,7 +1222,7 @@ def test_the_folder_defaults_to_where_it_has_always_been(data_dir):
 
 
 def test_a_recorded_location_survives_the_process_that_wrote_it(data_dir):
-    """The relocation is only real if the next start agrees with it — otherwise
+    """The relocation is only real if the next start agrees with it - otherwise
     every engine is downloaded again into the folder that was just emptied."""
     set_builtin_model_dir("/mnt/big/models")
     assert builtin_model_dir() == "/mnt/big/models"
@@ -1248,7 +1248,7 @@ def _warnings(caplog) -> list[str]:
     """Every WARNING-or-worse message captured, and nothing else.
 
     ``caplog.text`` is whatever the capture handler saw, which includes INFO
-    when the runner asks for it — the gate passes ``--log-level=INFO``. So
+    when the runner asks for it - the gate passes ``--log-level=INFO``. So
     ``caplog.text == ""`` is not "this said nothing worrying", it is "this said
     nothing at all, at whatever level today's command line happens to capture",
     and an ordinary INFO such as ``set_builtin_model_dir``'s own "now downloads
@@ -1301,7 +1301,7 @@ def test_a_start_up_declaration_says_when_the_engines_stayed_where_they_were(
     "The recorded folder cannot be read" is true for a single start: the
     download that follows creates the path, and every start after that sees a
     perfectly readable directory with nothing in it. The steady state of the
-    accident — which is the state the machine that reported it was found in — is
+    accident - which is the state the machine that reported it was found in - is
     a recorded folder holding none of the engines while the default still holds
     them. Silent when the default is empty too, because that is a machine that
     has downloaded nothing rather than one that lost track of what it has.
@@ -1349,8 +1349,8 @@ def test_a_volume_the_environment_names_is_not_reported_as_a_lost_relocation(
     """The override exists for a deployment that points the folder at a volume
     *without moving anything into it*, so a volume that has not mounted yet is a
     first start and nothing was ever fetched. Warning there would be a false
-    alarm on the override's primary use, and it would name a remedy — delete the
-    pointer file — that does nothing while the environment wins.
+    alarm on the override's primary use, and it would name a remedy - delete the
+    pointer file - that does nothing while the environment wins.
     """
     from pixlstash.services.builtin_models import BUILTIN_MODEL_DIR_ENV
 
@@ -1422,7 +1422,7 @@ def test_no_test_can_name_the_machines_own_recorded_locations():
     the deleted directory and download ~750 MB into it.
 
     Asserted on the *path* rather than by writing, because the path is what
-    ``set_builtin_model_dir`` and ``set_insightface_root`` open — sandbox the
+    ``set_builtin_model_dir`` and ``set_insightface_root`` open - sandbox the
     name and the write follows it. No fixture: the session-scoped redirection in
     ``conftest`` is exactly what is under test, and a per-test ``data_dir``
     would hide it. Drop that fixture and this goes red.

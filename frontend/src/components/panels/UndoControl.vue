@@ -1,6 +1,6 @@
 <script setup>
 /**
- * The toolbar history control — the persistent half of undo/redo.
+ * The toolbar history control - the persistent half of undo/redo.
  *
  * An undo/redo icon pair plus a chevron, in the main toolbar, which is in the
  * same place in the Electron shell and in the browser. The receipt is transient
@@ -69,7 +69,7 @@ const redoKeys = redoKeyHint();
 
 // A read-only (share-token) session keeps the control MOUNTED and inert rather
 // than hiding it: the demo has to show that undo exists. There is nothing to
-// soften here — `/operations*` is owner-only, so the store never reads a stack
+// soften here - `/operations*` is owner-only, so the store never reads a stack
 // and every affordance below states that reason instead of implying an empty
 // history. Same `aria-disabled` treatment as "nothing to undo", so the buttons
 // stay tabbable and keep explaining themselves.
@@ -199,7 +199,7 @@ async function onPick(row) {
 /**
  * The popover is opened long after mount, and Vuetify keeps menu content in the
  * DOM once it has been opened, so the read is driven by the open flag rather
- * than by `onMounted` — otherwise the list would show whatever the stack looked
+ * than by `onMounted` - otherwise the list would show whatever the stack looked
  * like the first time it was opened.
  */
 watch(menuOpen, async (isOpen) => {
@@ -347,7 +347,7 @@ defineExpose({
    own class names rather than reusing those: they live in Toolbar.vue's SCOPED
    style block, so a child component gets none of them, and promoting them into
    App.css is a toolbar-wide refactor that belongs to the lane that owns this
-   area — not to this change. Recorded as a follow-up. */
+   area - not to this change. Recorded as a follow-up. */
 .uc-group {
   display: flex;
   align-items: center;

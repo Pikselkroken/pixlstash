@@ -56,7 +56,7 @@ DEFAULT_OUTPUT = REPO_ROOT / "tests" / "ci_test_durations.json"
 # Anchored on the trailing nodeid so a GitHub log prefix in front is harmless,
 # and restricted to `tests/....py::...` so ordinary log chatter cannot match.
 # The nodeid runs to end of line rather than to the next space, because a
-# parametrised id can contain spaces — `...::test_x[Clementine holding a black
+# parametrised id can contain spaces - `...::test_x[Clementine holding a black
 # assault rifle]`. Requiring `\S+` there silently dropped 19 real tests from an
 # otherwise complete map, which is exactly the kind of quiet gap that leaves a
 # slow test unbalanced forever.

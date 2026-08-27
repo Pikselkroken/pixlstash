@@ -227,7 +227,7 @@
              canonical [separator][UndoControl][TbGlobalActions] cluster is
              identical in every view that writes the operation log, so the
              position learned here holds in Duplicates too. (The model shelf
-             writes none and carries no undo — amendment #4.) -->
+             writes none and carries no undo - amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -541,7 +541,7 @@
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
-             controls stood — so it lives HERE, at the end of the action run
+             controls stood - so it lives HERE, at the end of the action run
              it collapses (Export/Import/ComfyUI at ≤700, View at ≤600), and
              never a control from across a group boundary. Fold = CSS both
              ways: each row shares its bar button's v-if, and the container
@@ -770,7 +770,7 @@ const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
 const gbSortMenuOpen = ref(false);
 const gbPendingSortSelection = ref(null);
 
-// True while a text search is active — sort is then locked to relevance.
+// True while a text search is active - sort is then locked to relevance.
 const gbSearchActive = computed(() =>
   Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()),
 );
@@ -1136,7 +1136,7 @@ const gbCollapseAllStacksDisabled = computed(
   container-type: inline-size;
   /* Two names on one container: `selbar` for this bar's own ladder, and the
      shared `toolbar` name that UndoControl and the overflow write their
-     scoped @container rules against — so the shared chrome degrades
+     scoped @container rules against - so the shared chrome degrades
      identically here and in the Duplicates bar (`dqbar toolbar`). */
   container-name: selbar toolbar;
 }
@@ -1295,14 +1295,14 @@ const gbCollapseAllStacksDisabled = computed(
   color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
-/* Similarity character picker — a 2-up grid of avatar rows. */
+/* Similarity character picker - a 2-up grid of avatar rows. */
 .gb-sim-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-1) var(--space-4);
   max-height: 320px;
   overflow-y: auto;
-  /* Never scroll sideways — long names ellipsize instead (see .gb-sim-name). */
+  /* Never scroll sideways - long names ellipsize instead (see .gb-sim-name). */
   overflow-x: hidden;
 }
 

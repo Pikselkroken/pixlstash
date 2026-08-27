@@ -63,7 +63,7 @@ def _reset_face_globals():
 
 
 # --------------------------------------------------------------------------- #
-# §2 — get_or_init_insightface passes the configured name on both paths
+# §2 - get_or_init_insightface passes the configured name on both paths
 # --------------------------------------------------------------------------- #
 
 
@@ -80,7 +80,7 @@ def test_get_or_init_passes_model_pack_name(pack, cpu_spillover):
             "pixlstash.tasks.face_extraction_task.ensure_model_pack_available"
         ) as ensure_in_task,
         # FaceAnalysis is imported inside get_or_init_insightface (the ML libs
-        # are function-local so the server does not pay for them at import —
+        # are function-local so the server does not pay for them at import -
         # backend_architecture §3), so the source module is the patch target.
         mock.patch(
             "insightface.app.FaceAnalysis",
@@ -126,7 +126,7 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
         ORT_ARENA_SHARE["insightface_session"]
     )
     # Never capped: a capped detector failed in the field the evening it
-    # shipped. HEURISTIC stays — det_size never changes, EXHAUSTIVE only cost
+    # shipped. HEURISTIC stays - det_size never changes, EXHAUSTIVE only cost
     # seconds per reload.
     assert "gpu_mem_limit" not in cuda_options
     assert "arena_extend_strategy" not in cuda_options
@@ -213,7 +213,7 @@ def test_get_or_init_loads_from_the_recorded_root(tmp_path, monkeypatch, cpu_spi
 
 
 # --------------------------------------------------------------------------- #
-# §2 — unknown pack fails closed
+# §2 - unknown pack fails closed
 # --------------------------------------------------------------------------- #
 
 
@@ -238,7 +238,7 @@ def test_get_or_init_unknown_pack_raises():
 
 
 # --------------------------------------------------------------------------- #
-# §3 — auto-download behaviour
+# §3 - auto-download behaviour
 # --------------------------------------------------------------------------- #
 
 
@@ -358,7 +358,7 @@ def test_auraface_download_backoff_expires_then_retries(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# §4 — migration backfill (helper SQL on a temp SQLite DB)
+# §4 - migration backfill (helper SQL on a temp SQLite DB)
 # --------------------------------------------------------------------------- #
 
 
@@ -409,7 +409,7 @@ def test_migration_backfill_sets_buffalo_l(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# §4 — model_pack recorded on newly-written faces (incl. sentinel)
+# §4 - model_pack recorded on newly-written faces (incl. sentinel)
 # --------------------------------------------------------------------------- #
 
 
@@ -527,7 +527,7 @@ def test_model_pack_set_on_written_faces_including_sentinel(tmp_path, monkeypatc
 
 
 # --------------------------------------------------------------------------- #
-# §6 — stale-pack finder selection
+# §6 - stale-pack finder selection
 # --------------------------------------------------------------------------- #
 
 
@@ -574,7 +574,7 @@ def test_finder_yields_to_face_extraction():
 
 
 # --------------------------------------------------------------------------- #
-# §5 — in-place refresh preserves character_id
+# §5 - in-place refresh preserves character_id
 # --------------------------------------------------------------------------- #
 
 
@@ -691,7 +691,7 @@ def test_refresh_handles_new_detection_and_removal(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# §5b — manually-drawn faces (no embedding) survive the refresh sweep
+# §5b - manually-drawn faces (no embedding) survive the refresh sweep
 # --------------------------------------------------------------------------- #
 
 
@@ -912,13 +912,13 @@ def test_bbox_iou_basics():
 
 
 # --------------------------------------------------------------------------- #
-# §7 — claim-vs-commit timing and commit-failure handling (B2)
+# §7 - claim-vs-commit timing and commit-failure handling (B2)
 # --------------------------------------------------------------------------- #
 #
 # The synchronous _FakeDB above masks the async behaviour that caused B2: it
 # commits inside submit_task before the call even returns. _AsyncFakeDB runs the
 # write on a real background thread (with a deliberate delay) and returns a real
-# Future, so a fire-and-forget _run_task would return BEFORE the commit landed —
+# Future, so a fire-and-forget _run_task would return BEFORE the commit landed -
 # exactly the bug. _run_task must block on the write futures.
 
 
@@ -1039,7 +1039,7 @@ def test_commit_failure_surfaces_and_excludes_picture(tmp_path, monkeypatch):
     so the failure was invisible and the row stayed stale forever with no signal.
     Now _commit re-raises, the failure surfaces on the future, and _run_task
     excludes the picture from changed_ids (the row stays stale, so the finder
-    re-selects it — a genuine retry, not silent masking).
+    re-selects it - a genuine retry, not silent masking).
     """
     engine = _make_sqlite(tmp_path)
     img_root = tmp_path / "imgs"

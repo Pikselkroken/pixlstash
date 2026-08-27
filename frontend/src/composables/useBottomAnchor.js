@@ -3,14 +3,14 @@
 // The spec's rule is "whoever parks something on the bottom edge owns
 // `--floating-bottom-h`". This composable is that ownership, made literal: the
 // component that renders a bottom-anchored floating element registers it here,
-// and App.vue — which owns the variable — reads one derived number and publishes
+// and App.vue - which owns the variable - reads one derived number and publishes
 // it to `.app-viewport`.
 //
 // Why a registry and not a ResizeObserver in App.vue: the elements do not live
 // in App.vue. The selection pill is rendered by SelectionBar inside ImageGrid's
 // `.grid-content-area`, and the breadcrumb by ImageGrid. Reaching across two
 // component boundaries with a querySelector would couple App.vue to another
-// component's class names — and to the notice host's own placement rule, which
+// component's class names - and to the notice host's own placement rule, which
 // is exactly the coupling §2.3 says to avoid. Registration inverts that: a new
 // bottom-anchored element opts in with one call, and nothing in App.vue or the
 // notice host changes.
@@ -131,7 +131,7 @@ export function useBottomAnchor(name, elRef, { narrowOnly = false } = {}) {
  * The notice stack only ever needs the tallest, but a second bottom-anchored
  * element that stacks ON TOP of another (the action receipt above the selection
  * pill) needs that one element's height to lift itself clear. Reading it from
- * the registry keeps the height measured rather than guessed — the spec is
+ * the registry keeps the height measured rather than guessed - the spec is
  * explicit that the pill's 56px is a first-frame fallback and not a token.
  *
  * @param {string} name - the key the element registered under.

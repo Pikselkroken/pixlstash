@@ -92,7 +92,7 @@ class ImageUtils:
         """
         if not file_path or not os.path.exists(file_path):
             return {}
-        # Pillow cannot open video files — skip metadata extraction for them.
+        # Pillow cannot open video files - skip metadata extraction for them.
         if VideoUtils.is_video_file(file_path):
             return {}
         try:
@@ -164,7 +164,7 @@ class ImageUtils:
         if not file_path:
             return None
         if os.path.isabs(file_path) and image_root:
-            # Reference-folder picture — redirect thumbnail into image_root.
+            # Reference-folder picture - redirect thumbnail into image_root.
             path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
             stem = os.path.splitext(os.path.basename(file_path))[0]
             thumb_dir = os.path.join(image_root, ".ref_thumbs")
@@ -443,7 +443,7 @@ class ImageUtils:
 
         For JPEG files, PIL's ``draft()`` instructs the JPEG decoder to use DCT
         subsampling (1/2, 1/4, or 1/8 of the original size), which is much
-        faster than decoding at full resolution and then resizing — for a 4K
+        faster than decoding at full resolution and then resizing - for a 4K
         JPEG targeting 256 px, this decodes roughly 64× fewer pixels.  For PNG,
         WebP, and other formats ``draft()`` is a no-op and a normal decode +
         cv2 resize is performed instead.
@@ -674,8 +674,8 @@ class ImageUtils:
 
         **The orientation is part of the key, and it is not optional polish.**
         Thumbnails are served ``Cache-Control: private, max-age=3600,
-        must-revalidate``, and a 180° in-place rotate — or a 90° one of a square
-        picture — regenerates a bitmap with exactly the dimensions it had before.
+        must-revalidate``, and a 180° in-place rotate - or a 90° one of a square
+        picture - regenerates a bitmap with exactly the dimensions it had before.
         On dimensions alone the URL would be identical and the browser would go
         on painting the pre-rotate bitmap for up to an hour.
 
@@ -785,7 +785,7 @@ class ImageUtils:
             reference_folder_id: When set, assigned to the Picture so that the
                 reference-folder scan recognises the record as already indexed.
             subfolder: A ``/``-separated relative folder under
-                *image_root_path* to write into — where the v1.11 layout says a
+                *image_root_path* to write into - where the v1.11 layout says a
                 new picture belongs (``services/layout_move_service.render``).
                 The stored ``file_path`` stays RELATIVE, so the picture is still
                 a library picture and its thumbnail is still a sibling file;
@@ -816,7 +816,7 @@ class ImageUtils:
                 # left to `MissingOrientationFinder`. That finder exists to fill
                 # rows that predate the column; a NEW picture whose orientation
                 # is NULL for an indeterminate window is a value anything reading
-                # it right after import races — and the operation log records it
+                # it right after import races - and the operation log records it
                 # as a facet, so a rotate landing in that window would snapshot
                 # `None` as the prior state and its undo would have nothing to
                 # write back.
@@ -1009,7 +1009,7 @@ class ImageUtils:
         coordinate by ``inv_scale`` to get the original-space value.
 
         Uses PIL ``draft()`` for JPEG files so the JPEG decoder subsamples at
-        the DCT level — much faster than full decode + resize for large JPEGs.
+        the DCT level - much faster than full decode + resize for large JPEGs.
         For HEIF, PNG, WebP the image is decoded at full resolution and then
         resized with ``cv2.INTER_AREA``.
 
@@ -1030,7 +1030,7 @@ class ImageUtils:
                 else:
                     orig_w, _ = stored_w, stored_h
 
-                # draft() tells the JPEG decoder to use DCT subsampling — a no-op
+                # draft() tells the JPEG decoder to use DCT subsampling - a no-op
                 # for other formats.  Must be called before load()/convert().
                 img.draft("RGB", (max_side, max_side))
                 img = ImageOps.exif_transpose(img)

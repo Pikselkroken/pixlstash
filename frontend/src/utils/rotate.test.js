@@ -26,7 +26,7 @@ describe("canRotateInPlace", () => {
   });
 
   it("refuses WebP, whose orientation tag browsers ignore", () => {
-    // The load-bearing exclusion: the write works, so nothing upstream fails —
+    // The load-bearing exclusion: the write works, so nothing upstream fails -
     // the thumbnail would come out rotated and the full view would not.
     expect(canRotateInPlace({ id: 1, format: "webp" })).toBe(false);
   });

@@ -80,7 +80,7 @@
           <!-- Paste is a real route in, and it IMPORTS: a screenshot that was
                never imported cannot be chosen, because everything downstream of
                this picker names a picture by its id. The affordance is all this
-               component contributes — the window-level paste handler runs the
+               component contributes - the window-level paste handler runs the
                import and `ImageImporter` announces it from inside, which is the
                only place that knows whether it happened. See the Paste note in
                the script block for why announcing it from here was removed. -->
@@ -134,14 +134,14 @@
                 @error="unavailable.add(pic.id)"
               />
               <!-- Not an empty box: a picture whose file the server cannot
-                   reach — an unplugged drive, the state this very shelf models
-                   — has to say so, or it reads as a thumbnail that has not
+                   reach - an unplugged drive, the state this very shelf models
+                   - has to say so, or it reads as a thumbnail that has not
                    loaded yet and invites a click that cannot work. -->
               <span v-else class="pp-gone">
                 <v-icon size="18">mdi-image-off-outline</v-icon>
               </span>
               <!-- The mark that says WHICH tile is chosen, so the edge is not
-                   the only carrier of the state — the lesson the Character
+                   the only carrier of the state - the lesson the Character
                    editor's reference grid learned about a thin edge on a
                    photograph.
 
@@ -150,7 +150,7 @@
                    NAME (accname §4.3.2 step 2F, which Chromium implements). The
                    tile's subtree is one `alt=""` image, i.e. empty, so its name
                    falls through to `title`; a bare ✓ in there would make the
-                   chosen tile announce as "✓" and lose the picture's name — a
+                   chosen tile announce as "✓" and lose the picture's name - a
                    regression on exactly the reader the badge is drawn for.
                    `aria-pressed` already says chosen. -->
               <span
@@ -203,8 +203,8 @@
 <script setup>
 // One picker, faceted by project, character and picture set, single-select.
 //
-// SINGLE-SELECT ON PURPOSE. Every caller needs exactly one picture — a model's
-// thumbnail, a workflow's fixed input, a run-time answer — and multi-select
+// SINGLE-SELECT ON PURPOSE. Every caller needs exactly one picture - a model's
+// thumbnail, a workflow's fixed input, a run-time answer - and multi-select
 // would be built on the argument that something might want it one day.
 //
 // Design: the `Picker` artboard of the 1.11 Workflow Library canvas. Facet rail
@@ -240,7 +240,7 @@ const BATCH = 120;
 // The same ceiling for search, which needs one imposed HERE: `GET
 // /pictures/search` ignores `top_n` and defaults its `limit` to `sys.maxsize`,
 // so a loose query answers with every match above the similarity threshold and
-// this grid is not virtualised. Cut, and SAID (see `capped` below) — a silent
+// this grid is not virtualised. Cut, and SAID (see `capped` below) - a silent
 // truncation reads as "that is all there is".
 const SEARCH_CAP = 120;
 // How many rows of a facet group are shown before `All N ›`. Three is the
@@ -248,7 +248,7 @@ const SEARCH_CAP = 120;
 const FACET_PREVIEW = 3;
 // Columns in the tile grid. The arrow keys need the number the CSS is using,
 // and `auto-fill` will not tell them, so the grid is held at a fixed count and
-// the tiles flex instead — which is also what the artboard draws.
+// the tiles flex instead - which is also what the artboard draws.
 const COLUMNS = 5;
 
 const entityLists = useEntityListsStore();
@@ -268,7 +268,7 @@ const totalCount = ref(null);
 // True when a search returned more than `SEARCH_CAP` and the tail was dropped.
 const capped = ref(false);
 // Picture ids whose thumbnail would not load. A thumbnail is generated on
-// demand, but only for a file the server can still reach and decode — an
+// demand, but only for a file the server can still reach and decode - an
 // unplugged drive is a state this app models, so a tile has to be able to say
 // "not available" rather than draw an empty box that can still be chosen.
 const unavailable = ref(new Set());
@@ -322,7 +322,7 @@ function tileName(pic) {
 /** The tile's accessible name, which has to carry the unavailable state too. */
 function tileTitle(pic) {
   return unavailable.value.has(pic.id)
-    ? `${tileName(pic)} — not available`
+    ? `${tileName(pic)} - not available`
     : tileName(pic);
 }
 
@@ -348,7 +348,7 @@ async function load({ append = false } = {}) {
   try {
     const text = search.value.trim();
     if (text) {
-      // Search answers in one shot, so there is nothing to page through — and
+      // Search answers in one shot, so there is nothing to page through - and
       // no ceiling on the way back either, so one is applied here.
       const rows = await searchPictures(text, { query: scopeParams().toString() });
       if (seq !== loadSeq) return;
@@ -362,7 +362,7 @@ async function load({ append = false } = {}) {
     const params = scopeParams();
     // An explicit projection rather than `fields=grid`, which the route reads
     // as "this is the picture grid" and silently forces `stack_leaders_only`
-    // (`_listing.py`) — a picker that cannot offer a stacked variant, with
+    // (`_listing.py`) - a picker that cannot offer a stacked variant, with
     // nothing on screen saying so, and a list that would then disagree with
     // what the same query returns through search.
     params.set("fields", "id,file_path");
@@ -398,7 +398,7 @@ function loadMore() {
 /**
  * Choose a tile, if it can be chosen at all.
  *
- * @returns {boolean} whether the choice landed — which the two "choose it AND
+ * @returns {boolean} whether the choice landed - which the two "choose it AND
  *   take it" gestures below have to ask, or a refused tile falls through to
  *   `use()` and accepts whatever was chosen BEFORE it. That is the worst
  *   possible outcome for a refusal: silent, and a picture the reader did not
@@ -406,7 +406,7 @@ function loadMore() {
  */
 function pick(pic) {
   // An unreachable file cannot become a thumbnail, so it cannot be chosen
-  // either — the tile says why rather than failing after the dialog has shut.
+  // either - the tile says why rather than failing after the dialog has shut.
   if (!pic || unavailable.value.has(pic.id)) return false;
   chosen.value = pic;
   return true;
@@ -427,7 +427,7 @@ function use() {
 // One tab stop for the whole grid and the arrows move inside it (the listbox
 // pattern the app already uses in `DedupPictureStrip`). Without it a 120-tile
 // grid is 120 tab stops between the search field and the footer verbs, which
-// makes the keyboard route to `Use this picture` unusable — and it is the route
+// makes the keyboard route to `Use this picture` unusable - and it is the route
 // the ↵ badge on that button promises.
 
 const cellRefs = ref([]);
@@ -447,7 +447,7 @@ function focusCell(index) {
 
 function onCellKeydown(event, index) {
   // Enter on a tile ACCEPTS. A tile is a `<button>`, and `AppDialog` exempts
-  // buttons from its Enter contract precisely so native activation wins — so
+  // buttons from its Enter contract precisely so native activation wins - so
   // without this the ↵ badge on `Use this picture` is a promise the one state
   // it matters in cannot keep.
   if (event.key === "Enter") {
@@ -467,7 +467,7 @@ function onCellKeydown(event, index) {
 //
 // **This component does not handle the paste, and deliberately says nothing
 // about it.** `useWindowFileImport` already claims a pasted image anywhere in
-// the window, and `ImageImporter` — the thing it hands off to — is what
+// the window, and `ImageImporter` - the thing it hands off to - is what
 // announces the import, from inside the import, where the truth is: it opens
 // its own progress dialog on the same keystroke, counts the files, and reports
 // the buckets at the end. A second announcement from here could only ever be a
@@ -475,7 +475,7 @@ function onCellKeydown(event, index) {
 // are the reason this is subtraction rather than a fix:
 //
 //   * `startImport` refuses outright while another import is running, and
-//     refuses again under a read-only token — so a picker that announced
+//     refuses again under a read-only token - so a picker that announced
 //     "importing your pasted picture" said so about nothing at all;
 //   * neither refusal ever registers a run, so a flag armed on paste and
 //     disarmed on the run finishing stayed armed for the life of the dialog;
@@ -484,7 +484,7 @@ function onCellKeydown(event, index) {
 //
 // What is left is the half that IS this component's business: what was pasted
 // has to become selectable without reopening the dialog. So the list is
-// re-read when an import finishes while the picker is open — the CURRENT list,
+// re-read when an import finishes while the picker is open - the CURRENT list,
 // in place. It deliberately does not jump back to `Everything`: an import
 // finishing is not a reason to throw away the facet, the search and the choice
 // the reader has made in the meantime, and any import may be one this reader
@@ -669,23 +669,23 @@ watch(
   object-fit: cover;
   display: block;
 }
-/* The chosen tile wears the whole §11 selected vocabulary — `--active-wash`
-   fill AND `--active-bar` edge — not the edge alone. The edge on its own is a
+/* The chosen tile wears the whole §11 selected vocabulary - `--active-wash`
+   fill AND `--active-bar` edge - not the edge alone. The edge on its own is a
    2px stroke drawn INSIDE a photograph that can be any colour, so whether it
    registers depends on the frame behind it: `--active-bar` is `primary` on
    dark and the `accent` amber on light, and either can land on a picture that
    already contains it. That is what "the picker doesn't get any selection
-   marker" was — checked in a browser against real thumbnails, in both themes.
+   marker" was - checked in a browser against real thumbnails, in both themes.
 
    Outline rather than a box-shadow, because the focus ring below is a
-   box-shadow and the two would fight over one property — which is how the
+   box-shadow and the two would fight over one property - which is how the
    chosen state was once hidden from the reader who has no other way to see it
    (a focused, chosen tile showed only the ring). */
 .pp-cell--on {
   outline: var(--space-1) solid var(--active-bar);
   outline-offset: calc(-1 * var(--space-1));
 }
-/* The wash, over the image rather than under it — a tile IS its picture, so
+/* The wash, over the image rather than under it - a tile IS its picture, so
    there is no surface left to tint. A pseudo-element because it carries no
    text: nothing for the accessibility tree to pick up (unlike the tick, see
    the template). */

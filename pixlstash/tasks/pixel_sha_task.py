@@ -1,9 +1,9 @@
-"""Backfill ``Picture.pixel_sha`` — the tier-1 exact-duplicate key.
+"""Backfill ``Picture.pixel_sha`` - the tier-1 exact-duplicate key.
 
 Every current import path computes ``pixel_sha`` as the file is written, so this
 task exists for the rows that predate it (and for rows whose file was replaced
 under a reference folder). Tier 1 of the duplicate queue is a ``GROUP BY`` on
-that indexed column, so a NULL there is a duplicate the queue can never see —
+that indexed column, so a NULL there is a duplicate the queue can never see -
 which is the one failure mode that makes the sidebar count untrustworthy.
 
 The digest is ``ImageUtils.calculate_hash_from_file_path``, i.e. exactly what the

@@ -11,7 +11,7 @@ import { setActivePinia, createPinia } from "pinia";
 
 // The base-model field asks the server for its completion list the moment
 // somebody types in it. Left real that is a live request from a unit test, and
-// the failure lands as a console line after teardown — which kills the whole
+// the failure lands as a console line after teardown - which kills the whole
 // run, not just this file (see the note in ModelShelf.test.js).
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -121,8 +121,8 @@ describe("what the dialog sends", () => {
   it("seeds the algorithm from two rows the shelf calls one algorithm", async () => {
     // `model.kind` is free text, and the shelf now folds it: `lora` and `LoRA`
     // draw one group header, one Show checkbox, and two Kind cells both
-    // reading `LoRA`. Comparing raw here opened this field BLANK — which means
-    // "they disagree" — on a selection the rest of the screen presents as one
+    // reading `LoRA`. Comparing raw here opened this field BLANK - which means
+    // "they disagree" - on a selection the rest of the screen presents as one
     // thing. Seeded with the first row's own spelling, so saving converges it.
     select([row(1, { kind: "lora" }), row(2, { kind: "LoRA" })]);
     const wrapper = mount(ShelfEditDialog, {
@@ -170,7 +170,7 @@ describe("what the dialog sends", () => {
   it("will not call a MIXED selection already-kinded off the one row that is", async () => {
     // `.every`, never `.some`. At one row the two are the same, which is what
     // every other case here selects; the guard only does work at two. With a
-    // blank field, `.some` would enable Save and send `file_kind` alone —
+    // blank field, `.some` would enable Save and send `file_kind` alone -
     // leaving the second row with the non-algorithm it started with, under a
     // receipt reading "Set the algorithm on 2 models".
     select([
@@ -189,7 +189,7 @@ describe("what the dialog sends", () => {
 
   it("does not count a whitespace-only kind as an algorithm already on file", async () => {
     // The CHECK is `kind IS NOT NULL`, not `kind <> ''`, so `"  "` satisfies
-    // the database and satisfies nobody else. Read raw it is truthy — Save
+    // the database and satisfies nobody else. Read raw it is truthy - Save
     // goes live on a verb that would write only `file_kind` and leave the row
     // with the same non-algorithm it had.
     select([row(1, { file_kind: "adapter", kind: "  " })]);
@@ -206,7 +206,7 @@ describe("what the dialog sends", () => {
   it("sets the features a model serves, which the Kind column already showed", async () => {
     // The reported gap: `Captioning`, `Faces` and `Detection` are what the Kind
     // column reads on a classified row, and the editor offered only file kinds
-    // — a value on screen the owner could not correct.
+    // - a value on screen the owner could not correct.
     const store = select([row(1, { file_kind: "unknown", kind: null })]);
     const wrapper = mount(ShelfEditDialog, {
       ...globalOpts,

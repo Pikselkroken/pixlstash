@@ -804,7 +804,7 @@ def create_router(server) -> APIRouter:
 
             # Stacks are set-membership-atomic, so stacking these pictures would
             # add each of them to every set any of them belongs to. Refuse up
-            # front — before any row is written or committed below — if that
+            # front - before any row is written or committed below - if that
             # would grow a locked set.
             enforce_stack_membership_not_locked(
                 session, picture_ids, None, "create a stack"

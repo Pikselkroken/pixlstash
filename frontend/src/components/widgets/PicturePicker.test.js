@@ -8,7 +8,7 @@
 // picture imported while the picker is open becomes selectable without the
 // reader's facet, search or choice being thrown away.
 //
-// The picker deliberately says NOTHING about a paste — `ImageImporter`
+// The picker deliberately says NOTHING about a paste - `ImageImporter`
 // announces the import from inside it, which is the only place that knows
 // whether it happened. See the Paste note in the component.
 
@@ -171,7 +171,7 @@ describe("search", () => {
 describe("the keyboard", () => {
   it("drops the previous choice when the list changes under it", async () => {
     // AppDialog accepts on plain Enter from a single-line input, and a search
-    // field is one — so Enter in the search box both searches and reaches the
+    // field is one - so Enter in the search box both searches and reaches the
     // dialog's accept. What stops that confirming a tile the reader has stopped
     // looking at is the reload dropping the choice, not the key.
     const w = await mountPicker();
@@ -190,7 +190,7 @@ describe("the keyboard", () => {
 
 describe("an import finishing while the picker is open", () => {
   it("re-reads the list, so what was just pasted is selectable", async () => {
-    // The picker does not handle the paste and says nothing about it — the
+    // The picker does not handle the paste and says nothing about it - the
     // window importer and `ImageImporter` own that, and announce it from
     // inside the import where the truth is. What IS this component's business
     // is that the result becomes selectable without reopening the dialog.
@@ -212,7 +212,7 @@ describe("an import finishing while the picker is open", () => {
 
   it("does not throw away the facet, the search or the choice", async () => {
     // An import finishing is not a reason to undo what the reader has been
-    // doing while they waited — and any import may be one they never started.
+    // doing while they waited - and any import may be one they never started.
     const w = await mountPicker();
     const tasks = useTasksStore();
     const clementine = w
@@ -236,7 +236,7 @@ describe("an import finishing while the picker is open", () => {
 describe("the ceilings, and saying so", () => {
   it("cuts a runaway search and says it cut it", async () => {
     // `/pictures/search` ignores `top_n` and defaults its limit to
-    // `sys.maxsize`, and this grid is not virtualised — so the cap is applied
+    // `sys.maxsize`, and this grid is not virtualised - so the cap is applied
     // here, and a silent one would read as "that is all there is".
     searchPictures.mockResolvedValue(
       Array.from({ length: 500 }, (_, i) => ({ id: 1000 + i })),
@@ -318,7 +318,7 @@ describe("a picture whose file cannot be reached", () => {
     // The refusal has to reach the gestures that mean "choose this one AND
     // take it". If it only reaches the choosing half, a double-click or Enter
     // on a refused tile falls through and accepts whatever was chosen BEFORE
-    // it — silent, and a picture the reader did not point at.
+    // it - silent, and a picture the reader did not point at.
     const w = await mountPicker();
     await w.findAll(".pp-cell")[0].trigger("click");
     expect(w.findAll(".pp-cell--on")).toHaveLength(1);

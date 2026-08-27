@@ -117,7 +117,7 @@ def _make_vault(server, folder: Path) -> Path:
     """A folder holding a real vault that no library is registered against.
 
     Built through the registry so it is indistinguishable from one the server
-    made, then deregistered — the row is dropped outright rather than detached,
+    made, then deregistered - the row is dropped outright rather than detached,
     because a detached row would revive on attach and these tests are about the
     folder, not the registration.
     """
@@ -678,7 +678,7 @@ class TestInspect:
     ):
         """With a parent AND a child overlapping, the copy says "covers".
 
-        `overlapping` returns registry order — active first, then name — which
+        `overlapping` returns registry order - active first, then name - which
         says nothing about the direction, so taking the first would sometimes
         name the child under a sentence claiming it contains the folder.
         """
@@ -807,7 +807,7 @@ class TestInspect:
 
         The READ-token middleware runs ahead of routing, so a request to a
         renamed or nonexistent route returns the same 403 as a genuine refusal
-        — which would make this pass against a dead route. The owner's 200 on
+        - which would make this pass against a dead route. The owner's 200 on
         the identical URL is what proves the route is alive and the refusal is
         the gate's.
         """
@@ -1076,7 +1076,7 @@ class TestDetaching:
         attached set, the one `GET /libraries` shows. Without the filter, a
         second DELETE answered 200 "ok" for a no-op and re-stamped
         `detached_at`, and PATCH renamed a row nobody can see onto the name of
-        one they can — the duplicate check only inspects attached rows.
+        one they can - the duplicate check only inspects attached rows.
         """
         library = added_libraries(_add(_owner(server), tmp_path / "twice-forgotten"))
         assert (
@@ -1097,7 +1097,7 @@ class TestDetaching:
         self, server, added_libraries, tmp_path, monkeypatch
     ):
         """These routes are HUB_ONLY, so the gate's switch 503 does not cover
-        them — deliberately, so the registry answers when no vault is open.
+        them - deliberately, so the registry answers when no vault is open.
         Detach is the one that cannot take the exemption: it reads `is_active`,
         and mid-swap that flag is moving.
         """
@@ -1113,7 +1113,7 @@ class TestDetaching:
         # `Retry-After` is set on the exception and deliberately not asserted
         # here: `Server._add_cors_exception_handler` rebuilds every HTTPException
         # as a JSONResponse and drops `exc.headers`, so no route's headers reach
-        # a client today — the authz gate's own switch 503 loses the same one.
+        # a client today - the authz gate's own switch 503 loses the same one.
         # Pre-existing and worth its own change; the header stays so it works
         # the day that is fixed.
 
@@ -1144,8 +1144,8 @@ class TestDetaching:
 class TestTheNameRuleDoesNotStrandARow:
     """The duplicate-name check must never fire after a committed write.
 
-    `_register` frees a detached row's path — by rewriting it to
-    `<path>#detached-<uuid>` — when a *different* library now sits there. That
+    `_register` frees a detached row's path - by rewriting it to
+    `<path>#detached-<uuid>` - when a *different* library now sits there. That
     UPDATE commits. A name refusal after it would leave the old row at a path
     `_find_by_path` can never match again, so its uuid, and every share token
     stamped with it, would be stranded forever. That is precisely what
@@ -1163,8 +1163,8 @@ class TestTheNameRuleDoesNotStrandARow:
         _owner(server).delete(f"{API}/libraries/{original['uuid']}")
 
         # Record a fingerprint the folder does not carry, so re-registering this
-        # path takes the "a different library now sits here" branch — the one
-        # that frees the path — instead of reviving.
+        # path takes the "a different library now sits here" branch - the one
+        # that frees the path - instead of reviving.
         with server.hub.transaction() as conn:
             conn.execute(
                 "UPDATE library SET vault_uuid = ? WHERE uuid = ?",
@@ -1187,7 +1187,7 @@ class TestTheNameRuleDoesNotStrandARow:
 
         `bootstrap._register_first_library` passes the hardcoded "Library 1"
         and does not catch `LibraryExistsError`, so refusing there would turn a
-        duplicate label — a nuisance — into a server that will not start.
+        duplicate label - a nuisance - into a server that will not start.
         """
         # Not the literal "Library 1": this module's own first library already
         # answers to it. The property under test is that `register_pending`
@@ -1253,8 +1253,8 @@ class TestCountingMediaFiles:
 
         The count must be **short of the total**, not merely capped-flagged: the
         first version of this counted every file in a directory before testing
-        the cap, so a flat folder of half a million images — the exact shape
-        this release is about — was walked in full while reporting `capped`.
+        the cap, so a flat folder of half a million images - the exact shape
+        this release is about - was walked in full while reporting `capped`.
         `0 < count <= 12` passed against that. `count < 12` does not.
         """
         for index in range(12):
@@ -1300,7 +1300,7 @@ class TestTheRequestContract:
         """Switching names a registry uuid, never a folder.
 
         ``POST /libraries`` and ``GET /libraries/inspect`` do accept a host path
-        — that is the whole point of the picker — and are on the locality tier
+        - that is the whole point of the picker - and are on the locality tier
         for it. This route is not, and its body must stay closed so it cannot
         drift onto that tier by accident.
         """

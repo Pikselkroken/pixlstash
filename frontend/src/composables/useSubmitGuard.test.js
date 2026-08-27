@@ -94,7 +94,7 @@ describe("useSubmitGuard", () => {
   });
 
   // Templates call `run` in place of the handler, so arguments and the return
-  // value have to pass straight through — including the click event a bare
+  // value have to pass straight through - including the click event a bare
   // `@click="run"` hands it.
   it("forwards arguments and the resolved value", async () => {
     const handler = vi.fn(async (a, b) => `${a}:${b}`);

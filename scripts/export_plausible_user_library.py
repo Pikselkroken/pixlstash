@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""export_plausible_user_library.py — Copy a real PixlStash library out as a
+"""export_plausible_user_library.py - Copy a real PixlStash library out as a
 folder a human could plausibly have organized by hand, for testing reference
 folders against realistic data instead of a clean synthetic fixture.
 
@@ -19,7 +19,7 @@ run against a library a server is currently using.
   set.
 * ``mixed``: people first, then sets, for whichever picture each already
   belongs to; the rest fall back to date. Whenever the person or set has a
-  Project, its folder is nested one level under the project's own name —
+  Project, its folder is nested one level under the project's own name -
   since only some real characters/sets are actually in a project, this alone
   produces a library where some things sit inside a project folder and others
   don't, without any extra flag for it.
@@ -152,8 +152,8 @@ def _entity_folders(
     """Return ``{picture_id: folder_parts}`` for every picture an entity of
     *kinds* claims, nested under that entity's Project when it has one.
 
-    Reuses ``views_service.collect_in_session`` — the same grouping the Views
-    feature already does — rather than re-deriving it. First kind, then first
+    Reuses ``views_service.collect_in_session`` - the same grouping the Views
+    feature already does - rather than re-deriving it. First kind, then first
     entity within it, wins a picture that belongs to more than one; the
     fallback for everything unclaimed is the caller's job.
     """

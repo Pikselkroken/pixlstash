@@ -44,8 +44,8 @@
 // policy was live at the time, and the server deliberately ignores the gate and
 // the threshold on the decided page so a later policy change cannot hide a
 // decision. What a user reviewing decisions actually wants to narrow by is the
-// DECISION — the ones that were stacked, the ones kept separate, or both (owner
-// call, 2026-07-30) — so the Duplicates toolbar swaps this menu in for
+// DECISION - the ones that were stacked, the ones kept separate, or both (owner
+// call, 2026-07-30) - so the Duplicates toolbar swaps this menu in for
 // `DedupTierMenu` while the Decided page is showing.
 //
 // Nothing here is hardcoded: the verdict ids come from `GET /dedup/policy`'s
@@ -81,7 +81,7 @@ const enabledCount = computed(
  * Whether this row is the only one left on.
  *
  * Turning it off could only ever produce an empty page, which reads as a broken
- * queue rather than as a choice — so the row is held rather than allowed to
+ * queue rather than as a choice - so the row is held rather than allowed to
  * empty the list. The store enforces the same floor.
  *
  * @param {Object} verdict
@@ -181,7 +181,7 @@ function formatCount(value) {
 }
 
 /* The last row standing is ON, not unavailable, so it keeps the active wash and
-   only loses its pointer — dimming it would say the opposite of what it means. */
+   only loses its pointer - dimming it would say the opposite of what it means. */
 .vrow:disabled {
   cursor: default;
 }

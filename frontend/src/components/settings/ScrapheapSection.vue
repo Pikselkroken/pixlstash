@@ -7,7 +7,7 @@
  * Gated behind `isReadOnly === false` at the tab level in UserSettingsDialog.
  *
  * The retention window is a *server* setting (server-config.json), so changing
- * it affects every session — the copy says "PixlStash", not "you".
+ * it affects every session - the copy says "PixlStash", not "you".
  */
 import { computed, ref, watch } from "vue";
 import { VIcon, VTooltip } from "vuetify/components";
@@ -35,7 +35,7 @@ const store = useScrapheapRetentionStore();
 const userPrefsStore = useUserPrefsStore();
 
 // Vuetify dialogs stay mounted after the first open, so onMounted would only
-// ever fire once — fetch on the open transition instead (the house pattern).
+// ever fire once - fetch on the open transition instead (the house pattern).
 watch(
   () => props.open,
   (isOpen) => {
@@ -52,7 +52,7 @@ const options = computed(() =>
 // The select is NOT bound straight to the store: a reduction is only saved after
 // a confirm, so between the pick and the answer the control shows a value the
 // server has not accepted. A local ref lets a cancel push the old value back
-// into the DOM — binding the store directly would leave the native <select>
+// into the DOM - binding the store directly would leave the native <select>
 // visually stuck on the abandoned choice, because the bound value never changed
 // and Vue would have nothing to patch.
 const selectValue = ref(retentionToSelectValue(store.retentionDays));
@@ -95,7 +95,7 @@ const tooltipAriaLabel = computed(
 // ── State line ──────────────────────────────────────────────────────────────
 // The control shows a WINDOW; on its own it does not say whether anything is
 // running. Auto-empty now ships OFF, so "off" has to be a stated fact rather
-// than the absence of one — and stating the ON case in the same place keeps the
+// than the absence of one - and stating the ON case in the same place keeps the
 // two symmetric, so neither reads as the default. Icon AND text, never colour
 // alone. Server-wide setting, so the copy stays impersonal (see the header).
 const stateLine = computed(() => {
@@ -155,7 +155,7 @@ async function onSelect(value) {
   selectValue.value = value;
 
   const isReduction = isRetentionReduction(store.retentionDays, days, {
-    // Never confirm against a baseline we haven't loaded — we'd be asserting a
+    // Never confirm against a baseline we haven't loaded - we'd be asserting a
     // direction we don't actually know.
     previousKnown: store.loaded,
   });
@@ -173,7 +173,7 @@ async function onSelect(value) {
     impact = await getScrapheapRetentionImpact(days);
   } catch (err) {
     // Includes a 404 from a server that hasn't shipped the endpoint yet. Do NOT
-    // guess a count and do NOT save silently — say so and let the user decide.
+    // guess a count and do NOT save silently - say so and let the user decide.
     console.warn(
       `Couldn't check the impact of lowering scrapheap retention to ${String(days)} days; ` +
         "asking the user to confirm on an unverified basis.",

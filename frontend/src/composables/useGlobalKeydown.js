@@ -57,7 +57,7 @@ export function useGlobalKeydown({
    * Is the model shelf the mounted destination?
    *
    * The shelf replaces the grid, and it is the one destination that neither
-   * writes the operation log nor mounts an `ActionReceipt` — and since it also
+   * writes the operation log nor mounts an `ActionReceipt` - and since it also
    * dropped `UndoControl`, nothing on that screen can narrate an undo or carry
    * the "Changed elsewhere" warning. Read off the same kind of DOM signal the
    * lightbox check above uses, for the same reason: there is no shared
@@ -73,9 +73,9 @@ export function useGlobalKeydown({
     // run the app/grid shortcuts (scroll, search, help) behind it.
     if (reviewSessionsStore.overlayOpen) return;
     // The LIGHTBOX owns the keyboard too, with its own undo binding and its own
-    // receipt. This used to be enforced implicitly by listener order — the
+    // receipt. This used to be enforced implicitly by listener order - the
     // overlay mounted before App, ran first, and stopImmediatePropagation()
-    // silenced this handler — but the Duplicates view unmounts and remounts the
+    // silenced this handler - but the Duplicates view unmounts and remounts the
     // grid (and the overlay inside it), which re-registers their listeners
     // AFTER this one and silently flips that order. The result was one Ctrl+Z
     // running TWO undos: this handler's, then the overlay's, which the
@@ -128,7 +128,7 @@ export function useGlobalKeydown({
     // arrived at from the other side: it mounts no receipt and (deliberately)
     // no UndoControl, so the chord there would revert a library action taken
     // on a screen the reader has left, with nothing on this one to say it
-    // happened — not even the "Changed elsewhere" warning, whose only renderer
+    // happened - not even the "Changed elsewhere" warning, whose only renderer
     // is the control the shelf does not have. It declines OUT LOUD: a chord
     // that does nothing at all teaches nothing, and the next thing a reader
     // does is press it again. The notice surface is app-wide and already
@@ -139,7 +139,7 @@ export function useGlobalKeydown({
     // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
     // renders its own. The lightbox is excluded by the explicit `.image-overlay`
     // check at the top of this handler (listener ORDER used to do it, until the
-    // Duplicates view's grid remount flipped it — see that comment). Undo works
+    // Duplicates view's grid remount flipped it - see that comment). Undo works
     // in the lightbox through its own key handler plus `OverlayActionReceipt`,
     // fitted to that surface's GUI per the owner's ruling.
     if (
@@ -159,7 +159,7 @@ export function useGlobalKeydown({
           noticeStore.push({
             level: "info",
             key: SHELF_NO_UNDO_KEY,
-            text: "Model shelf changes aren't undoable — undo and redo apply to library actions in the grid.",
+            text: "Model shelf changes aren't undoable - undo and redo apply to library actions in the grid.",
           });
         } else if (wantsUndo) {
           operationStore.undo();

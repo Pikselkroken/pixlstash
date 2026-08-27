@@ -381,7 +381,7 @@
                dialog, no direction picker and no confirmation. The safety net
                is undo (the receipt below narrates every step and offers it),
                which is the right net for an action that is instant, lossless
-               and reversible — a confirm on every quarter-turn would cost more
+               and reversible - a confirm on every quarter-turn would cost more
                than the mistake it prevents.
 
                Greyed rather than hidden when the file cannot carry a rotation
@@ -510,7 +510,7 @@
           ref="overlayCanvasRef"
           class="overlay-canvas"
           tabindex="0"
-          aria-label="Image — right-click or press the menu key for actions"
+          aria-label="Image - right-click or press the menu key for actions"
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
@@ -675,7 +675,7 @@
 
           <!-- The zoom announcer: the button's aria-label carries the live
                value (no aria-live on the button); this hidden status node
-               announces on settle — 500 ms after the last wheel change, and
+               announces on settle - 500 ms after the last wheel change, and
                immediately on a snap stop. The settle timer lives in
                useWheelZoom. -->
           <span class="visually-hidden" role="status" aria-live="polite">{{
@@ -1027,7 +1027,7 @@ const {
 
 const image = ref(null);
 // Grouping (project/set) membership is stack-atomic: a single stack member shown
-// in the overlay cannot have its membership changed individually — the user must
+// in the overlay cannot have its membership changed individually - the user must
 // unstack first. Whole-stack edits happen from the collapsed grid tile.
 const stackGroupingLockReason = computed(() => {
   if (!image.value) return null;
@@ -1051,7 +1051,7 @@ const chromeRevealTimestamp = ref(0);
 // The zoom family's shared core (Compare's model, adopted here): continuous
 // cursor-anchored wheel zoom, basis 1 = actual pixels, entry at fit, snap
 // stops at fit and 100%. The floor policy is `rest`: the overlay is a
-// DESTINATION, not a layer — wheeling out clamps hard at fit with no exit and
+// DESTINATION, not a layer - wheeling out clamps hard at fit with no exit and
 // no hysteresis (Escape/backdrop remain the exits; ZOOM_EXIT_RESISTANCE stays
 // Compare-only). Pan transport stays the translate+scale transform on
 // `.overlay-media`, which the face-bbox overlays, draw-mode rectangle, and
@@ -1182,7 +1182,7 @@ function setOverlayImageById(nextId) {
       ...(isSameImage && existingDescription != null
         ? { description: existingDescription }
         : {}),
-      // Preserve smartScore fetched by fetchOverlayMetadata — grid images don't carry it.
+      // Preserve smartScore fetched by fetchOverlayMetadata - grid images don't carry it.
       ...(isSameImage && existingSmartScore != null
         ? { smartScore: existingSmartScore }
         : {}),
@@ -1269,7 +1269,7 @@ const currentLockReason = computed(() =>
 // One click (or one `[` / `]`) is one 90° step, applied immediately.
 //
 // Presses are SERIALISED, never dropped. Two quick presses are a legitimate
-// 180° and the second one has to land, so a busy flag is the wrong guard here —
+// 180° and the second one has to land, so a busy flag is the wrong guard here -
 // it would throw away exactly the gesture the design promises. Letting them run
 // concurrently is not an option either: each request reads the file's current
 // orientation and writes the next one, so two in flight over one picture race,
@@ -1307,7 +1307,7 @@ const rotateRightTitle = computed(() => rotateTitle("right", "]"));
  * They travel three different paths, which is why this is not a one-liner:
  *
  *   * the **operation log**, so the receipt narrates the step and offers undo.
- *     Anything the server refused rides that same pill as a second sentence —
+ *     Anything the server refused rides that same pill as a second sentence -
  *     a separate notice would be the half the user dismisses;
  *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
  *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels exactly
@@ -2086,7 +2086,7 @@ async function applyAllImagesUpdate() {
 watch(
   () => allImages.value,
   async () => {
-    // Don't disturb the DOM while the user is actively typing — the reactive
+    // Don't disturb the DOM while the user is actively typing - the reactive
     // update to image.value causes a DOM patch that can blur the focused input.
     // Set a flag so we apply the update as soon as editing finishes.
     if (isAddingTag.value || isDescriptionEditing.value) {
@@ -2243,7 +2243,7 @@ function handleKeydown(e) {
   // App's handler stands down while `.image-overlay` is in the DOM (an
   // explicit guard at its top). Do NOT rely on the stopImmediatePropagation()
   // above to silence it: that only works when this listener registered first,
-  // and the Duplicates view's grid remount re-registers this one LAST — that
+  // and the Duplicates view's grid remount re-registers this one LAST - that
   // ordering flip is exactly how one Ctrl+Z once ran two undos. The owner
   // ruled that undo must work here, fitted to the lightbox's own GUI:
   // `OverlayActionReceipt` narrates the result inside the overlay chrome, so
@@ -2287,7 +2287,7 @@ function handleKeydown(e) {
     }
   }
 
-  // When chrome is hidden, only Space and Escape reveal it — other keys still
+  // When chrome is hidden, only Space and Escape reveal it - other keys still
   // navigate/act but don't bring the chrome back.
   if (chromeHidden.value) {
     if (e.key === " " || e.key === "Spacebar") {
@@ -2381,7 +2381,7 @@ function handleKeydown(e) {
     // Focus is inside the receipt: retire it and hand the keyboard back to the
     // canvas, without closing the lightbox. A keyboard user who tabbed into the
     // pill needs an exit that is not "leave the whole surface". Escape is NOT a
-    // general receipt dismissal — the pill blocks nothing and expires on its
+    // general receipt dismissal - the pill blocks nothing and expires on its
     // own, and making Escape-to-close depend on an invisible countdown would be
     // a worse failure than a pill that outlived its welcome.
     if (receiptRef.value?.containsFocus?.()) {
@@ -2421,7 +2421,7 @@ function handleKeydown(e) {
     }
   } else if (e.key === "[" || e.key === "]") {
     // One press is one 90° step, same as the toolbar buttons; two presses make
-    // 180°. Unmodified only — Ctrl+[ / Cmd+[ is the browser's own Back on
+    // 180°. Unmodified only - Ctrl+[ / Cmd+[ is the browser's own Back on
     // several platforms, and a bracket that both navigated history and turned
     // the picture would be the worst kind of collision.
     if (!e.ctrlKey && !e.metaKey && !e.altKey && canRotateCurrent.value) {
@@ -2741,7 +2741,7 @@ function handleMediaDragStart(event) {
 
 /** Continuous cursor-anchored wheel zoom (the shared model): every step is
  * exponential in the normalized delta, the image point under the pointer
- * stays stationary, and wheel-out clamps hard at fit — no exit. */
+ * stays stationary, and wheel-out clamps hard at fit - no exit. */
 function onWheelZoom(event) {
   if (!open.value) return;
   handleUserActivity();
@@ -2762,7 +2762,7 @@ const mediaTransformStyle = computed(() => {
 /** Above the fit floor: drag means pan (clamped), not drag-out. */
 const isZoomed = zoom.aboveFit;
 
-/** The button's live readout: whole percent of natural size — at fit this is
+/** The button's live readout: whole percent of natural size - at fit this is
  * the computed fit percentage (e.g. "37%"), never the word "Fit". Empty only
  * until the image has measured; the reserved width absorbs it. */
 const zoomButtonLabel = zoom.percentLabel;
@@ -2771,8 +2771,8 @@ const zoomButtonTitle = computed(() => {
   const pct = zoom.percentLabel.value;
   if (!pct) return "Zoom (Z)";
   return zoom.atFit.value
-    ? `Zoom ${pct} (fit) — click for 100% (Z)`
-    : `Zoom ${pct} — click to fit (Z)`;
+    ? `Zoom ${pct} (fit) - click for 100% (Z)`
+    : `Zoom ${pct} - click to fit (Z)`;
 });
 
 const filmstripCanvasData = computed(() => {
@@ -2957,7 +2957,7 @@ const overlayCanvasRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video
-// Derive the video src from id + format only — deliberately excludes pixel_sha
+// Derive the video src from id + format only - deliberately excludes pixel_sha
 // so the URL stays stable across metadata merges (which would otherwise abort
 // the in-progress download). Returns '' while format is not yet known, which
 // also keeps the <video> element from being created prematurely via v-if.
@@ -3272,7 +3272,7 @@ function handleVideoError(event) {
   const err = event.target?.error;
   const code = err?.code ?? -1;
   const msg = err?.message ?? String(event);
-  // MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) is the most common — browser doesn't
+  // MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) is the most common - browser doesn't
   // support the container/codec (e.g. Firefox + .mov/ProRes).
   console.warn(`Video load error (code ${code}): ${msg}`);
   videoError.value = err ?? { code, message: msg };
@@ -3502,7 +3502,7 @@ async function fetchOverlayMetadata(imageId) {
       // which is why the score stayed stale until a full reload).
       // Only fall back to the currently-displayed value when the fetch returns
       // null/absent: the brief post-invalidation window before the recompute
-      // lands, and grid-sourced images that don't carry a smartScore at all — so
+      // lands, and grid-sourced images that don't carry a smartScore at all - so
       // we never flash "unscored" during the transient.
       const freshSmartScore = data.smartScore;
       merged.smartScore =
@@ -3519,7 +3519,7 @@ async function fetchOverlayMetadata(imageId) {
       // smartScore above: this fetch is how an undo/redo (whose WS
       // descriptions_changed event triggers it) reaches an open overlay, and
       // the old local-wins rule kept the field stale until reopen. The one
-      // race — a fetch that left before a local save — is closed at the
+      // race - a fetch that left before a local save - is closed at the
       // source: handleDescriptionUpdate invalidates in-flight requests.
       merged.description = data.description ?? null;
     }
@@ -3998,7 +3998,7 @@ function preloadAdjacentImages() {
   if (idx + 1 < images.length) candidates.push(images[idx + 1]);
   if (idx - 1 >= 0) candidates.push(images[idx - 1]);
   _preloadImages = candidates.flatMap((img) => {
-    // Only preload still images — video files are large; let the browser
+    // Only preload still images - video files are large; let the browser
     // fetch them on demand rather than pre-requesting gigabytes of video.
     if (isSupportedVideoFile(getOverlayFormat(img))) return [];
     const url = appendShareToken(
@@ -4084,7 +4084,7 @@ watch(
 // freshly-committed score. Deliberately NOT gated on the open card's id being in
 // payload.pictureIds: unlike the tag/description watchers (whose events name the
 // exact pictures they touched), a smart_score signal can legitimately omit the
-// open card even when that card WAS rescored —
+// open card even when that card WAS rescored -
 //   • the bulk-drain event carries a whole task batch's ids (vault.py, the
 //     remaining==0 emit), which need not contain the open card;
 //   • an interactive rescore that overflowed the registry is demoted onto that

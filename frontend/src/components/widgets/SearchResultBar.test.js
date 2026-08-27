@@ -62,7 +62,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SearchResultBar — plain search", () => {
+describe("SearchResultBar - plain search", () => {
   it("hides the threshold and the assign action", () => {
     // A text or reverse-image search has neither a person to assign to nor a
     // likeness to cut on; rendering either would be an inert control.
@@ -98,7 +98,7 @@ describe("SearchResultBar — plain search", () => {
   });
 });
 
-describe("SearchResultBar — character face search", () => {
+describe("SearchResultBar - character face search", () => {
   it("states the blast radius on the assign button", () => {
     // "Assign all" hides how much is about to be written. The count is what
     // makes the sliders legible and the click safe to make.
@@ -323,10 +323,10 @@ describe("SearchResultBar — character face search", () => {
   });
 });
 
-describe("SearchResultBar — the live region", () => {
+describe("SearchResultBar - the live region", () => {
   it("carries the full sentence and the cut, debounced to one announcement", async () => {
     // A sighted user watches the number move with the slider; everyone else
-    // needs it in a live region (WCAG 4.1.3) — but once per drag, not once per
+    // needs it in a live region (WCAG 4.1.3) - but once per drag, not once per
     // pointer sample.
     vi.useFakeTimers();
     const wrapper = mountBar(characterSearchProps());
@@ -366,7 +366,7 @@ describe("SearchResultBar — the live region", () => {
   });
 });
 
-describe("SearchResultBar — the Esc keycap", () => {
+describe("SearchResultBar - the Esc keycap", () => {
   it("wears the keycap only when Esc actually reaches it", async () => {
     // Both halves claiming Esc means one of them is lying. An
     // aria-keyshortcuts on a button that will not get the key is a 4.1.2 lie.
@@ -382,7 +382,7 @@ describe("SearchResultBar — the Esc keycap", () => {
       wrapper.find(".clear-search-btn").attributes("aria-keyshortcuts"),
     ).toBeUndefined();
     expect(wrapper.find(".clear-search-btn").attributes("title")).toBe(
-      "Clear search — press Esc twice, or click",
+      "Clear search - press Esc twice, or click",
     );
   });
 });

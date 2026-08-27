@@ -1,7 +1,7 @@
 // The header strip above an expanded stack.
 //
-// These pin the claims the strip makes about the stack — exactly one cover, the
-// evidence it was grouped on — and the two gestures that follow from disagreeing
+// These pin the claims the strip makes about the stack - exactly one cover, the
+// evidence it was grouped on - and the two gestures that follow from disagreeing
 // with it, including the one that must stay a no-op.
 
 import { describe, it, expect, vi } from "vitest";
@@ -37,7 +37,7 @@ function mountStrip(props = {}) {
   });
 }
 
-describe("StackExpansionStrip — what it says", () => {
+describe("StackExpansionStrip - what it says", () => {
   it("leads with the count and carries the evidence beside it", () => {
     // The reason and the date are what make the grouping inspectable rather
     // than something the app just did.
@@ -74,7 +74,7 @@ describe("StackExpansionStrip — what it says", () => {
   });
 });
 
-describe("StackExpansionStrip — the cover", () => {
+describe("StackExpansionStrip - the cover", () => {
   it("marks exactly one member as the cover", () => {
     // Two flagged covers, or none, and the user cannot tell which frame the
     // collapsed grid tile will show.
@@ -112,7 +112,7 @@ describe("StackExpansionStrip — the cover", () => {
   });
 });
 
-describe("StackExpansionStrip — actions", () => {
+describe("StackExpansionStrip - actions", () => {
   it("emits unstack from the trailing action", () => {
     const wrapper = mountStrip();
     wrapper.get('[data-testid="stack-unstack"]').trigger("click");

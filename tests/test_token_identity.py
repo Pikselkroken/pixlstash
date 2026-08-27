@@ -3,7 +3,7 @@
 Two related properties, both about a token id being used as a reference from
 somewhere that can outlive the row it names.
 
-1. ``usertoken.id`` is a plain SQLite ``INTEGER PRIMARY KEY`` — a rowid alias —
+1. ``usertoken.id`` is a plain SQLite ``INTEGER PRIMARY KEY`` - a rowid alias -
    so SQLite hands out the lowest free value and reissues a deleted token's id
    to the next token created.  ``UserToken.public_id`` is random and never
    reissued, and it is what the in-memory session-to-token maps are keyed on,
@@ -107,7 +107,7 @@ def _wipe_tokens(server) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Part 1 — a token's public id is never reissued
+# Part 1 - a token's public id is never reissued
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ def test_a_deleted_tokens_public_id_is_never_reissued(server):
         replacement = _create_token(owner, description="replacement", scope="ALL")
 
     assert replacement["token_id"] in original_int_ids, (
-        "the integer primary key is expected to be reused after deletion — "
+        "the integer primary key is expected to be reused after deletion - "
         "that is the behaviour public_id exists to work around"
     )
     assert _public_id_of(server, replacement["token_id"]) not in original_public_ids, (
@@ -159,8 +159,8 @@ def test_revoking_a_token_ends_its_own_sessions_and_no_others(server):
     The setup reproduces the id-reuse window exactly: a token's row is removed
     out of band (as a restore's token clear does), so no sweep runs, and the
     replacement token is handed the freed integer id.  Keyed on that integer,
-    revoking the replacement would end the *first* token's session — the wrong
-    session — while leaving the replacement's own untouched.
+    revoking the replacement would end the *first* token's session - the wrong
+    session - while leaving the replacement's own untouched.
     """
     _wipe_tokens(server)
     with TestClient(server.api) as owner:
@@ -207,12 +207,12 @@ def test_revoking_a_token_ends_its_own_sessions_and_no_others(server):
             # recorded under the integer id the replacement inherited.
             assert first_session in server.auth.active_session_ids, (
                 "revoking the replacement token ended a session it never "
-                "created — the session map is keyed on a reusable id"
+                "created - the session map is keyed on a reusable id"
             )
 
 
 # ---------------------------------------------------------------------------
-# Part 2 — a restore clears the in-memory authentication state
+# Part 2 - a restore clears the in-memory authentication state
 # ---------------------------------------------------------------------------
 
 
@@ -222,7 +222,7 @@ def test_a_full_restore_clears_the_token_cache_and_every_session(server):
     A verified token is cached for five minutes and a session lives in a plain
     dictionary, neither of which the file swap touches.  Without the reset both
     keep working against a database that no longer holds the rows they were
-    issued from, which is fail-open — and the restore's own token clear does not
+    issued from, which is fail-open - and the restore's own token clear does not
     help, because the cache is consulted before the database is.
     """
     _wipe_tokens(server)
@@ -311,7 +311,7 @@ def test_a_full_restore_still_restores_and_leaves_the_owner_able_to_sign_in(serv
         == "before"
     )
 
-    # And the owner's password still works — the credential cache was re-read
+    # And the owner's password still works - the credential cache was re-read
     # from the restored database rather than left stale or emptied.
     with TestClient(server.api) as fresh:
         signed_in = fresh.post(
@@ -326,8 +326,8 @@ def test_per_resource_restore_leaves_the_authentication_state_alone(server):
     """A per-resource restore needs no reset, and must not perform one.
 
     It never replaces the database file and never reads or writes ``usertoken``
-    / ``guest_session`` / ``guest_score`` — it upserts picture, set and
-    character rows — so nothing held in memory becomes stale.  Signing everyone
+    / ``guest_session`` / ``guest_score`` - it upserts picture, set and
+    character rows - so nothing held in memory becomes stale.  Signing everyone
     out for it would be gratuitous.
     """
     _wipe_tokens(server)

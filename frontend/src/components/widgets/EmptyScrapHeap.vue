@@ -44,7 +44,7 @@
 /**
  * Scrapheap action bar: restore-all / empty, plus the active auto-empty policy.
  *
- * Presentational only — the parent (ImageGrid) owns the retention value and the
+ * Presentational only - the parent (ImageGrid) owns the retention value and the
  * navigation to Settings, so this component never touches the store or the API.
  */
 import { VIcon } from "vuetify/components";

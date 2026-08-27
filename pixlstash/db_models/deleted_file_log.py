@@ -8,7 +8,7 @@ from sqlmodel import Field, SQLModel
 
 class DeletedFileLog(SQLModel, table=True):
     """Records permanently deleted pictures so restore knows what it must never
-    resurrect — using only one-way hashes, never a readable path.
+    resurrect - using only one-way hashes, never a readable path.
 
     A picture is identified by ``path_sha`` (SHA-256 of its vault file path)
     and, when available, ``pixel_sha`` (its content hash). The path is stored
@@ -24,7 +24,7 @@ class DeletedFileLog(SQLModel, table=True):
             rows whose pixel hash was never computed).
         deleted_at: UTC timestamp of permanent deletion.
         file_removed: Whether the on-disk file was actually removed. ``True`` for a
-            genuine permanent deletion (content is gone — restore must never
+            genuine permanent deletion (content is gone - restore must never
             resurrect it). ``False`` when the picture was removed from the library
             but the file was deliberately kept on disk (a protected reference-folder
             picture, ``allow_delete_file=False``): the row exists only to stop the

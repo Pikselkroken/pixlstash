@@ -1,16 +1,16 @@
-"""The human-label ledger — one place that records human POS/NEG decisions.
+"""The human-label ledger - one place that records human POS/NEG decisions.
 
 Absence of a ``Tag`` row is overloaded: it means both "a human reviewed this and said
 NO" and "nobody has looked." That ambiguity wrecks training for any tag whose negatives
 are scarce (every new tag), because absence read as a negative teaches "this tag is
 always absent." This module fixes it at the source: every human accept/reject on a
 ``(picture, tag)`` is recorded on the :class:`TagPrediction` row as an explicit
-``label_state`` (POS/NEG) with ``label_source='human'`` — a real supervision signal that
+``label_state`` (POS/NEG) with ``label_source='human'`` - a real supervision signal that
 survives tag edits, tagger re-runs, and scans.
 
 Route every human decision through :func:`record_human_label` (or
 :func:`record_human_label_if_relevant` for generic tag edits) so accept and reject are
-provably symmetric and the hardest data — a human-reviewed negative — is never dropped.
+provably symmetric and the hardest data - a human-reviewed negative - is never dropped.
 Use :func:`not_human_labeled` as the single guard predicate so model/scan writes never
 clobber a human label.
 """
@@ -46,7 +46,7 @@ MODEL = "model"
 # one on undo (it is the only prediction row a user action can create).
 MANUAL_MODEL_VERSION = "manual"
 
-# The tagger's anomaly vocabulary — the tags a human POS/NEG is worth recording for even
+# The tagger's anomaly vocabulary - the tags a human POS/NEG is worth recording for even
 # when no prediction row exists yet. Generic content tags (character names, scenes) are
 # outside the tagger's label space, so recording them would only pollute the prediction
 # store and the review overlay. Mirrors the penalised-tag set plus the child tags that
@@ -66,7 +66,7 @@ def not_human_labeled():
 
     The single source of truth for the human-protection invariant. Use it everywhere the
     tagger or a scan bulk-mutates predictions so a ``label_source='human'`` ledger entry
-    is never clobbered — re-running the tagger is then a no-op over human rows by
+    is never clobbered - re-running the tagger is then a no-op over human rows by
     construction.
     """
     return or_(
@@ -156,7 +156,7 @@ def record_human_label_if_relevant(
 def clear_human_label(session: "Session", picture_id: int, tag: str) -> None:
     """Undo a human label (reopen/reverse): reset the ledger to UNKNOWN. No commit.
 
-    Leaves the row and its live ``model_version``/``confidence`` intact — only the
+    Leaves the row and its live ``model_version``/``confidence`` intact - only the
     human supervision fields are cleared, so reopening a review is symmetric with
     recording it.
     """

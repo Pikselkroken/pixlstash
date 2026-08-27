@@ -18,7 +18,7 @@
         <button
           class="rs-session-refresh"
           type="button"
-          title="Append newly-found suspects — decided cards are never resurrected"
+          title="Append newly-found suspects - decided cards are never resurrected"
           @click="store.refreshSession(session.id)"
         >
           <v-icon size="14">mdi-refresh</v-icon> Refresh
@@ -57,7 +57,7 @@
       <!-- Store-level error (a failed decision write, refresh, undo…). The
            optimistic mutation in resolveCurrent() rolls back on failure, so
            without this the user sees an identical screen and a tally that
-           flickers and returns — a 423 with no renderer. -->
+           flickers and returns - a 423 with no renderer. -->
       <div v-if="store.error" class="rs-error-bar" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
         <span class="rs-error-msg">{{ store.error }}</span>
@@ -95,7 +95,7 @@
           {{ session.stats?.prev_reviewed ?? 0 }} handled in earlier reviews.
         </p>
         <p class="rs-state-sub rs-state-sub--muted">
-          The board's Priority number is a fast estimate — the review scan is
+          The board's Priority number is a fast estimate - the review scan is
           more selective, so finding fewer (or none) here doesn't mean that
           number was wrong.
         </p>
@@ -118,11 +118,11 @@
         </div>
       </div>
 
-      <!-- Completion: the queue is empty — a real state with a receipt. -->
+      <!-- Completion: the queue is empty - a real state with a receipt. -->
       <div v-else-if="!current" class="rs-state rs-state--done">
         <v-icon size="48" class="rs-state-check">mdi-check-decagram</v-icon>
         <p class="rs-state-big">
-          Review complete — {{ found }} suspect{{ found === 1 ? "" : "s" }}
+          Review complete - {{ found }} suspect{{ found === 1 ? "" : "s" }}
           reviewed.
         </p>
         <p class="rs-state-sub">
@@ -212,7 +212,7 @@
 
       <!-- Assertive because it answers a deliberate user action and must
            interrupt; cleared on card change so it never re-reads a stale reason.
-           Clipped, never `display: none` — a hidden node is not announced. -->
+           Clipped, never `display: none` - a hidden node is not announced. -->
       <p class="visually-hidden" role="status" aria-live="assertive">
         {{ announcement }}
       </p>
@@ -277,7 +277,7 @@ const current = computed(() => store.current);
 //
 // A card has TWO sides and either can be frozen, which is what the original gate
 // got wrong: it tested only `picture_id` (the suspect), while on a pair card the
-// locked picture is almost always the TWIN — and `pairAction()` writes the twin
+// locked picture is almost always the TWIN - and `pairAction()` writes the twin
 // on the fix-twin/swap corners. So every button stayed live, the request went
 // out, and the backend answered 423.
 //
@@ -316,7 +316,7 @@ const twinLock = computed(() => {
 
 // Which side each per-item action writes. Normal locked-twin pair cards arrive
 // already degraded to `kind: "binary"` by the backend, so this table is the
-// defensive path for a stale cached card — not elaborate per-corner gating.
+// defensive path for a stale cached card - not elaborate per-corner gating.
 const ACTION_WRITES = {
   accept: { suspect: true, twin: false },
   dismiss: { suspect: true, twin: false },
@@ -346,7 +346,7 @@ function blockReasonFor(kind, decision) {
 
 // Undo is ONE-WAY on a locked card: `reopen_suggestion` guards both sides
 // unconditionally, so a decision made there is final until the set is unlocked.
-// Explain that up front rather than letting Undo fail silently — which would
+// Explain that up front rather than letting Undo fail silently - which would
 // reproduce the exact bug this change fixes.
 const undoBlockedReason = computed(() => {
   const s = store.activeSession;
@@ -433,7 +433,7 @@ const loadingEmpty = computed(
   () => store.activeQueueLoading && !store.activeQueue.length,
 );
 
-// XP/level/streak: monotonic counters of decisions made — Undo never
+// XP/level/streak: monotonic counters of decisions made - Undo never
 // decrements them.
 const level = computed(() => Math.floor(store.decisionsCount / 3) + 1);
 const xp = computed(() => store.decisionsCount * 100);
@@ -491,7 +491,7 @@ watch(
       }, 300);
     }
     prevKind = kind;
-    // A new card invalidates the previous card's blocked-decision explanation —
+    // A new card invalidates the previous card's blocked-decision explanation -
     // clear the live region so it can never be re-read out of context.
     announcement.value = "";
     // Focus follows the card (the container is re-keyed per card).
@@ -521,7 +521,7 @@ const pendingDecision = ref(null); // { kind, decision, conflict } or null
 
 // The ONE gate for both inputs. The decision bar emits on a blocked click just
 // like an unblocked one (its buttons are aria-disabled, not disabled, so they
-// stay focusable) and lands here — so a blocked mouse press and a blocked key
+// stay focusable) and lands here - so a blocked mouse press and a blocked key
 // press produce the identical announcement, and neither issues a request.
 function attemptBinary(answer) {
   if (holdActive.value || !current.value) return;
@@ -584,7 +584,7 @@ function attemptUndo() {
 }
 
 /**
- * Undo, then say so — in that order, and after the card has landed.
+ * Undo, then say so - in that order, and after the card has landed.
  *
  * The `current` watcher clears `announcement` on every card change, and a
  * successful undo IS a card change (the reopened card returns to the head of
@@ -655,7 +655,7 @@ function handleKey(key) {
     return ["y", "n", "b", "l", "r", "s", "u", "undo"].includes(key);
   }
   // Undo sits ABOVE the `current` guard on purpose: it does not act on the card
-  // in front of you, it puts the LAST one back — which is exactly what you want
+  // in front of you, it puts the LAST one back - which is exactly what you want
   // when the queue has just run dry and there is no current card at all.
   // It always consumes the key: `attemptUndo` answers all three outcomes
   // (blocked, nothing to undo, done), so the press was answered rather than
@@ -675,8 +675,8 @@ function handleKey(key) {
     return true;
   }
   // The `return attempt…(x), true` comma-operator form used here reported the
-  // key as consumed unconditionally — including when attempt*() bailed at its
-  // lock guard — so the overlay called preventDefault() and the user got nothing
+  // key as consumed unconditionally - including when attempt*() bailed at its
+  // lock guard - so the overlay called preventDefault() and the user got nothing
   // at all: strictly worse than the mouse path. Every branch is now an explicit
   // statement + `return true`. Consuming the key is still correct: attempt*()
   // has announced the reason, so the press was answered, not swallowed.
@@ -801,7 +801,7 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-tertiary));
 }
 
-/* `progress.locked` — the suspects this review is holding back. Warning-toned
+/* `progress.locked` - the suspects this review is holding back. Warning-toned
    because it explains a missing count, not an error. */
 .rs-session-locked {
   display: inline-flex;
@@ -857,8 +857,8 @@ defineExpose({ handleKey });
    receive a keyboard-Tab focus. Chromium's sticky keyboard modality makes that
    scripted focus match :focus-visible right after a Y/N/S/U keypress, painting a
    full-card purple ring after every decision (GH #578, most visible in Electron
-   on Windows). The ring is always spurious here — the real focus indicators live
-   on the buttons/thumbnails — so suppress it on the container. Both properties:
+   on Windows). The ring is always spurious here - the real focus indicators live
+   on the buttons/thumbnails - so suppress it on the container. Both properties:
    the app-wide `:focus-visible` rule in style.css paints the ring with
    `box-shadow`, so staying silent about it would put the #578 ring straight
    back, in amber instead of purple. */
@@ -914,7 +914,7 @@ defineExpose({ handleKey });
   gap: 10px;
 }
 /* The emptyScan reassurance line (Spec C item 4) is a secondary clarification,
-   not the primary receipt line above it — quieter size and tone. */
+   not the primary receipt line above it - quieter size and tone. */
 .rs-state-sub--muted {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.5);

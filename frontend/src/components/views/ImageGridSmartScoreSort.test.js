@@ -1,11 +1,11 @@
-// Grid smart-score sort — null placement must match the server's ORDER BY.
+// Grid smart-score sort - null placement must match the server's ORDER BY.
 //
 // ImageGrid.vue (~7.4k lines) is impractical to mount, so this test exercises
 // the exact contract the grid's incremental insert relies on: `gridImageSortKey`
 // feeds a comparator (`descending ? otherKey < key : otherKey > key`) that finds
 // where a freshly-fetched card belongs. The backend sorts the smart_score column
 // with a plain .asc()/.desc() (pixlstash/db_models/picture.py), so SQLite's
-// native NULL rule applies — NULL is less than every real value, hence NULLs
+// native NULL rule applies - NULL is less than every real value, hence NULLs
 // FIRST on ascending and LAST on descending. The client must place a
 // null-scored card in the same slot, or "a card lands in a different spot than
 // the server put it" (the exact bug the `gridSortDescending` comment warns of).
@@ -27,7 +27,7 @@ function getGridSmartScoreValue(img) {
   return Number.isFinite(raw) ? raw : null;
 }
 
-// Verbatim copy of ImageGrid.vue's formatGridSmartScoreValue — what the card
+// Verbatim copy of ImageGrid.vue's formatGridSmartScoreValue - what the card
 // renders. A null smart score must show "" (no score), never "0.00".
 function formatGridSmartScoreValue(img) {
   const value = getGridSmartScoreValue(img);
@@ -100,7 +100,7 @@ function serverOrder(images, descending) {
 
 const ids = (arr) => arr.map((img) => img.id);
 
-describe("grid smart-score sort — null placement matches the server", () => {
+describe("grid smart-score sort - null placement matches the server", () => {
   // Real scores span negative → positive so a 0 sentinel would demonstrably
   // mis-order the null card; -Infinity keeps it consistent with SQLite.
   const withScores = [
@@ -155,7 +155,7 @@ describe("grid smart-score sort — null placement matches the server", () => {
 // refreshSmartScoreForImage → repositionImageBySmartScore), so a card already in
 // the grid is re-ranked to null. It must land where the server would put it AND
 // keep displaying "no score", not a fabricated 0.
-describe("grid smart-score reposition — null re-rank matches the server", () => {
+describe("grid smart-score reposition - null re-rank matches the server", () => {
   const withScores = [
     { id: 1, smart_score: 0.9 },
     { id: 2, smart_score: 0.1 },
@@ -201,7 +201,7 @@ describe("grid smart-score reposition — null re-rank matches the server", () =
   it("does not regress a negative rescore (0 is a real value, not a floor)", () => {
     const descending = true;
     // id 1 (0.9, currently first) rescored to -0.9 must sink below every other
-    // real score but stay ABOVE any null card — proving 0 is not used as a floor.
+    // real score but stay ABOVE any null card - proving 0 is not used as a floor.
     const withNull = [...withScores, { id: 5, smart_score: null }];
     const base = serverOrder(withNull, descending);
     const result = repositionBySmartScore(base, 1, -0.9, descending);

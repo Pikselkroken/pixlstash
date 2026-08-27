@@ -2,7 +2,7 @@
 
 One module-scoped ``Server`` covers the whole flow: run a real Phase 2 read
 over a tiny real folder tree, accept a mapping over it, commit, and check what
-came out the other side — a reference folder indexed in place, the accepted
+came out the other side - a reference folder indexed in place, the accepted
 projects/people/sets/tags, every picture linked, and **the release's headline,
 asserted rather than eyeballed: not one file on disk moved, was renamed, or
 changed a byte.**
@@ -31,7 +31,7 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _make_tree(root: str, spec: dict) -> None:
-    """Real (tiny) files on disk — see test_folder_structure_read.py's twin."""
+    """Real (tiny) files on disk - see test_folder_structure_read.py's twin."""
     from PIL import Image
 
     for rel, files in spec.items():
@@ -49,7 +49,7 @@ def _make_tree(root: str, spec: dict) -> None:
 def _snapshot(root: str) -> dict:
     """Every file under *root*: relative path -> (size, content hash).
 
-    Not mtime — a read-only walk must not perturb it, but asserting on it
+    Not mtime - a read-only walk must not perturb it, but asserting on it
     anyway would be asserting on noise the OS itself introduces (atime-linked
     mtime updates on some filesystems). Content is what "not one byte changed"
     actually means.
@@ -158,7 +158,7 @@ def test_committing_moves_renames_and_copies_zero_files(owner_env):
     commit_body = _drain_commit(owner, commit_task_id, timeout_s=60.0)
     assert commit_body["status"] == "completed", commit_body
     result = commit_body["result"]
-    # 5 images, not the 6 files in `before` — the caption sidecar (`d.txt`)
+    # 5 images, not the 6 files in `before` - the caption sidecar (`d.txt`)
     # is not a picture and gets no Picture row of its own.
     assert result["pictures_indexed"] == 5
     assert result["projects_created"] == 1
@@ -167,7 +167,7 @@ def test_committing_moves_renames_and_copies_zero_files(owner_env):
     assert result["tags_created"] == 1
 
     after = _snapshot(root)
-    assert after == before, "the folder tree changed — the release's headline broke"
+    assert after == before, "the folder tree changed - the release's headline broke"
 
 
 def test_the_accepted_mapping_actually_attaches_the_pictures(owner_env):
@@ -238,7 +238,7 @@ def test_recommitting_a_completed_read_is_refused_and_creates_nothing_twice(owne
 
 
 def test_a_malformed_commit_does_not_burn_the_read_s_one_commit(owner_env):
-    """A 400 on bad input must not mark the read committed — the owner has
+    """A 400 on bad input must not mark the read committed - the owner has
     to be able to fix `assignments` and try again."""
     owner = owner_env["owner"]
     root = os.path.join(owner_env["tmp"], "malformed-then-retry")
@@ -265,7 +265,7 @@ def test_a_malformed_commit_does_not_burn_the_read_s_one_commit(owner_env):
 def test_committing_a_path_already_registered_and_scanned_is_refused(owner_env):
     """§25's reuse-vs-refuse rule: a folder that already completed a scan
     (an unrelated reference folder, or an earlier commit of the same path
-    from a since-cancelled read run again) must not be silently reused —
+    from a since-cancelled read run again) must not be silently reused -
     that would apply the new mapping to whatever is indexed already, not to
     what this read found."""
     owner = owner_env["owner"]
@@ -338,7 +338,7 @@ def test_an_unsettled_read_is_refused(owner_env):
     """A commit against a read still `running` is refused, not queued.
 
     The background read has already settled by the time this test forces the
-    slot's status back to `running` — nothing else will touch it again — so
+    slot's status back to `running` - nothing else will touch it again - so
     the override is restored afterwards rather than "drained": there is
     nothing left to drain.
     """
@@ -367,8 +367,8 @@ def test_an_unknown_commit_status_task_id_is_a_404(owner_env):
 
 def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     """`mode="local_import"`: the "Add a library" bugfix. Pictures already
-    inside the library's own `image_root` become ordinary MANAGED pictures —
-    no reference folder — with the same entity-assignment semantics as
+    inside the library's own `image_root` become ordinary MANAGED pictures -
+    no reference folder - with the same entity-assignment semantics as
     `mode="reference"`."""
     server = owner_env["server"]
     owner = owner_env["owner"]
@@ -418,7 +418,7 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     characters = owner.get(f"{API}/characters").json()
     assert any(c["name"] == "nova" for c in characters)
 
-    # The originals are untouched — no move, rename or copy — but a sibling
+    # The originals are untouched - no move, rename or copy - but a sibling
     # `_thumb.webp` per image is expected: for a MANAGED picture (unlike a
     # reference-folder one) the thumbnail lands next to the source file, same
     # as any other ordinary import. `_snapshot` doesn't distinguish; filter
@@ -435,7 +435,7 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
 def test_local_import_skips_dot_folders(owner_env):
     """A vault's own caches (`.ref_thumbs/`, `.pixlstash` sidecars) can sit
     right inside `image_root`, which `local_import`'s root commonly IS. A
-    `.webp` thumbnail in one of those is a supported extension — without the
+    `.webp` thumbnail in one of those is a supported extension - without the
     same dot-folder prune the Phase 2 read already does, local_import would
     walk straight into it and import PixlStash's own cache files as if they
     were the owner's pictures."""
@@ -466,7 +466,7 @@ def test_local_import_skips_dot_folders(owner_env):
 
 
 def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
-    """local_import must never be reachable against an external folder — that
+    """local_import must never be reachable against an external folder - that
     is exactly what mode="reference" (register_reference_folder) is for, and
     routes.reference_folders already refuses the opposite direction (a
     reference folder that equals or contains image_root)."""
@@ -598,8 +598,8 @@ def test_a_finished_commit_settles_its_record_in_the_same_transaction(owner_env)
 def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env):
     """The record carries enough to finish the job without the read.
 
-    A restart has no read to go back to — the result only ever lived in server
-    memory — so everything the resume needs (root, mode, and the accepted
+    A restart has no read to go back to - the result only ever lived in server
+    memory - so everything the resume needs (root, mode, and the accepted
     assignments themselves) has to be in the row.
     """
     from pixlstash.services import folder_structure_commit_service as svc
@@ -680,7 +680,7 @@ def test_a_pending_commit_is_finished_by_the_next_start_up(tmp_path):
     """The point of the whole record: a killed import finishes itself.
 
     Its own ``Server`` pair rather than the module's shared one, because the
-    thing under test *is* the process boundary — the resume runs as the router
+    thing under test *is* the process boundary - the resume runs as the router
     is built, so it cannot be provoked inside a server that is already up.
     """
     from sqlmodel import select

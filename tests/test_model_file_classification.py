@@ -121,7 +121,7 @@ class TestTheFolderNamesTheRole:
     """The support kinds, which no header signal can assert.
 
     A VAE and a text encoder carry no marker, and their parameter counts land on
-    both sides of the checkpoint threshold — a CLIP-L below it, a T5-XXL well
+    both sides of the checkpoint threshold - a CLIP-L below it, a T5-XXL well
     above. The directory is what actually knows, because ComfyUI and the
     launchers that front it file models by role.
     """
@@ -187,7 +187,7 @@ class TestTheFolderNamesTheRole:
     def test_a_lora_folder_names_nothing_so_a_big_file_is_still_a_checkpoint(self):
         # `loras` is deliberately absent from the table. All-in-one checkpoints
         # get dropped in LoRA folders, and the parameter count already catches
-        # them — trusting the folder here would BREAK that.
+        # them - trusting the folder here would BREAK that.
         assert (
             classify_model_file(
                 ["model.weight"],

@@ -1,4 +1,4 @@
-// useSelectionStore.js — what the sidebar currently has selected.
+// useSelectionStore.js - what the sidebar currently has selected.
 //
 // ── Security (issue #655, found by the store matrix) ─────────────────────────
 // Most of this is UI state, but `selectedSetNames` holds server-resolved set
@@ -10,7 +10,7 @@
 //
 // The three sessionStorage-backed values (`characterMultiMode`, `setMultiMode`,
 // `setDifferenceBaseId`) are view preferences that survive a reload by design.
-// Only `setDifferenceBaseId` names a server object, so it alone is cleared —
+// Only `setDifferenceBaseId` names a server object, so it alone is cleared -
 // through its own setter, so the stored copy goes with it rather than being
 // left behind to reappear on the next reload.
 

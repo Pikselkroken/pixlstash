@@ -1,4 +1,4 @@
-// useViewStore.js — route → view resolution: the one place the app parses the
+// useViewStore.js - route → view resolution: the one place the app parses the
 // URL into the selection/project state the grid renders.
 //
 // The route stays the SINGLE SOURCE OF TRUTH for what the grid shows (see
@@ -116,7 +116,7 @@ function parseStackState(raw) {
  *
  * It rides on every grid route rather than only on `/`, for the same reason
  * `?stack_state=` does: the facet is not specific to one view shape, and
- * `/character/UNASSIGNED?path=…` — the unassigned pictures in one folder — is
+ * `/character/UNASSIGNED?path=…` - the unassigned pictures in one folder - is
  * exactly what a finding opens.
  *
  * **It does NOT yet fix the sidebar's subfolder selection.** A subfolder click
@@ -152,7 +152,7 @@ function parseFolderPath(raw) {
  * anywhere does not silently clear a filter the filter panel set.
  *
  * It exists because "About your library" opens its unnamed-faces finding on
- * `/character/UNASSIGNED?face=with_face` — unassigned means no face here is
+ * `/character/UNASSIGNED?face=with_face` - unassigned means no face here is
  * named, `with_face` means there is one, and the pair is exactly the set the
  * finding counted. Without it the destination would be every unassigned
  * picture, most of which have no face at all.
@@ -353,7 +353,7 @@ function applyView(view, selectionStore, projectStore, filterStore) {
   if (view.clearFolderFilter) {
     selectionStore.selectedFolderFilter = null;
   } else if (view.folderFilter && !view.folderKey) {
-    // A `?path=` route owns the folder facet — EXCEPT on a folder route, where
+    // A `?path=` route owns the folder facet - EXCEPT on a folder route, where
     // the sidebar owns the payload and sets it once the folder has loaded.
     // Without the `folderKey` guard, `/ref-folder/5?path=/sub` would overwrite
     // the sidebar's `{referenceFolderId, pathPrefix, label}` with a bare

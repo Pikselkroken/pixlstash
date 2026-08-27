@@ -3,8 +3,8 @@
 A commit has two phases and only one of them is atomic. Indexing writes a
 picture row per file over many transactions; assigning creates the projects,
 people, sets and tags and links every picture to them in a single one. Kill the
-app between them — the owner quits, the machine sleeps, the desktop shell
-restarts the backend — and the library is left half made: some pictures
+app between them - the owner quits, the machine sleeps, the desktop shell
+restarts the backend - and the library is left half made: some pictures
 indexed, nothing organised, and no record anywhere that the owner ever asked
 for the rest. The screen that would ask again is gone with the process, because
 the read and the accepted assignments only ever lived in server memory.
@@ -51,7 +51,7 @@ class FolderMappingCommit(SQLModel, table=True):
         task_id: The id the client polls. Kept across a resume so a client that
             remembers it can reattach to the resumed run.
         root_path: The folder that was read, absolute.
-        mode: ``reference`` or ``local_import`` — which of the two commit paths
+        mode: ``reference`` or ``local_import`` - which of the two commit paths
             this was, recorded because they index differently and a resume must
             take the same one.
         label: The reference folder's label, when the owner gave one.
@@ -60,10 +60,10 @@ class FolderMappingCommit(SQLModel, table=True):
             ``folder_structure_commit_service.parse_assignments`` reads. Stored
             rather than re-derived: the read that produced it is gone after a
             restart, and re-running it would cost the same half hour again and
-            could propose something else. ``[]`` is an "organise later" commit —
+            could propose something else. ``[]`` is an "organise later" commit -
             index everything, decide what the folders mean another day.
         stage: Last stage reported (``registering`` / ``indexing`` /
-            ``assigning``). Informational — a resume re-runs from the start of
+            ``assigning``). Informational - a resume re-runs from the start of
             its phase, since indexing is idempotent by ``file_path`` and
             assigning is one transaction.
         state: :data:`STATE_PENDING`, :data:`STATE_DONE`,

@@ -1,4 +1,4 @@
-// Issue #717 — a share link minted while the owner browsed a project.
+// Issue #717 - a share link minted while the owner browsed a project.
 //
 // `AccountSection.shareUrl` builds the link from `window.location.pathname`
 // (Settings is a dialog, not a route), so a token minted from `/project/5`
@@ -9,12 +9,12 @@
 //
 // These tests exercise the real code on both halves of the chain:
 //
-//   * the ORDERING App.vue depends on — `useViewStore.startRouteSync` is
+//   * the ORDERING App.vue depends on - `useViewStore.startRouteSync` is
 //     installed at setup with `immediate: true` (App.vue:322), so the URL's
 //     project scope is already written by the time the scoped-session block in
 //     `onMounted` (App.vue:384) runs. Proven below with the real store and the
 //     real Vue lifecycle, not asserted from reading the file;
-//   * the CONSEQUENCE — the real `useGridFetch` builds the real query string,
+//   * the CONSEQUENCE - the real `useGridFetch` builds the real query string,
 //     so `project_id` is asserted on the wire rather than inferred from
 //     `projectViewMode`.
 //
@@ -81,7 +81,7 @@ function mountWithRouteSync(route, atMounted) {
 }
 
 /**
- * Minimal `useGridFetch` harness — same shape as the one in
+ * Minimal `useGridFetch` harness - same shape as the one in
  * `composables/useGridFetch.test.js`. Selection, filter and project facets come
  * from the live Pinia stores, which is the point: this builds the REAL query.
  */
@@ -190,7 +190,7 @@ describe("a scoped share session landing on a project URL", () => {
   it("does not ask the server for a project a character token cannot see", async () => {
     scopedSession("character", 9);
     const wrapper = mountWithRouteSync(routeOf("project", { id: "5" }), () => {
-      // App.vue:390 — the scoped-session block selects the shared character.
+      // App.vue:390 - the scoped-session block selects the shared character.
       useSelectionStore().selectedCharacter = 9;
     });
 
@@ -204,7 +204,7 @@ describe("a scoped share session landing on a project URL", () => {
   it("does not ask the server for a project a picture-set token cannot see", async () => {
     scopedSession("picture_set", 3);
     const wrapper = mountWithRouteSync(routeOf("project", { id: "5" }), () => {
-      // App.vue:387 — the scoped-session block selects the shared set.
+      // App.vue:387 - the scoped-session block selects the shared set.
       useSelectionStore().selectedSet = 3;
     });
 

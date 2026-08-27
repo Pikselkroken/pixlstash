@@ -127,8 +127,8 @@
            the first time should not have to run one to find that out. -->
       <!-- Amendment #3: S became a SYNONYM of Enter for Stack (the owner's
            S-for-Stack slip is now self-healing), and K took Keep separate.
-           The chips stay one key per button — the primary key shown, the
-           synonym taught in copy — while aria-keyshortcuts carries the full
+           The chips stay one key per button - the primary key shown, the
+           synonym taught in copy - while aria-keyshortcuts carries the full
            machine-readable set (the chips are aria-hidden, so this is the
            only channel that announces the keys at all). -->
       <button
@@ -313,7 +313,7 @@
 // That redundancy is the point. `Up`/`Down` then `Enter`/`S` can never be
 // ambiguous about which group they hit, and a user who looks away mid-run can
 // find the cursor again without reading anything. (The former "Keyboard acts
-// here" label was dropped as noise — owner call, 2026-07-29; the kbd chips on
+// here" label was dropped as noise - owner call, 2026-07-29; the kbd chips on
 // the verdict buttons carry that message.)
 //
 // The row owns no data of its own: covers, exclusions and verdicts all belong
@@ -373,7 +373,7 @@ const props = defineProps({
   focused: { type: Boolean, default: false },
   // Part of a Ctrl/Shift-click multi-selection. While the selection holds two
   // or more groups, the verdict buttons rename themselves to say they act on
-  // ALL of them — a bulk action must never look like a single one.
+  // ALL of them - a bulk action must never look like a single one.
   selected: { type: Boolean, default: false },
   selectionCount: { type: Number, default: 0 },
   // True when Enter/S would genuinely take the whole selection (the focused
@@ -444,7 +444,7 @@ const emit = defineEmits([
 const userPrefsStore = useUserPrefsStore();
 
 /**
- * When the decision was made, in the user's own date format — the same
+ * When the decision was made, in the user's own date format - the same
  * `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
  * renders through (scrapheap deadlines, picture metadata). `decided_at`
  * arrives as a naive-UTC ISO string per house convention; the util
@@ -867,7 +867,7 @@ function onExpand(unit) {
 
 /**
  * A modified press means "select rows", so the browser's own gesture on the
- * same input — extending a text selection from wherever the caret last was —
+ * same input - extending a text selection from wherever the caret last was -
  * must not also run. Selection starts on mousedown, before the click handler
  * ever sees the event, so this is the only place it can be refused.
  * @param {MouseEvent} event
@@ -938,7 +938,7 @@ function onToggle(unit) {
  * Two carve-outs keep the gesture from surprising anyone:
  *
  *   * the action buttons (`.gbtn`, `.gcompare`, the Clear on a decided row)
- *     keep their own double-click meaning — a fast double press on Stack is
+ *     keep their own double-click meaning - a fast double press on Stack is
  *     two Stack clicks, already guarded by `busy`, and must not ALSO open a
  *     dialog over the next group;
  *   * a modified double-click belongs to the selection gestures (Ctrl/Shift
@@ -958,7 +958,7 @@ function onDblClick(event) {
 .grow {
   position: relative;
   display: grid;
-  /* Three columns — info | pictures | verdicts — per the owner's layout call
+  /* Three columns - info | pictures | verdicts - per the owner's layout call
      (2026-07-29): the row reads left to right as "what this is, what's in it,
      what to do about it". minmax(0, 1fr) on the middle is what makes the
      picture strip scroll horizontally INSIDE its cell (one scrollbar per row)
@@ -967,7 +967,7 @@ function onDblClick(event) {
   align-items: center;
   gap: var(--space-3) var(--space-5);
   /* Tight vertically, comfortable horizontally. The row's height is spent on
-     the pictures — the one thing in it the user actually has to look at — so
+     the pictures - the one thing in it the user actually has to look at - so
      the vertical padding is the smallest step that still reads as a card
      (owner call, 2026-07-29: the previous --space-4 was padding the strip out
      of the room it needed). */
@@ -1009,7 +1009,7 @@ function onDblClick(event) {
 }
 
 /* Part of a multi-selection: the same accent family as the focus treatment,
-   one step quieter — no left bar, that stays the keyboard cursor's. */
+   one step quieter - no left bar, that stays the keyboard cursor's. */
 .grow--selected {
   border-color: rgba(var(--v-theme-accent), 0.55);
   background: var(--hover-wash);
@@ -1060,11 +1060,11 @@ function onDblClick(event) {
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
-/* The decided row's verdict statement — reads as state, not as a button.
+/* The decided row's verdict statement - reads as state, not as a button.
    TEXT-edge aligned with the Clear button below it (owner report: the outer
    borders lined up, the text did not): the label wears the button's exact
-   box — a 1px border made transparent, the same horizontal padding, the same
-   height and icon gap — so its icon and text columns start precisely where
+   box - a 1px border made transparent, the same horizontal padding, the same
+   height and icon gap - so its icon and text columns start precisely where
    the button's do, in both themes. It stays a <span> with no hover, focus or
    cursor treatment, so the invisible border can never read as an affordance. */
 .gverdict {

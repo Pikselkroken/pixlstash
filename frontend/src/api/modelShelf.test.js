@@ -1,13 +1,13 @@
 // The model-shelf resource, and specifically the WIRE.
 //
-// Every consumer of this module mocks it out at the import boundary — the shelf
+// Every consumer of this module mocks it out at the import boundary - the shelf
 // store, the shelf view, the show panel and `AdapterTray` all replace
-// `listAdapters` with a double — so until this file existed the real function
+// `listAdapters` with a double - so until this file existed the real function
 // body was executed by nothing in the repo. That is not a theoretical gap: the
 // params here are snake_case because FastAPI reads them that way, and FastAPI
 // silently DROPS a query param it does not declare. Rename `character_id` to
 // `characterId` and every caller keeps passing its tests while the server
-// answers with every adapter on the machine — which the tray would then render
+// answers with every adapter on the machine - which the tray would then render
 // as one person's attachments, under a confident "N attached".
 //
 // So these assert the query string, not the arguments.
@@ -131,9 +131,9 @@ describe("api/modelShelf the rest of the wire", () => {
   });
 
   it("editModels sends the ids beside the changed columns, and only those", async () => {
-    // Only the keys actually passed are sent — that is what lets one route
+    // Only the keys actually passed are sent - that is what lets one route
     // carry Rename, Set base model and Set kind without each blanking the
-    // others — and an explicit null is a CLEAR, not "leave it alone".
+    // others - and an explicit null is a CLEAR, not "leave it alone".
     await editModels([1, 2], { base_model: null });
     expect(apiClient.patch).toHaveBeenCalledWith("/models", {
       ids: [1, 2],

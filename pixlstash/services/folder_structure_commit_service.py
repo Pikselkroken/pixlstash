@@ -8,14 +8,14 @@ place anything from the mapping screen is written.
 **No file is moved, renamed or copied, at any stage, in either commit mode.**
 
 - ``mode="reference"`` (the default): the scanned root is registered as an
-  ordinary :class:`~pixlstash.db_models.reference_folder.ReferenceFolder` —
+  ordinary :class:`~pixlstash.db_models.reference_folder.ReferenceFolder` -
   indexed in place by the existing, already-shipped
   :class:`~pixlstash.tasks.reference_folder_scan_task.ReferenceFolderScanTask`,
   which is the only filesystem-reading step here and writes nothing but the
   vault database and its own thumbnail cache. Right for a folder *external* to
   the library's own storage.
 - ``mode="local_import"``: for a root that IS the active library's own
-  ``image_root`` (or a folder inside it) — the "Add a library" flow's
+  ``image_root`` (or a folder inside it) - the "Add a library" flow's
   "pictures" verdict, where the folder a fresh vault was just created in
   already held loose files. Those pictures already live where the library
   keeps its own, so they become ordinary MANAGED pictures (relative
@@ -23,7 +23,7 @@ place anything from the mapping screen is written.
   ones. Routing this case through ``mode="reference"`` instead would either
   bypass or have to reimplement the exact conflict guard
   ``routes.reference_folders._validate_reference_folder_conflicts`` already
-  enforces — a reference folder may never equal or contain ``image_root`` —
+  enforces - a reference folder may never equal or contain ``image_root`` -
   which is the proof the two need to stay two commit modes, not one.
   ``local_import_pictures`` does the read this mode's own filesystem step
   (there is no already-shipped scan task for "index my own image_root in
@@ -32,7 +32,7 @@ place anything from the mapping screen is written.
   modes cannot answer "who does this folder belong to" differently.
 
 Once a mode's filesystem step has run, every newly-indexed picture is linked
-to whichever accepted ancestor folder names it — a database row, never a
+to whichever accepted ancestor folder names it - a database row, never a
 filesystem write.
 
 An assignment names a folder, not a picture: two folders that resolve to the
@@ -87,7 +87,7 @@ from pixlstash.utils.reference_folder_validator import (
 
 logger = get_logger(__name__)
 
-#: `local_import`'s own "hash + thumbnail many files" step — mirrors
+#: `local_import`'s own "hash + thumbnail many files" step - mirrors
 #: `ReferenceFolderScanTask`'s `_BUILD_CHUNK_SIZE` / `_MAX_BUILD_WORKERS`,
 #: the established shape for this exact piece of work, rather than a new one.
 _BUILD_CHUNK_SIZE = 128
@@ -101,7 +101,7 @@ INDEX_TIMEOUT_S = 30 * 60.0
 _POLL_INTERVAL_S = 0.25
 
 #: The facets a folder can be accepted as, plus "tag" which is a `Facet` value
-#: too — every accepted `kind` the mapping screen sends is one of these.
+#: too - every accepted `kind` the mapping screen sends is one of these.
 _ACCEPTED_KINDS = frozenset(f.value for f in Facet)
 
 
@@ -127,12 +127,12 @@ class Assignment:
     """One accepted folder from the mapping screen.
 
     Attributes:
-        relative_path: POSIX-separated, relative to the scanned root — the
+        relative_path: POSIX-separated, relative to the scanned root - the
             same handle the read's folder rows carry. ``""`` addresses the
             root folder itself.
         kind: One of `Facet`'s values (``project``, ``person``, ``set``,
             ``tag``). Rows the owner left as "just a folder" or undecided are
-            not sent at all — there is nothing here for them to do.
+            not sent at all - there is nothing here for them to do.
         match_id: The existing entity to attach to, when the owner accepted a
             `name_match` (or picked one from `candidates` themselves) rather
             than starting a new one. ``None`` means "create one named after
@@ -155,7 +155,7 @@ class Assignment:
 
 @dataclass
 class CommitResult:
-    #: ``None`` for a `local_import` commit — there is no reference folder;
+    #: ``None`` for a `local_import` commit - there is no reference folder;
     #: the pictures are managed ones, indexed directly under `image_root`.
     reference_folder_id: Optional[int] = None
     pictures_indexed: int = 0
@@ -176,7 +176,7 @@ def parse_assignments(raw: list) -> list[Assignment]:
 
     Raises:
         CommitError: A row is malformed, or names a kind the read never
-            proposes and the layout would not accept — "folder" included,
+            proposes and the layout would not accept - "folder" included,
             since a row with nothing to do is simply absent from the list.
     """
     parsed: list[Assignment] = []
@@ -224,7 +224,7 @@ def record_pending_commit(
     """Write the accepted mapping down before the commit thread starts.
 
     Before, deliberately. A record written afterwards would not exist for the
-    window this whole mechanism is about — the crash that lands between "the
+    window this whole mechanism is about - the crash that lands between "the
     owner pressed the button" and "the pictures are organised".
     """
 
@@ -351,7 +351,7 @@ def _resolve_folder(
 ]:
     """Return the (project, person, set) ancestor and every tag ancestor.
 
-    The nearest accepted ancestor of each exclusive kind wins — a folder is
+    The nearest accepted ancestor of each exclusive kind wins - a folder is
     filed under the *closest* Project or Person or Set above it, mirroring
     ``library_layout``'s first-match-wins segments. Tags are not exclusive:
     every accepted Tag ancestor along the path applies, because a picture can
@@ -402,7 +402,7 @@ def register_reference_folder(
                 # A row with a completed scan pass is either an unrelated
                 # reference folder the owner already had, or an EARLIER
                 # commit of this same path (a fresh read run again over a
-                # folder that was already organised once) — either way,
+                # folder that was already organised once) - either way,
                 # reusing it here without re-scanning would silently apply
                 # this mapping to whatever pictures happen to be indexed
                 # already, not to what the read the owner just accepted
@@ -413,7 +413,7 @@ def register_reference_folder(
                     "committing this read."
                 )
             # last_scanned is None: registered but its first scan has not
-            # completed yet — a retry of a commit that crashed after
+            # completed yet - a retry of a commit that crashed after
             # registering but before the scan finished. Safe to keep waiting
             # on the same row rather than erroring, since nothing has been
             # indexed under it that this wait could miss.
@@ -445,7 +445,7 @@ def validate_local_import_root(server, root_path: str) -> None:
     """Refuse a `local_import` commit whose root is not the library's own tree.
 
     `local_import` turns pictures already on disk into ordinary MANAGED
-    pictures — the mirror image of `register_reference_folder`, which
+    pictures - the mirror image of `register_reference_folder`, which
     `routes.reference_folders._validate_reference_folder_conflicts` already
     refuses for exactly this path (a reference folder may never equal or
     contain `image_root`). This is the same rule read the other way: a folder
@@ -461,7 +461,7 @@ def validate_local_import_root(server, root_path: str) -> None:
     if not image_root or not path_is_within(root_path, image_root):
         raise CommitError(
             f"{root_path} is not this library's own folder ({image_root or 'unset'}) "
-            "or inside it — local_import only applies to pictures the library "
+            "or inside it - local_import only applies to pictures the library "
             "already owns."
         )
 
@@ -471,12 +471,12 @@ def _build_managed_picture(
 ) -> Picture:
     """Build a managed Picture for a file already sitting under *image_root*.
 
-    Mirrors ``ReferenceFolderScanTask._build_picture`` — same hash, metadata
-    and thumbnail steps — with the two differences that matter for a MANAGED
+    Mirrors ``ReferenceFolderScanTask._build_picture`` - same hash, metadata
+    and thumbnail steps - with the two differences that matter for a MANAGED
     picture: ``file_path`` is stored RELATIVE (to *image_root*) rather than
     absolute, and no ``reference_folder_id`` is set. No bytes are written or
     moved for the picture itself; only the thumbnail is generated, exactly as
-    the reference-folder path does — the source file already lives where it
+    the reference-folder path does - the source file already lives where it
     is going to stay.
     """
     pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
@@ -511,7 +511,7 @@ def _build_managed_picture(
                     }
         except Exception as exc:
             # Not fatal: a corrupt image just means no thumbnail yet. Same
-            # swallow reference_folder_scan_task makes — the Picture row is
+            # swallow reference_folder_scan_task makes - the Picture row is
             # still built and MissingThumbnailFinder can retry later.
             logger.warning(
                 "Local import: could not decode %s for a thumbnail (%s: %s); "
@@ -565,7 +565,7 @@ def local_import_pictures(
     Args:
         expected_pictures: The read's own count, shown as the progress total.
         on_progress: ``(processed, total) -> None``, called as files are
-            resolved — both the already-indexed ones (counted immediately)
+            resolved - both the already-indexed ones (counted immediately)
             and the newly-built ones (counted as each chunk commits).
         should_stop: ``() -> str | None``, checked at each chunk boundary. A
             returned state aborts the walk by raising `CommitStopped`.
@@ -582,8 +582,8 @@ def local_import_pictures(
     image_root = os.path.normpath(server.vault.image_root)
 
     # Prune dot-folders exactly as the Phase 2 read does (`folder_structure_
-    # service.py`): a vault's own caches — `.ref_thumbs/`, `.pixlstash`
-    # sidecars — sit *inside* image_root, and root_path is commonly
+    # service.py`): a vault's own caches - `.ref_thumbs/`, `.pixlstash`
+    # sidecars - sit *inside* image_root, and root_path is commonly
     # image_root itself. Without this prune, local_import would re-import
     # every reference-folder thumbnail already sitting in `.ref_thumbs/` as
     # if it were a picture of its own (`.webp` is a supported extension).
@@ -683,7 +683,7 @@ def wait_for_first_scan(
     Raises:
         CommitError: The scan did not finish inside *timeout_s*, or the
             reference folder failed to mount.
-        CommitStopped: The owner stopped waiting. Only the *wait* stops — the
+        CommitStopped: The owner stopped waiting. Only the *wait* stops - the
             scan is an ordinary background task and carries on to the end,
             which is exactly what "organise later" is asking for.
     """
@@ -737,7 +737,7 @@ def _link_pictures(
 
     Shared by `apply_mapping` (a reference folder's indexed set, absolute
     `file_path`) and `apply_local_mapping` (`local_import_pictures`'s managed
-    pictures, `file_path` relative to *image_root*) — the one place the
+    pictures, `file_path` relative to *image_root*) - the one place the
     Facet-handling (create-or-match project/person/set, nearest-ancestor-wins,
     every Tag ancestor) is written, so the two commit modes cannot answer "who
     does this folder belong to" differently.
@@ -749,7 +749,7 @@ def _link_pictures(
 
     # `apply_local_mapping` is handed pictures that may already have been
     # indexed before the wizard ran, so some can sit in a locked set. Skip
-    # those rather than failing the whole commit — the rest of the library
+    # those rather than failing the whole commit - the rest of the library
     # still gets filed. (`apply_mapping`'s pictures are new, so it is a no-op
     # there.)
     frozen = locked_picture_ids(session, [p.id for p in pictures if p.id is not None])
@@ -885,7 +885,7 @@ def apply_mapping(
 
     Runs once the reference folder's first scan has completed, so every
     picture it will ever touch already has a `Picture.file_path`. Nothing here
-    reads the filesystem again — folder membership is derived purely from that
+    reads the filesystem again - folder membership is derived purely from that
     already-recorded path, which is what makes this step a pile of database
     writes and not a second walk.
 
@@ -923,7 +923,7 @@ def apply_local_mapping(
     """The `local_import` counterpart to `apply_mapping`.
 
     Links the pictures `local_import_pictures` just imported (or found
-    already indexed) to the accepted projects, people, sets and tags — same
+    already indexed) to the accepted projects, people, sets and tags - same
     entity-resolution code as `apply_mapping` via `_link_pictures`, sourced
     from an explicit id list rather than a `reference_folder_id` foreign key,
     since a managed picture carries no such column.

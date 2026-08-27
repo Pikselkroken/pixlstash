@@ -10,9 +10,9 @@
     <div class="ins-toolbar">
       <!-- An `h2`, not a span: the findings below are `h3`, and without a
            heading above them the screen has no outline for a screen reader to
-           move through. The CSS is unchanged — the other view bars carry their
+           move through. The CSS is unchanged - the other view bars carry their
            title in a span and Toolbar.test.js pins this one's size and ink to
-           theirs — so this is the outline only, not a visual change. -->
+           theirs - so this is the outline only, not a visual change. -->
       <h2 class="ins-title">About your library</h2>
       <span class="ins-sub">read-only · nothing here has been changed</span>
       <div class="ins-tb-right">
@@ -134,7 +134,7 @@ const lede = computed(() => {
   if (!data.total_pictures) {
     return (
       "There are no pictures here yet. Add the folder you already organised " +
-      "and PixlStash will read it in place — nothing moves, nothing is renamed."
+      "and PixlStash will read it in place - nothing moves, nothing is renamed."
     );
   }
   const looked = `${checks} things worth knowing about the ${total} pictures you already had.`;
@@ -364,7 +364,7 @@ onMounted(load);
 }
 
 /* The note under a button says what it opens, not what it will do to your
-   pictures — nothing on this screen does anything to your pictures. */
+   pictures - nothing on this screen does anything to your pictures. */
 .ins-note-sm {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-background), 0.5);

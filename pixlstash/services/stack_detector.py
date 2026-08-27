@@ -7,8 +7,8 @@ is free, silent and continuous; rearranging somebody's shelf takes a click. So
 this module returns groups and writes nothing, and :func:`apply_stack` is a
 separate call the UI makes only after the owner has seen the dry run.
 
-**A stack is a subject, not a training run.** It started as one — six files
-differing only by a step — but a person retrains a character and calls the
+**A stack is a subject, not a training run.** It started as one - six files
+differing only by a step - but a person retrains a character and calls the
 result ``Foxglove_v2``, and that is the same subject on the shelf even though it
 shares no training run with ``Foxglove``. So grouping is on the name with both
 the step *and* the version token removed, and a group is proposed when its
@@ -30,14 +30,14 @@ missing code.
 
 Only *unstacked* adapters are considered. A run imported from ai-toolkit is
 already a stack (:mod:`pixlstash.services.run_importer` builds one), and a
-stack the owner has ratified must never be re-proposed — the risk is in
+stack the owner has ratified must never be re-proposed - the risk is in
 creating groupings nobody has seen, not in extending one they have.
 
 **Three functions curate a stack that already exists**, and none of them is
 detection: :func:`set_cover` is the owner overruling the filenames about which
 file the shelf draws for a run, :func:`remove_member` takes one file back out
 of one, and :func:`repair_stacks` is what every *other* way a member can leave
-— Forget, Delete, a duplicate merge — has to call so the run it left is still
+- Forget, Delete, a duplicate merge - has to call so the run it left is still
 a run. Like :func:`unstack`, not one of them touches a byte on disk.
 """
 
@@ -89,7 +89,7 @@ class ProposedMember:
     step: int | None
     file_size: int | None
     # Deliberately NOT defaulted. The cover sort reads this, and a missing
-    # version silently sorts as v1 — so a future construction that forgets it
+    # version silently sorts as v1 - so a future construction that forgets it
     # would pick the wrong cover with nothing to show for it. Required here
     # makes that a TypeError at the call site instead.
     version: str | None
@@ -131,8 +131,8 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     Reads only. The caller shows the result and asks; nothing here writes.
 
     Grouped **per folder**, not shelf-wide. Two runs on different disks can
-    easily share a name — ``JimmyVehicle`` is not a globally unique thing, which
-    is the same reason ``run_key`` is documented as unique within a stack only —
+    easily share a name - ``JimmyVehicle`` is not a globally unique thing, which
+    is the same reason ``run_key`` is documented as unique within a stack only -
     and collapsing across folders would invent a run that never existed and
     would put one stack's members on two drives.
 
@@ -155,7 +155,7 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
         # has many `model_file` rows, so a bare `mf.model_folder_id` beside
         # `GROUP BY m.id` is a bare column: SQLite may return the folder of ANY
         # of its rows, so a model catalogued on two disks would group under one
-        # folder on this call and the other on the next — proposals would be
+        # folder on this call and the other on the next - proposals would be
         # nondeterministic, and two members of one run could land in different
         # groups and never be offered together. MIN makes the choice stable, and
         # `apply_stack` re-derives the same common-folder rule, so a proposal
@@ -249,15 +249,15 @@ def apply_stack(
 
     The names are only *read* here, never gated on: the caller may stack any
     loose adapters that share a folder, whether or not detection would have
-    proposed them. What the names decide is the cover — newest version first,
+    proposed them. What the names decide is the cover - newest version first,
     then the bare final of that version, then its highest step.
 
     **``fuse`` is what lets a stack be stacked.** Without it a model that is
     already in a stack is refused, which is right for the proposals flow: that
     caller is confirming a dry run over *loose* files, so a row stacked in the
     meantime must be left where it is rather than torn out. Fusing is the
-    opposite intent — the owner picked two stacks on the shelf and asked for one
-    — so it is a separate flag rather than a relaxed gate, and the default stays
+    opposite intent - the owner picked two stacks on the shelf and asked for one
+    - so it is a separate flag rather than a relaxed gate, and the default stays
     the strict one.
 
     **Fusing absorbs whole stacks, never part of one.** Every member of every
@@ -273,7 +273,7 @@ def apply_stack(
     **Every gate is re-checked on the UPDATE itself, not just read first.**
     An earlier version read the gate with a SELECT inside ``hub.transaction()``
     and believed that was one critical section. It is not: the hub connects with
-    ``isolation_level=""``, so pysqlite opens a transaction on *DML only* — a
+    ``isolation_level=""``, so pysqlite opens a transaction on *DML only* - a
     leading SELECT runs in autocommit and the INSERT below is what actually
     begins the write. Measured, not reasoned: with two connections on one WAL
     database, ``in_transaction`` reads ``False`` after the SELECT, and a second
@@ -370,7 +370,7 @@ def apply_stack(
 
         placeholders = ",".join("?" for _ in ids)
         # The gate. `stack_id IS NULL` is dropped only when fusing, and even then
-        # a row is admitted solely from a stack this call is absorbing — never
+        # a row is admitted solely from a stack this call is absorbing - never
         # from a third one that appeared in the meantime.
         stacked_clause = (
             f"(m.stack_id IS NULL OR m.stack_id IN ({','.join('?' for _ in absorbed)}))"
@@ -391,7 +391,7 @@ def apply_stack(
         ).fetchall()
 
         # "Grouped per folder, never shelf-wide" is the module's invariant, and
-        # until now only `propose_stacks` enforced it — so the route could build
+        # until now only `propose_stacks` enforced it - so the route could build
         # a stack whose members sit on two drives, which is exactly the run that
         # never existed. Checked as "is there ONE folder holding a present copy
         # of every named model", which is the honest reading of a run being
@@ -477,8 +477,8 @@ def apply_stack(
                 )
 
         if absorbed:
-            # The absorbed stacks are empty now — every member points at the new
-            # one — so the rows go. Deleted by "has no members left" rather than
+            # The absorbed stacks are empty now - every member points at the new
+            # one - so the rows go. Deleted by "has no members left" rather than
             # by id, so a stack that somehow kept one is left alone instead of
             # becoming an orphaned `stack_id` pointing at nothing.
             emptied = conn.execute(
@@ -503,8 +503,8 @@ def apply_stack(
 def unstack(hub: HubDatabase, stack_id: int) -> int:
     """Break a stack apart, leaving its members loose on the shelf.
 
-    The undo the shelf never had. Everything else here is one-way — a stack was
-    built by a confirmation and there was no gesture that took it back — which
+    The undo the shelf never had. Everything else here is one-way - a stack was
+    built by a confirmation and there was no gesture that took it back - which
     is why the grouping dialog had to warn that nothing unstacks a group, and
     why fusing had to be argued for so carefully. With this, both become
     ordinary edits rather than commitments.
@@ -515,7 +515,7 @@ def unstack(hub: HubDatabase, stack_id: int) -> int:
 
     One consequence worth knowing: the members become *loose*, so
     :func:`propose_stacks` can offer to regroup them the next time the dialog is
-    opened. That is honest — they really are files that look like a run — but it
+    opened. That is honest - they really are files that look like a run - but it
     means unstacking is not a way to tell detection "never again". Recording
     that refusal needs somewhere to keep it, and there is nowhere yet.
 
@@ -539,7 +539,7 @@ def unstack(hub: HubDatabase, stack_id: int) -> int:
             "DELETE FROM adapter_stack WHERE id = ?", (stack_id,)
         ).rowcount
         if not deleted:
-            # Inside the transaction, so the UPDATE above rolls back with it —
+            # Inside the transaction, so the UPDATE above rolls back with it -
             # an id that names no stack must not half-release rows on its way to
             # reporting that.
             raise StackRefused(
@@ -556,7 +556,7 @@ def set_cover(hub: HubDatabase, stack_id: int, model_id: int) -> list[int]:
     """Promote one member of a stack to ``stack_position`` 0.
 
     The names decide the cover when a stack is built, and they are usually
-    right — but only the owner knows that the run's best checkpoint is step
+    right - but only the owner knows that the run's best checkpoint is step
     1500 rather than the one the trainer wrote last. This is the override, and
     it is the only way a cover is ever chosen by hand.
 
@@ -564,8 +564,8 @@ def set_cover(hub: HubDatabase, stack_id: int, model_id: int) -> list[int]:
     Nothing renumbers a stack after it is built: :func:`apply_stack` writes
     positions once, :func:`propose_stacks` reads *loose* adapters only, and the
     run importer's upsert keeps an existing ``stack_position`` with
-    ``COALESCE``. A member's row can still *disappear* — deleted, forgotten, or
-    merged away as a duplicate by the checkpoint-hash task — and
+    ``COALESCE``. A member's row can still *disappear* - deleted, forgotten, or
+    merged away as a duplicate by the checkpoint-hash task - and
     :func:`repair_stacks` closes the gap that leaves; a chosen cover survives
     all of it unless the chosen file is itself what went.
 
@@ -628,8 +628,8 @@ def remove_member(hub: HubDatabase, stack_id: int, model_id: int) -> tuple[int, 
 
     :func:`unstack` breaks a whole stack up; this releases a single member,
     which is what the owner wants when one checkpoint of a run turns out to be
-    a different subject. **Nothing on disk is touched** — two hub columns are
-    cleared — and the released model becomes loose, so :func:`propose_stacks`
+    a different subject. **Nothing on disk is touched** - two hub columns are
+    cleared - and the released model becomes loose, so :func:`propose_stacks`
     may offer to regroup it, exactly as it may after an unstack.
 
     **A stack of one is not a stack**, so removing the second-to-last member
@@ -643,7 +643,7 @@ def remove_member(hub: HubDatabase, stack_id: int, model_id: int) -> tuple[int, 
         model_id: The member to release.
 
     Returns:
-        ``(released, dissolved)`` — how many models are loose again, and
+        ``(released, dissolved)`` - how many models are loose again, and
         whether the stack itself is gone.
 
     Raises:
@@ -700,7 +700,7 @@ def repair_stacks(conn, stack_ids: Iterable[int]) -> None:
     :func:`~pixlstash.services.model_shelf_service._purge`, which drops the
     ``model`` row and knows nothing about stacks. Left alone that yields a run
     whose positions read ``0, 2, 3``, or one with **no** position 0 at all
-    because the cover is what went, or a stack of one — which the shelf draws
+    because the cover is what went, or a stack of one - which the shelf draws
     as a plain row while still holding a grouping nobody can see or undo.
 
     So this is the repair, and it is the one statement of the rule: renumber
@@ -714,7 +714,7 @@ def repair_stacks(conn, stack_ids: Iterable[int]) -> None:
     the row it is about to point at.
 
     Args:
-        conn: An open hub connection, inside the caller's transaction — the
+        conn: An open hub connection, inside the caller's transaction - the
             repair has to land with whatever removed the member.
         stack_ids: The stacks to check. An id that names no stack, and a stack
             that is already tidy, cost one read and change nothing.
@@ -765,7 +765,7 @@ def _cover_first_key(member: ProposedMember):
     """Sort key putting the right cover at ``stack_position`` 0.
 
     **Version first, then the step rule.** The newest version is what a person
-    means by "the LoRA" once they have retrained the subject — a stack of
+    means by "the LoRA" once they have retrained the subject - a stack of
     ``Foxglove`` and ``Foxglove_v2`` covers with v2, and an unversioned file
     reads as v1 because it existed before v2 did. *Within* one version the rule
     is unchanged: the bare no-step file is what the trainer wrote last so it
@@ -777,7 +777,7 @@ def _cover_first_key(member: ProposedMember):
     same function.** That one is ``finals + stepped`` with no version term, and
     it is deliberately left alone: it orders a single ai-toolkit run, which is
     one version by construction, so the two agree on every input it can see. Say
-    superset rather than "the same rule" — the older wording became false the
+    superset rather than "the same rule" - the older wording became false the
     moment a version term existed, and a reader checking the claim would find
     two functions. If the importer ever ingests more than one run at a time, it
     has to come here rather than grow its own second answer.

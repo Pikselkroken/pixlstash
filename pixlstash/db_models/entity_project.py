@@ -14,7 +14,7 @@ rows *and* re-derives the scalar pointer in one place. Every *read* that asks
 "is this entity in project P?" must use the predicates below rather than comparing
 the scalar column, because the scalar only ever names one of possibly many
 projects. Comparing the FK is now a bug: it silently hides an entity's secondary
-projects, and — in the authorization helpers — under-grants (or, once the FK is
+projects, and - in the authorization helpers - under-grants (or, once the FK is
 eventually dropped post-1.12, breaks outright).
 
 The FK removal is explicitly out of scope here; a later cleanup release retires it

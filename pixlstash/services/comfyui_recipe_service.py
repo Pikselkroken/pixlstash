@@ -1,7 +1,7 @@
 """Recipe replay: pre-flighting an embedded ComfyUI prompt graph (Remix v1.9).
 
-"Recipe mode" replays the API-format ``prompt`` chunk a generated image carries —
-the graph the ComfyUI server actually executed — against the user's *current*
+"Recipe mode" replays the API-format ``prompt`` chunk a generated image carries -
+the graph the ComfyUI server actually executed - against the user's *current*
 ComfyUI. That install may have moved on: a custom node pack uninstalled, a
 checkpoint renamed, a LoRA deleted. Submitting blind produces an opaque 400 from
 ``POST /prompt``; pre-flighting against ``GET /object_info`` lets us say which
@@ -69,7 +69,7 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value
 # against the combo list ComfyUI advertises for that field. Anything not listed
-# here is simply not checked — this map is deliberately conservative, because a
+# here is simply not checked - this map is deliberately conservative, because a
 # false "missing" is worse than a missed check.
 MODEL_FILENAME_FIELDS: dict[str, tuple[str, ...]] = {
     "CheckpointLoaderSimple": ("ckpt_name",),
@@ -172,11 +172,11 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
     """Return the enumerated string options for *field*, or ``None``.
 
     ComfyUI serialises a combo widget in **two** shapes, and both are live in a
-    current install — ``UpscaleModelLoader`` is already on the second:
+    current install - ``UpscaleModelLoader`` is already on the second:
 
-    - **V1** ``[["a.safetensors", "b.safetensors"], {opts}]`` — the option list
+    - **V1** ``[["a.safetensors", "b.safetensors"], {opts}]`` - the option list
       *is* the type field.
-    - **V3** ``["COMBO", {"options": [...], ...}]`` — the list moved into opts.
+    - **V3** ``["COMBO", {"options": [...], ...}]`` - the list moved into opts.
 
     This mirrors ComfyUI's own branch in ``execution.py`` (``isinstance(
     input_type, list) or input_type == io.Combo.io_type``). Reading only the V1
@@ -184,7 +184,7 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
 
     ``None`` means "not enumerable", and is deliberately returned for:
 
-    - a plain type name (``"INT"``, ``"MODEL"``) — not a filename at all;
+    - a plain type name (``"INT"``, ``"MODEL"``) - not a filename at all;
     - a ``remote`` combo, whose options ComfyUI leaves empty in ``object_info``
       and fills from a URL at runtime, so the embedded list proves nothing;
     - an empty list, which ComfyUI emits both for "nothing installed" and for
@@ -225,8 +225,8 @@ def _match_option(value: str, options: list[str]) -> str | None:
     """Return ``None`` if *value* is present, else a note on the near-miss.
 
     Separator differences are not a mismatch (see :func:`_normalize_filename`).
-    A case-only difference IS a real failure on a case-sensitive host — ComfyUI
-    compares exactly — but saying "present under a different case" is far more
+    A case-only difference IS a real failure on a case-sensitive host - ComfyUI
+    compares exactly - but saying "present under a different case" is far more
     actionable than "missing", so it is reported as its own kind of miss.
     """
     normalized = _normalize_filename(value)
@@ -247,7 +247,7 @@ def collect_node_classes(prompt_graph: dict) -> list[str]:
     whoever made the image file, not by the owner replaying it, and PixlStash's
     premise is importing images from elsewhere. What that graph can do on the
     owner's ComfyUI is bounded only by which node packs are installed, so the
-    owner — the only trust anchor in the loop — has to be able to see *which*
+    owner - the only trust anchor in the loop - has to be able to see *which*
     node classes will run before approving the run. A node *count* does not
     answer that question; the class list does.
 
@@ -276,21 +276,21 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
     Four checks, each deliberately narrow, each reported in its own bucket so
     the UI can say *what kind* of thing is wrong:
 
-    1. **Node classes** (``missing_node_classes``) — a ``class_type`` that is
+    1. **Node classes** (``missing_node_classes``) - a ``class_type`` that is
        not a key of ``object_info`` cannot run. This one is exact.
-    2. **Model filenames** (``missing_models``) — for the loader fields in
+    2. **Model filenames** (``missing_models``) - for the loader fields in
        :data:`MODEL_FILENAME_FIELDS`, a literal string value absent from
        ComfyUI's advertised combo list. Node references (``[node_id, slot]``)
        are skipped: computed at run time, not filenames. Non-enumerable fields
        are skipped and counted in ``unchecked_fields``, so a mostly-skipped
        check cannot masquerade as a clean bill of health.
-    3. **Input images** (``missing_input_images``) — a recipe's ``LoadImage``
+    3. **Input images** (``missing_input_images``) - a recipe's ``LoadImage``
        names whatever sat in *that* ComfyUI's ``input/`` directory when the
        image was generated, which is usually gone. This is a separate bucket
        because it is a different problem with a different fix, and because
        ComfyUI itself validates it by file existence rather than against the
        combo list. Never reported as a "missing model".
-    4. **Output nodes** (``has_save_image``) — a graph with nothing that writes
+    4. **Output nodes** (``has_save_image``) - a graph with nothing that writes
        an image runs to completion and imports nothing. Catching it here saves
        the user the full generation wait for an empty result.
 
@@ -354,7 +354,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
         for field in MODEL_FILENAME_FIELDS.get(class_type, ()):
             value = inputs.get(field)
             if not isinstance(value, str) or not value:
-                # Missing, or wired from another node — not a literal filename.
+                # Missing, or wired from another node - not a literal filename.
                 continue
             options = _combo_options(object_info.get(class_type), field)
             if options is None:
@@ -388,7 +388,7 @@ def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
 
     A class allowlist cannot converge on arbitrary user graphs, so this asks
     ComfyUI instead: **an input is a seed when its declared type is ``INT`` and
-    its options carry a truthy ``control_after_generate``** — the flag ComfyUI
+    its options carry a truthy ``control_after_generate``** - the flag ComfyUI
     sets on exactly the inputs its own frontend re-rolls between runs. That
     covers core samplers and every custom node pack for free, with no list to
     maintain. Both serialisations count: legacy nodes emit ``true``, V3-schema
@@ -398,7 +398,7 @@ def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     :data:`SEED_PASSTHROUGH_CLASSES` are the exception and are reached **only**
     by following a link from a real seed consumer. ``PrimitiveInt`` carries
     ``control_after_generate`` unconditionally, including when it is driving
-    width or height — scanning it directly would randomize the image
+    width or height - scanning it directly would randomize the image
     dimensions, which the shipped ``Flux2-Klein-t2i`` template would hit.
 
     Args:
@@ -461,7 +461,7 @@ def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
         if not isinstance(node, dict):
             continue
         if node.get("class_type") in SEED_PASSTHROUGH_CLASSES:
-            # Only reachable via a link from a real consumer — see the docstring.
+            # Only reachable via a link from a real consumer - see the docstring.
             continue
         _visit(str(node_id))
 
@@ -510,7 +510,7 @@ def format_prompt_rejection(body: Any) -> str | None:
                                            "message": "Value not in list",
                                            "details": "ckpt_name: 'x' not in [...]"}]}}}
 
-    Every field is treated as optional — a custom fork or a future version may
+    Every field is treated as optional - a custom fork or a future version may
     omit any of them, and an unparseable body must degrade to ``None`` (the
     caller then falls back to the raw text) rather than raise.
 

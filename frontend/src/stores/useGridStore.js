@@ -48,7 +48,7 @@ export const useGridStore = defineStore("grid", () => {
   // maxColumns (the viewport's column ceiling, so tiles never shrink below the
   // usable minimum on narrow screens) but NOT up to minColumns: the larger size
   // levels intentionally mean few columns / big tiles, even past the 384px
-  // source width. Read-only — change `sizeLevel` to resize. Kept as a getter
+  // source width. Read-only - change `sizeLevel` to resize. Kept as a getter
   // named `columns` so every existing square-grid consumer works unchanged.
   const columns = computed(() => {
     const desired = columnsForSizeLevel(sizeLevel.value);

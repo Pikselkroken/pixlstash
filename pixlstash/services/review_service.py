@@ -1,11 +1,11 @@
-"""Service layer for review sessions — one tag + a frozen scope + one scan's results.
+"""Service layer for review sessions - one tag + a frozen scope + one scan's results.
 
 A :class:`~pixlstash.db_models.review.Review` is the first-class noun of the tag
 review workflow (see ``docs/reviews/2026-07-review-sessions-redesign-draft.md``):
 created explicitly, scanned once at creation, refreshed append-only, and finally
 archived or aborted. Per-item decisions (accept/dismiss/fix-twin/swap/reopen)
 stay in :mod:`pixlstash.services.tag_suggestion_service` and are written through
-immediately — archiving/aborting a review never touches suggestion rows.
+immediately - archiving/aborting a review never touches suggestion rows.
 
 Mirrors the vault-task conventions of the sibling services (all DB access via
 ``vault.db.run_task`` / ``run_immediate_read_task``).
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# min_combined threshold used for the creation receipt's "N obvious pairs —
+# min_combined threshold used for the creation receipt's "N obvious pairs -
 # auto-resolve?" count; matches the bulk-accept endpoint's default.
 AUTO_RESOLVE_MIN_COMBINED = 0.9
 
@@ -104,7 +104,7 @@ def _resolve_scope_ids(
 ) -> set[int] | None:
     """Resolve the review's frozen scope filters to picture ids.
 
-    ``None`` means unrestricted (no filters — whole vault). An empty set is a
+    ``None`` means unrestricted (no filters - whole vault). An empty set is a
     valid "nothing in scope" result. The ``/reviews`` surface is owner-only
     (scoped share tokens are rejected at the route boundary), so there is no
     token scope to intersect here.
@@ -294,7 +294,7 @@ def _progress_map(session: Session, review_ids: list[int]) -> dict[int, dict]:
     ``locked`` counts still-PENDING rows whose suspect is frozen by a locked set.
     They are deliberately **not** counted in ``pending``: they are never served as
     cards (see :func:`list_review_suggestions`), so counting them as pending would
-    leave the session reporting work remaining while its queue serves nothing —
+    leave the session reporting work remaining while its queue serves nothing -
     the UI would look stuck at "N remaining" with no card to act on. Splitting
     them out keeps the "complete when ``pending`` is 0" invariant true for a
     session whose pictures were locked mid-review, while still reporting the
@@ -374,7 +374,7 @@ def _frozen_snapshot(review: Review) -> dict | None:
     it is archived/aborted (see :func:`set_review_status`), so a later scan that
     re-parents its rows into a new review cannot shrink its historical cover
     sheet. Returns ``None`` for OPEN reviews and for closed reviews with no
-    snapshot (closed before the column existed) — both fall back to live
+    snapshot (closed before the column existed) - both fall back to live
     aggregation at the call site.
     """
     if review.status != OPEN and review.receipt_snapshot:
@@ -410,7 +410,7 @@ def list_reviews(vault: "Vault", status: str | None = None) -> list[dict]:
     """List reviews (newest first) with per-review progress and staleness.
 
     Each item is the serialized review plus ``progress`` (``done`` = the
-    review's non-PENDING suggestion rows, ``pending``) and ``stale`` — True
+    review's non-PENDING suggestion rows, ``pending``) and ``stale`` - True
     when the vault changed (new pictures or a tagger run) after the review's
     last scan.
     """
@@ -591,7 +591,7 @@ def delete_review(vault: "Vault", review_id: int) -> None:
 
     Removes the :class:`Review` row only. Its :class:`TagSuggestion` rows are
     **not** deleted: ``TagSuggestion.review_id`` is an ``ON DELETE SET NULL`` FK
-    (SQLite FK enforcement is on — see ``database.init_database``), so those rows
+    (SQLite FK enforcement is on - see ``database.init_database``), so those rows
     survive with ``review_id`` cleared. This is deliberate:
 
     * A review is an *audit receipt* over per-item decisions that were written
@@ -601,7 +601,7 @@ def delete_review(vault: "Vault", review_id: int) -> None:
       not on ``review_id`` (see :func:`tag_scan_service.scan_tag`): a DECIDED row
       left with ``review_id = NULL`` is still counted as ``prev_reviewed`` and
       suppressed on the next scan of the tag. Deleting the suggestion rows would
-      instead re-surface already-decided suspects — a resurrection. So they are
+      instead re-surface already-decided suspects - a resurrection. So they are
       detached, not destroyed.
 
     Deleting an OPEN review the owner is mid-review-of is allowed: the row goes
@@ -629,7 +629,7 @@ def clear_reviews(vault: "Vault", status: str) -> int:
 
     Powers the review rail's "clear all archived" bulk action. Each deleted
     review's suggestion rows are detached (``review_id`` set NULL), never
-    destroyed — identical semantics to :func:`delete_review`, so the decision
+    destroyed - identical semantics to :func:`delete_review`, so the decision
     audit and the no-resurrection guarantee are preserved.
 
     Raises:
@@ -699,7 +699,7 @@ def list_review_suggestions(
     """The review's ranked queue, enriched for the card UI.
 
     Each item carries the suggestion fields plus ``kind`` ("pair"/"binary",
-    derived — see :func:`derive_kind`), ``neighbors`` (the scan-time evidence
+    derived - see :func:`derive_kind`), ``neighbors`` (the scan-time evidence
     JSON parsed to a list of ``{"picture_id", "has"}``), file extensions, and
     the tagger's confidences for suspect and twin.
 
@@ -726,13 +726,13 @@ def list_review_suggestions(
         # locked at any time *after* the review was created, and the scan only
         # ever runs at create/refresh. Rows scanned while the set was still
         # unlocked would otherwise be served forever as cards whose every action
-        # 423s — the reported "locked images still show up in the review". The
+        # 423s - the reported "locked images still show up in the review". The
         # filter is applied before OFFSET/LIMIT so paging stays correct.
         #
         # Restricted to PENDING rows deliberately, matching the `locked` bucket
         # in _progress_map exactly. A row DECIDED before the lock is no longer
-        # actionable work — it is this review's audit record, still counted in
-        # progress.done — so hiding it would make the served list disagree with
+        # actionable work - it is this review's audit record, still counted in
+        # progress.done - so hiding it would make the served list disagree with
         # the receipt. Only undecided work is withheld.
         q = (
             select(TagSuggestion)
@@ -824,7 +824,7 @@ def list_review_suggestions(
         if twin_locked_sets:
             # Degrade to a binary card on the suspect. A pair card offers four
             # corners, but with a frozen twin two of them (swap, and whichever of
-            # both/neither maps to fix-twin) can only 423 — while the other two
+            # both/neither maps to fix-twin) can only 423 - while the other two
             # map to accept and dismiss, which are EXACTLY the actions a binary
             # card offers. So the degradation costs no reachable decision and
             # removes two dead corners. The row is still served rather than

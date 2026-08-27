@@ -3,7 +3,7 @@
 The shelf catalogues model files by **reading** them: the scanner walks a
 registered folder, reads each ``.safetensors`` header and decides what the file
 is. That is the right approach for a folder of LoRAs the owner assembled, and
-the wrong one for our own engines — half of them are ONNX or ``.pt``, which the
+the wrong one for our own engines - half of them are ONNX or ``.pt``, which the
 scanner does not even yield (``MODEL_SUFFIX`` is ``.safetensors``), and all of
 them are files *we* chose to download. We do not have to guess what they are.
 We know.
@@ -13,8 +13,8 @@ from the declaration. Nothing is parsed and nothing is hashed, which is also why
 a 339 MB engine costs nothing at start-up.
 
 **Why the filenames are restated here rather than imported.** Every downloader
-names its files as module constants — ``PIXLSTASH_TAGGER_FILENAME``,
-``WD14_CSV_FILE``, ``ImageEmbeddingTask.AESTHETIC_MODELS`` — but those modules
+names its files as module constants - ``PIXLSTASH_TAGGER_FILENAME``,
+``WD14_CSV_FILE``, ``ImageEmbeddingTask.AESTHETIC_MODELS`` - but those modules
 import onnxruntime, torch, cv2 and PIL at module level, and start-up must not
 pay that to learn two strings. They are duplicated here and pinned by
 ``tests/test_builtin_models.py``, which imports the real modules and asserts the
@@ -27,8 +27,8 @@ declared row go :data:`STATE_NOT_DOWNLOADED` and the real file appear under
 **The engine rows are protected.** The folder answers 409 to ``DELETE`` and
 every shelf verb refuses them, because they are ours: renaming our own tagger
 would make the shelf lie about it, and assigning a tagger to a character means
-nothing. They are on the shelf for completeness — so the owner can see what is
-on their disk and what it costs — not to be curated.
+nothing. They are on the shelf for completeness - so the owner can see what is
+on their disk and what it costs - not to be curated.
 
 **The unclaimed files in the folder are not**, and that is the point of
 declaring them (#927). They go in as ``file_kind='unknown'``, which is what the
@@ -59,7 +59,7 @@ BUILTIN_KIND = "foreign"
 BUILTIN_OWNER = "pixlstash"
 
 # How a declared folder moves, which is a statement about the folder rather than
-# a permission. `root_only` means "if it relocates, it relocates whole" — true of
+# a permission. `root_only` means "if it relocates, it relocates whole" - true of
 # PixlStash's own downloads, which have a relocate route since #905, and of the
 # InsightFace packs, which do not yet (#906). Whether a route exists is
 # `managed_model_store.relocatable_identity`, not this column. `fixed` means it
@@ -79,8 +79,8 @@ BUILTIN_PROVENANCE = "builtin"
 # folder and is not in it any more, and the shelf draws it as a fault: error
 # rail, error glyph, "The file is not where it was". Nothing declared here is
 # ever that. Every file this module and `builtin_caches` declare is one
-# PixlStash fetches on demand — the ViT-L/14 scorer arrives only with the CLIP
-# model that needs it, an InsightFace pack only when face detection first runs —
+# PixlStash fetches on demand - the ViT-L/14 scorer arrives only with the CLIP
+# model that needs it, an InsightFace pack only when face detection first runs -
 # so absence means "not fetched yet", on a perfectly healthy machine, for about
 # half of these. Saying a file wandered off when nobody ever asked for it is a
 # false alarm, and a false alarm teaches the reader to ignore the real one
@@ -93,12 +93,12 @@ STATE_NOT_DOWNLOADED = "not_downloaded"
 # `hf_hub_download(local_dir=...)` leaves its own bookkeeping beside the files it
 # writes, at the top level and again inside every subdirectory it fills. It is
 # HuggingFace's, not ours and not the owner's, so it is neither declared nor
-# reported as unclaimed — it is simply not a model file.
+# reported as unclaimed - it is simply not a model file.
 TOOLING_DIRS = (".cache",)
 
 # What counts as weights, for the unclaimed readout. Wider than the scanner's
 # `MODEL_SUFFIX` (`.safetensors` alone), because this folder is precisely where
-# the other formats land — our own tagger is ONNX and both scorers are `.pth` —
+# the other formats land - our own tagger is ONNX and both scorers are `.pth` -
 # and the leftover that prompted #927 is a `.pt`.
 #
 # An allowlist rather than "every file the walk saw", because the readout now
@@ -125,13 +125,13 @@ class BuiltinEngine:
     Attributes:
         key: Stable identifier, used as the row's filename-independent identity.
         display_name: What the shelf calls it.
-        role: What it does — ``tagger``, ``captioner``, ``scorer``, ``face``.
+        role: What it does - ``tagger``, ``captioner``, ``scorer``, ``face``.
             Stored in ``model.kind``, which already holds free text (``lora``,
             ``lokr``) and already renders as the row's label, so ``file_kind``
             stays a four-value vocabulary instead of growing one entry per role.
         relpath: The engine's own file, relative to the folder. This is what the
             shelf shows and what its size is read from.
-        companions: Files that belong to the engine but are not it — a label
+        companions: Files that belong to the engine but are not it - a label
             set, a revision sidecar. They get no row of their own and are not
             reported as unclaimed.
     """
@@ -160,7 +160,7 @@ class DeclaredEntry:
     holds. Only the writing is common, so only the writing is shared.
 
     Attributes:
-        relpath: Location within the folder — `model_file`'s own identity.
+        relpath: Location within the folder - `model_file`'s own identity.
         display_name: What the shelf calls it, or None to let the row derive a
             name from its filename. None for an unclaimed file: we did not put
             it there and have nothing to call it.
@@ -168,7 +168,7 @@ class DeclaredEntry:
             for an unclaimed file, whose role we do not know.
         size: Bytes, or None when it could not be read. None never overwrites a
             size already recorded.
-        state: What the row's ``model_file.state`` becomes —
+        state: What the row's ``model_file.state`` becomes -
             :data:`~pixlstash.services.model_folder_scanner.STATE_PRESENT`,
             :data:`STATE_NOT_DOWNLOADED` (declared and simply not fetched yet,
             which is normal here and not a warning) or
@@ -197,7 +197,7 @@ class DeclaredEntry:
 
     @property
     def declared_capabilities(self) -> tuple[str, ...]:
-        """The capability set to write — `role` first, empty when there is none."""
+        """The capability set to write - `role` first, empty when there is none."""
         if self.capabilities:
             return self.capabilities
         return (self.role,) if self.role else ()
@@ -211,8 +211,8 @@ class DeclaredEntry:
     def restated_display_name(self) -> Optional[str]:
         """The name a re-declaration asserts, or None to leave it alone.
 
-        The first declaration still names the row — ``models--krea--Krea-2-Raw``
-        is a cache directory, not a name anyone wants to read — but a Rename is
+        The first declaration still names the row - ``models--krea--Krea-2-Raw``
+        is a cache directory, not a name anyone wants to read - but a Rename is
         the owner's and the next start-up must not take it back.
         """
         return None if self.owner_curatable else self.display_name
@@ -224,7 +224,7 @@ class DeclaredEntry:
         An engine is ours and its row says what we say. An unclaimed file is
         not, and the difference is load-bearing rather than tidy: it enters with
         ``sha256`` NULL, so ``CheckpointHashTask`` picks it up, and if it hashes
-        to a digest already registered the two ``model`` rows **merge** — this
+        to a digest already registered the two ``model`` rows **merge** - this
         folder's ``model_file`` is repointed at the survivor, which is somebody's
         real adapter. Restating ``unknown`` onto that row on the next start would
         drop the adapter out of ``/adapters`` for its own folder too, over a
@@ -280,7 +280,7 @@ BUILTIN_ENGINES: tuple[BuiltinEngine, ...] = (
 )
 
 
-# Redirects the folder whole — declaration and downloads alike, since all three
+# Redirects the folder whole - declaration and downloads alike, since all three
 # callers now ask this module. Kept for a deployment that wants the folder
 # somewhere else without moving what is already in it (a container image with a
 # mounted model volume is the case); the tests do not use it, because a fresh
@@ -292,8 +292,8 @@ BUILTIN_DIRNAME = "downloaded_models"
 
 # Where a relocation records the folder's new home: one line of text, beside the
 # place the folder started. A FILE and not a row in the hub, because this path is
-# machine-global — one download serves every library and every server instance on
-# the host — while a hub belongs to one deployment. Putting it in the hub would
+# machine-global - one download serves every library and every server instance on
+# the host - while a hub belongs to one deployment. Putting it in the hub would
 # mean a second deployment on the same machine kept downloading to the old place,
 # which is the divergence this whole accessor exists to remove.
 BUILTIN_MODEL_DIR_POINTER = "downloaded_models.location"
@@ -312,7 +312,7 @@ def _recorded_model_dir_quietly() -> Optional[str]:
     """The recorded location, or None, reporting nothing about either answer.
 
     :func:`_configured_model_dir` is the one that speaks up, and it is called on
-    every resolution — so a second caller wanting only to *know* whether a
+    every resolution - so a second caller wanting only to *know* whether a
     location was recorded would double every line it logs. This reads the same
     file and says nothing, which is what a caller checking the record against a
     path needs.
@@ -403,7 +403,7 @@ def set_builtin_model_dir(path: str) -> None:
         path: The folder the engines now live in.
 
     Raises:
-        OSError: if the pointer could not be written. The caller decides — the
+        OSError: if the pointer could not be written. The caller decides - the
             files have already moved by then, so this is news to report rather
             than a reason to undo anything.
     """
@@ -442,7 +442,7 @@ def unclaimed_files(folder_path: str) -> list[dict]:
     **Not "orphaned".** We know our own manifest; we do not know that a previous
     build, a plugin or the owner did not put a file there deliberately. This
     reports what nothing in *this build* claims, which is a smaller and true
-    statement — the same distinction the scan already draws between ``missing``
+    statement - the same distinction the scan already draws between ``missing``
     (we looked and it was not there) and ``unreachable`` (we could not look).
 
     **Weights only** (:data:`MODEL_SUFFIXES`). Each hit becomes a row on the
@@ -482,7 +482,7 @@ def unclaimed_files(folder_path: str) -> list[dict]:
                 )
                 # `None`, never `0`. The declaration COALESCEs the size onto the
                 # row, so a zero from a transient `stat` failure would overwrite
-                # a size a previous run read correctly — the shelf would then
+                # a size a previous run read correctly - the shelf would then
                 # claim a 339 MB leftover takes no disk. `None` leaves the
                 # stored figure alone and matches "without one".
                 size = None
@@ -495,26 +495,26 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
 
     A stale record costs a full re-download and says nothing while it does it:
     the downloaders ``makedirs`` their destination, so a record left naming a
-    directory that has been deleted — or a drive that is not plugged in — has
+    directory that has been deleted - or a drive that is not plugged in - has
     every start re-create the path and fetch every engine into it again, while
     the real ones sit untouched in the folder they were moved out of. That is
     the accident this exists to make legible; it took an investigation precisely
     because nothing anywhere said a word.
 
     **Two symptoms, because either one alone goes quiet.** The recorded folder
-    being unreadable is what a start sees while the drive is away — but the
+    being unreadable is what a start sees while the drive is away - but the
     download that follows creates the path, so on a machine where the record
     merely went stale that symptom lasts exactly one start. The second is
     **engines in the default folder that a relocation should have emptied**,
     which says the same thing from the other side and does not heal itself:
     before the re-download it is a fetch about to be repeated, and afterwards it
     is two copies with the folder still filling. Checked whatever the recorded
-    folder holds, for that reason — a check that stopped at "the recorded folder
+    folder holds, for that reason - a check that stopped at "the recorded folder
     has something in it" would report the accident only in the window its own
     download closes.
 
     **Here rather than in the accessor**, which is read on every call and on the
-    per-row path behind ``GET /model-folders`` — the frontend polls it — so a
+    per-row path behind ``GET /model-folders`` - the frontend polls it - so a
     line there is a flood and its ``stat`` is a syscall against a drive that may
     be gone. This runs once per start, beside the declaration that is already
     reading the folder.
@@ -525,7 +525,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
     it has a default that resolves to the recorded path, and a path test would
     go quiet for exactly the person who did the most to move their models. It
     does not fire at all while :data:`BUILTIN_MODEL_DIR_ENV` is set, because
-    that names the folder over the record's head — a volume that has not mounted
+    that names the folder over the record's head - a volume that has not mounted
     yet is a first start, nothing was ever fetched, and "delete the pointer"
     would be advice that does nothing. And it says what ``stat`` said rather
     than asserting the folder is missing, so a permission error reads as one.
@@ -545,7 +545,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
         # Recorded back onto the default, which nothing below has anything to
         # say about. `normpath` and not `realpath`: a default that is a SYMLINK
         # to the recorded folder is still a real relocation onto a real drive,
-        # and it can still go away — silencing that would lose the case for the
+        # and it can still go away - silencing that would lose the case for the
         # owner who moved their models the hard way.
         return
     try:
@@ -556,7 +556,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
             "engines into, and it cannot be read (%s), so every engine will be "
             "fetched again into a re-created path. Restore, mount or "
             "re-permission it. If it is gone for good, deleting %s sends the "
-            "downloads back to %s — but nothing is moved back, and PixlStash "
+            "downloads back to %s - but nothing is moved back, and PixlStash "
             "stops recognising the old folder as one it can relocate.",
             folder_path,
             exc,
@@ -565,7 +565,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
         )
         return
     if os.path.realpath(default) == os.path.realpath(folder_path):
-        # One directory reached by two names — a default symlinked at the
+        # One directory reached by two names - a default symlinked at the
         # recorded folder. `os.path.exists` follows the link, so every engine
         # that IS in the recorded folder would also be counted as left behind,
         # for ever. The `stat` branch above still applies to this shape (the
@@ -579,7 +579,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
     if left_behind:
         # Whether or not the recorded folder holds engines of its own. A
         # relocation *moves* the files, so engines in both places mean the
-        # record and the disk disagree — before the re-download that is a fetch
+        # record and the disk disagree - before the re-download that is a fetch
         # about to be repeated, and after it, two copies and a folder still
         # filling. Stopping at `present` would report the accident only in the
         # window before its own download closed it, which is the one state the
@@ -590,7 +590,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
             "relocation should have emptied. Downloads go to the recorded "
             "folder, so anything missing there is fetched again rather than "
             "found. If that is not where you meant them to go, deleting %s "
-            "sends the downloads back to the ones you already have — nothing "
+            "sends the downloads back to the ones you already have - nothing "
             "is moved, and the recorded folder stops being one PixlStash can "
             "relocate.",
             folder_path,
@@ -614,7 +614,7 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     both ``.pth`` scorers missing on every pass.
 
     **The unclaimed files are declared too.** :func:`unclaimed_files` has always
-    known about the leftovers — a 339 MB ``best.pt`` on a measured machine — but
+    known about the leftovers - a 339 MB ``best.pt`` on a measured machine - but
     nothing called it, so the shelf listed the four engines and said nothing
     about the file sitting beside them: invisible, and therefore impossible to
     act on (#927). They go in as ``file_kind='unknown'`` with no role and no
@@ -639,7 +639,7 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
         #
         # ENOENT is the only absence that means "not fetched yet". A permission
         # error or an IO error is us not being able to LOOK, which is
-        # `unreachable` — reporting that as the non-fault state would hide a
+        # `unreachable` - reporting that as the non-fault state would hide a
         # real filesystem problem behind a download glyph.
         try:
             size = os.stat(absolute).st_size
@@ -698,7 +698,7 @@ def declare_folder(
     InsightFace packs, and the HuggingFace cache. The caller resolves what is
     there; this writes it.
 
-    Idempotent, and the declaration is the authority — a second call restates
+    Idempotent, and the declaration is the authority - a second call restates
     every field rather than merging, because unlike a scanned row there is no
     owner curation here to preserve.
 
@@ -720,7 +720,7 @@ def declare_folder(
             # `movable` is re-asserted with the rest. A path the owner had
             # already registered as a `user` folder keeps its own
             # `movable` otherwise, so claiming it for PixlStash would
-            # leave the built-in folder advertising `per_item` — the
+            # leave the built-in folder advertising `per_item` - the
             # engines individually movable, which is exactly what the
             # protection exists to prevent.
             "ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, "
@@ -748,7 +748,7 @@ def declare_folder(
             # about half of these on any given machine. See
             # :data:`STATE_NOT_DOWNLOADED` for why that is not `missing`.
             #
-            # Identity is the LOCATION — `model_file`'s own primary key — not a
+            # Identity is the LOCATION - `model_file`'s own primary key - not a
             # hash we would have to read 339 MB to compute, and not `run_key`,
             # which belongs to ai-toolkit runs and is COALESCE'd by the run
             # importer.
@@ -783,7 +783,7 @@ def declare_folder(
                 model_id = int(existing["model_id"])
                 # The one time a found repo's file kind IS restated: to take
                 # back the `engine` this module used to write over the whole
-                # cache. Unambiguous, which is why it can be done silently —
+                # cache. Unambiguous, which is why it can be done silently -
                 # `engine` is not a value any verb can set (`FILE_KINDS` does
                 # not offer it) and every verb refuses an engine row, so a
                 # stored `engine` on a repo we did not choose can only be our
@@ -793,13 +793,13 @@ def declare_folder(
                     restated_file_kind = entry.file_kind
                 # COALESCE'd on the *declared* value throughout, which changes
                 # nothing for an engine: every one declares its kind, its role
-                # and its name, so the declaration still wins outright — and no
+                # and its name, so the declaration still wins outright - and no
                 # verb lets anyone edit an engine row anyway.
                 #
                 # It is what keeps an unclaimed file honest, which declares only
                 # the first of the three. Written outright, every server start
                 # would reset the name and kind the owner typed onto the one row
-                # class here they are allowed to curate — and `restated_file_kind`
+                # class here they are allowed to curate - and `restated_file_kind`
                 # covers the sharper case above, where the row is no longer the
                 # leftover's alone.
                 #
@@ -829,9 +829,9 @@ def declare_folder(
                 )
 
             # Restated wholesale when it differs, and NOT TOUCHED when it does
-            # not. The declaration is still the authority — a capability it no
+            # not. The declaration is still the authority - a capability it no
             # longer claims has to go, or a model that stopped serving a feature
-            # would stay listed under it — but every root here is re-declared on
+            # would stay listed under it - but every root here is re-declared on
             # every server start, and the set changes about never. Rewriting it
             # each boot was pure write amplification: ~35 declared entries per
             # start (engines, InsightFace packs, every cached HuggingFace repo)
@@ -869,8 +869,8 @@ def declare_folder(
                     [(model_id, capability) for capability in declared],
                 )
         # The sweep, and these folders have nowhere else to get one. The folder
-        # scanner does this pass for every folder it walks — anything it did not
-        # see this run goes `missing` — and it skips these precisely because
+        # scanner does this pass for every folder it walks - anything it did not
+        # see this run goes `missing` - and it skips these precisely because
         # they carry an `owner`, so without this a row here could never stop
         # being `present`.
         #
@@ -879,12 +879,12 @@ def declare_folder(
         # `huggingface-cli delete-cache` drops a repo out of the index and
         # deleting an InsightFace pack drops it out of the listing, and the row
         # left behind would otherwise claim its bytes are still on the disk
-        # forever — inflating the very `present_bytes` figure the folder list
+        # forever - inflating the very `present_bytes` figure the folder list
         # reports.
         #
         # `missing` here and not :data:`STATE_NOT_DOWNLOADED`, which is the one
         # place in this module the distinction bites: a row the declaration no
-        # longer NAMES is one nothing will fetch back — `antelopev2` deleted out
+        # longer NAMES is one nothing will fetch back - `antelopev2` deleted out
         # of the InsightFace store is not in `KNOWN_MODEL_PACKS`, so it is gone
         # rather than pending. A declared entry that is merely absent goes
         # through the loop above and gets the softer word.

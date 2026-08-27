@@ -49,7 +49,7 @@ function mountMenu(props = {}) {
     },
     global: {
       stubs: {
-        // Renders its slot so the glyph name survives into the markup — the
+        // Renders its slot so the glyph name survives into the markup - the
         // only handle on these items once a greyed state replaces the label.
         "v-icon": { template: "<i><slot /></i>" },
         teleport: true,
@@ -69,7 +69,7 @@ function rotateItems(wrapper) {
   };
 }
 
-describe("SelectionMenu — rotate", () => {
+describe("SelectionMenu - rotate", () => {
   it("offers the pair at all, which is the parity #403 asserts", () => {
     const { left, right } = rotateItems(mountMenu());
     expect(left).toBeDefined();

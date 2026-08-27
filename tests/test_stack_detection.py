@@ -124,7 +124,7 @@ def test_a_run_with_no_bare_final_covers_with_its_highest_step(hub, tmp_path):
 def test_two_versions_of_one_subject_are_one_stack(hub, tmp_path):
     """The ask: a stack is a subject, not a training run.
 
-    `Foxglove_v2` shares no training run with `Foxglove` — it is a retrain — but
+    `Foxglove_v2` shares no training run with `Foxglove` - it is a retrain - but
     it is the same character on the shelf, so it belongs behind one row.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
@@ -289,7 +289,7 @@ def test_a_group_never_spans_two_folders(hub, tmp_path):
     """Two runs on different disks can easily share a name.
 
     Collapsing across folders would invent a run that never existed and put one
-    stack's members on two drives — which the move verb would then have to
+    stack's members on two drives - which the move verb would then have to
     reason about.
     """
     first = _folder(hub, str(tmp_path / "disk-a"))
@@ -427,7 +427,7 @@ def test_applying_drops_a_row_something_else_stacked_first(hub, tmp_path):
 
     A proposal is a snapshot the owner may have been looking at for a minute.
     A row stacked in the meantime must be left in the stack it already has, not
-    torn out of it — and if that leaves fewer than two, nothing is written at
+    torn out of it - and if that leaves fewer than two, nothing is written at
     all rather than a stack of one.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
@@ -459,7 +459,7 @@ def test_applying_refuses_a_model_with_no_copy_on_disk(hub, tmp_path):
     """The route must not offer what the dry run refuses.
 
     `propose_stacks` skips a model whose only copies are `missing` or
-    `unreachable` — files nobody has seen are not something to reorganise a
+    `unreachable` - files nobody has seen are not something to reorganise a
     shelf around. Without the same gate here, `POST /model-stacks` would be a
     way to build a stack the detector would never have suggested.
     """
@@ -551,7 +551,7 @@ def test_applying_refuses_models_that_are_not_all_in_one_folder(hub, tmp_path):
 
     `apply_stack` checked that each model had SOME present copy, not that they
     shared a folder, so the route could build a stack whose members sit on two
-    drives — the run that never existed, which is exactly what the per-folder
+    drives - the run that never existed, which is exactly what the per-folder
     rule exists to prevent. Reported by the review of #882.
     """
     first = _folder(hub, str(tmp_path / "disk-a"))
@@ -569,7 +569,7 @@ def test_applying_refuses_models_that_are_not_all_in_one_folder(hub, tmp_path):
 
 
 def test_a_model_in_two_folders_can_still_join_a_run_in_one_of_them(hub, tmp_path):
-    """The positive control for the rule above — over-blocking is its own
+    """The positive control for the rule above - over-blocking is its own
     regression. A model copied into two folders shares a folder with its run,
     so the run still stacks."""
     first = _folder(hub, str(tmp_path / "disk-a"))
@@ -592,7 +592,7 @@ def test_a_model_in_two_folders_is_proposed_under_a_stable_one(hub, tmp_path):
     """One model legitimately has many `model_file` rows, and a bare
     `mf.model_folder_id` beside `GROUP BY m.id` lets SQLite return any of them.
 
-    That would make proposals nondeterministic — the same run grouping under a
+    That would make proposals nondeterministic - the same run grouping under a
     different folder call to call, and two members of one run potentially
     landing in different groups and never being offered together. `MIN()` is
     what makes the answer stable.
@@ -603,7 +603,7 @@ def test_a_model_in_two_folders_is_proposed_under_a_stable_one(hub, tmp_path):
 
     # The HIGHER folder's location is written first, deliberately. With the
     # lower one first, SQLite returns it for a bare column too and the
-    # assertion below cannot tell the two implementations apart — measured:
+    # assertion below cannot tell the two implementations apart - measured:
     # the mutant survived until this order was flipped.
     for name in ("Stable_000000500.safetensors", "Stable_000001000.safetensors"):
         model_id = _adapter(hub, higher, name)
@@ -644,7 +644,7 @@ def test_stacking_two_stacks_fuses_them(hub, tmp_path):
     """The ask. Two stacks selected on the shelf become one.
 
     Without `fuse` every member is already stacked, so the gate empties the
-    selection and the call is refused — which is right for the proposals flow
+    selection and the call is refused - which is right for the proposals flow
     and wrong for a person pointing at two rows and asking for one.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
@@ -707,7 +707,7 @@ def test_stacking_a_stacked_model_is_still_refused_without_fuse(hub, tmp_path):
     """The default gate is unchanged, and that is the point of the flag.
 
     The proposals flow confirms a dry run over loose files. A row stacked in the
-    meantime must be left in the stack it has, not silently rehomed — so fusing
+    meantime must be left in the stack it has, not silently rehomed - so fusing
     had to be something a caller asks for.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
@@ -872,7 +872,7 @@ def test_fusing_cannot_walk_past_the_member_ceiling(hub, tmp_path):
 
     The route counts the ids it was SENT. Fusing then widens that set to every
     member of every stack absorbed, so two stacks of 150 arrive as two ids and
-    would have left as a 300-member stack — measured at 300 against a ceiling of
+    would have left as a 300-member stack - measured at 300 against a ceiling of
     200. A limit the widening step can walk past is not a limit, so the count is
     repeated by the function that does the widening.
     """
@@ -1132,7 +1132,7 @@ def test_repairing_a_stack_closes_the_gaps_a_deleted_member_left(hub, tmp_path):
     """The state `_purge` leaves behind: holes, and no position 0.
 
     Written against the columns directly rather than through a delete, because
-    what is being asserted is the repair itself — every caller that drops a
+    what is being asserted is the repair itself - every caller that drops a
     member reaches the same function.
     """
     folder = _folder(hub, str(tmp_path / "loras"))

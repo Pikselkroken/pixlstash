@@ -3,7 +3,7 @@
  *
  * Why this exists: on 2026-07-26 the dark-mode status hues were deepened in one
  * pass. That was right for the FILL tier and wrong for `dark-surface-<status>`,
- * which is a FOREGROUND family — it styles 11px semibold labels on chrome that
+ * which is a FOREGROUND family - it styles 11px semibold labels on chrome that
  * stays dark in both themes. Three of the four dropped to 2.48:1 – 2.97:1 and
  * nothing caught it, because a token pair is only measured if some test happens
  * to render it. The Playwright suite covers the notice card and nothing else.
@@ -41,7 +41,7 @@ const TINT_ON_DARK_CHROME = 0.14
 /**
  * WCAG floors. 4.5 is the normal-text floor: `dark-surface-<status>` styles
  * `--text-2xs` (11px) semibold labels in ReviewRail.vue, which is not large
- * text. 2.5 is the notice rail's authored floor — it is decorative
+ * text. 2.5 is the notice rail's authored floor - it is decorative
  * reinforcement (the glyph carries the variant) but must still read as a mark.
  */
 const FLOOR_TEXT = 4.5
@@ -85,7 +85,7 @@ export function contrastRatio(a, b) {
  * Composite a translucent hue over an opaque background.
  *
  * Channels stay FRACTIONAL. The e2e helper does the same, and rounding to 8-bit
- * here would shift a ratio by ~0.002 — enough for this audit and the Playwright
+ * here would shift a ratio by ~0.002 - enough for this audit and the Playwright
  * assertion to disagree about a pair sitting on its floor. Use `toHex` when a
  * composited colour needs to be displayed.
  */
@@ -133,7 +133,7 @@ export function readThemeColors(source = readFileSync(MAIN_JS, 'utf8')) {
       colors[m[1]] = m[2]
     }
     if (Object.keys(colors).length === 0) {
-      throw new Error(`Parsed no colours for ${marker} — has main.js changed shape?`)
+      throw new Error(`Parsed no colours for ${marker} - has main.js changed shape?`)
     }
     themes[name] = colors
   }

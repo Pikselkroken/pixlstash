@@ -1,5 +1,5 @@
 // The sidebar tree's per-row picture counts, read off the shared entity lists
-// (`useEntityListsStore`, `include_counts=true` — issue #651) instead of one
+// (`useEntityListsStore`, `include_counts=true` - issue #651) instead of one
 // `/{id}/summary` request per row.
 //
 // Why this is a module and not four lines inside `SideBar.vue`: every character
@@ -7,8 +7,8 @@
 // `project_image_count` already narrowed to that character's own project, or to
 // "in no project" when it has none), so picking between them is the entire
 // definition of "which number does this view mode show". Getting it backwards
-// is a silent failure — the tree renders a plausible wrong number and nobody
-// notices — and `SideBar.vue` is ~10k lines, far past the size where a
+// is a silent failure - the tree renders a plausible wrong number and nobody
+// notices - and `SideBar.vue` is ~10k lines, far past the size where a
 // component test could pin it. Pure function here, unit test next door.
 
 /** The `projectViewMode` value whose counts are scoped to a project. */

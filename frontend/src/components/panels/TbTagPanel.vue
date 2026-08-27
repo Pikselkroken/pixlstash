@@ -70,7 +70,7 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On all ${totalWithTagData} selected — click to remove, drag to rejected to remove`"
+              :title="`On all ${totalWithTagData} selected - click to remove, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="removeTagFromAll(t)"
@@ -92,7 +92,7 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On ${t.count} of ${totalWithTagData} — click to add to all, drag to rejected to remove`"
+              :title="`On ${t.count} of ${totalWithTagData} - click to add to all, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="addTagToRemaining(t)"
@@ -174,7 +174,7 @@
               draggable="true"
               :disabled="predActionLoading.includes(p.tag)"
               :style="{ '--pred-confidence': p.avgConf }"
-              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all, drag to current to confirm`"
+              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept - click to confirm all, drag to current to confirm`"
               @dragstart="onRejectedTagDragStart($event, p)"
               @dragend="onDragEnd"
               @click="confirmPredictionOnAll(p)"
@@ -383,7 +383,7 @@ function buildPreviewImages() {
 }
 
 // Stable preview: always update when selection changes; only update when
-// allGridImages changes if the result is non-empty — this prevents the preview
+// allGridImages changes if the result is non-empty - this prevents the preview
 // column from disappearing during the placeholder phase of a grid refresh.
 const stablePreviewImages = ref([]);
 

@@ -121,7 +121,7 @@ class InferenceEngine:
                     },
                 },
             }
-        # Legacy private flags — kept so existing setters don't break.
+        # Legacy private flags - kept so existing setters don't break.
         self._wd14_enabled = bool(wd14_enabled)
         self._pixlstash_tagger_enabled = bool(pixlstash_tagger_enabled)
         self._pixlstash_tagger_threshold_offset = float(
@@ -416,8 +416,8 @@ class InferenceEngine:
         """Apply the configured Florence-2 variant, then load it if needed.
 
         This is the single chokepoint for the Florence-native paths (captions
-        and Segment). Applying the variant here — rather than only in
-        ``Florence2Plugin.init`` — is what keeps the two in step, because
+        and Segment). Applying the variant here - rather than only in
+        ``Florence2Plugin.init`` - is what keeps the two in step, because
         ``DescriptionWorkflow`` and :meth:`detect_objects` reach the service
         directly and never run the plugin's ``init``. Switching variants
         unloads the resident checkpoint, so the load below picks up the new one.

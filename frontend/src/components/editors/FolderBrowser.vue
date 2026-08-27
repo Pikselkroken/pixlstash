@@ -356,7 +356,7 @@ const { pending: createFolderLoading, run: createFolder } =
 
 /* Pending is not disabled (visual-language.md §11): the shared AppButton keeps
    its label legible while busy, but this is a stock Vuetify v-btn, whose own
-   `--loading` styling sets `.v-btn__content { opacity: 0 }` — blanking "Create"
+   `--loading` styling sets `.v-btn__content { opacity: 0 }` - blanking "Create"
    entirely instead of just dimming it. Restore it so this button matches the
    pending contract the rest of #647's forms carry. */
 .browse-create-btn :deep(.v-btn--loading .v-btn__content),

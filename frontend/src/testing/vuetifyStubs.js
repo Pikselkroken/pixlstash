@@ -11,7 +11,7 @@
  * `server.deps.inline: ['vuetify']` entry in vite.config.js exists to enable.
  * Stubbing the barrel for everyone would silently gut those.
  *
- * Usage — the dynamic import is required because `vi.mock` is hoisted above
+ * Usage - the dynamic import is required because `vi.mock` is hoisted above
  * every top-level binding in the calling file:
  *
  *   vi.mock("vuetify/components", async () => {

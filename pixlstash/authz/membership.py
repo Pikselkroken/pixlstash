@@ -2,7 +2,7 @@
 
 Phase 1 Step 4 of the backend authorization refactor (backend refactor plan
 §3.5 / §3.7). This module is the **single home** for the per-object scope
-membership ladder — the ``token_scope`` branching that decides whether a scoped
+membership ladder - the ``token_scope`` branching that decides whether a scoped
 share token may reach a specific picture / picture-set / character / project.
 Before this module the same ladder was copy-pasted in five places
 (``routes/pictures/_helpers.py::enforce_picture_scope`` plus the inline
@@ -26,11 +26,11 @@ plan §1 goal 2 collapses that into one implementation with one test surface.
   the now-trivial shims.
 
 **Semantics (unchanged from the code these functions replace).** An owner /
-unscoped token (``token_scope is None``) always passes immediately — the checks
+unscoped token (``token_scope is None``) always passes immediately - the checks
 never narrow the owner. A resource-scoped token passes only when the requested
 object is inside its grant, and an unrecognised ``resource_type`` fails closed
 (403). Every check that touches the database does so through
-``server.vault.db.run_immediate_read_task`` — the caller (the gate) runs these on
+``server.vault.db.run_immediate_read_task`` - the caller (the gate) runs these on
 a threadpool worker so the blocking read never sits on the event loop.
 """
 
@@ -288,7 +288,7 @@ def enforce_project_scope(server, request: Request, project_id: int) -> None:
 # of :func:`enforce_project_path_scope` is that the *content* of the answer
 # carries no information about the project space, so "no such project", "another
 # project" and "a project that does not hold the resource you named" must be
-# spelled identically. That covers status, body and headers — it does NOT make the
+# spelled identically. That covers status, body and headers - it does NOT make the
 # refusal constant-time; see the residual timing channel in that function's
 # docstring.
 PROJECT_PATH_REFUSAL_DETAIL = "Token is not authorised for this project"
@@ -297,7 +297,7 @@ PROJECT_PATH_REFUSAL_DETAIL = "Token is not authorised for this project"
 def enforce_project_path_scope(
     server, request: Request, project_id: int | None
 ) -> None:
-    """Refuse — identically — a project named in the path that the token cannot see.
+    """Refuse - identically - a project named in the path that the token cannot see.
 
     The four name-derived routes (§16.1 residual inline exception) take a project
     in a **path segment** rather than in the ``project_id`` query parameter, so
@@ -311,21 +311,21 @@ def enforce_project_path_scope(
         GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 "Project not found"
 
     Three distinguishable answers told a picture_set-scoped token which projects
-    exist and which of them hold its set — the exact disclosure
+    exist and which of them hold its set - the exact disclosure
     ``visible_project_ids`` exists to prevent, arriving through a path segment
     instead of a query parameter. ``GET /projects/{id_or_name}`` had the same
     shape one rung up (403 for an existing project, 404 for a missing one, by
     numeric id *and* by name).
 
-    So this is called with the **resolved** id — or ``None`` when the segment
-    resolved to nothing — before the handler asks any membership question, and a
+    So this is called with the **resolved** id - or ``None`` when the segment
+    resolved to nothing - before the handler asks any membership question, and a
     token that may not see the project gets one indistinguishable 403 in all
     three cases. An owner / unscoped token (``visible_project_ids`` returns
     ``None``) is not restricted and the caller's own 404 branch still runs, so
     the owner-facing behaviour of these routes is unchanged.
 
     **Residual: the refusal is uniform in content, not in time (accepted risk).**
-    "Indistinguishable" above means status, body and headers — it does *not* mean
+    "Indistinguishable" above means status, body and headers - it does *not* mean
     constant-time, and the difference is measurable. Both ``id_or_name`` routes
     (``GET /projects/{id_or_name}`` and ``.../picture_sets``) resolve a numeric
     segment with ``session.get(Project, int(v))`` and, when that returns nothing,
@@ -341,14 +341,14 @@ def enforce_project_path_scope(
     This is **not** equalised, deliberately: making the lookup constant-time is a
     runtime change to a hot read path, and the channel is worth far less than the
     content oracle it replaced. Reading it needs many samples per bit against a
-    local, single-user server, and what it leaks is one bit — "is there a project
-    with this id" — not the membership fact. A project that exists and holds the
+    local, single-user server, and what it leaks is one bit - "is there a project
+    with this id" - not the membership fact. A project that exists and holds the
     caller's resource and one that exists and does not cost the same single
     query, so the ``P1``/``P3`` distinction that motivated this function is not
     recoverable through the timing channel.
 
     - **Owner:** backend (``senior-backend-developer``), tracked on issue #708.
-    - **Revisit trigger — any of:** (a) a resource-scoped share token becomes
+    - **Revisit trigger - any of:** (a) a resource-scoped share token becomes
       reachable by someone other than the owner (multi-user, or a hosted demo
       handing out scoped tokens), which turns a local timing channel into a remote
       one; (b) these routes gain a lookup whose cost varies with *membership*
@@ -401,7 +401,7 @@ def enforce_project_path_scope(
 # project-ish name that is not listed here. It is a check over *declared* params
 # with *project-ish wire names*; a parameter aliased to something that does not
 # say "project", or read straight off ``request.query_params`` without being
-# declared, is invisible to it — and in the alias case, to the gate as well. The
+# declared, is invisible to it - and in the alias case, to the gate as well. The
 # three blind spots are enumerated in that test's docstring; read them before
 # treating "machine-checked" as "total".
 #
@@ -417,7 +417,7 @@ def enforce_project_filter_scope(server, request: Request) -> None:
     ``visible_project_ids`` decides which project ids a token may *learn about*:
     its own for a ``project`` token, none at all for a ``character`` /
     ``picture_set`` / ``picture`` token (issue #125 / R1b). Narrowing the ids in
-    the *response* is only half the rule — a ``project_id`` **filter** turns any
+    the *response* is only half the rule - a ``project_id`` **filter** turns any
     list, count, or summary route into a membership oracle for the same hidden
     facts: ``GET /picture_sets?project_id=7`` returning a row tells a set-scoped
     token that project 7 exists and that its set is filed under it, which
@@ -427,15 +427,15 @@ def enforce_project_filter_scope(server, request: Request) -> None:
 
     So the gate answers the filter the same way it answers the payload: a
     resource-scoped token may name **only** a project id it can already see.
-    Anything else — another project's id, a non-existent id, or the
+    Anything else - another project's id, a non-existent id, or the
     ``UNASSIGNED`` sentinel (which asks the complementary question, "which of my
-    things are in *no* project") — is refused with the same 403 regardless of
+    things are in *no* project") - is refused with the same 403 regardless of
     whether the project exists, so the refusal itself is not an oracle either.
 
     An owner / unscoped token (``visible_project_ids`` returns ``None``) is never
     restricted, and a request that carries no project filter is a no-op.
 
-    **Boundary — this reads ``request.query_params`` and nothing else.** A new
+    **Boundary - this reads ``request.query_params`` and nothing else.** A new
     route is covered the day it mounts only if it takes its project in the *query
     string*. A project named in a JSON body, a form field, or a path segment is
     outside this chokepoint:
@@ -446,12 +446,12 @@ def enforce_project_filter_scope(server, request: Request) -> None:
       ``PATCH /pictures/project``, ``POST /characters``, ``POST /picture_sets``,
       ``PATCH /picture_sets/{id}`` and ``POST /comfyui/run_t2i`` read one out of an
       untyped ``payload: dict`` body. **The second list is hand-made and cannot be
-      shown complete** — a ``dict`` annotation declares no keys, so nothing can
+      shown complete** - a ``dict`` annotation declares no keys, so nothing can
       enumerate what those handlers read; treat it as "the ones we know about",
       not "the ones there are". None of the ten is reachable by a resource-scoped
       token today, but only because a resource-scoped token can only be minted
       ``READ`` (§16.2 item 4) and the auth middleware blocks a non-``GET`` for a
-      ``READ`` token unless the path is in ``auth.READ_SAFE_POST_PATHS`` — which
+      ``READ`` token unless the path is in ``auth.READ_SAFE_POST_PATHS`` - which
       none of these is. **Adding one of them to that frozenset would open the
       hole**; the payload half is not checked anywhere.
     * **Path segment.** Handled separately by :func:`enforce_project_path_scope`
@@ -523,14 +523,14 @@ def resolve_tag_suggestion_picture_id(server, raw_id) -> int | None:
 
     The ``tag_suggestions`` single-item mutators key on a ``suggestion_id`` and
     ``bulk-reopen`` on a body list of suggestion ids, but they authorise on
-    **picture** scope — a suggestion belongs to exactly one picture
+    **picture** scope - a suggestion belongs to exactly one picture
     (``TagSuggestion.picture_id``). This maps one raw id to that picture id so the
     gate can run :func:`enforce_picture_scope` on it (matrix §N4).
 
     Returns:
         The picture id for the suggestion, or ``None`` when the id is malformed or
         the suggestion does not exist (the caller fails closed for a scoped
-        token — a suggestion the token cannot resolve is not one it may act on).
+        token - a suggestion the token cannot resolve is not one it may act on).
     """
     try:
         suggestion_id = int(raw_id)
@@ -551,7 +551,7 @@ def resolve_tag_suggestion_picture_id(server, raw_id) -> int | None:
 
 # Registry of named id resolvers referenced by ``RoutePolicy.id_resolver``. A
 # resolver maps one raw route id (path or body) to the picture id the route
-# authorises on. Keep this closed and small — a new resolver is a deliberate,
+# authorises on. Keep this closed and small - a new resolver is a deliberate,
 # reviewable addition, exactly like the closed AccessPolicy enum.
 ID_RESOLVERS = {
     "tag_suggestion": resolve_tag_suggestion_picture_id,

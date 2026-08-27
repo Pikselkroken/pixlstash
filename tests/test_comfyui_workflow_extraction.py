@@ -38,7 +38,7 @@ def test_extract_generation_info(workflow_file: pathlib.Path) -> None:
     expected_all = _load_expected()
     expected = expected_all.get(workflow_file.name)
     assert expected is not None, (
-        f"{workflow_file.name} has no entry in expected_results.csv — "
+        f"{workflow_file.name} has no entry in expected_results.csv - "
         "run the extraction, verify the output, and add a row to the CSV."
     )
 

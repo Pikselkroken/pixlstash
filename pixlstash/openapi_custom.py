@@ -14,14 +14,14 @@ from pixlstash.auth import is_auth_excluded_path
 
 
 _PICTURES_TAG_DESCRIPTION = """\
-Browse, search, import, export and edit the pictures and videos in your library — the core of the API.
+Browse, search, import, export and edit the pictures and videos in your library - the core of the API.
 
 **Listing.** `GET /pictures` returns matching rows. Page with `offset` + `limit`, order with
 `sort` (plus `descending`), and control how much data comes back per row with `fields`:
 
-- `fields=grid` — compact set tuned for thumbnail grids (stack leaders only)
-- `fields=id,score,width,height` — only the columns you name
-- *(omit `fields`)* — full metadata for every row
+- `fields=grid` - compact set tuned for thumbnail grids (stack leaders only)
+- `fields=id,score,width,height` - only the columns you name
+- *(omit `fields`)* - full metadata for every row
 
 Most filters (tags, characters, sets, score ranges, …) are passed as additional query parameters.
 
@@ -62,7 +62,7 @@ Omit `sort` for natural (id) order; add `descending=false` to reverse.
 
 ### Exporting (async)
 
-Exports run as a background job — start it, poll status, then download the ZIP:
+Exports run as a background job - start it, poll status, then download the ZIP:
 
 ```bash
 task=$(curl -s "https://your-pixlstash-host/api/v1/pictures/export?set_id=7&resolution=original" \\
@@ -225,7 +225,7 @@ curl "https://your-pixlstash-host/api/v1/projects/$pid/export" \\
 
 
 _SNAPSHOTS_TAG_DESCRIPTION = """\
-Point-in-time snapshots of the **metadata database** — tags, scores, faces, descriptions, and how
+Point-in-time snapshots of the **metadata database** - tags, scores, faces, descriptions, and how
 everything is organised. The image files themselves are never copied. Snapshots are taken
 automatically on a grandfather-father-son schedule (daily / weekly / monthly) and can also be
 created by hand, then restored wholesale or for just the resources you choose.
@@ -265,16 +265,16 @@ _AUTH_TAG_DESCRIPTION = """\
 Session login for the web UI. **For API access, prefer a personal token** (see *Authentication*
 at the top) and send it as `Authorization: Bearer …` on every request.
 
-- `POST /login` — authenticate a username/password and set a session cookie.
-- `GET /login` — report whether first-run registration is still needed.
-- `GET /check-session` — validate the current session or token.
-- `POST /logout` — end the session.
+- `POST /login` - authenticate a username/password and set a session cookie.
+- `GET /login` - report whether first-run registration is still needed.
+- `GET /check-session` - validate the current session or token.
+- `POST /logout` - end the session.
 """
 
 
 _SERVER_TAG_DESCRIPTION = """\
 Server status. `GET /version` is public (no token) and returns the running version and install
-type — handy as a health / compatibility check:
+type - handy as a health / compatibility check:
 
 ```bash
 curl "https://your-pixlstash-host/version"
@@ -337,11 +337,11 @@ API_DESCRIPTION = """\
 **PixlStash is a self-hosted, open-source image library for creators.** It imports your
 pictures and videos, auto-tags and captions them with local AI models, recognises
 characters and faces, scores image quality, runs natural-language semantic search and
-drives ComfyUI workflows — all on your own hardware, with no cloud and no lock-in.
+drives ComfyUI workflows - all on your own hardware, with no cloud and no lock-in.
 
-**Integrate with scripts, pipelines and external tools** — fetch images, metadata, tags and
-more. This REST API exposes everything the app can do — **pictures, tags, stacks, sets,
-characters and projects** — so you can script imports, build integrations and automate your pipeline.
+**Integrate with scripts, pipelines and external tools** - fetch images, metadata, tags and
+more. This REST API exposes everything the app can do - **pictures, tags, stacks, sets,
+characters and projects** - so you can script imports, build integrations and automate your pipeline.
 
 ### → Learn more and download at **[pixlstash.dev](https://pixlstash.dev)**
 
@@ -352,13 +352,13 @@ characters and projects** — so you can script imports, build integrations and 
 ## What can you do with this?
 
 Drive any tool or pipeline you can script. For a worked example, see the
-[**PixlStash LM Studio plugin**](https://github.com/pikselkroken/pixlstash-lmstudio) —
+[**PixlStash LM Studio plugin**](https://github.com/pikselkroken/pixlstash-lmstudio) -
 it uses this API to let a locally-running LLM illustrate its chat replies with
 matching pictures from your PixlStash library.
 
 ## Quick start
 
-Create an API token (steps below), then fetch your first 50 pictures — replace
+Create an API token (steps below), then fetch your first 50 pictures - replace
 `your-pixlstash-host` with your server's address:
 
 ```bash
@@ -378,12 +378,12 @@ Tokens have one of two access types:
 
 | Access type | Can do | Notes |
 | --- | --- | --- |
-| **Full access** | Read **and** write — everything your account can do | Never put a full-access token in a URL |
+| **Full access** | Read **and** write - everything your account can do | Never put a full-access token in a URL |
 | **Read-only** | `GET` requests only | May also be passed as a `?token=…` query parameter (handy for share links) |
 
 ## Creating a token
 
-**1. Open Settings** — click the gear icon in the top toolbar.
+**1. Open Settings** - click the gear icon in the top toolbar.
 
 ![Open Settings from the top toolbar](scalar-assets/WhereIsUserSettings.jpg)
 
@@ -391,13 +391,13 @@ Tokens have one of two access types:
 
 ![The Account Settings tab](scalar-assets/ScreenshotsUserSettings.jpg)
 
-**3. Create the token** — in the **API Tokens** section, type a description, choose an
+**3. Create the token** - in the **API Tokens** section, type a description, choose an
 access type (*Full access* or *Read-only*), optionally tick *Apply watermark*, then click
 **Create Token**.
 
 ![The API Tokens section in Account Settings](scalar-assets/ScreenshotTokens.jpg)
 
-**4. Copy it now** — the token is shown **only once**. Copy it and store it somewhere safe;
+**4. Copy it now** - the token is shown **only once**. Copy it and store it somewhere safe;
 you won't be able to see it again.
 
 ![Copy the newly created token](scalar-assets/ScreenshotToken.jpg)
@@ -432,7 +432,7 @@ Browse the endpoints below for full request and response details.
 _SCALAR_THEME_CSS = """\
     <style>
       /* With the developer-tools toolbar disabled the top header strip is
-         empty, but Scalar still reserves its height — collapse it so the
+         empty, but Scalar still reserves its height - collapse it so the
          content title sits at the top of the page. */
       :root,
       .scalar-app,
@@ -485,7 +485,7 @@ _SCALAR_THEME_CSS = """\
         --scalar-sidebar-search--color: rgba(242, 229, 218, 0.6) !important;
       }
       /* Float the logo (rendered from the OpenAPI description) so the intro
-         heading and paragraphs flow around it — Scalar's markdown sanitizer
+         heading and paragraphs flow around it - Scalar's markdown sanitizer
          strips inline style attributes, so we target the image by src here. */
       img[src$="scalar-assets/logo.png"] {
         float: right !important;
@@ -574,7 +574,7 @@ def _example_for_schema(schema, schemas, seen=()):
 
     Most response models are Pydantic ``Optional[...]`` fields, which serialize
     as ``anyOf: [T, null]`` with no example. Scalar then renders the whole
-    response example as ``null`` — useless in the docs. We synthesize a
+    response example as ``null`` - useless in the docs. We synthesize a
     shape-correct example (picking the non-null branch, recursing through
     ``$ref``/objects/arrays) so every endpoint shows its response structure.
 
@@ -587,7 +587,7 @@ def _example_for_schema(schema, schemas, seen=()):
     ref = schema.get("$ref")
     if ref:
         name = ref.split("/")[-1]
-        if name in seen:  # circular reference — stop descending
+        if name in seen:  # circular reference - stop descending
             return None
         return _example_for_schema(schemas.get(name, {}), schemas, seen + (name,))
 
@@ -672,7 +672,7 @@ def _strip_query_param_defaults(operation):
 
     FastAPI serialises every optional query param's Python default into its
     OpenAPI schema, and Scalar pre-fills the "try it" example URL with all of
-    them — so a plain ``GET /pictures`` renders as
+    them - so a plain ``GET /pictures`` renders as
     ``?limit=<MAXINT>&offset=0&descending=true&...``. That just restates the
     defaults, so we remove them from the published schema. Runtime is
     unaffected (FastAPI applies the Python default regardless), and any curated
@@ -705,7 +705,7 @@ def _inject_path_param_examples(operation):
     """Give every path parameter an example value.
 
     Without one, Scalar can't fill the ``{name}`` template and renders the
-    literal placeholder URL-encoded into the example request — e.g.
+    literal placeholder URL-encoded into the example request - e.g.
     ``/api/v1/pictures/%7Bid%7D.%7Bext%7D``. We set a sample (by known name, then
     by type) so the example URLs are valid. Curated examples are left untouched.
     """
@@ -747,16 +747,16 @@ class OpenApiMixin:
 
         Two fixes, both stemming from the schema FastAPI emits by default:
 
-        * **Bearer auth** — auth is enforced by middleware, not per-route
+        * **Bearer auth** - auth is enforced by middleware, not per-route
           dependencies, so FastAPI declares no ``securitySchemes`` and the docs'
           example code omits the ``Authorization`` header. We declare an HTTP
           Bearer scheme and attach it to every operation that actually requires
           auth (same public-path rules as the middleware).
-        * **Response examples** — most response models are Pydantic
+        * **Response examples** - most response models are Pydantic
           ``Optional[...]`` (``anyOf: [T, null]``) with no example, which Scalar
           renders as a bare ``null``. We synthesize a shape-correct example for
           each 2xx JSON response so endpoints show their actual structure.
-        * **Query-parameter defaults** — FastAPI emits each optional query
+        * **Query-parameter defaults** - FastAPI emits each optional query
           param's default into its schema, and Scalar then pre-fills the
           "try it" example URL with every one of them (e.g. ``?limit=<MAXINT>``
           ``&offset=0&descending=true``). That redundant noise just restates
@@ -802,7 +802,7 @@ class OpenApiMixin:
 
             # Lead the reference with the picture listing (the most useful
             # starting point) by ordering its path first. This is presentation
-            # only — it does not affect route matching.
+            # only - it does not affect route matching.
             paths = schema.get("paths", {})
             # Local import avoids a server <-> openapi_custom import cycle
             from pixlstash.server import API_V1_PREFIX

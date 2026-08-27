@@ -14,7 +14,7 @@
 // get bigger. Justified row heights are a separate, smoother scale.
 // Both grid scales were made STEEPER (owner call, 2026-08-05): the large end
 // was right but the small end never got small enough, so `huge` is pinned where
-// it was and every level below it steps down harder — a constant ratio of about
+// it was and every level below it steps down harder - a constant ratio of about
 // 1.20 per notch on row height (was ~1.17) and the matching ~0.77 on square tile
 // width. `tiny`'s 14 columns is the ceiling `MAX_COLUMNS` in
 // `useViewportLayout.js` allows; going denser than that means raising it there

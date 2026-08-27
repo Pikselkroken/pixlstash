@@ -2,7 +2,7 @@
 
 The point of :class:`pixlstash.hub.engine.HubEngine` is that identity can move
 out of the vault by re-pointing one constructor argument, so these tests assert
-the real :class:`~pixlstash.auth.AuthService` works when handed one — that is
+the real :class:`~pixlstash.auth.AuthService` works when handed one - that is
 the claim the hub schema's shape exists to support.
 """
 
@@ -398,7 +398,7 @@ class TestTrustedPathSymlinkCheck:
 
     The check used to be ``os.path.abspath(p) != os.path.realpath(p)``. On
     POSIX those differ only where a symlink was resolved, so it read correctly
-    here — and wrongly on Windows, where ``realpath`` also expands 8.3 short
+    here - and wrongly on Windows, where ``realpath`` also expands 8.3 short
     names. ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` was rejected as
     "contains a symlink", taking down every Windows test that opens a hub.
 
@@ -454,8 +454,8 @@ class TestTrustedPathSymlinkCheck:
         """The W6/W7/W18 outage regression.
 
         The desktop shell derives the hub path from ``--server-config`` under
-        ``%APPDATA%\\pixlstash-desktop`` — never inside
-        ``user_config_dir("pixlstash")`` — so the old DACL predicate refused
+        ``%APPDATA%\\pixlstash-desktop`` - never inside
+        ``user_config_dir("pixlstash")`` - so the old DACL predicate refused
         every desktop install and the server could not start on Windows. A
         private open with ``trusted_root`` set to the hub's own parent must
         succeed regardless of where that parent is.
@@ -559,7 +559,7 @@ class TestTrustedPathSymlinkCheck:
         What made the old check wrong on Windows is that it asked ``realpath``
         a question realpath does not answer: "did this path cross a symlink?"
         Nothing on POSIX can produce a short name to reproduce that with, so
-        this pins the property instead — the decision does not depend on the
+        this pins the property instead - the decision does not depend on the
         canonical spelling at all. ``realpath`` is made to explode; a path with
         no symlink in it must still be accepted.
         """
@@ -580,11 +580,11 @@ class TestGroupWritableDirectories:
     The blanket ``mode & 0o022`` test exited the server 1 at startup on a stock
     Linux box: Debian/Ubuntu give every account a same-named group of its own
     and default to umask 002, so every directory PixlStash created before it
-    started passing 0700 is 0775 — group-writable by a group of exactly one.
+    started passing 0700 is 0775 - group-writable by a group of exactly one.
 
     ``grp``/``pwd`` are patched rather than read, in both directions, because
-    the real answer depends on the machine — a developer box's group is named
-    after the login, a CI runner's need not be — so an unpatched test asserting
+    the real answer depends on the machine - a developer box's group is named
+    after the login, a CI runner's need not be - so an unpatched test asserting
     a *value* would assert whatever the box happened to be configured with. Two
     tests at the end do call the real lookups, for what is machine-independent:
     that the production path resolves real ``pwd``/``grp`` records without an
@@ -669,7 +669,7 @@ class TestGroupWritableDirectories:
         """The member count alone is not the property; the name carries half of it.
 
         ``gr_mem`` is empty for *every* private group, so "no other member" is
-        the default state of a group rather than evidence about it — a shared
+        the default state of a group rather than evidence about it - a shared
         group with only primary members looks identical. The name is what makes
         this the owner's own group, and without this case that half of the
         predicate could be deleted with the suite still green.
@@ -737,7 +737,7 @@ class TestGroupWritableDirectories:
         Every other test here replaces ``grp`` and ``pwd`` with stand-ins written
         to match the code, so ``pw_name``/``gr_name``/``gr_mem`` would go on
         agreeing with a typo. Asking about gid 0 as a non-root user has a
-        machine-independent answer — this login is not called ``root`` — while
+        machine-independent answer - this login is not called ``root`` - while
         still running the production lookups end to end.
         """
         assert _is_private_group(os.geteuid(), 0) is False
@@ -754,7 +754,7 @@ class TestGroupWritableDirectories:
         ``grp.getgrgid`` raises ``OverflowError`` past the end of ``gid_t``,
         where the unresolvable id above raises ``KeyError`` and where
         ``pwd.getpwuid`` raises ``KeyError`` for the same value. Unreachable from
-        ``_require_owned_directory``, whose gid comes from the kernel — but the
+        ``_require_owned_directory``, whose gid comes from the kernel - but the
         helper promises to fail closed on *any* lookup failure, and an escaping
         ``OverflowError`` would make that a startup crash instead.
         """
@@ -792,7 +792,7 @@ class TestWindowsHasNoModeBits:
     Windows synthesises ``st_mode`` from the read-only attribute alone, so an
     ordinary file reads 0o666 and no chmod can make it 0o600. Asserting the
     mode there refuses *every* hub, including one this process created moments
-    earlier — which is how both Windows shards failed with "SQLite credential
+    earlier - which is how both Windows shards failed with "SQLite credential
     file ... must be mode 600" on a freshly created file.
 
     Both directions, because these are credential-file checks: they must go on
@@ -1019,7 +1019,7 @@ class TestHostileSidecarRefusal:
         ``-journal`` during first migration. When it vanished between the
         ``lexists`` probe and ``_validate_file``'s ``lstat``, the resulting
         FileNotFoundError was wrapped as "Could not inspect" and the healthy
-        opener was refused — concurrency mistaken for tampering, the same
+        opener was refused - concurrency mistaken for tampering, the same
         class the creation-race test pins. Simulated here by making the probe
         claim the journal exists when it does not.
         """
@@ -1322,8 +1322,8 @@ class TestHubUnderASymlinkedAncestor:
 
     v1.10.0 introduced both the hub and ``trusted_sqlite``'s guard. The guard
     refuses a *caller-supplied* path that crosses a symlink, and the hub's path
-    — unlike a library's, which ``registry.resolve_path`` has always canonicalised
-    at attach — was handed over exactly as derived from the config directory.
+    - unlike a library's, which ``registry.resolve_path`` has always canonicalised
+    at attach - was handed over exactly as derived from the config directory.
     A stow/chezmoi-managed ``~/.config``, a ``$HOME`` symlinked onto another
     disk, or a macOS path crossing ``/var`` -> ``/private/var`` therefore
     bricked startup with no route back, since ``startup_permissions`` mirrors
@@ -1391,7 +1391,7 @@ class TestHubUnderASymlinkedAncestor:
         exposed.mkdir()
         # chmod, not mkdir(mode=...): the process umask is commonly 0o022, which
         # would silently make this 0o755 and leave nothing for the guard to
-        # refuse — the assertion would then pass for the wrong reason.
+        # refuse - the assertion would then pass for the wrong reason.
         os.chmod(exposed, 0o777)
         link = tmp_path / "config"
         link.symlink_to(exposed, target_is_directory=True)
@@ -1432,8 +1432,8 @@ class TestCanonicalHubPath:
         On ``nt`` resolving the ancestors would defeat the redirect refusal, one
         of the only controls left there (W19, ``docs/backend_architecture.md``
         section 13). A real symlink is made on this POSIX gate, ``os.name`` is
-        forced to ``nt``, and the ancestor must come back *unresolved* — the
-        symlink still present — so the leaf-and-ancestor walk in
+        forced to ``nt``, and the ancestor must come back *unresolved* - the
+        symlink still present - so the leaf-and-ancestor walk in
         ``_reject_symlinked_path`` still gets to see and refuse it. Without the
         guard this resolves the link and the assertion fails.
         """

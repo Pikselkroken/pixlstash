@@ -1,18 +1,18 @@
-"""Tag health board cache — per-tag aggregate signals, rebuilt in the background.
+"""Tag health board cache - per-tag aggregate signals, rebuilt in the background.
 
 Computes one :class:`~pixlstash.db_models.tag_health.TagHealth` row per tag from
 indexed SQL over ``tag_prediction`` / ``tag`` / ``tag_suggestion`` / ``picture``
-plus the *stored* ``PictureLikeness`` pairs — no embeddings, no kNN, never a
+plus the *stored* ``PictureLikeness`` pairs - no embeddings, no kNN, never a
 live O(N²) sweep. The board ranks tags by these signals; the expensive
 near-neighbour scan stays reserved for review creation.
 
 Signal definitions (thresholds are module constants, deliberately fixed for now
-— see the redesign doc's open questions):
+- see the redesign doc's open questions):
 
 * ``est_wrong``    – tagged, *un-reviewed* pictures (no human POS/NEG on the
-  ``(tag, picture)`` ledger row — ``label_state == "UNKNOWN"``) whose prediction
+  ``(tag, picture)`` ledger row - ``label_state == "UNKNOWN"``) whose prediction
   confidence ≤ 0.1, on the current model version only (older generations are
-  excluded — see ``_current_model_version``). A tag a human already CONFIRMED is
+  excluded - see ``_current_model_version``). A tag a human already CONFIRMED is
   excluded even when the model doubts it: that human-vs-model contradiction is
   surfaced via ``model_disputes`` instead, never re-counted here as an estimated
   fix.
@@ -34,7 +34,7 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
 * ``overturn_rate``– ACCEPTED / (ACCEPTED + DISMISSED) over the tag's reviewed
   suggestions; ``None`` when the tag has no reviewed history.
 * ``model_disputes`` – human-frozen labels the current prediction strongly
-  contradicts (POS with conf ≤ 0.1 or NEG with conf ≥ 0.9). Surfaced only —
+  contradicts (POS with conf ≤ 0.1 or NEG with conf ≥ 0.9). Surfaced only -
   never auto-requeued; human outranks model.
 * ``mismatch``     – same-stack picture pairs disagreeing on the tag, plus
   stored high-likeness pairs (≥ ``MISMATCH_LIKENESS_THRESHOLD``) disagreeing
@@ -43,14 +43,14 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
   one prediction row exists on the current model version (the most recently
   written non-``manual`` prediction's version) somewhere in the vault. This is
   a property of the MODEL, not of the board's scope, so it is computed
-  vault-wide even on a scoped board — a scope whose in-scope pictures were last
+  vault-wide even on a scoped board - a scope whose in-scope pictures were last
   tagged by an *earlier* run still reports the tag as in-vocabulary. Tags with
   no current-version prediction anywhere still get a row with ``has_model=False``
   so the board can show a "no model signal" state.
 * ``ground_truth`` – how many **pictures** (not ``tag`` rows) carry this tag:
   the count of DISTINCT non-deleted ``picture_id``s with a ``Tag`` row for any
   literal tag in the folded tag's ``DEFAULT_TAG_MERGES`` equivalence class.
-  Unlike ``has_model`` this IS scope-restricted — on a scoped board it counts
+  Unlike ``has_model`` this IS scope-restricted - on a scoped board it counts
   only in-scope pictures, because it answers "does a review *of this scope*
   have confirmed examples to vote against?". Its equivalence class is
   deliberately identical to the ``equiv`` set
@@ -63,17 +63,17 @@ Signal definitions (thresholds are module constants, deliberately fixed for now
   also have an embedding), which is the direction the board's
   "this review would find nothing" gate depends on. Every rebuild writes a real
   integer; a **NULL** ``ground_truth`` can only appear on a cached row written
-  before the column existed and means "not measured", never "zero" — the gate
+  before the column existed and means "not measured", never "zero" - the gate
   must not fire on it (see migration ``0075``).
 
 Every signal above folds child tags into their parent per
-:data:`~pixlstash.db_models.tag.DEFAULT_TAG_MERGES` before grouping — the same
-``equiv`` idiom :func:`pixlstash.services.tag_scan_service.scan_tag` uses —
+:data:`~pixlstash.db_models.tag.DEFAULT_TAG_MERGES` before grouping - the same
+``equiv`` idiom :func:`pixlstash.services.tag_scan_service.scan_tag` uses -
 so a child ("extra digit") and its parent ("malformed hand") never appear as
 separate board rows with inconsistent partial signals. Grouping is done in
 Python: the underlying queries still ``GROUP BY`` (or ``DISTINCT``) the
 literal tag column in SQL for cheap aggregation, then a second pass merges
-same-parent buckets — additive counts sum, ``max(reviewed_at)`` takes the
+same-parent buckets - additive counts sum, ``max(reviewed_at)`` takes the
 later timestamp. Set-membership signals (``mismatch``'s per-picture tag sets)
 remap at fetch time instead, since disagreement is a per-picture membership
 question, not a simple sum.
@@ -136,7 +136,7 @@ def _current_model_version(session: Session) -> str | None:
     """The model version of the most recently written real prediction row.
 
     ``manual`` is the synthetic version ``reject_tag_prediction`` writes for
-    pure-human decisions, not a tagger — excluded.
+    pure-human decisions, not a tagger - excluded.
     """
     return session.exec(
         select(TagPrediction.model_version)
@@ -187,12 +187,12 @@ def _mismatch_counts(
     tags_of: dict[int, set[str]] = defaultdict(set)
     # Scoped board: read only in-scope tag rows rather than the whole Tag table
     # (``alive`` is already narrowed to the scope above). An empty scope means no
-    # rows — skip the query so an empty ``.in_(())`` never runs. Unscoped, ``alive``
+    # rows - skip the query so an empty ``.in_(())`` never runs. Unscoped, ``alive``
     # is ~every non-deleted picture, so the whole-table scan is kept (and the
     # ``pid in alive`` guard still drops tags on deleted pictures).
     # When scoped, materialise ``alive`` into a per-connection temp table once
     # and filter via ``IN (SELECT ...)`` rather than binding one SQL parameter
-    # per id — a large scope (tens of thousands of pictures) would otherwise
+    # per id - a large scope (tens of thousands of pictures) would otherwise
     # exceed SQLite's bound-parameter ceiling and raise OperationalError. The
     # subquery is result-identical to ``.in_(alive)`` and is reused for the
     # likeness-pairs query below (which binds ``alive`` at both endpoints). A
@@ -250,7 +250,7 @@ def _mismatch_counts(
         if not alive:
             pairs: list = []
         else:
-            # Both endpoints filtered via the shared temp-table subquery — this
+            # Both endpoints filtered via the shared temp-table subquery - this
             # pair binds ``alive`` twice, so a plain ``.in_(alive)`` would hit
             # the parameter ceiling at half the scope size.
             pair_query = pair_query.where(
@@ -293,7 +293,7 @@ def compute_tag_health_rows(
     tag_precisions = get_latest_tag_precisions(session)
 
     # Materialise the scope once into a per-connection temp table and filter
-    # every scoped aggregate via ``IN (SELECT ...)`` — binding one SQL parameter
+    # every scoped aggregate via ``IN (SELECT ...)`` - binding one SQL parameter
     # per id (``.in_(picture_ids)``) would exceed SQLite's bound-parameter
     # ceiling for a large scope (tens of thousands of pictures) and raise
     # OperationalError. Result-identical to the set ``.in_()``. The default
@@ -312,10 +312,10 @@ def compute_tag_health_rows(
         return query.where(column.in_(scope_subq))
 
     # est_wrong: tagged + confidently-negative prediction, current model version only
-    # (5a — an unpinned join here previously blended every model generation ever run).
+    # (5a - an unpinned join here previously blended every model generation ever run).
     # label_state == "UNKNOWN" restricts this to pictures no human has ruled on: a tag
     # a human CONFIRMED (POS) keeps its Tag row and would otherwise be counted here even
-    # though the human already resolved it — that human-vs-model contradiction belongs to
+    # though the human already resolved it - that human-vs-model contradiction belongs to
     # model_disputes, not est_wrong. (Human REJECT drops the Tag row, so those are already
     # excluded by the inner join above; only human POS needs filtering out.) The literal
     # matches the `verified` metric's `label_state != "UNKNOWN"` below.
@@ -347,7 +347,7 @@ def compute_tag_health_rows(
     # label_state == "UNKNOWN" restricts this to pictures no human has ruled on: a human
     # REJECT (NEG) deliberately keeps the tagger's original high confidence and leaves no
     # Tag row, so such a row would otherwise be counted here as "missing" even though the
-    # human already said no — that contradiction belongs to model_disputes, not est_missing.
+    # human already said no - that contradiction belongs to model_disputes, not est_missing.
     # (Human CONFIRM adds a Tag row, so those are already excluded by `Tag.picture_id IS
     # NULL`; only human NEG needs filtering out.)
     est_missing = _fold_counts(
@@ -375,9 +375,9 @@ def compute_tag_health_rows(
     )
 
     # One grouped pass over tag_prediction: totals, verified, boundary (these
-    # stay scoped). ``has_model`` is NOT derived here — it is vault-wide
+    # stay scoped). ``has_model`` is NOT derived here - it is vault-wide
     # vocabulary membership, computed once below (see ``vocab``). Folded into
-    # DEFAULT_TAG_MERGES buckets by summing per-literal-tag results — a child and
+    # DEFAULT_TAG_MERGES buckets by summing per-literal-tag results - a child and
     # its parent's prediction rows both count toward the parent's row.
     pred_agg: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
     for tag_value, total, verified, boundary in session.exec(
@@ -501,7 +501,7 @@ def compute_tag_health_rows(
     # Both details are load-bearing: this count must equal |{pictures carrying
     # any tag in the equivalence class}|, which is exactly the ``concept`` set
     # ``tag_scan_service.scan_tag`` builds (``equiv = {tag} | children-of-tag``,
-    # then ``select(Tag.picture_id).where(Tag.tag.in_(equiv))`` — a SET of
+    # then ``select(Tag.picture_id).where(Tag.tag.in_(equiv))`` - a SET of
     # picture ids). Folding in Python by summing per-literal-tag counts would
     # double-count a picture tagged with BOTH a child ("extra digit") and its
     # parent ("malformed hand"), which the UNIQUE(picture_id, tag) constraint
@@ -538,7 +538,7 @@ def compute_tag_health_rows(
     # has_model vocabulary: the folded tags that carry ≥1 prediction on the
     # current model version, computed VAULT-WIDE (deliberately NOT run through
     # ``_scoped``). ``has_model`` asks "is this tag in the current tagger's
-    # vocabulary?" — a property of the model, not of the board's scope. On a
+    # vocabulary?" - a property of the model, not of the board's scope. On a
     # scoped board whose in-scope pictures were last tagged by an earlier run,
     # a scope-restricted current-version count would be zero and wrongly report
     # every tag as out-of-vocabulary (the R-bug this fixes); the unscoped query
@@ -663,7 +663,7 @@ def _latest_health_relevant_change(session: Session) -> datetime | None:
 
     Same shape as ``review_service._latest_vault_change`` (latest picture
     creation, latest tagger-run ingest), plus the signal that idiom didn't
-    need but the board does: latest ``TagSuggestion.reviewed_at`` — every
+    need but the board does: latest ``TagSuggestion.reviewed_at`` - every
     accept/dismiss/swap changes ``est_wrong``/``est_missing``/``mismatch``/
     ``overturn_rate`` for its tag, so a review session that touches zero new
     pictures and triggers zero tagger runs must still be able to mark the
@@ -672,8 +672,8 @@ def _latest_health_relevant_change(session: Session) -> datetime | None:
     **Known gap, deliberately not closed here** (flagged as an open item in
     the redesign spec, §11): ``Tag`` has no timestamp column, so a manual tag
     add/remove via ``POST/DELETE /pictures/{id}/tags`` outside the review
-    flow — the routes in ``routes/tags.py``, not
-    ``tag_suggestion_service`` — is invisible to this staleness check. Adding
+    flow - the routes in ``routes/tags.py``, not
+    ``tag_suggestion_service`` - is invisible to this staleness check. Adding
     a schema migration + backfill solely to catch that narrower, rarer path
     was judged disproportionate for a staleness *hint* whose escape hatch is
     already one click away (the persistent rebuild button, Spec B frontend);
@@ -698,7 +698,7 @@ def is_stale(vault: "Vault") -> bool:
     """Whether the cached board is stale relative to the latest health-relevant change.
 
     Cheap: two scalar aggregate queries (``max(TagHealth.computed_at)``,
-    :func:`_latest_health_relevant_change`) — no row hydration, safe to call
+    :func:`_latest_health_relevant_change`) - no row hydration, safe to call
     from a periodic finder. ``stale = latest_change > computed_at`` when both
     exist, else ``False`` (never built yet, or nothing has changed).
     """
@@ -721,7 +721,7 @@ def list_tag_health(vault: "Vault") -> dict:
     Returns ``{"rows", "building", "progress", "computed_at", "stale"}`` where
     ``computed_at`` is the newest row's timestamp (ISO) or ``None`` when the
     cache has never been built, and ``stale`` is top-level (not per-row) since
-    the cache is vault-wide and one rebuild covers every row — see
+    the cache is vault-wide and one rebuild covers every row - see
     :func:`is_stale`.
     """
 
@@ -806,7 +806,7 @@ def list_tag_health_scoped(
         "building": False,
         "progress": 1.0,
         "computed_at": now.isoformat(),
-        # Computed live, never cached — nothing for it to be stale relative to.
+        # Computed live, never cached - nothing for it to be stale relative to.
         "stale": False,
         "scoped": True,
     }

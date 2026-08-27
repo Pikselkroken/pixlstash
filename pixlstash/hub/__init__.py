@@ -1,7 +1,7 @@
 """The hub: app-level identity, settings, and the library registry.
 
 The hub database lives outside every library and holds what never belonged in a
-vault — the user, credentials, tokens, per-user preferences, machine settings,
+vault - the user, credentials, tokens, per-user preferences, machine settings,
 and which libraries this installation knows about. See the multi-library plan
 and ``docs/backend_architecture.md`` §17.
 """

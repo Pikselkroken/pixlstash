@@ -103,7 +103,7 @@ def _reap_staging_sessions(server, now_ms: Optional[int] = None) -> None:
       past ``_STAGING_SESSION_TTL_S``.
 
     Called opportunistically from the staging routes, so no background thread is
-    needed. Safe to call frequently — it only touches disk when it evicts.
+    needed. Safe to call frequently - it only touches disk when it evicts.
     """
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     for staging_id, session in list(server.staging_sessions.items()):
@@ -114,7 +114,7 @@ def _reap_staging_sessions(server, now_ms: Optional[int] = None) -> None:
             else None
         )
         if status_value in ("pending", "running"):
-            # Active import — never reap it out from under the running task.
+            # Active import - never reap it out from under the running task.
             continue
         idle_ms = now_ms - int(session.get("last_update_epoch_ms") or 0)
         terminal = status_value in ("completed", "failed", "cancelled")
@@ -573,7 +573,7 @@ def register_routes(router, server):
                     )
                 )
 
-                # Duplicates are instantly "processed" — credit them now so that
+                # Duplicates are instantly "processed" - credit them now so that
                 # the progress bar stays accurate even when most files are dupes.
                 # Scrapheap matches are equally instant and are counted in their
                 # OWN bucket: they are neither imported nor ordinary duplicates.
@@ -848,7 +848,7 @@ def register_routes(router, server):
 
                 if all_imported_ids:
                     _mark_stage("finalizing_import_context")
-                    # Queue face extraction asynchronously — do not block on it.
+                    # Queue face extraction asynchronously - do not block on it.
                     for pic in new_pictures:
                         vault.get_worker_future(
                             TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
@@ -911,9 +911,9 @@ def register_routes(router, server):
                     )
                     if imported_ids:
                         # A genuine PixlStash tab attaches X-Client-Id (captured
-                        # as origin_client_id); an external API client — e.g. a
+                        # as origin_client_id); an external API client - e.g. a
                         # ComfyUI node POSTing generated output to
-                        # /pictures/import — does not. Tag the former "ui" (slick
+                        # /pictures/import - does not. Tag the former "ui" (slick
                         # in-place insert) and the latter "external" so an
                         # outside push raises the New-pictures pill instead of
                         # auto-inserting cards under the user.
@@ -1050,7 +1050,7 @@ def register_routes(router, server):
     # off to a background PictureImportTask on the shared TaskRunner,      #
     # whose progress surfaces in the task manager. All four mutating      #
     # routes are OWNER_ONLY (streaming client-provided bytes into the      #
-    # vault — NOT a host-filesystem read), mirroring POST /pictures/import.#
+    # vault - NOT a host-filesystem read), mirroring POST /pictures/import.#
     # ------------------------------------------------------------------ #
 
     def _staging_base_dir() -> str:
@@ -1144,7 +1144,7 @@ def register_routes(router, server):
         # one, so abandoned staging dirs never accumulate.
         _reap_staging_sessions(server)
         # Reject an invalid drop target up front (on the drop), before any files
-        # are streamed — a nonexistent set/character/project must not silently
+        # are streamed - a nonexistent set/character/project must not silently
         # no-op or fail downstream after import.
         _validate_association_targets(
             payload.set_id, payload.character_id, payload.project_id

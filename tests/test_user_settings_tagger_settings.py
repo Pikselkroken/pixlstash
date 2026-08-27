@@ -106,7 +106,7 @@ def test_serialize_respects_stored_tagger_settings():
 
 
 # ---------------------------------------------------------------------------
-# apply_user_config_patch — tagger_settings
+# apply_user_config_patch - tagger_settings
 # ---------------------------------------------------------------------------
 
 
@@ -149,7 +149,7 @@ def test_patch_returns_false_when_no_change():
     apply_user_config_patch(
         user, {"tagger_settings": {"plugins": {"wd14": {"enabled": False}}}}
     )
-    # Repeat the same patch — no change.
+    # Repeat the same patch - no change.
     changed = apply_user_config_patch(
         user, {"tagger_settings": {"plugins": {"wd14": {"enabled": False}}}}
     )
@@ -193,7 +193,7 @@ def test_patch_merges_without_overwriting_other_plugins():
         user,
         {"tagger_settings": {"plugins": {"pixlstash_tagger": {"enabled": True}}}},
     )
-    # Now patch wd14 — pixlstash_tagger entry should be untouched.
+    # Now patch wd14 - pixlstash_tagger entry should be untouched.
     apply_user_config_patch(
         user, {"tagger_settings": {"plugins": {"wd14": {"enabled": True}}}}
     )

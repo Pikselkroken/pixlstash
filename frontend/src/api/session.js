@@ -1,4 +1,4 @@
-// Session resource — GET /session/context.
+// Session resource - GET /session/context.
 //
 // Read once by `Root.vue` at boot to learn what the current credential can do
 // (owner session vs. a scoped share token) before the app shell mounts.

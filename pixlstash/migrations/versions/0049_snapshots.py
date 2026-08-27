@@ -4,8 +4,8 @@ Squashes the former snapshots-branch migrations (add_checkpoint,
 add_picture_metadata_hash, reset_metadata_hash) into a single revision that
 chains after 0048_normalize_stack_positions:
 
-  - ``snapshot`` table — full-database snapshot metadata created by VACUUM INTO.
-  - ``picture.metadata_hash`` column — SHA-256 fingerprint of each picture's
+  - ``snapshot`` table - full-database snapshot metadata created by VACUUM INTO.
+  - ``picture.metadata_hash`` column - SHA-256 fingerprint of each picture's
     user-visible metadata, used for fast snapshot-identity comparisons.
 
 Every step is conditional so this is a no-op on a fresh database, where

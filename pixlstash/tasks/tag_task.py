@@ -51,8 +51,8 @@ def _is_transient_load_error(exc: BaseException) -> bool:
     """True when *exc* means the machine failed, not that the file is corrupt.
 
     This is the gate on `mark_unprocessable`. A mark suppresses the picture in
-    `base_task_finder._filter_and_claim`, i.e. for **every** batch finder —
-    thumbnails, embeddings and quality as well as tagging — until the file's
+    `base_task_finder._filter_and_claim`, i.e. for **every** batch finder -
+    thumbnails, embeddings and quality as well as tagging - until the file's
     mtime/size changes, and `vault._count_missing_*` subtracts suppressed ids
     from the "remaining" counters, so the loss does not even show in the UI.
     Marking a good picture because the machine ran out of file descriptors would
@@ -60,7 +60,7 @@ def _is_transient_load_error(exc: BaseException) -> bool:
 
     `OSError.errno` is the discriminator, and it is exact: a real filesystem or
     resource failure carries one (``EMFILE`` 24, ``EIO`` 5, ``ESTALE`` 116),
-    while PIL's decode failures do not — both `UnidentifiedImageError` and the
+    while PIL's decode failures do not - both `UnidentifiedImageError` and the
     ``"image file is truncated"`` `OSError` leave it `None`.
     """
     if isinstance(exc, MemoryError):
@@ -205,14 +205,14 @@ class TagTask(BaseTask):
         Returns:
             ``(file_path, image, undecodable)``. ``undecodable`` is True **only**
             when the file's bytes were readable and still could not be decoded by
-            any loader — the sole condition under which the caller may mark it in
+            any loader - the sole condition under which the caller may mark it in
             the unprocessable registry (see `_is_transient_load_error` for why
             that distinction has to be exact).
 
         The extension only picks which decoder is tried first. Whatever it says,
         a failure falls back to `ImageUtils.load_image_or_video`, the loader the
         thumbnail, quality and embedding tasks use, so this path can never
-        suppress a picture those pipelines are able to read — a real mp4 named
+        suppress a picture those pipelines are able to read - a real mp4 named
         `.png` is common enough with re-encoded downloads to matter.
         """
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
@@ -248,7 +248,7 @@ class TagTask(BaseTask):
                 #
                 # The refusal was the loud half. The quiet half is worse: with
                 # the face nearer the top the box stayed valid and the crop came
-                # out of the wrong part of a sideways picture — and the
+                # out of the wrong part of a sideways picture - and the
                 # whole-image tagging pass ran on that same sideways image, for
                 # every rotated photo in the library.
                 return (
@@ -299,7 +299,7 @@ class TagTask(BaseTask):
         `expand_bbox_to_square`, and a bbox whose JSON is malformed raises on
         attribute access alone. Inline in the caller's loop, one such row escaped
         to the pass-level handler and cost **every remaining picture in the task**
-        its quality crop — silently, because those pictures are still written as
+        its quality crop - silently, because those pictures are still written as
         tagged, so no finder re-selects them.
         """
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
@@ -356,7 +356,7 @@ class TagTask(BaseTask):
 
         Mirrors `thumbnail_generation_task` / `quality_task`: the registry is
         optional on the database object, and its absence degrades to a warning
-        rather than a crash. Only ever called for a genuinely undecodable file —
+        rather than a crash. Only ever called for a genuinely undecodable file -
         see `_load_pic`'s ``undecodable`` flag.
         """
         registry = getattr(self._db, "unprocessable_images", None)
@@ -516,8 +516,8 @@ class TagTask(BaseTask):
 
         # Human labels outrank the tagger in the ground-truth Tag table (mirrors the
         # prediction-status invariant / not_human_labeled): a tag the user confirmed
-        # (POS) stays applied even when the fresh pass can't reproduce it — e.g. a
-        # manually-added 'watermark' the model has no vocabulary for — and a tag the
+        # (POS) stays applied even when the fresh pass can't reproduce it - e.g. a
+        # manually-added 'watermark' the model has no vocabulary for - and a tag the
         # user rejected (NEG) is never re-applied. Without this, re-tagging silently
         # drops a human-accepted tag that the model doesn't emit.
         human_pos_by_pic: dict[int, set[str]] = {}
@@ -565,7 +565,7 @@ class TagTask(BaseTask):
             pics_to_update.append((pic_id, effective_tags))
 
         # A locked set freezes a picture's CONFIRMED tags (the Tag table, not just
-        # predictions), so the background tagger must never rewrite them — even if
+        # predictions), so the background tagger must never rewrite them - even if
         # a retag sentinel somehow landed on a locked picture (e.g. a reset that
         # slipped through). Skip locked pictures from the confirmed-Tag rewrite;
         # MissingTagFinder also excludes them so they are not re-queued.
@@ -573,7 +573,7 @@ class TagTask(BaseTask):
             locked = locked_picture_ids(session, [pid for pid, _ in pics_to_update])
             if locked:
                 logger.info(
-                    "Tagger: preserving frozen confirmed tags — skipping "
+                    "Tagger: preserving frozen confirmed tags - skipping "
                     "rewrite for %d locked picture(s) %s",
                     len(locked),
                     sorted(locked),
@@ -834,7 +834,7 @@ class TagTask(BaseTask):
                                 )
                         # Crops are ground truth for the tags they own: strip those tags
                         # if the full-image pass produced them, then add only what the
-                        # crop confirmed.  Applies to every picture that produced a crop —
+                        # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
                         # fallback (which leaves face tags from the full-image pass alone).
                         for path, crop_quality in quality_tags_by_path.items():
@@ -1037,7 +1037,7 @@ class TagTask(BaseTask):
         if not picture_ids:
             return 0
 
-        # Filter to pictures that still exist — a reference folder removal can
+        # Filter to pictures that still exist - a reference folder removal can
         # delete pictures while a tag task is already in flight, causing FK
         # violations when TagPrediction rows are flushed for a gone picture.
         existing_picture_ids: set[int] = set(
@@ -1191,7 +1191,7 @@ class TagTask(BaseTask):
                     max(anomaly_scores) if anomaly_scores else 0.0
                 )
 
-        # One bulk UPDATE for the whole batch — a write per picture here would
+        # One bulk UPDATE for the whole batch - a write per picture here would
         # saturate the single DB writer queue on a large re-tag.
         invalidate_changed_anomaly_scores(
             session, picture_ids, before_anomaly, context="tagger prediction rewrite"

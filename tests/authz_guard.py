@@ -7,8 +7,8 @@ is easy to miss and hard to notice: **a GET to a nonexistent API path returns
 typo'd, renamed, or never-existing URL, and proves nothing at all.
 
 That is not hypothetical. ``test_integration_scoped_list_pass_through_not_over
-blocked`` asserted 200 against ``/stacks/{id}/stack`` — a route that has never
-existed — and stayed green while its docstring claimed to cover
+blocked`` asserted 200 against ``/stacks/{id}/stack`` - a route that has never
+existed - and stayed green while its docstring claimed to cover
 ``/stacks/{id}/pictures``, one of this repo's three historical whole-library BOLA
 leaks (CLAUDE.md, "Security & authorization review process"). A red test gets
 fixed; a green one that proves nothing silently certifies a leak vector.
@@ -88,7 +88,7 @@ def assert_real_route(app, method: str, path: str) -> None:
         AssertionError: If no real route matches.
     """
     assert resolves_to_real_route(app, method, path), (
-        f"{method} {path} matches no mounted API route — only the SPA catch-all "
+        f"{method} {path} matches no mounted API route - only the SPA catch-all "
         f"'{SPA_FALLBACK_PATH}' would answer it, with a 200. Any assertion against "
         "this path is vacuous."
     )

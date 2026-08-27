@@ -1,4 +1,4 @@
-// Telemetry install-ID resource — GET/POST /telemetry/install-id.
+// Telemetry install-ID resource - GET/POST /telemetry/install-id.
 //
 // The four consent flags are ordinary user settings and ride /users/me/config
 // (see api/config.js). Only the install ID has its own routes, because it is a

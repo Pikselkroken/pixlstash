@@ -92,7 +92,7 @@ ROTATE_MAX_IDS = 200
 
 
 # picture belongs to a locked set. Organisation fields (e.g. project_id) are not
-# listed — they stay editable per the lock semantics.
+# listed - they stay editable per the lock semantics.
 _LOCK_SENSITIVE_PATCH_FIELDS = frozenset({"description", "score"})
 
 
@@ -140,7 +140,7 @@ class PictureFullMetadataResponse(BaseModel):
             "True when a locked picture set freezes this picture's label data "
             "(directly, or through a stack sibling). This is the authoritative "
             "'is it frozen' signal and is always accurate, even for a share token "
-            "that may not see the locking set — use it to disable editing "
+            "that may not see the locking set - use it to disable editing "
             "controls. ``locked_by_sets`` may be empty while this is true."
         ),
     )
@@ -151,7 +151,7 @@ class PictureFullMetadataResponse(BaseModel):
             "to the sets the caller's token may see (owner/unscoped sees all). A "
             "resource-scoped share token is not told the id or the user-authored "
             "name of a locked set outside its grant, so this list can be empty "
-            "while ``locked`` is true — render the 'Locked by <names>' detail only "
+            "while ``locked`` is true - render the 'Locked by <names>' detail only "
             "when it is non-empty, and never derive locked-ness from its length."
         ),
     )
@@ -203,11 +203,11 @@ class ScrapheapDeleteResponse(BaseModel):
     # scrapheap). 0 when ``include_protected`` is true or nothing was protected.
     skipped_count: int = 0
     # Ids left intact because a locked picture-set freezes them. A lock binds on
-    # EVERY path — including ``include_protected=true`` — so these are never
+    # EVERY path - including ``include_protected=true`` - so these are never
     # destroyed by this endpoint at any flag value. Unlock the set to delete them.
     skipped_locked: list[int] = []
     # Ids left intact because they had LEFT the scrapheap by the time the rows
-    # were deleted — a restore that landed mid-purge. Their rows, files and
+    # were deleted - a restore that landed mid-purge. Their rows, files and
     # permanent-deletion ledger entries are untouched; nothing is lost.
     skipped_restored: list[int] = []
     # Echoes the effective ``include_protected`` flag for this call.
@@ -328,7 +328,7 @@ class PictureRotateResponse(BaseModel):
 
     status: str
     # Pictures whose file now carries a new EXIF orientation. Disjoint from the
-    # two lists below, and the three together account for every requested id —
+    # two lists below, and the three together account for every requested id -
     # the buckets are counted where they happen, never by subtraction.
     rotated_picture_ids: list[int] = []
     # Pictures that cannot be rotated in place and need the copy-producing rotate
@@ -346,7 +346,7 @@ class PictureRotateResponse(BaseModel):
 def register_routes(router, server):
     # Per-server store of unspent delete-forever confirmations. Scoped to this
     # router (i.e. to this Server) rather than module-global so two servers in
-    # one process — the test suite — cannot spend each other's confirmations.
+    # one process - the test suite - cannot spend each other's confirmations.
     scrapheap_confirmations = scrapheap_service.ScrapheapDeleteConfirmations()
 
     @router.patch(
@@ -517,7 +517,7 @@ def register_routes(router, server):
             return updated_ids, missing_ids
 
         # Project membership is stack-atomic, so the snapshot expands to whole
-        # stacks — otherwise undo would restore the clicked picture and leave its
+        # stacks - otherwise undo would restore the clicked picture and leave its
         # stack siblings on the new project.
         (updated_ids, missing_ids), _operation = (
             operation_log_service.run_recorded_metadata_task(
@@ -753,7 +753,7 @@ def register_routes(router, server):
     )
     def detect_pictures(request: Request, payload: dict = Body(...)):
         # Capture the originating tab's client id so the detection-complete
-        # event is attributed to this user's own action — the SPA suppresses the
+        # event is attributed to this user's own action - the SPA suppresses the
         # "view changed externally" pill for its own origin.
         origin_client_id = getattr(request.state, "origin_client_id", None)
         raw_ids = payload.get("picture_ids")
@@ -875,8 +875,8 @@ def register_routes(router, server):
         # legitimately read a picture that is also a member of some other, private
         # locked set, and that set's user-authored name (which routinely carries a
         # client / project / subject identifier) is not obtainable from
-        # `GET /picture_sets`. So the *fact* of the freeze is disclosed —
-        # `locked` is what the UI needs to disable the right controls — while the
+        # `GET /picture_sets`. So the *fact* of the freeze is disclosed -
+        # `locked` is what the UI needs to disable the right controls - while the
         # names are filtered down to the sets this token may actually see.
         locked_sets = server.vault.db.run_immediate_read_task(
             locked_by_sets_for_picture, pic.id
@@ -1082,7 +1082,7 @@ def register_routes(router, server):
                         pid: int,
                         new_tags: list[str],
                     ) -> None:
-                        # Tag replacement is label data — frozen on a locked pic.
+                        # Tag replacement is label data - frozen on a locked pic.
                         enforce_pictures_not_locked(
                             session, [pid], "replace tags on a locked picture"
                         )
@@ -1118,7 +1118,7 @@ def register_routes(router, server):
                 pic_db = session.get(Picture, picture_id)
                 if pic_db is None:
                     raise KeyError("Picture not found")
-                # description and score are label/curation data — frozen on a
+                # description and score are label/curation data - frozen on a
                 # picture in a locked set. Project assignment and other org fields
                 # remain editable, so only guard when a locked-sensitive field is
                 # actually being written.
@@ -1283,20 +1283,20 @@ def register_routes(router, server):
         summary="Preview a scrapheap delete-forever",
         description=(
             "Authoritative preview of a scrapheap delete-forever, computed over "
-            "ALL matching scrapheap rows — never a virtualized/grid subset — so "
+            "ALL matching scrapheap rows - never a virtualized/grid subset - so "
             "the confirmation can name each file at risk. Body "
             "{ids: int[] | null}; null/omitted = the entire scrapheap.\n\n"
             "`total_count` splits into three DISJOINT counts that sum to it, "
             "keyed on which action destroys the row so no count overstates "
             "destruction:\n\n"
-            "- `locked_count` — frozen by a locked picture set; destroyed by "
+            "- `locked_count` - frozen by a locked picture set; destroyed by "
             "NEITHER option. A lock overrides `include_protected`, so a row that "
             "is locked AND protected counts here, not under `protected_count`.\n"
-            "- `protected_count` — protected reference-folder originals "
+            "- `protected_count` - protected reference-folder originals "
             "(`allow_delete_file=false`) that are not locked; destroyed only by "
             "`include_protected=true`. `protected` lists each one's absolute "
             "on-disk path.\n"
-            "- `unprotected_count` — neither; destroyed by both options.\n\n"
+            "- `unprotected_count` - neither; destroyed by both options.\n\n"
             'So "Delete unprotected only" destroys exactly `unprotected_count` '
             'and "Delete all" destroys exactly '
             "`unprotected_count + protected_count`."
@@ -1365,13 +1365,13 @@ def register_routes(router, server):
             "destroyed too.\n\n"
             "Pictures frozen by a LOCKED picture set (directly or via a stack "
             "sibling) are never destroyed here, at EITHER include_protected "
-            "value — a locked set is a hard whole-set freeze, and this is the "
+            "value - a locked set is a hard whole-set freeze, and this is the "
             "one irreversible path, so it must not be the one that ignores it. "
             "They are skipped and returned in `skipped_locked` rather than "
             "failing the request; unlock the set to delete them.\n\n"
             "**A `confirm_token` is REQUIRED.** Call "
-            "`POST /pictures/scrapheap/delete-preview` first — it reports "
-            "exactly what each option will destroy and mints the token — then "
+            "`POST /pictures/scrapheap/delete-preview` first - it reports "
+            "exactly what each option will destroy and mints the token - then "
             "send that token back here. It is single-use, expires after five "
             "minutes, and is bound to the previewed selection, so this "
             "irreversible endpoint cannot be driven without the destruction "
@@ -1422,11 +1422,11 @@ def register_routes(router, server):
                 detail=(
                     "This delete confirmation is no longer valid (already used, "
                     "expired, or for a different selection). Nothing was "
-                    "deleted — re-check what would be destroyed and try again."
+                    "deleted - re-check what would be destroyed and try again."
                 ),
             )
         # Default false: absent body (delete-all) never destroys protected
-        # originals — that requires an explicit include_protected=true.
+        # originals - that requires an explicit include_protected=true.
         include_protected = bool(
             payload.get("include_protected", False)
             if isinstance(payload, dict)
@@ -1478,8 +1478,8 @@ def register_routes(router, server):
             "Soft-deletes a picture by marking it deleted, making it appear in "
             "scrapheap views. Recorded in the operation log as "
             "`pictures.scrapheap.move` and **undoable**: undo restores the "
-            "picture, redo moves it back. (A *permanent* delete — "
-            "`DELETE /pictures/scrapheap` — is not recorded and cannot be undone.)"
+            "picture, redo moves it back. (A *permanent* delete - "
+            "`DELETE /pictures/scrapheap` - is not recorded and cannot be undone.)"
         ),
         response_model=PictureDeleteResponse,
     )
@@ -1496,7 +1496,7 @@ def register_routes(router, server):
             pic = session.get(Picture, id)
             if not pic:
                 return False
-            # Soft-deleting a member would silently mutate a frozen set — refuse.
+            # Soft-deleting a member would silently mutate a frozen set - refuse.
             enforce_pictures_not_locked(session, [pic.id], "delete a locked picture")
             if pic.deleted:
                 return True
@@ -1627,7 +1627,7 @@ def register_routes(router, server):
             session.flush()
             return newly_deleted, sorted(locked)
 
-        # One bulk action, one operation row, one batch id — so the client can
+        # One bulk action, one operation row, one batch id - so the client can
         # offer a single "Undo" for the whole move, by batch id or by simply
         # popping the newest operation.
         (deleted_ids, skipped_locked), _operation = (
@@ -1675,7 +1675,7 @@ def register_routes(router, server):
             "Three disjoint result buckets that together account for every id "
             "sent: `rotated_picture_ids`, `unsupported_picture_ids` (a "
             "reference-folder original, or a container with no orientation tag "
-            "this server can splice — use the `rotate` image plugin, which "
+            "this server can splice - use the `rotate` image plugin, which "
             "produces a rotated *copy*) and `skipped_picture_ids` (no row, "
             "already in the Scrapheap, or the write failed).\n\n"
             "Recorded as a single `pictures.rotate` operation carrying a "
@@ -1719,7 +1719,7 @@ def register_routes(router, server):
             """Fill the orientation mirror of any target that has none yet.
 
             ``capture_state_in_session`` reads the mirror, and it runs *before*
-            the mutation — so a target still NULL here would record
+            the mutation - so a target still NULL here would record
             ``before_state {"orientation": null}`` and its undo would have
             nothing to write back. Every row predating the column is NULL, and
             ``MissingOrientationFinder`` may not have reached this one yet.
@@ -1768,7 +1768,7 @@ def register_routes(router, server):
                     continue
                 path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
                 if not path:
-                    # A file problem, not a format one — so `skipped`, beside the
+                    # A file problem, not a format one - so `skipped`, beside the
                     # other "there is nothing on disk to turn" cases above. The
                     # two buckets are advice, not bookkeeping: the client answers
                     # `unsupported` with "use Filters > Rotate to make a rotated

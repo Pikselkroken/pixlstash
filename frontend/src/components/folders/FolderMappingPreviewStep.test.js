@@ -1,4 +1,4 @@
-// Wizard step 3 ("Preview") — what's worth pinning here is the one thing this
+// Wizard step 3 ("Preview") - what's worth pinning here is the one thing this
 // screen actually sends over the wire: `mode` has to reach the commit call
 // unchanged, because that field is what tells the server whether to register
 // an external reference folder or import into the active library in place

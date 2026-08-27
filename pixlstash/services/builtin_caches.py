@@ -5,10 +5,10 @@ its *own* engines into. It is not the only place models land on this disk, and
 the other two were invisible: InsightFace keeps face packs under
 ``~/.insightface/models``, and everything fetched through ``huggingface_hub``
 goes to the HuggingFace cache. On a measured machine that is 1.8 GB and 116 GB
-respectively — 100x the built-in folder — and the shelf showed neither, so the
+respectively - 100x the built-in folder - and the shelf showed neither, so the
 owner had no way to see where their disk had gone.
 
-**Declared, never scanned — for the same reason and one more.** The scanner
+**Declared, never scanned - for the same reason and one more.** The scanner
 yields only ``.safetensors``: InsightFace holds ONNX and would list as empty,
 and the HuggingFace cache is a content-addressed blob store whose 37
 ``.safetensors`` sit behind symlinks in ``snapshots/``. Pointing a walk at it
@@ -21,19 +21,19 @@ folder does.
 downloads and duplicating two strings beats importing onnxruntime at start-up.
 Neither applies here: the contents of these roots are whatever the owner and the
 tools put there, so a fixed list would be a guess that goes stale. Both are read
-from a cheap index instead — one ``listdir`` for InsightFace, and
+from a cheap index instead - one ``listdir`` for InsightFace, and
 ``scan_cache_dir()`` for HuggingFace, which reads the cache's own bookkeeping and
 measured **0.01 s against 116 GB and 26 repos**.
 
 **``provenance`` stays ``builtin`` for every row here**, which is a claim about
-*how the row got written* — declared by PixlStash's own registration rather than
-scanned out of a folder the owner assembled — and not a claim that PixlStash
+*how the row got written* - declared by PixlStash's own registration rather than
+scanned out of a folder the owner assembled - and not a claim that PixlStash
 chose the model. It did not choose most of them. ``external`` would say the row
 came from a scan, which is the thing that never happens to these folders.
 
 **``file_kind`` is where "we chose it" IS the claim, so it is only made for the
 repos we chose.** The HuggingFace cache is shared with every other tool on the
-machine, and ``engine`` means "PixlStash downloaded this for itself" — which is
+machine, and ``engine`` means "PixlStash downloaded this for itself" - which is
 what every shelf verb refuses to touch. Written over the whole cache it locked
 the owner out of their own models: their checkpoint could not be renamed or
 reclassified, and the refusal told them PixlStash had downloaded it. Only
@@ -81,7 +81,7 @@ logger = get_logger(__name__)
 #
 # **InsightFace had one and no longer does (#906).** `PIXLSTASH_INSIGHTFACE_DIR`
 # named the *models* directory, one level below the root that is now recorded, so
-# the two could disagree — inert while nothing could relocate, a bug the moment
+# the two could disagree - inert while nothing could relocate, a bug the moment
 # something could: the shelf would declare the override path while downloads and
 # `FaceAnalysis` used the root, and a relocation identified by
 # `insightface_models_dir()` would repoint the row at a directory the next start
@@ -92,7 +92,7 @@ HUGGINGFACE_CACHE_DIR_ENV = "PIXLSTASH_HUGGINGFACE_CACHE_DIR"
 INSIGHTFACE_MODELS_SUBDIR = "models"
 
 # InsightFace stores each pack as a directory. The zip it downloaded to build
-# one sits beside it and is the tool's own leftover, not a model — the same
+# one sits beside it and is the tool's own leftover, not a model - the same
 # judgement `TOOLING_DIRS` makes about `.cache`.
 _PACK_ARCHIVE_SUFFIX = ".zip"
 
@@ -102,7 +102,7 @@ def insightface_models_dir_under(root: str) -> str:
 
     ``models`` is InsightFace's own layout and is not ours to choose: the
     library joins it onto whatever ``root`` it is given. That is why relocating
-    the packs is a change of *root* rather than of this folder — see
+    the packs is a change of *root* rather than of this folder - see
     ``POST /model-folders/{id}/relocate``.
 
     Args:
@@ -118,7 +118,7 @@ def insightface_models_dir() -> str:
     """Where InsightFace keeps its model packs.
 
     ``FaceAnalysis`` looks under ``<root>/models/<pack>/``, so the *models*
-    subdirectory is the folder that holds models — the root itself also holds
+    subdirectory is the folder that holds models - the root itself also holds
     the tool's own state and would be a less honest thing to call a model
     folder.
 
@@ -169,7 +169,7 @@ def huggingface_cache_dir() -> Optional[str]:
         # through the library, so its absence means there is nothing to show.
         logger.info(
             "huggingface_hub is not installed (%s); the HuggingFace cache will "
-            "not be listed on the shelf. Nothing is wrong — there is simply no "
+            "not be listed on the shelf. Nothing is wrong - there is simply no "
             "cache to describe.",
             exc,
         )
@@ -215,7 +215,7 @@ def declare_insightface_packs(hub, folder_path: str) -> Optional[int]:
     a measured machine has and which are exactly what the owner wants to see;
     listing only what is on disk would silently drop a pack we provision that
     has not downloaded yet. Both are declared, and an absent known pack lands as
-    ``missing`` — a state, not a warning, the same as the ViT-L/14 scorer.
+    ``missing`` - a state, not a warning, the same as the ViT-L/14 scorer.
 
     Args:
         hub: The open hub database.
@@ -248,7 +248,7 @@ def declare_insightface_packs(hub, folder_path: str) -> Optional[int]:
             # A relocation put the packs here and they are not here, which is
             # the download folder's failure in the folder beside it: they are
             # re-fetched into a path PixlStash re-creates, and until this line
-            # nothing said so. Not "normal" — the machine has run face
+            # nothing said so. Not "normal" - the machine has run face
             # detection, which is why it has a recorded root at all. Recognised
             # by the record rather than by "not the default", because the owner
             # who symlinked `~/.insightface` at their big drive and then
@@ -257,7 +257,7 @@ def declare_insightface_packs(hub, folder_path: str) -> Optional[int]:
                 "A relocation recorded %s as the InsightFace root and %s cannot "
                 "be read (%s), so every pack will be downloaded again into a "
                 "re-created path. Restore, mount or re-permission it. If it is "
-                "gone for good, deleting %s sends face detection back to %s — "
+                "gone for good, deleting %s sends face detection back to %s - "
                 "but nothing is moved back, and PixlStash stops recognising the "
                 "old root as one it can relocate.",
                 recorded,
@@ -341,7 +341,7 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
 
     entries = []
     for repo in info.repos:
-        # The features it powers, not `repo_type` — which is `model` for all 26
+        # The features it powers, not `repo_type` - which is `model` for all 26
         # repos on a real machine and therefore says nothing. Classified once
         # per repo: the primary label goes in `model.kind` for the Kind column
         # and the whole set goes to `model_capability`, because Florence-2 and
@@ -352,14 +352,14 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
         # the list PixlStash's own code fetches; everything else beside it was
         # put there by the owner or by another tool, and calling those rows
         # `engine` made the shelf claim we downloaded them. That claim is what
-        # every verb refuses on — so correcting the Kind of a checkpoint the
+        # every verb refuses on - so correcting the Kind of a checkpoint the
         # owner downloaded themselves came back "1 of these are engines
         # PixlStash downloaded for itself … listed so you can see them, not
         # curated", about a file PixlStash has never loaded.
         #
         # `file_kind` for those is what the classifier read off the repo, which
         # for a full diffusers pipeline is a genuine answer and otherwise is
-        # `unknown` — the same word the unclaimed leftovers in the built-in
+        # `unknown` - the same word the unclaimed leftovers in the built-in
         # folder carry, chosen there for this exact reason: an `engine` row is
         # the one state on the shelf nothing can act on.
         ours = str(getattr(repo, "repo_id", "") or "") in OUR_REPOS

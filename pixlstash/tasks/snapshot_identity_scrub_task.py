@@ -68,7 +68,7 @@ class SnapshotIdentityScrubTask(BaseTask):
             # missing-archive branch below.
             logger.error(
                 "SnapshotIdentityScrubTask: snapshot %s is registered at %s, "
-                "which is outside the vault root — refusing to touch it and "
+                "which is outside the vault root - refusing to touch it and "
                 "recording it as done: %s",
                 self._snapshot_id,
                 self._relative_path,

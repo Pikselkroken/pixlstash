@@ -2,7 +2,7 @@
 
 A ``kind='source'`` folder is an ai-toolkit output root: the scanner never
 catalogues it, because a run's steps are working output rather than a library of
-models. Importing is how a run's files stop being working output — they are
+models. Importing is how a run's files stop being working output - they are
 brought into a folder the shelf *does* catalogue, and become ``model`` rows with
 a stack over them so the whole run reads as one shelf row with an expandable step
 strip.
@@ -25,7 +25,7 @@ found on disk by the scanner and says so; a run PixlStash imported from a traine
 it can read is the one case where the shelf knows where the file came from.
 
 An interrupted import can leave an ``adapter_stack`` row with no members. It is
-inert — nothing reads a stack except through a ``model.stack_id`` pointing at it —
+inert - nothing reads a stack except through a ``model.stack_id`` pointing at it -
 so it is left rather than cleaned up by a rollback the rest of this module
 deliberately does not have.
 
@@ -37,7 +37,7 @@ when the run has a bare no-step file, or the highest step when it does not.
 ``samples/`` was 15 MB, so the provenance costs 0.8 % of the bytes and the whole
 run is taken: each checkpoint's previews land in ``<stem>_samples/`` beside it,
 under the trainer's own filenames. They are copied after the row commits and
-before the unlink, so ``delete_after_import`` can never destroy the only copy —
+before the unlink, so ``delete_after_import`` can never destroy the only copy -
 which is what it used to do, this module having taken the ``.safetensors`` and
 nothing else. A failed sample copy is logged and reported in the outcome's
 ``detail`` and the checkpoint stays ``imported``: losing a preview must not cost
@@ -158,8 +158,8 @@ def _copy_samples(
     try:
         os.mkdir(partial)
         for sample in samples:
-            # ``basename`` because the trainer's own filename is kept verbatim —
-            # no renumbering — and it is still a name being turned into a path.
+            # ``basename`` because the trainer's own filename is kept verbatim -
+            # no renumbering - and it is still a name being turned into a path.
             shutil.copy2(
                 sample.path, os.path.join(partial, os.path.basename(sample.filename))
             )
@@ -183,8 +183,8 @@ def _cover_first(checkpoints: list[Checkpoint]) -> list[Checkpoint]:
     """Order a run's files so ``stack_position`` 0 is the right cover.
 
     The bare no-step file is what the trainer wrote last and is the one a user
-    means by "the LoRA", so it leads. Without one — the run the fixtures call
-    *the unconfirmed cover* — the highest step is the best available answer, and
+    means by "the LoRA", so it leads. Without one - the run the fixtures call
+    *the unconfirmed cover* - the highest step is the best available answer, and
     the rest follow newest first so expanding the strip reads backwards in time.
     """
     finals = [c for c in checkpoints if c.is_final]
@@ -350,7 +350,7 @@ class RunImporter:
 
         Returns:
             ``{source checkpoint path: (file target, samples target or None)}``.
-            The samples target is ``None`` for a checkpoint with no previews —
+            The samples target is ``None`` for a checkpoint with no previews -
             nothing is written, so nothing is claimed.
         """
         targets: dict[str, tuple[str, Optional[str]]] = {}
@@ -362,7 +362,7 @@ class RunImporter:
                 # yields ``scandir`` entry names, but ``resolve_path_within``
                 # calls ``realpath``, so a *symlink standing at the destination
                 # filename* is refused here. A dangling one is refused **only**
-                # here with a 4xx naming the run — ``os.path.exists`` below is
+                # here with a 4xx naming the run - ``os.path.exists`` below is
                 # False for it, so the collision check waves it through, and
                 # publication then refuses it as a taken name on the worker
                 # thread. Asserted in ``tests/test_model_run_import.py``.
@@ -412,7 +412,7 @@ class RunImporter:
             # **That check is on the resolved path, not the joined one.** For a
             # dangling link ``realpath`` has already collapsed to the missing
             # target, so ``lexists`` and ``exists`` agree here and the choice
-            # between them buys nothing — the containment above is the whole
+            # between them buys nothing - the containment above is the whole
             # guard. Written down because the opposite was claimed in this
             # comment and the mutation stayed green.
             target = resolve_path_within(destination, directory)
@@ -497,7 +497,7 @@ class RunImporter:
             )
         except sqlite3.IntegrityError as exc:
             # The destination key was registered between ``_resolve_targets``
-            # and this commit — a rescan, which is deliberately not under
+            # and this commit - a rescan, which is deliberately not under
             # ``SHELF_IO_LOCK``. Fail closed, exactly as the mover does: the
             # alternative repoints somebody else's location row at this file,
             # which is a silent overwrite of bookkeeping rather than of bytes.
@@ -548,7 +548,7 @@ class RunImporter:
         The header is parsed from the *destination* copy, which is the one the
         row will name. ``ON CONFLICT(sha256)`` because a run imported twice, or a
         file already on the shelf from somewhere else, is one model with two
-        locations — the shelf's whole content/location split. On that path the
+        locations - the shelf's whole content/location split. On that path the
         curation already on the row is kept and only the run facts are filled in.
 
         The run's own config supplies what the header often does not: 37 % of
@@ -602,7 +602,7 @@ class RunImporter:
                 ).fetchone()[0]
             )
             # **No ``ON CONFLICT`` on the location row.** ``ON CONFLICT(sha256)``
-            # above is the content/location split doing its job — one model, two
+            # above is the content/location split doing its job - one model, two
             # places. This one is not: the destination key is checked free in
             # ``_resolve_targets``, so a conflict here can only mean a racing
             # writer took it, and ``DO UPDATE`` would repoint *their* row at

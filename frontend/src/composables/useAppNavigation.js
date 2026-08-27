@@ -219,7 +219,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   }
 
   // ============================================================
-  // ROUTING — URL ↔ Store sync
+  // ROUTING - URL ↔ Store sync
   // ============================================================
 
   /**
@@ -272,7 +272,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         });
         return;
       }
-      // A folder payload with no id of any kind — what an "About your
+      // A folder payload with no id of any kind - what an "About your
       // library" finding points at. It travels as `?path=` rather than being
       // dropped, and `useViewStore.parseFolderPath` reads it back.
       //
@@ -381,7 +381,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
   // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
-  // be imported — the same destination, a second tab — so the sidebar's Models
+  // be imported - the same destination, a second tab - so the sidebar's Models
   // entry stays the current page across both and no second destination lights.
   // A READ session is never showing it: the shelf lists the owner's machine and
   // every route behind it is owner-only, so mounting it would only fire requests
@@ -399,14 +399,14 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   //
   // A watcher and not a router guard. The router's first navigation resolves at
   // mount, before `Root.vue` has fetched the session context, and for this
-  // session nothing ever navigates a second time — so a guard would see "not
+  // session nothing ever navigates a second time - so a guard would see "not
   // read-only" on exactly the boot it exists to catch, and never run again.
   //
   // It writes no selection or project state, so `useViewStore` remains the only
   // route→store watcher; this one only navigates, which is this file's job.
   //
   // `replace` and not `push`, so Back leaves the app rather than returning to
-  // the bounce — and through the same token-preserving path every other
+  // the bounce - and through the same token-preserving path every other
   // navigation here uses, because the ONLY session that reaches this line is
   // one whose credential lives in `?token=`. Dropping it would leave a share
   // visitor on a URL that 401s the moment they reload or bookmark it.
@@ -467,7 +467,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
    * Act on one finding's button: open the tool it names, on the pictures it
    * counted. The `kind` vocabulary is the backend's (`routes/insights.py`).
    *
-   * `settings` is not handled here — the settings dialog is not a route, so
+   * `settings` is not handled here - the settings dialog is not a route, so
    * App.vue takes that one straight to `openSettingsDialog`.
    *
    * @param {{kind: string, path?: string, folder_label?: string}} action

@@ -3,7 +3,7 @@
 Wave B of the tag-review takeover design
 (docs/reviews/tag-review-tagger-takeover-design.md §2): one row per picture
 recording its component-aware TRAIN/EVAL/NEITHER split assignment, plus a
-fail-closed conflict flag/detail (no separate conflict-queue table —
+fail-closed conflict flag/detail (no separate conflict-queue table -
 ``SELECT * FROM picture_split WHERE conflict = true`` is the queue).
 Additive, no data migration.
 

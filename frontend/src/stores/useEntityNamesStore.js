@@ -8,7 +8,7 @@ import { onSessionReset } from "../utils/apiClient";
  * The route is the single source of truth for *what* is being viewed, but it
  * only carries IDs. This store supplies the human names so the ImageGrid
  * breadcrumb can render "Project › Character" instead of "5 › 12". The SideBar
- * — which already fetches these lists — publishes into it after every fetch.
+ * - which already fetches these lists - publishes into it after every fetch.
  *
  * Lookups are intentionally **one-directional** (id → name). Names are not
  * unique (two characters can share a name), so the breadcrumb never maps a
@@ -70,7 +70,7 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
     importFolderLabels.value = {};
   }
 
-  // This store has no fetches of its own — the sidebar publishes into it — so
+  // This store has no fetches of its own - the sidebar publishes into it - so
   // there is no in-flight response to guard, only the accumulated maps.
   const unsubscribeSessionReset = onSessionReset(reset);
   onScopeDispose(() => unsubscribeSessionReset());

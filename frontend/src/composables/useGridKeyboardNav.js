@@ -67,7 +67,7 @@ export function useGridKeyboardNav(
   // is only being held there while its undo is one click away.
   //
   // The cursor SKIPS them rather than landing on them. A cursor parked on an
-  // inert cell makes every following key a dead key — Space, Enter, a digit,
+  // inert cell makes every following key a dead key - Space, Enter, a digit,
   // all silently doing nothing with no way to tell that from a broken feature,
   // which is the one outcome this codebase treats as unacceptable. One linear
   // scan in the direction of travel serves all four arrow keys and both paging
@@ -192,13 +192,13 @@ export function useGridKeyboardNav(
         cursorIdx.value = null;
         clearFaceSelection();
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
-        // No images selected — ESC closes the union/intersect/overlap bar
+        // No images selected - ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
       } else if (
         searchResultsActive?.value ||
         (searchStore.searchQuery && searchStore.searchQuery.trim())
       ) {
-        // No selection active — ESC also clears search. The query now comes
+        // No selection active - ESC also clears search. The query now comes
         // from `searchStore` rather than a prop (App.vue slim-down, #661).
         // `searchResultsActive` covers the modes that have no query string
         // behind them (reverse image, similar faces, a person face search):

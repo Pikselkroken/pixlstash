@@ -1,9 +1,9 @@
-// The four facets a folder can be mapped onto, plus "just a folder" — the
+// The four facets a folder can be mapped onto, plus "just a folder" - the
 // owner's own choice, never something a Phase 2 signal proposes (see
 // integration_architecture.md §20). Shared between the mapping tree and the
 // preview screen so the icon/label/key for a kind is spelled once.
 //
-// Digits 1-4 and 0: DECISIONS.md's own reasoning — Project and Person both
+// Digits 1-4 and 0: DECISIONS.md's own reasoning - Project and Person both
 // want P, so the mapping screen keys by position instead.
 
 export const FACET_KINDS = [

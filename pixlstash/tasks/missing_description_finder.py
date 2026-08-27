@@ -100,7 +100,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
         # DescriptionTask's write guard (`locked_picture_ids`) does: a picture
         # merely *sharing a stack* with a locked-set member was selected here, ran
         # full captioning inference, had its write skipped, kept its NULL
-        # description, and was selected again next sweep — an unbounded loop.
+        # description, and was selected again next sweep - an unbounded loop.
         not_locked = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(
             select(Picture)

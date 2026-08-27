@@ -1,11 +1,11 @@
 <script setup>
 /**
- * The first screen of every install — see `docs/frontend_architecture.md`
+ * The first screen of every install - see `docs/frontend_architecture.md`
  * §"The empty library is a different question from an empty grid" for why it
  * says what it says.
  *
  * In short: three routes out rather than one, folder first and the only
- * accented one, and not a word about a "database". Presentational — every
+ * accented one, and not a word about a "database". Presentational - every
  * route is emitted for the grid to place, including the chosen files, which
  * are handed up unfiltered because the grid already drops what PixlStash
  * cannot read for both drop paths.
@@ -29,8 +29,8 @@ function filesChosen(event) {
   // Cleared before the emit, so choosing the same files twice in a row still
   // fires `change` the second time.
   event.target.value = "";
-  // Handed up unfiltered. `accept` is advisory — every OS picker offers "All
-  // Files" — so somebody has to drop what PixlStash cannot read, and that
+  // Handed up unfiltered. `accept` is advisory - every OS picker offers "All
+  // Files" - so somebody has to drop what PixlStash cannot read, and that
   // somebody is the grid, where both drop paths already do it against the same
   // `isSupportedImportFile` and raise the same notice. A presenter owning a
   // third copy is how the three drift apart.
@@ -42,7 +42,7 @@ function filesChosen(event) {
   <div class="library-empty">
     <!-- Announced, unlike the two empty cards beside it. This one appears
          asynchronously, at least 350ms after load, and replaces the whole grid
-         on the first screen a new install shows — the one place a screen reader
+         on the first screen a new install shows - the one place a screen reader
          user most needs to be told the view changed under them. -->
     <div class="library-empty__card" role="status" aria-live="polite">
       <div class="library-empty__illustration" aria-hidden="true">
@@ -243,7 +243,7 @@ function filesChosen(event) {
 
 /* Off-screen rather than `display: none`: some browsers refuse to open the
    picker for an input that is not rendered at all. `pointer-events: none` is
-   safe on top of that — a programmatic `.click()` ignores it, and nobody should
+   safe on top of that - a programmatic `.click()` ignores it, and nobody should
    be able to hit a 1px target by accident. The button above is the real
    control, and it is a real <button>. */
 .library-empty__file-input {

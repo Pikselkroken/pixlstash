@@ -1,4 +1,4 @@
-"""Tagger plugin registry — manages first-party and user TaggerPlugin instances."""
+"""Tagger plugin registry - manages first-party and user TaggerPlugin instances."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class TaggerPluginManager:
     Plugins are imported lazily on first call to :meth:`reload`.  If a
     plugin module fails to import (e.g. because an optional dependency like
     ``bitsandbytes`` is absent), the error is logged and the plugin is skipped
-    — the rest of the app continues to boot normally.
+    - the rest of the app continues to boot normally.
 
     User plugins are discovered from *user_dir* at load time only; adding one
     requires a restart.  First-party plugins are loaded first and win on a
@@ -92,7 +92,7 @@ class TaggerPluginManager:
         rules. ``pixlstash-cli plugins test`` calls this so its verdict is the
         server's behaviour rather than a second loader that resembles it.
 
-        This adds to the registry rather than declaring it complete — the
+        This adds to the registry rather than declaring it complete - the
         directory-level decisions (which entries are eligible, and the fact
         that first-party plugins were loaded first and so win a name
         collision) belong to :meth:`reload`, which callers still owe.
@@ -172,7 +172,7 @@ class TaggerPluginManager:
         """Call ``unload()`` on every registered plugin that reports loaded.
 
         Each plugin is guarded on its own: one that raises must not leave the
-        rest of the library resident. Does not load the registry — a plugin
+        rest of the library resident. Does not load the registry - a plugin
         that was never imported is holding nothing.
         """
         with self._lock:
@@ -449,7 +449,7 @@ class TaggerPluginManager:
             # Every later caller (GET /taggers, fill_defaults on library open)
             # runs unguarded, so a plugin that raises in parameter_schema(),
             # list_downloaded_artifacts() or is_loaded() must be rejected now
-            # rather than take the whole Auto-tagging screen — or the boot —
+            # rather than take the whole Auto-tagging screen - or the boot -
             # down with it.
             instance.plugin_schema()
         except (Exception, SystemExit) as exc:
@@ -499,8 +499,8 @@ def unload_loaded_tagger_plugins() -> None:
     * The registry is process-wide, and the vault's engine is the one its
       plugins are bound to (``Vault._bind_engine_services``). Hanging this off
       ``InferenceEngine.close()`` instead would mean reaping a throwaway CPU
-      spillover engine — which ``DescriptionTask`` and ``TagTask`` do on the
-      hot path, before every batch — unloading the GPU engine's models.
+      spillover engine - which ``DescriptionTask`` and ``TagTask`` do on the
+      hot path, before every batch - unloading the GPU engine's models.
     * A plugin's ``unload()`` may arrive while its own load is in flight, which
       is memory-unsafe rather than merely wrong (``tests/test_model_unload_race.py``).
       The built-in services hold one lock across load and unload; a third-party
@@ -532,8 +532,8 @@ def get_tagger_plugin_manager() -> TaggerPluginManager:
                 # user plugin code, and a plugin that calls this function from
                 # its module body must short-circuit on the unlocked check
                 # above.  Building into a local and assigning afterwards would
-                # send it into `_manager_lock` — a plain, non-reentrant Lock
-                # already held by this thread — and hang the boot for good.
+                # send it into `_manager_lock` - a plain, non-reentrant Lock
+                # already held by this thread - and hang the boot for good.
                 _manager = TaggerPluginManager(user_dir=user_plugin_dir())
                 _manager.reload()
     return _manager

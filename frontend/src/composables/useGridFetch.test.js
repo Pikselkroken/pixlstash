@@ -180,7 +180,7 @@ describe("useGridFetch streaming path", () => {
 
   it("trims trailing placeholders when the stream yields fewer rows than the count", async () => {
     const pics = [{ id: 21 }, { id: 22 }, { id: 23 }];
-    // Count says 5, stream only ever delivers 3 — the last 2 cells would
+    // Count says 5, stream only ever delivers 3 - the last 2 cells would
     // otherwise remain permanent id-less spinners.
     getPictureCount.mockResolvedValue({ count: 5 });
     streamPictures.mockResolvedValue({ pictures: pics });

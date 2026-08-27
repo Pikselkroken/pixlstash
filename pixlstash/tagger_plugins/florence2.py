@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from PIL import Image
 
-if TYPE_CHECKING:  # annotations only — see the function-local import note below
+if TYPE_CHECKING:  # annotations only - see the function-local import note below
     import torch
 
 from pixlstash.pixl_logging import get_logger
@@ -20,7 +20,7 @@ from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
-# server's import path — so importing them at module scope would make server
+# server's import path - so importing them at module scope would make server
 # startup and every single test pay that cost before doing any work.
 
 logger = get_logger(__name__)
@@ -33,7 +33,7 @@ FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-ba
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
 
 # Selectable Florence-2 checkpoints. One setting drives BOTH captioning and
-# object detection (Segment) — the service is shared, and loading two variants
+# object detection (Segment) - the service is shared, and loading two variants
 # side by side would double the VRAM for no benefit (issue #512). Every entry
 # pins a revision: an unpinned HuggingFace ref is a silent supply-chain change.
 # `vram_mb` is the model footprint the VRAM gate charges before a batch runs;
@@ -449,7 +449,7 @@ class Florence2Service:
         Coordinates are returned in **original picture pixels** as ``xyxy``.
         Florence emits scale-invariant normalised bins (0-1000), so passing each
         image's *original* size to ``post_process_generation`` dequantises
-        straight back to original pixels — independent of the ``max_dim`` resize
+        straight back to original pixels - independent of the ``max_dim`` resize
         we feed the model for speed (the resize preserves aspect ratio, and the
         bins are per-axis fractions).
 
@@ -485,7 +485,7 @@ class Florence2Service:
             text_prompt = task_token
 
         try:
-            # (path, fed_image, (orig_w, orig_h)) — fed_image is the resized
+            # (path, fed_image, (orig_w, orig_h)) - fed_image is the resized
             # copy handed to the processor; orig size drives box dequantisation.
             valid_items = []
             for image_path in image_paths:
@@ -633,7 +633,7 @@ class Florence2Service:
 
         # device_map routes loading through Accelerate, which correctly handles
         # Florence-2's tied weights (lm_head / embed_tokens) and places all
-        # tensors on the target device during from_pretrained — no post-load
+        # tensors on the target device during from_pretrained - no post-load
         # .to() call is needed, eliminating "Cannot copy out of meta tensor".
         device_map = str(device)
 
@@ -742,7 +742,7 @@ class Florence2Service:
 
         Args:
             generated_text: Raw decoded model output.
-            task_token: ``"<OD>"`` or ``"<OPEN_VOCABULARY_DETECTION>"`` — the
+            task_token: ``"<OD>"`` or ``"<OPEN_VOCABULARY_DETECTION>"`` - the
                 key ``post_process_generation`` returns results under.
             image_size: ``(width, height)`` of the original picture in pixels;
                 Florence's normalised bins dequantise directly to these pixels.
@@ -824,12 +824,12 @@ class Florence2Plugin(TaggerPlugin):
     name: str = "florence2"
     display_name: str = "Florence-2"
     description: str = (
-        "Microsoft Florence-2 — generates natural-language image descriptions. "
+        "Microsoft Florence-2 - generates natural-language image descriptions. "
         "The selected checkpoint also drives the Segment action."
     )
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
     license: str = "GPL-3.0-only"
-    # One entry per selectable checkpoint (FLORENCE_MODEL_VARIANTS) — the user
+    # One entry per selectable checkpoint (FLORENCE_MODEL_VARIANTS) - the user
     # picks which one is downloaded.
     models: list[dict[str, str]] = [
         {"name": "florence-community/Florence-2-base", "license": "MIT"},
@@ -941,14 +941,14 @@ class Florence2Plugin(TaggerPlugin):
         return {f["name"]: f["default"] for f in self.parameter_schema()}
 
     def needs_download(self, parameters=None) -> bool:
-        """Return ``True`` — Florence-2 is always downloaded on first use."""
+        """Return ``True`` - Florence-2 is always downloaded on first use."""
         # Florence-2 uses HuggingFace's automatic caching; the service handles
         # download lazily inside ensure_ready().  We report False here so the
         # workflow doesn't gate on an explicit download step.
         return False
 
     def download(self, parameters=None, progress_callback=None) -> None:
-        """No-op — Florence-2 downloads automatically inside ensure_ready()."""
+        """No-op - Florence-2 downloads automatically inside ensure_ready()."""
 
     def init(self, parameters: dict) -> None:
         """Apply parameters and load the model (idempotent).
@@ -979,7 +979,7 @@ class Florence2Plugin(TaggerPlugin):
         return self._service.is_loaded()
 
     def list_downloaded_artifacts(self) -> list:
-        """Return empty list — Florence-2 uses HF cache, not a named artifact."""
+        """Return empty list - Florence-2 uses HF cache, not a named artifact."""
         return []
 
     def estimated_vram_mb(self, image_count: int, parameters=None) -> int:
@@ -1024,7 +1024,7 @@ class Florence2Plugin(TaggerPlugin):
                 the captions produced so far rather than running the batch out.
 
         Returns:
-            ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            ``{path: caption_str}`` - value is ``None`` on per-image failure.
             A cancelled batch simply omits the paths it never reached.
         """
         _VIDEO_EXTS = frozenset(

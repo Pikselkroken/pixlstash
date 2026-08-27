@@ -193,7 +193,7 @@ els.start.addEventListener('click', async () => {
 api.onProgress((p) => {
   show(els.progress);
   // pip emits no byte-level progress over a pipe (its bar is TTY-only), so most
-  // of the install reports an unknown fraction — show an animated indeterminate
+  // of the install reports an unknown fraction - show an animated indeterminate
   // bar for those rather than a misleading full one.
   const known = p.fraction >= 0;
   els.barFill.classList.toggle('indeterminate', !known);

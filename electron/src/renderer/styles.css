@@ -1,17 +1,17 @@
 :root {
-  /* PixlStash dark theme — mirrors the Vuetify pixlStashDark palette in
+  /* PixlStash dark theme - mirrors the Vuetify pixlStashDark palette in
      frontend/src/main.js: cream text on slate, amber accent, olive primary.
      Every value below is a token from that theme; keep them in sync with the
      web app (they were last synced to the unified amber palette, 2026-07-24). */
   --bg: #1b1f24; /* background */
   --toolbar: #23282f; /* toolbar / sidebar */
-  --panel: #23282f; /* surface — raised cards */
+  --panel: #23282f; /* surface - raised cards */
   --input-bg: #2b3138; /* input-background */
   --fg: #f2e5da; /* on-background */
   --muted: rgba(242, 229, 218, 0.7);
-  --accent: #c47a1e; /* accent — the unified amber */
-  --primary: #567309; /* primary — olive action fill */
-  --on-accent: #f7f1ea; /* on-accent / on-primary — warm near-white label */
+  --accent: #c47a1e; /* accent - the unified amber */
+  --primary: #567309; /* primary - olive action fill */
+  --on-accent: #f7f1ea; /* on-accent / on-primary - warm near-white label */
   --border: #363d45; /* border */
   /* Red as a FOREGROUND on dark chrome, so it comes from the dark-surface-*
      family, not from the theme's `error` fill (#b54538, tuned to carry a warm
@@ -66,7 +66,7 @@ body {
   padding-left: 78px; /* room for native traffic lights */
 }
 /* Brand wordmark: the Tiny5 pixel face at 16px, "Pixl" in the body colour and
-   "Stash" in the accent — the two-tone split every other brand surface uses
+   "Stash" in the accent - the two-tone split every other brand surface uses
    (DESIGN.md "Wordmark amber", docs/design/visual-language.md §Wordmark). */
 .winbar .wb-brand {
   margin-right: auto;

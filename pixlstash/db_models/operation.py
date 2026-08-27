@@ -1,4 +1,4 @@
-"""The append-only operation log — DAM 1.2's undo/redo substrate and audit log.
+"""The append-only operation log - DAM 1.2's undo/redo substrate and audit log.
 
 One :class:`Operation` row records one user-visible change: what changed, on
 which targets, the *before* and *after* metadata state of those targets, who did
@@ -8,7 +8,7 @@ re-applies ``after_state``.
 
 **Append-only.** Recorded content (``op_type`` / ``target_ids`` /
 ``before_state`` / ``after_state`` / ``actor`` / ``source`` / ``created_at``) is
-written once and never rewritten — that is what makes this table usable as the
+written once and never rewritten - that is what makes this table usable as the
 audit log and, later, the Studio activity feed (DAM roadmap §4.3). The only
 mutable columns are the lifecycle markers ``status`` / ``undone_at``, which
 *append* the fact that the operation was later reverted rather than erasing it.
@@ -29,7 +29,7 @@ from sqlmodel import Field, SQLModel
 
 # Lifecycle of a recorded operation. ``APPLIED`` is live; ``UNDONE`` sits on the
 # redo stack; ``SUPERSEDED`` is an undone operation whose redo was invalidated by
-# a newer operation (the classic linear undo history). Only the marker moves —
+# a newer operation (the classic linear undo history). Only the marker moves -
 # the recorded content never changes.
 STATUS_APPLIED = "applied"
 STATUS_UNDONE = "undone"
@@ -50,7 +50,7 @@ class Operation(SQLModel, table=True):
             ``None`` for a plain single-shot operation. Undoing any member of a
             batch undoes the whole batch.
         created_at: UTC timestamp the operation was recorded.
-        actor: Who performed it — the user id as a string, or a service name for
+        actor: Who performed it - the user id as a string, or a service name for
             a background actor. ``None`` when unauthenticated context is absent.
         op_type: Dotted verb naming the change, e.g. ``"pictures.tags"``. Free
             text on purpose: the undo applier is driven by the recorded state,
@@ -64,7 +64,7 @@ class Operation(SQLModel, table=True):
             facets this operation changed, as they were *before* it ran.
         after_state: The same shape, as the facets are *after* it ran.
         source: WS-envelope source (``"ui"`` / ``"external"``), carried
-            explicitly from the request — never read from a contextvar.
+            explicitly from the request - never read from a contextvar.
         origin_client_id: WS-envelope per-tab origin, same discipline.
         undoable: ``True`` only for the metadata scope DAM 1.2 defines. A
             file-mutating operation is *recorded* (audit) but not reversible

@@ -50,7 +50,7 @@
       {{ errorText }}
     </p>
     <p v-else-if="!adapters.length && !loading" class="adapter-tray__empty">
-      No adapters yet — assign them from the Models shelf.
+      No adapters yet - assign them from the Models shelf.
     </p>
   </div>
 </template>
@@ -65,8 +65,8 @@
 // whole-set semantics need the other entities' rows to write safely.
 //
 // Filtered by the route's own `character_id` / `set_id`. That buys the wire, not
-// the query — the server intersects in Python because the hub and the vault are
-// separate SQLite files — but it keeps the definition of "attached" server-side,
+// the query - the server intersects in Python because the hub and the vault are
+// separate SQLite files - but it keeps the definition of "attached" server-side,
 // which is the half that matters here.
 
 import { computed, ref, useId, watch } from "vue";
@@ -77,8 +77,8 @@ import { modelName } from "../../utils/modelShelf";
 import ModelMark from "./ModelMark.vue";
 
 // Both kinds an attachment can be read back through. `unknown` is here because
-// the server lets an unclassified file be attached — of the file kinds, the
-// attach route rejects only a checkpoint (400) and an engine (409) — and asking
+// the server lets an unclassified file be attached - of the file kinds, the
+// attach route rejects only a checkpoint (400) and an engine (409) - and asking
 // for `adapter` alone told the owner "no adapters yet" about a person whose
 // shelf row showed their mark. Two requests, because the route's `file_kind`
 // Query is a single `str`. The cost, the one-line backend fix, and the
@@ -87,7 +87,7 @@ const ATTACHABLE_FILE_KINDS = ["adapter", "unknown"];
 
 // Which `listAdapters` filter each entity type selects. A lookup rather than a
 // `type === "character" ? … : …`, because a ternary makes every value that is
-// not the one it names — a typo, a type the app grows later — silently mean
+// not the one it names - a typo, a type the app grows later - silently mean
 // "set", and the failure is a picture set's adapters rendered under a person's
 // name. A validator warns in development; this is what fails closed in
 // production, and `filterKey` below is the only thing that reads it.
@@ -95,7 +95,7 @@ const FILTER_KEY = { character: "characterId", set: "setId" };
 
 const props = defineProps({
   /**
-   * `character` or `set` — which filter the id is for. Spelled out rather than
+   * `character` or `set` - which filter the id is for. Spelled out rather than
    * read off `FILTER_KEY`, which `defineProps` is hoisted above and cannot see;
    * the runtime guard on the watcher is the one that fails closed.
    */
@@ -110,7 +110,7 @@ const props = defineProps({
 
 const adapters = ref([]);
 // One-way: nothing is claimed before the first answer, and a re-read empties the
-// section rather than tearing it down. `loading` is the other half — it keeps
+// section rather than tearing it down. `loading` is the other half - it keeps
 // the empty line from claiming "none" in the gap between the two.
 const settled = ref(false);
 const loading = ref(false);
@@ -126,7 +126,7 @@ const headingId = useId();
  *
  * `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `constructor`
  * and `toString` would pass the check and resolve to a function, which spreads
- * into the request as a key no route declares — and FastAPI drops what it does
+ * into the request as a key no route declares - and FastAPI drops what it does
  * not declare, so the "filtered" read comes back as every adapter on the
  * machine, rendered under one entity's name. Same failure the wire test in
  * `api/modelShelf.test.js` exists to prevent, one line away from it.
@@ -155,7 +155,7 @@ const numericId = computed(() => {
 
 /**
  * What to call a row. `modelName` returns "" when there is no title and no
- * filename either — a field inviting a rename on the shelf, a hole in a card
+ * filename either - a field inviting a rename on the shelf, a hole in a card
  * here.
  */
 function nameOf(row) {
@@ -170,7 +170,7 @@ function nameOf(row) {
 function cardTitle(row) {
   const name = nameOf(row);
   const filename = String(row?.filename || "").trim();
-  return filename && filename !== name ? `${name} — ${filename}` : name;
+  return filename && filename !== name ? `${name} - ${filename}` : name;
 }
 
 // Only the newest flight may write, or a slow read for one person lands last and
@@ -218,14 +218,14 @@ async function fetchAdapters(id) {
   loading.value = false;
   settled.value = true;
 
-  // The failure matrix, decided by two counts rather than cell by cell —
+  // The failure matrix, decided by two counts rather than cell by cell -
   // patching it a case at a time is what let a partial 403 fall between "every
   // flight refused" and "one flight failed" and print "No adapters yet".
   // Exactly one outcome hides, and the table is in frontend_architecture.md.
   //
   // `refused` means "this session may not read the shelf", which is only what a
   // WHOLLY refused read says: a refusal standing beside a success is a session
-  // that changed underneath two concurrent requests — a fault to report, not a
+  // that changed underneath two concurrent requests - a fault to report, not a
   // permission to respect.
   const failures = flights.filter((f) => f.status === "rejected");
   const total = failures.length === flights.length;
@@ -258,7 +258,7 @@ async function fetchAdapters(id) {
     // within its own. Compared as plain strings rather than with
     // `localeCompare`: these are ISO-8601 timestamps, which order lexically by
     // construction, and a locale-aware collation is both slower and free to
-    // disagree with that. A row with no date falls out last for free — "" is
+    // disagree with that. A row with no date falls out last for free - "" is
     // below every real timestamp, and last is where the shelf puts a row with
     // no value for the key it is sorting on.
     .sort((a, b) => {
@@ -269,7 +269,7 @@ async function fetchAdapters(id) {
 
   // Our sentence leads, because whether this is ALL the adapters or only some
   // of them is the part no server detail states. `errorMessage` is not used
-  // here for that reason alone — it is `errorDetail || err.message || fallback`
+  // here for that reason alone - it is `errorDetail || err.message || fallback`
   // and would return one of those INSTEAD of the lead; its transport fallback
   // is worth having, so it is appended by hand. A dead backend rejects with no
   // `response` at all, and "Couldn't read the adapters." on its own leaves the
@@ -285,7 +285,7 @@ async function fetchAdapters(id) {
 
 // Both, because either alone selects the wrong rows: the id picks the entity,
 // the type picks which filter it is. A refusal is read off the response rather
-// than predicted from `sessionContext` — the server owns who may read the shelf
+// than predicted from `sessionContext` - the server owns who may read the shelf
 // and a second statement of it here would drift.
 watch(
   [numericId, filterKey],
@@ -322,7 +322,7 @@ watch(
 /* 0.7 rather than the 0.5–0.6 this app drifted to for secondary text: composited
    on `surface` it measures 5.94:1 in light and 6.65:1 in dark, so every string
    in the tray clears the 4.5:1 body floor (§4 Contrast). 0.6 is 4.31:1 in light
-   and misses it. Rank here is size and weight, never opacity — the name is
+   and misses it. Rank here is size and weight, never opacity - the name is
    `--text-sm` medium and everything under it `--text-xs` regular.
 
    The heading is the shared `.section-label` and is NOT restyled here (§3: use
@@ -358,7 +358,7 @@ watch(
 .adapter-tray__grid {
   display: grid;
   /* Three per row in both 720-wide editors, where the tray spans both columns,
-     one on a narrow window — the same card either way, so neither editor needs
+     one on a narrow window - the same card either way, so neither editor needs
      its own tray. (The tray only renders for a saved entity, which in the
      person editor is exactly the case that is 720 rather than 480.) */
   /* `min(180px, 100%)` rather than a bare 180px: a hard minimum track cannot
@@ -378,7 +378,7 @@ watch(
 .adapter-card {
   /* `ModelMark` at the shared `--entity-thumb`, not a local override of it. A
      card has room for a bigger mark, but nothing in the app re-assigns that
-     token today (design-tokens.css says the sidebar does; it does not — it has
+     token today (design-tokens.css says the sidebar does; it does not - it has
      its own `--sidebar-thumb-size`), and being the first to do it for a size
      preference is a design decision, not a layout detail. */
   display: flex;

@@ -2,7 +2,7 @@
 
 Two columns: where this library publishes its views tree, and which kinds it
 publishes. They belong to the library rather than to the person because the
-folder holds *this* library's people and sets — two libraries publishing into
+folder holds *this* library's people and sets - two libraries publishing into
 the same folder would overwrite each other's tree.
 
 NULL in both means views are off, which is what every existing library wants:

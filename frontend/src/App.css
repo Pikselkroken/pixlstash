@@ -86,7 +86,7 @@ body {
   padding: 0;
   transition: border-color 0.2s;
   overflow: hidden;
-  /* Height is determined by flex — toolbar takes natural height, this fills the rest */
+  /* Height is determined by flex - toolbar takes natural height, this fills the rest */
 }
 
 .export-dialog-card {
@@ -176,7 +176,7 @@ body {
 }
 
 @media (min-width: 850px) {
-  /* Hide the in-flow sidebar when closed — but not the auto-hide overlay, which
+  /* Hide the in-flow sidebar when closed - but not the auto-hide overlay, which
      stays in the DOM (off-screen) so it can slide in. */
   .sidebar-shell:not(.open):not(.sidebar-overlay) {
     display: none;
@@ -212,7 +212,7 @@ body {
 /* Reduced-motion exception. The global reset in design-tokens.css forces every
    CSS transition-duration to ~0 under prefers-reduced-motion, which snaps this
    slide. Keep it: the auto-hide slide is *communicative* (it shows the panel
-   entering/leaving from the screen edge it lives on), not decoration — the kind
+   entering/leaving from the screen edge it lives on), not decoration - the kind
    of motion the reduced-motion guidance says you may preserve. Class specificity
    (0,2,0) beats the universal `*` reset (0,0,0) even though both are !important.
    The transform/box-shadow properties + easing come from the rule above; we only
@@ -272,7 +272,7 @@ body {
   display: flex;
   align-items: center;
   overflow: visible;
-  /* No full-length strip — the centred tab is the only indicator. This stays an
+  /* No full-length strip - the centred tab is the only indicator. This stays an
      invisible hit area so hovering the edge still reveals the sidebar. */
   background: transparent;
   cursor: pointer;
@@ -314,10 +314,10 @@ body {
 
 /* Narrow widths reuse the same auto-hide overlay as the unpinned sidebar (the
    store forces it below the breakpoint), so there is no separate mobile-drawer
-   layout that offsets the sidebar downward — it is always either pinned in-flow
+   layout that offsets the sidebar downward - it is always either pinned in-flow
    or the .sidebar-overlay slide-in above. */
 
-/* Tiny5 — the brand wordmark pixel font (logo). */
+/* Tiny5 - the brand wordmark pixel font (logo). */
 @font-face {
   font-family: "Tiny5";
   src: url("/src/assets/fonts/Tiny5-Regular.ttf") format("truetype");
@@ -451,8 +451,8 @@ button:focus:not(:focus-visible) {
   background: var(--hover-wash);
 }
 
-/* The only verb in the pill that destroys bytes. Colour is the whole signal —
-   no border, no fill — so it reads as one of the row rather than as a second
+/* The only verb in the pill that destroys bytes. Colour is the whole signal -
+   no border, no fill - so it reads as one of the row rather than as a second
    kind of control, and the hover wash is the error colour at the same weight
    the neutral one uses. */
 .selbar-btn--danger {
@@ -583,7 +583,7 @@ kbd {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Toolbar menus — shared chrome for the Sort / Filter / Grid-view popovers.
+   Toolbar menus - shared chrome for the Sort / Filter / Grid-view popovers.
    These three menus live in two different components (Toolbar.vue and
    GbFilterPanel.vue) but must read as one family, so their chrome and controls
    are defined here, globally, on the design tokens. See the "Toolbar Menus"
@@ -650,7 +650,7 @@ kbd {
   flex: 1 1 auto;
 }
 
-/* Hint strip closing a menu — `.tbm-header` mirrored (same padding and gap, a
+/* Hint strip closing a menu - `.tbm-header` mirrored (same padding and gap, a
    top rule instead of a bottom one) with quieter type, because it states what a
    click would do rather than titling the panel. Lives here beside the header so
    the next menu that needs a footer finds it instead of rolling its own. */
@@ -668,8 +668,8 @@ kbd {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), 0.6);
   white-space: nowrap;
-  /* Hard-reserve room for "1,000,000 matches" — fixed basis, no grow, no shrink
-     — so the header never shifts as the count changes. Right-aligned and clipped
+  /* Hard-reserve room for "1,000,000 matches" - fixed basis, no grow, no shrink
+     - so the header never shifts as the count changes. Right-aligned and clipped
      so the digits sit next to Clear and an extreme count can't push it. */
   flex: 0 0 9rem;
   width: 9rem;
@@ -779,7 +779,7 @@ kbd {
 .tbm-toggle--on {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  /* No weight change on select — the fill marks the state. Bolding reflows the
+  /* No weight change on select - the fill marks the state. Bolding reflows the
      label (it can wrap the centred overlay labels), which we don't want. */
 }
 .tbm-toggle--on:hover {
@@ -792,7 +792,7 @@ kbd {
   opacity: 0.5;
 }
 
-/* Vertical variant (icon over label) — used for the grid-view overlay toggles. */
+/* Vertical variant (icon over label) - used for the grid-view overlay toggles. */
 .tbm-toggle--vertical {
   flex-direction: column;
   gap: var(--space-2);
@@ -940,7 +940,7 @@ kbd {
 .tbm-input--with-icon {
   padding-left: calc(var(--space-5) + var(--space-4));
 }
-/* Focus: a single thin accent border — not the olive border plus a thick accent
+/* Focus: a single thin accent border - not the olive border plus a thick accent
    ring stacked (that read as an awkward double outline). */
 .tbm-input:focus {
   border-color: rgb(var(--v-theme-accent));
@@ -1072,7 +1072,7 @@ kbd {
   border-color: rgb(var(--v-theme-accent));
 }
 
-/* ── Ghost (text) button — header actions like Clear / direction ──────────── */
+/* ── Ghost (text) button - header actions like Clear / direction ──────────── */
 .tbm-ghost {
   display: inline-flex;
   align-items: center;
@@ -1116,7 +1116,7 @@ kbd {
   font-family: inherit;
   /* Icons and labels take the sidebar's treatment: the toolbar-text token
      (identical to sidebar-text) at the sidebar's muted alpha, brightening on
-     hover/active — so the toolbar and sidebar chrome read as one strip. */
+     hover/active - so the toolbar and sidebar chrome read as one strip. */
   color: rgb(var(--v-theme-toolbar-text));
   /* A transparent 1px border is reserved so the open state (which colours the
      border) does not change the box size and make the button jump. */
@@ -1260,7 +1260,7 @@ kbd {
   transition: transform var(--dur-1) var(--ease-standard);
 }
 
-/* ── Open trigger state — the toolbar button while its menu is open ────────── */
+/* ── Open trigger state - the toolbar button while its menu is open ────────── */
 .bar-btn--open {
   background: rgb(var(--v-theme-panel)) !important;
   border: 1px solid rgb(var(--v-theme-border)) !important;

@@ -138,7 +138,7 @@
       <button
         class="tbm-action tbm-action--outline tbm-action--lg tbm-action--full tb-export-folder-btn"
         type="button"
-        title="Write straight into a folder on this machine, then open it — no ZIP or download step"
+        title="Write straight into a folder on this machine, then open it - no ZIP or download step"
         @click="folderBrowserOpen = true"
       >
         <v-icon size="18">mdi-folder-download-outline</v-icon>

@@ -6,11 +6,11 @@ scalar ``character.project_id`` / ``pictureset.project_id`` foreign keys. Issue
 (migration ``0009``) already gives pictures.
 
 The change is deliberately **additive and non-destructive**: both scalar FK columns
-stay, and stay populated — they now hold the entity's *primary* project (the lowest
+stay, and stay populated - they now hold the entity's *primary* project (the lowest
 member project id, or ``NULL``). Reads move to the join tables; the FKs are retired
 by a later cleanup release once nothing reads them. Nothing is dropped here, so the
 migration is safe to run against a deployed database and reversible without data
-loss (``downgrade`` drops only the new tables — every entity keeps its original
+loss (``downgrade`` drops only the new tables - every entity keeps its original
 single-project assignment in the untouched FK).
 
 Backfill inserts one join row per non-``NULL`` scalar FK, so an existing library

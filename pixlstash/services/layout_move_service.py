@@ -5,7 +5,7 @@ in ``utils/library_layout.py`` decides *where*; this decides *whether*, and then
 does it.
 
 **Two jobs, one primitive.** ``render`` says where a picture with no folder yet
-belongs, and ``relocate`` says where one with a folder has to go — and returns
+belongs, and ``relocate`` says where one with a folder has to go - and returns
 ``None``, which is the answer almost every time, for every case the rule calls
 still true. Adding a second project or a second person changes nothing here:
 the folder said "this is a 2024 Shoots picture" and it still is.
@@ -96,8 +96,8 @@ class LayoutRoot:
         layout: The parsed layout.
         reference_folder_id: The reference folder this is, or ``None`` for the
             library's own picture root. The two differ in exactly one way that
-            matters here — a reference picture stores an absolute ``file_path``
-            and a library one stores a path relative to the root — and
+            matters here - a reference picture stores an absolute ``file_path``
+            and a library one stores a path relative to the root - and
             :func:`relative_folder` is where that difference lives.
     """
 
@@ -117,7 +117,7 @@ class PlannedMove:
     #: What goes into ``Picture.file_path``: relative for a library picture,
     #: absolute for a reference-folder one.
     stored_path: str
-    #: What ``Picture.file_path`` held before the move — the journal's ``old_path``
+    #: What ``Picture.file_path`` held before the move - the journal's ``old_path``
     #: and the thumbnail's old key. Optional because a row can carry no path at
     #: all, in which case callers fall back to the resolved source.
     old_stored_path: Optional[str]
@@ -223,7 +223,7 @@ def picture_facets(session: Session, picture_ids: Iterable[int]) -> dict:
     chosen: ``Picture.project_id`` (the picture's primary project) leads, then
     every other membership by ascending row id, and sets and people likewise.
     A picture in three projects therefore renders into the same folder today and
-    tomorrow — which matters because an unstable choice would make the engine
+    tomorrow - which matters because an unstable choice would make the engine
     move files back and forth for no change at all.
     """
     ids = sorted({int(pid) for pid in picture_ids})
@@ -308,8 +308,8 @@ def absolute_path(picture: Picture, root: LayoutRoot) -> Optional[str]:
     # ``path_is_within`` rather than a hand-rolled prefix test: it is what every
     # other read path in the product uses, it normalises case on Windows, and it
     # accepts a root reached through a different alias of the same directory,
-    # which a hand-rolled ``startswith`` refuses. Its documented lenience — a
-    # symlink planted *inside* the root pointing out of it — is closed one step
+    # which a hand-rolled ``startswith`` refuses. Its documented lenience - a
+    # symlink planted *inside* the root pointing out of it - is closed one step
     # later, at the only place it could matter here: ``_prepare_move`` declines
     # a source that is a link at all.
     if not path_is_within(resolved, root.path):
@@ -328,7 +328,7 @@ def relative_folder(absolute: str, root: LayoutRoot) -> str:
 def stored_form(absolute: str, root: LayoutRoot) -> str:
     """Return the value ``Picture.file_path`` should hold for *absolute*.
 
-    Absolute for a reference-folder picture, relative for a library one — the
+    Absolute for a reference-folder picture, relative for a library one - the
     two conventions the rest of the product already reads (``get_thumbnail_path``
     branches on exactly this).
     """
@@ -354,14 +354,14 @@ def placement_subfolder(
     Job one of the engine, and the cheap half: a picture that has never had a
     folder cannot have a false one, so this is ``render`` and nothing else.
 
-    ``""`` when the library root has no layout — every library today — and the
+    ``""`` when the library root has no layout - every library today - and the
     import writes where it always did.
 
     **Only the assignments that are already true are used.** A drop-to-person
     import carries a *pending* character id: the picture has no faces yet, so
     it is not that person's until face extraction says so, and writing it into
     their folder now would make the folder false the moment anything read it.
-    It lands unfiled instead and leaves on its own when the face lands — which
+    It lands unfiled instead and leaves on its own when the face lands - which
     is exactly what the unfiled folder is drawn as doing.
     """
     root = layout_roots(session, image_root).get(None)
@@ -395,7 +395,7 @@ def plan_moves(
     reports ``len(plan)`` and can show it before a single file is renamed.
 
     Returns:
-        ``(plan, skipped)`` — the moves to make, and ``(picture_id, reason)``
+        ``(plan, skipped)`` - the moves to make, and ``(picture_id, reason)``
         for every candidate that was considered and left alone for a reason
         worth naming. A picture whose folder is simply still true is in
         neither: that is the ordinary answer, not an exception.
@@ -441,8 +441,8 @@ def plan_moves(
 def _destination_stays_inside(root_path: str, destination_path: str) -> bool:
     """Whether writing *destination_path* actually lands inside *root_path*.
 
-    The rendered components cannot escape lexically — ``folder_name`` strips
-    every separator and refuses ``..`` — but a **directory that already exists
+    The rendered components cannot escape lexically - ``folder_name`` strips
+    every separator and refuses ``..`` - but a **directory that already exists
     inside the root can be a symlink**, and ``os.makedirs(exist_ok=True)``
     traverses one happily. Without this a project folder linked to another
     volume, or one planted there, would take the write out of the library and
@@ -454,7 +454,7 @@ def _destination_stays_inside(root_path: str, destination_path: str) -> bool:
     strict primitive the rotate sink uses (#1024).
 
     **The price is deliberate and it is small.** A picture whose destination
-    folder is a symlinked subfolder is declined and stays exactly where it is —
+    folder is a symlinked subfolder is declined and stays exactly where it is -
     which is this engine's default answer to almost everything anyway, not a
     feature the owner loses. That is why the strict form is affordable here and
     was contentious for rotate, where refusing meant a photo that could not be
@@ -538,7 +538,7 @@ def apply_moves(
     the thumbnail and sidecars, then write the row.** The claim is
     ``publish_no_clobber``, the same single-syscall primitive the model shelf
     uses, so a name that appeared since the plan was made is refused rather than
-    overwritten — this walks the owner's own library and there is no file here
+    overwritten - this walks the owner's own library and there is no file here
     it is entitled to destroy.
 
     A picture that cannot be moved is skipped and logged; the rest of the batch
@@ -546,7 +546,7 @@ def apply_moves(
 
     **The caller owns the rollback, and must have one.** Every move this makes
     is appended to *applied* as it happens, so a failure anywhere in the
-    caller's transaction — not only inside this function — can put the files
+    caller's transaction - not only inside this function - can put the files
     back with :func:`rollback_applied_moves`. That is not tidiness: the writer
     thread rolls the session back on any exception, and a row left naming a path
     where no file is does not merely look wrong, it is purged by
@@ -559,7 +559,7 @@ def apply_moves(
     has always carried: the file is at the new path and the row still names the
     old one. In a reference folder the scan repairs it by ``pixel_sha`` (every
     300 s, well inside the purge sweep's hour). In the library's own root there
-    is no scan, so the residue stands until the picture is re-imported — which
+    is no scan, so the residue stands until the picture is re-imported - which
     is why the batch is 200 files rather than the whole library.
 
     Args:
@@ -665,7 +665,7 @@ def _undo_one_file(move: PlannedMove, image_root: Optional[str] = None) -> None:
 
     The thumbnail comes back with it. ``_carry_thumbnail`` renamed the bitmap to
     a name derived from the new path, and leaving it there would strand it where
-    nothing ever looks while the row — restored to its old path — still claims a
+    nothing ever looks while the row - restored to its old path - still claims a
     non-NULL ``thumbnail_width``, so ``MissingThumbnailFinder`` would not
     regenerate one either.
     """
@@ -703,7 +703,7 @@ def _carry_thumbnail(
     under ``.ref_thumbs``, and a relative one means a library picture whose
     thumbnail is a sibling file. Handing it the absolute path of a library
     picture would look for the sibling under ``.ref_thumbs``, find nothing, and
-    strand a bitmap at the old name that nothing ever collects — the sweep only
+    strand a bitmap at the old name that nothing ever collects - the sweep only
     ever looks where a row's *current* path says.
     """
     old_thumb = ImageUtils.get_thumbnail_path(image_root, old_stored)
@@ -738,7 +738,7 @@ def describe_drift(
     Backs the **Move to match** offer. A picture whose folder has drifted is
     still filed truthfully; nothing here moves anything, and nothing here calls
     it wrong. ``suggested_folder`` is ``None`` for every picture the offer does
-    not apply to — no layout, not in a laid-out root, off-layout, or already
+    not apply to - no layout, not in a laid-out root, off-layout, or already
     where ``render`` would put it.
     """
     ids = sorted({int(pid) for pid in picture_ids})
@@ -777,7 +777,7 @@ def plan_match_moves(
 
     The same planning as :func:`plan_moves`, against
     :func:`~pixlstash.utils.library_layout.match_destination` instead of the
-    truth check — because this is the owner asking, not the rule deciding. Every
+    truth check - because this is the owner asking, not the rule deciding. Every
     refusal the automatic path makes is made here too: a source outside its
     root, a symlink, a name already taken at the destination.
     """
@@ -831,7 +831,7 @@ def _prepare_move(
     """Turn a decided destination folder into a move, or say why there is none.
 
     Shared by the rule's own moves and the offered ones so the refusals cannot
-    drift apart — the offer must be exactly as careful as the automatic path,
+    drift apart - the offer must be exactly as careful as the automatic path,
     not less.
 
     Returns:
@@ -842,7 +842,7 @@ def _prepare_move(
     if os.path.islink(source):
         # A symlink standing inside the library is not a file the library owns.
         # ``publish_no_clobber`` links the TARGET, so moving one would pull
-        # whatever it points at — anywhere on the machine — into the tree under
+        # whatever it points at - anywhere on the machine - into the tree under
         # the link's name. Same read-escape-in-a-write-sink shape #1024 closed
         # for the rotate sink, and the same answer: decline the picture and
         # change nothing about it.
@@ -888,8 +888,8 @@ def resolve_placement(
 ) -> Optional[str]:
     """Where a picture about to be written belongs, or ``None`` to write flat.
 
-    The one call every creation site makes. It answers ``None`` — write where
-    you always did — for the two cases placement must not touch:
+    The one call every creation site makes. It answers ``None`` - write where
+    you always did - for the two cases placement must not touch:
 
     * the library root has no layout, which is every library until its owner
       picks one;
@@ -900,8 +900,8 @@ def resolve_placement(
 
     A site that knows nothing about the picture's assignments still calls this
     and still gets an answer: the unfiled folder. That is not a fallback, it is
-    the drawn behaviour — *"they land here, and leave on their own the moment
-    you give them one"* — and the assignment that follows a few milliseconds
+    the drawn behaviour - *"they land here, and leave on their own the moment
+    you give them one"* - and the assignment that follows a few milliseconds
     later stamps the picture, so the engine files it inside one debounce.
     """
     image_root = getattr(vault_db, "image_root", None)
@@ -932,7 +932,7 @@ def _same_path(left: str, right: str) -> bool:
 def picture_layout(vault, picture_id: int) -> Optional[dict]:
     """Return one picture's current folder and the layout's offer for it.
 
-    ``None`` when the picture is not in a root that has a layout — including
+    ``None`` when the picture is not in a root that has a layout - including
     when it does not exist, which the caller tells apart for itself.
     """
     report = vault.db.run_immediate_read_task(
@@ -999,7 +999,7 @@ def move_to_match(vault, picture_ids: Iterable[int], **operation_context) -> tup
             )
             session.commit()
         except BaseException:
-            # Covers the whole transaction, not just the move loop — see
+            # Covers the whole transaction, not just the move loop - see
             # :func:`apply_moves`. A row naming a path with no file at it is
             # purged within the hour, and the picture's metadata with it.
             rollback_applied_moves(applied, image_root)
@@ -1041,7 +1041,7 @@ def rename_entity_folders(
 
     It is also not optional. The layout reads a folder against the library's
     *current* vocabulary, so a folder still carrying the old name names nothing
-    PixlStash knows about — unreadable, permanently frozen, and quietly outside
+    PixlStash knows about - unreadable, permanently frozen, and quietly outside
     the layout from then on. The rename is what keeps those pictures inside the
     language.
 
@@ -1054,18 +1054,18 @@ def rename_entity_folders(
     default ``Project / Person or Set`` a person and a set both live one level
     down, so renaming a person called *Summer* would otherwise rename the *set*
     Summer's folder, drag its pictures' rows with it, and leave the engine
-    planning a second move to put them back — two file operations on the owner's
+    planning a second move to put them back - two file operations on the owner's
     disk for a change to an entity that was not touched. Character names are
     only unique *within a project*, so the same collision arises between two
     people of the same name in different projects. :func:`_name_is_ambiguous`
     refuses those, which costs those folders their place in the layout's
-    language and costs nobody a moved file — the direction this whole design
+    language and costs nobody a moved file - the direction this whole design
     errs in.
 
     **The caller must not commit before this returns**, and this commits for
     them: the directory renames and the ``file_path`` rewrites that describe
     them have to land together, or a failed commit leaves every picture under a
-    renamed folder naming a path that no longer exists — which
+    renamed folder naming a path that no longer exists - which
     ``MissingFilePurgeFinder`` purges within the hour, taking their metadata.
     On any failure the directories are renamed back.
 
@@ -1148,7 +1148,7 @@ def _name_is_ambiguous(
     Compared as folder names rather than as entity names, because that is what
     is on disk: ``A/B`` and ``A:B`` both become ``A_B``, and both would claim
     the same directory. Only the facets sharing a *segment* with this one are
-    considered — a project and a person of the same name sit at different
+    considered - a project and a person of the same name sit at different
     depths and never collide.
     """
     wanted = {
@@ -1162,8 +1162,8 @@ def _name_is_ambiguous(
             if other is facet and candidate == name:
                 # The entity being renamed no longer carries this name (the
                 # caller wrote the new one first), so a row still holding it is
-                # a genuine second entity. A row that IS this one — an
-                # unflushed session, a caller that renames after — is not.
+                # a genuine second entity. A row that IS this one - an
+                # unflushed session, a caller that renames after - is not.
                 continue
             return True
     return False
@@ -1221,8 +1221,8 @@ def _repoint_under(
     # Narrowed in SQL rather than walked in Python: for the library's own root
     # "every picture in this root" is the whole table, and a project rename
     # would load 28,000 rows to touch the handful under one folder. The LIKE is
-    # a PRE-filter and is allowed to be loose — ``_`` and ``%`` inside a folder
-    # name only widen it — because the containment check below is what actually
+    # a PRE-filter and is allowed to be loose - ``_`` and ``%`` inside a folder
+    # name only widen it - because the containment check below is what actually
     # decides. Both separators are matched: this module normalises what it
     # writes, but a row written by something older may carry the other one.
     stored_prefix = stored_form(old_dir, root)
@@ -1286,7 +1286,7 @@ def restore_location(
 
     It refuses anything it cannot prove is a move *within one root*: no root, a
     path that resolves outside it, a symlink, a destination that is already
-    taken. Every refusal leaves the file exactly where it is and says so — this
+    taken. Every refusal leaves the file exactly where it is and says so - this
     walks the owner's own library and there is no file in it that an undo is
     entitled to destroy.
 
@@ -1319,8 +1319,8 @@ def restore_location(
         return False
     # The layout is a placeholder and is never consulted: an undo goes to the
     # path that was recorded, not to one this function renders. What the root is
-    # actually for here is the pair of path conventions it carries —
-    # ``absolute_path`` and ``stored_form`` — and the containment they give.
+    # actually for here is the pair of path conventions it carries -
+    # ``absolute_path`` and ``stored_form`` - and the containment they give.
     root = LayoutRoot(
         path=root_path,
         layout=DEFAULT_LAYOUT,

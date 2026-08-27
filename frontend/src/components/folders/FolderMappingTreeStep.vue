@@ -1,11 +1,11 @@
 <script setup>
 /**
- * Wizard step 2 ("MapTree") — name what each folder level is.
+ * Wizard step 2 ("MapTree") - name what each folder level is.
  *
  * Direction A from DECISIONS.md: assign a whole level, override per row,
  * because two folders at the same depth can legitimately mean two different
  * things. A folder's resolved kind is, in order: its own row override, its
- * level's default, then the Phase 2 signal's own proposal — the same
+ * level's default, then the Phase 2 signal's own proposal - the same
  * override-beats-default-beats-signal chain the artboard's "press a number on
  * a row" promises.
  *
@@ -165,7 +165,7 @@ function next() {
   <div class="map-tree">
     <div class="map-tree__header">
       <p class="map-tree__lead">
-        from up to 20 pictures per folder — each row says what answered it
+        from up to 20 pictures per folder - each row says what answered it
       </p>
       <div class="map-tree__summary">
         <span v-if="summary.project">{{ summary.project }} {{ summary.project === 1 ? "Project" : "Projects" }}</span>

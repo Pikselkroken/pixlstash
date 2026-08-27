@@ -191,7 +191,7 @@ class TestReferenceFolderScanIsVideo:
 
 
 # ---------------------------------------------------------------------------
-# 0096 — picture.is_video backfill
+# 0096 - picture.is_video backfill
 # ---------------------------------------------------------------------------
 
 _REVISION_BEFORE_IS_VIDEO = "0095_add_finder_partial_indexes"

@@ -1,12 +1,12 @@
 <script setup>
 /**
- * PixlStash Views — this library's sets, people and projects as folders of
+ * PixlStash Views - this library's sets, people and projects as folders of
  * LINKS to the real files, so they can be opened in a file manager and pointed
  * at other tools.
  *
  * The copy is load-bearing and deliberate: nothing here duplicates a picture,
  * no original moves, and deleting the whole folder loses nothing. Views are
- * *additional* to the folders the owner already keeps — if this ever reads as a
+ * *additional* to the folders the owner already keeps - if this ever reads as a
  * replacement for their tree, the feature has lost the point it exists for.
  *
  * Saving IS rebuilding. The tree is a full re-derive and costs a fraction of a
@@ -52,7 +52,7 @@ const error = ref("");
 const refused = ref(false);
 /**
  * The gate: the registry's own answer, which is known before any request. Kept
- * separate from `refused` on purpose — a gate that also consulted `refused`
+ * separate from `refused` on purpose - a gate that also consulted `refused`
  * could never retry, because clearing `refused` happens inside the fetch the
  * gate was blocking.
  */
@@ -95,7 +95,7 @@ function applySettings(body) {
 }
 
 // Vuetify dialogs stay mounted after the first open, so onMounted would fire
-// only once — fetch on the open transition instead (the house pattern).
+// only once - fetch on the open transition instead (the house pattern).
 // `unavailable` is watched alongside it because the registry read that answers
 // it is in flight when the pane opens: a pane that only watched `open` would
 // stay blank for a local owner whose `can_manage` landed a moment later.
@@ -106,7 +106,7 @@ watch(
     loading.value = true;
     error.value = "";
     // Cleared per attempt, not only set on failure: a session that was refused
-    // once — a remote owner who then reached the machine, or a policy change —
+    // once - a remote owner who then reached the machine, or a policy change -
     // would otherwise stay stuck showing the locality notice for ever.
     refused.value = false;
     try {
@@ -134,7 +134,7 @@ async function save(nextRoot) {
     applySettings(await setViewsSettings(nextRoot, nextRoot ? chosenKinds.value : []));
   } catch (err) {
     // The server left the settings untouched, so the refused folder is not the
-    // recorded one — re-read rather than leave the pane showing what was tried.
+    // recorded one - re-read rather than leave the pane showing what was tried.
     error.value = errorDetail(err) || err?.message || "Could not publish the views.";
     try {
       applySettings(await getViewsSettings());
@@ -242,11 +242,11 @@ const publishedSummary = computed(() => {
       </div>
       <SettingsInfoCard v-if="lastPublish?.skipped_unlinkable?.length">
         <v-icon size="15">mdi-alert-outline</v-icon>
-        These folders are incomplete — at least one picture could not be linked
+        These folders are incomplete - at least one picture could not be linked
         into each of them:
         {{ lastPublish.skipped_unlinkable.join(", ") }}. A hard link cannot span
         two drives, so this is what a library split across disks looks like when
-        symbolic links are unavailable — on Windows they need administrator
+        symbolic links are unavailable - on Windows they need administrator
         rights or Developer Mode.
       </SettingsInfoCard>
       <SettingsInfoCard v-if="lastPublish?.kept_by_owner?.length">
@@ -254,7 +254,7 @@ const publishedSummary = computed(() => {
         These are yours, not links, so the rebuild left them exactly where they
         are: {{ lastPublish.kept_by_owner.join(", ") }}. PixlStash never deletes
         a file whose only copy is in a view folder, but it will not keep one up
-        to date either — move it somewhere you control.
+        to date either - move it somewhere you control.
       </SettingsInfoCard>
       <SettingsInfoCard v-if="lastPublish?.skipped_missing">
         {{ lastPublish.skipped_missing }} pictures were skipped because their

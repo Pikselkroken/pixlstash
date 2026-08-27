@@ -13,7 +13,7 @@ safe, both asserted / referenced here:
 * **Live guard (asserted end-to-end below).** Every resource-scoped share token is
   a READ token, and these POST routes are NOT in ``READ_SAFE_POST_PATHS``, so the
   auth middleware blocks a scoped token from all of them (403) before any handler
-  or DB work runs. A share token therefore cannot mutate tag predictions at all —
+  or DB work runs. A share token therefore cannot mutate tag predictions at all -
   in-scope or out.
 * **Latent object-scope (proven elsewhere).** The routes are declared
   ``PICTURE_SCOPED`` in ``pixlstash/authz/registry.py``; the gate's per-object
@@ -21,7 +21,7 @@ safe, both asserted / referenced here:
   in ``tests/test_authz_gate_step4.py``.
 
 Both directions per CLAUDE.md: a resource-scoped token is denied (403) and the
-owner still succeeds (200) — over-blocking the owner would be its own regression.
+owner still succeeds (200) - over-blocking the owner would be its own regression.
 The destructive handlers additionally assert fail-closed: the 403 leaves the
 out-of-scope data intact.
 """
@@ -77,7 +77,7 @@ def env():
         assert len(picture_ids) >= 2, "Need two pictures for the scope test"
 
         # A real resource-scoped READ share token. create_token does not require
-        # the resource to exist — the point is exercising the scoped-token path
+        # the resource to exist - the point is exercising the scoped-token path
         # through the middleware, which blocks it on every non-READ_SAFE POST.
         r = client.post(
             "/users/me/token",

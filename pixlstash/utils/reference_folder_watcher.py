@@ -79,7 +79,7 @@ class ReferenceFolderWatcher:
         """
         if not os.path.isdir(resolved_path):
             logger.debug(
-                "ReferenceFolderWatcher: skipping watch for folder %d — "
+                "ReferenceFolderWatcher: skipping watch for folder %d - "
                 "path is not a directory: %s",
                 folder_id,
                 resolved_path,
@@ -129,7 +129,7 @@ class ReferenceFolderWatcher:
         with self._lock:
             self._timers.pop(folder_id, None)
         logger.debug(
-            "ReferenceFolderWatcher: change detected — triggering rescan for folder %d",
+            "ReferenceFolderWatcher: change detected - triggering rescan for folder %d",
             folder_id,
         )
         try:
