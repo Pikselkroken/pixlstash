@@ -903,11 +903,9 @@ class FaceExtractionTask(BaseTask):
 
             if need_faces:
                 if not face_objects:
-                    logger.warning(
-                        "No face found in %s for picture %s. Inserting sentinel record.",
-                        file_path,
-                        pic.id,
-                    )
+                    # Not a warning: most pictures have no face in them, and
+                    # a warning per picture buried the real ones.
+                    logger.debug("No faces found in %s (picture %s)", file_path, pic.id)
                     # Sentinel face — no bbox, face_index=-1
                     bulk_faces.append(
                         Face(
