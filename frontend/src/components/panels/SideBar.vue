@@ -530,7 +530,11 @@ function chooseFolderType(type) {
 
 function openReferenceFolderEditor(rf = null) {
   if (rf === null) {
-    openFolderMappingWizard();
+    // Adding a folder is "Add a library" now: a folder indexed in place as
+    // the library's own storage. This used to open the mapping wizard in
+    // reference mode, which, pointed at the library root, registered the
+    // whole library as one reference folder.
+    openSettingsDialog("libraries");
     return;
   }
   referenceFolderEditorFolder.value = rf;

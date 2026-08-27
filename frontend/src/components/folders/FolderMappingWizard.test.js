@@ -80,7 +80,7 @@ beforeEach(() => {
 });
 
 describe("choosing a folder fresh", () => {
-  it("defaults to reference mode and saves it once scanning starts", async () => {
+  it("defaults to local_import mode and saves it once scanning starts", async () => {
     const wrapper = await settle(mountWizard());
 
     await wrapper
@@ -101,7 +101,7 @@ describe("choosing a folder fresh", () => {
       taskId: "started-1",
       path: "/home/me/Pictures/Family",
       label: "Family",
-      mode: "reference",
+      mode: "local_import",
     });
   });
 });
@@ -154,7 +154,7 @@ describe("resuming a local_import entry (empty taskId)", () => {
 });
 
 describe("resuming a legacy entry with no mode field", () => {
-  it("falls back to reference mode", async () => {
+  it("falls back to local_import mode", async () => {
     const resume = {
       taskId: "task-99",
       path: "/home/me/Pictures/Old",
@@ -164,6 +164,6 @@ describe("resuming a legacy entry with no mode field", () => {
 
     await wrapper.find(".scan-stub .emit-task").trigger("click");
 
-    expect(useFolderMappingStore().pending.mode).toBe("reference");
+    expect(useFolderMappingStore().pending.mode).toBe("local_import");
   });
 });

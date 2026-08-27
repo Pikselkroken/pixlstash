@@ -563,6 +563,40 @@ def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
     assert "library's own folder" in body["error"], body
 
 
+def test_reference_mode_refuses_the_librarys_own_folder(owner_env):
+    """The mirror of the test above: the library's own storage is indexed in
+    place and never registered as a reference folder. The wizard used to
+    default to mode="reference", and pointed at image_root it registered the
+    whole library as one reference folder - with absolute paths on every row
+    and "remove" on that folder deleting all of them. Refused at the route."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "own-folder-as-reference")
+    _make_tree(root, {"2028/shoot": ["a.jpg"]})
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    task_id = started.json()["task_id"]
+    _drain_read(owner, task_id)
+
+    before_refs = owner.get(f"{API}/reference-folders").json()["folders"]
+    refused = owner.post(
+        _COMMIT, json={"task_id": task_id, "mode": "reference", "assignments": []}
+    )
+    assert refused.status_code == 400, refused.text
+    assert "library's own storage" in refused.json()["detail"]
+    after_refs = owner.get(f"{API}/reference-folders").json()["folders"]
+    assert after_refs == before_refs, "the refusal must register nothing"
+
+    # The same read still commits the right way.
+    accepted = owner.post(
+        _COMMIT, json={"task_id": task_id, "mode": "local_import", "assignments": []}
+    )
+    assert accepted.status_code == 200, accepted.text
+    body = _drain_commit(owner, accepted.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "completed", body
+
+
 def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
     """`local_import` may be handed pictures indexed before the wizard ran, so
     some can already sit in a locked set. Those are skipped; the rest of the
