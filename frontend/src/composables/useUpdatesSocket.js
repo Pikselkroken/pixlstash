@@ -70,6 +70,9 @@ const VRAM_CULPRIT = "another program is probably holding the card";
  * @param {number} payload.max_attempts - attempts the task gets in total.
  * @param {boolean} payload.gave_up - the retry sequence ended without the work.
  * @param {boolean} payload.recovered - a later attempt succeeded.
+ * @param {Array<{name: string, used_mb: number}>} [payload.other_processes] -
+ *   the other processes on the card, largest first, when nvidia-smi could
+ *   say; the first one is named in place of the generic guess.
  * @returns {{level: string, text: string, timeout: number|undefined}}
  */
 export function vramOomNotice({
@@ -77,9 +80,15 @@ export function vramOomNotice({
   max_attempts: max,
   gave_up,
   recovered,
+  other_processes: others = [],
 }) {
   const used = Number(attempt) || 0;
   const total = Number(max) || 0;
+  // Named when the backend could see it, guessed when it could not.
+  const top = Array.isArray(others) && others.length ? others[0] : null;
+  const culprit = top
+    ? `${top.name} is holding ${(Number(top.used_mb) / 1024).toFixed(1)} GB of the card`
+    : VRAM_CULPRIT;
   if (recovered) {
     return {
       level: "success",
@@ -93,13 +102,13 @@ export function vramOomNotice({
     // shutting down — says what happened and promises nothing.
     const text =
       used >= total
-        ? `Ran out of GPU memory after ${total} attempts — ${VRAM_CULPRIT}. Nothing was changed; this work will be tried again later.`
+        ? `Ran out of GPU memory after ${total} attempts — ${culprit}. Nothing was changed; this work will be tried again later.`
         : `Ran out of GPU memory, and the work stopped on attempt ${used} of ${total}.`;
     return { level: "warning", text, timeout: undefined };
   }
   return {
     level: "warning",
-    text: `Ran out of GPU memory — ${VRAM_CULPRIT}. Retrying — attempt ${used} of ${total} used.`,
+    text: `Ran out of GPU memory — ${culprit}. Retrying — attempt ${used} of ${total} used.`,
     timeout: VRAM_OOM_RETRY_NOTICE_MS,
   };
 }

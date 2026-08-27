@@ -54,6 +54,7 @@ import {
   handleUpdatesSocketClose,
   useUpdatesSocket,
   VRAM_OOM_NOTICE_KEY,
+  vramOomNotice,
 } from "./useUpdatesSocket";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { API_BASE_URL } from "../utils/apiClient";
@@ -402,5 +403,34 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     // A share viewer cannot act on the machine's GPU, and the backend does not
     // deliver the event to them either — this is the second lock.
     expect(useNoticeStore().notices).toHaveLength(0);
+  });
+});
+
+
+describe("vramOomNotice names the process holding the card", () => {
+  it("names the largest other process when the backend could see it", () => {
+    const notice = vramOomNotice({
+      attempt: 1,
+      max_attempts: 3,
+      gave_up: false,
+      recovered: false,
+      other_processes: [
+        { name: "lms", used_mb: 18432 },
+        { name: "Xorg", used_mb: 210 },
+      ],
+    });
+    expect(notice.text).toContain("lms is holding 18.0 GB of the card");
+    expect(notice.text).not.toContain("probably");
+  });
+
+  it("falls back to the guess when nobody could be named", () => {
+    const notice = vramOomNotice({
+      attempt: 3,
+      max_attempts: 3,
+      gave_up: true,
+      recovered: false,
+      other_processes: [],
+    });
+    expect(notice.text).toContain("another program is probably holding the card");
   });
 });

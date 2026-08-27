@@ -159,29 +159,11 @@ class TaskRunner:
 
         pid = os.getpid()
         try:
-            output = subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-compute-apps=pid,used_memory",
-                    "--format=csv,noheader,nounits",
-                ],
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=cls._NVIDIA_SMI_TIMEOUT_S,
+            used_mb = sum(
+                row_mb
+                for row_pid, _name, row_mb in cls._query_compute_apps()
+                if row_pid == pid
             )
-            used_mb = 0
-            for line in output.splitlines():
-                parts = [part.strip() for part in line.split(",")]
-                if len(parts) < 2:
-                    continue
-                try:
-                    line_pid = int(parts[0])
-                    line_used_mb = int(float(parts[1]))
-                except Exception:
-                    # Per-line parse guard: skip an unparseable nvidia-smi row.
-                    continue
-                if line_pid == pid:
-                    used_mb += line_used_mb
         except subprocess.TimeoutExpired:
             logger.warning(
                 "nvidia-smi timed out after %ss; reusing last VRAM reading.",
@@ -234,6 +216,63 @@ class TaskRunner:
             # done had the last attempt failed.
             raise error
 
+    @classmethod
+    def _query_compute_apps(cls) -> list[tuple[int, str, int]]:
+        """Every process on the card as nvidia-smi sees it: ``(pid, name, MB)``.
+
+        The one nvidia-smi call behind both the VRAM gate (which wants our own
+        total) and the OOM notice (which wants everyone else's name). Raises
+        what ``subprocess`` raises; the callers decide what a failure means.
+        """
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=cls._NVIDIA_SMI_TIMEOUT_S,
+        )
+        rows: list[tuple[int, str, int]] = []
+        for line in output.splitlines():
+            # rsplit, because a process name is a path and may hold commas.
+            parts = [part.strip() for part in line.rsplit(",", 1)]
+            head = parts[0].split(",", 1) if parts else []
+            if len(parts) < 2 or len(head) < 2:
+                continue
+            try:
+                rows.append((int(head[0]), head[1].strip(), int(float(parts[1]))))
+            except ValueError as exc:
+                logger.debug("Skipping an unparseable nvidia-smi row %r: %s", line, exc)
+        return rows
+
+    @classmethod
+    def gpu_tenants(cls, limit: int = 3) -> list[dict]:
+        """The other processes holding the card, largest first, for the OOM notice.
+
+        "Another program is probably holding the card" was the toast's best
+        guess; this names it. The name is nvidia-smi's process path reduced to
+        its basename — enough to recognise ``lms`` or ``ComfyUI``'s python —
+        and never sent anywhere but this owner's own browser.
+        """
+        pid = os.getpid()
+        try:
+            rows = cls._query_compute_apps()
+        except Exception as exc:
+            # No nvidia-smi, or it stalled: the notice simply names nobody.
+            logger.debug("Could not list GPU tenants for the OOM notice: %s", exc)
+            return []
+        others = sorted(
+            (
+                {"name": os.path.basename(name) or name, "used_mb": mb}
+                for row_pid, name, mb in rows
+                if row_pid != pid and mb > 0
+            ),
+            key=lambda row: -row["used_mb"],
+        )
+        return others[:limit]
+
     def _report_vram_oom(
         self, task: BaseTask, attempt: int, final: bool, recovered: bool = False
     ) -> None:
@@ -256,6 +295,10 @@ class TaskRunner:
                     "max_attempts": task.VRAM_OOM_ATTEMPTS,
                     "gave_up": final,
                     "recovered": recovered,
+                    # Who else is on the card, so the toast can say "LM Studio
+                    # is holding 18 GB" instead of guessing. Not on the
+                    # recovery frame: the contention is over.
+                    "other_processes": [] if recovered else self.gpu_tenants(),
                 },
             )
         except Exception as exc:

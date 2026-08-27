@@ -10,6 +10,7 @@ fakes, and standing an environment up would cost ~1.35 s per test for nothing.
 """
 
 import asyncio
+import os
 import threading
 from types import SimpleNamespace
 
@@ -321,3 +322,40 @@ def test_an_oom_leaves_existing_descriptions_alone():
         "a dog in a hat",
     ]
     assert task.status == TaskStatus.FAILED
+
+
+def test_the_notice_names_the_other_process_on_the_card(monkeypatch):
+    """ "Another program is probably holding the card" was a guess; name it."""
+    monkeypatch.setattr(
+        TaskRunner,
+        "_query_compute_apps",
+        classmethod(
+            lambda cls: [
+                (os.getpid(), "/usr/bin/python3", 4338),
+                (566190, "/opt/LM Studio/lms", 18432),
+                (566191, "/usr/lib/xorg/Xorg", 210),
+            ]
+        ),
+    )
+    task = _OomTask(fail_times=1)
+
+    events = _run_through_the_worker(task, monkeypatch)
+
+    retry, recovery = (data for _, data in events)
+    assert retry["other_processes"] == [
+        {"name": "lms", "used_mb": 18432},
+        {"name": "Xorg", "used_mb": 210},
+    ], "largest first, ourselves excluded, basename only"
+    assert recovery["other_processes"] == [], "the contention is over"
+
+
+def test_the_notice_names_nobody_without_nvidia_smi(monkeypatch):
+    def missing(cls):
+        raise FileNotFoundError("nvidia-smi")
+
+    monkeypatch.setattr(TaskRunner, "_query_compute_apps", classmethod(missing))
+    task = _OomTask(fail_times=99)
+
+    events = _run_through_the_worker(task, monkeypatch)
+
+    assert all(data["other_processes"] == [] for _, data in events)
