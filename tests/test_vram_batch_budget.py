@@ -172,6 +172,13 @@ def test_ort_session_options_cap_the_arena_only_when_a_budget_is_set():
     assert options["arena_extend_strategy"] == "kSameAsRequested"
     assert options["cudnn_conv_algo_search"] == "HEURISTIC"
 
-    # Only WD14 and the InsightFace recogniser fill their caps; together they
-    # must leave torch (CLIP, the PixlStash tagger) real headroom.
-    assert ORT_ARENA_SHARE["wd14"] + ORT_ARENA_SHARE["insightface_session"] < 0.6
+    # WD14 is the one capped arena; it must leave torch (CLIP, the PixlStash
+    # tagger) and the uncapped InsightFace sessions real headroom.
+    assert ORT_ARENA_SHARE["wd14"] < 0.6
+    assert ORT_ARENA_SHARE["insightface_session"] is None
+
+    uncapped = budgeted.ort_cuda_provider_options(None)
+    assert uncapped == {"cudnn_conv_algo_search": "HEURISTIC"}, (
+        "an uncapped session gets neither a limit nor a strategy that only "
+        "pays off against one"
+    )

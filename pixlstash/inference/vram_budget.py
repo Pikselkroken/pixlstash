@@ -20,7 +20,13 @@ logger = get_logger(__name__)
 # what these leave.
 ORT_ARENA_SHARE = {
     "wd14": 0.40,
-    "insightface_session": 0.15,
+    # None: uncapped. InsightFace was capped at 0.15 for one evening and it
+    # failed in the field within the hour — "Available memory of 43939328 is
+    # smaller than requested bytes of 102908160": five sessions sharing one
+    # limit, and `kSameAsRequested` fragmenting the detector's arena until a
+    # 98 MB request found 42 MB free. Its arena never ballooned (recognition
+    # is chunked, detection is per image); WD14's did, and WD14 keeps its cap.
+    "insightface_session": None,
 }
 
 
@@ -108,7 +114,7 @@ class VramBudget:
             self._max_vram_usage_mb / 1024.0,
         )
 
-    def ort_cuda_provider_options(self, share: float) -> dict[str, object]:
+    def ort_cuda_provider_options(self, share: float | None) -> dict[str, object]:
         """CUDAExecutionProvider options for one ONNX Runtime session.
 
         ORT's default arena doubles on every growth (``kNextPowerOfTwo``) and
@@ -122,15 +128,18 @@ class VramBudget:
 
         Args:
             share: Fraction of the configured budget, from
-                :data:`ORT_ARENA_SHARE`.
+                :data:`ORT_ARENA_SHARE`; ``None`` for a session that must never
+                be capped (only the cudnn search setting applies).
 
         Returns:
             Options dict for ``provider_options`` / a ``providers`` tuple.
         """
-        options: dict[str, object] = {
-            "arena_extend_strategy": "kSameAsRequested",
-            "cudnn_conv_algo_search": "HEURISTIC",
-        }
+        options: dict[str, object] = {"cudnn_conv_algo_search": "HEURISTIC"}
+        if share is None:
+            # Uncapped, and ORT's own arena strategy with it: kSameAsRequested
+            # only pays off against a limit, and fragments without one.
+            return options
+        options["arena_extend_strategy"] = "kSameAsRequested"
         if self._max_vram_usage_mb is not None:
             options["gpu_mem_limit"] = int(self._max_vram_usage_mb * share) * 1024**2
         return options

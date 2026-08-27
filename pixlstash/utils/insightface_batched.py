@@ -41,12 +41,11 @@ class FaceResult:
     embedding: np.ndarray | None = field(default=None)
 
 
-# Faces per recogniser call. The arena of an ORT session is capped at
-# ``ORT_ARENA_SHARE["insightface_session"]`` of the VRAM budget and the
-# recogniser's activations are ~20 MB a face at 112 px (~650 MB for 16, which
-# fits the 6 GB default budget's cap with room); per-face throughput was flat
-# from 16 to 64, so a bigger chunk buys nothing and a face-dense batch of
-# stills would push one unchunked call past any cap.
+# Faces per recogniser call. The recogniser's activations are ~20 MB a face at
+# 112 px (~650 MB for 16); per-face throughput was flat from 16 to 64, so a
+# bigger chunk buys nothing, and a face-dense batch of stills would otherwise
+# make one unchunked call whose size nobody chose. The session is uncapped
+# (see ``ORT_ARENA_SHARE``); the chunk bounds its peak anyway.
 RECOGNITION_CHUNK = 16
 
 
