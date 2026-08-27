@@ -125,7 +125,12 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
     assert cuda_options == budget.ort_cuda_provider_options(
         ORT_ARENA_SHARE["insightface_session"]
     )
-    assert cuda_options["gpu_mem_limit"] == int(8192 * 0.15) * 1024**2
+    # Never capped: a capped detector failed in the field the evening it
+    # shipped. HEURISTIC stays — det_size never changes, EXHAUSTIVE only cost
+    # seconds per reload.
+    assert "gpu_mem_limit" not in cuda_options
+    assert "arena_extend_strategy" not in cuda_options
+    assert cuda_options["cudnn_conv_algo_search"] == "HEURISTIC"
     assert cpu_options == {}
     _reset_face_globals()
 
