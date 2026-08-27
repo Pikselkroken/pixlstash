@@ -105,6 +105,13 @@ def is_vram_oom(error: BaseException) -> bool:
         message = str(current).lower()
         if "cuda_error_out_of_memory" in message:
             return True
+        # ONNX Runtime's BFC arena says neither "out of memory" nor a device
+        # word when the card is full: "Failed to allocate memory for requested
+        # buffer of size N" from bfc_arena.cc. Another process holding the
+        # card (a local LLM, a ComfyUI graph) produces exactly this, and it is
+        # as transient as torch's.
+        if "failed to allocate memory for requested buffer" in message:
+            return True
         if "out of memory" in message and any(w in message for w in _DEVICE_WORDS):
             return True
         current = current.__cause__ or current.__context__

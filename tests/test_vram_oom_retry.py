@@ -65,6 +65,20 @@ def test_is_vram_oom_ignores_an_out_of_memory_that_is_not_the_gpus():
     assert not is_vram_oom(MemoryError("Unable to allocate 4.00 GiB for an array"))
 
 
+def test_is_vram_oom_recognises_onnx_runtimes_full_arena():
+    """ORT says neither "out of memory" nor a device word; this is the message
+    a full card produced on 2026-08-27 with an LLM holding the VRAM."""
+    assert is_vram_oom(
+        RuntimeError(
+            "[ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while "
+            "running Conv node. Name:'Conv_3' Status Message: bfc_arena.cc:359 "
+            "void* onnxruntime::BFCArena::AllocateRawInternal(size_t, bool, "
+            "onnxruntime::Stream*) Failed to allocate memory for requested "
+            "buffer of size 90063104"
+        )
+    )
+
+
 def test_is_vram_oom_looks_through_a_plugin_wrapper():
     # `raise RuntimeError(...) from oom` is how a plugin reports one.
     wrapper = RuntimeError("plugin 'example-plugin' failed to load its model")
