@@ -998,25 +998,30 @@ class ReferenceFolderScanTask(BaseTask):
         # AR-bitmap dims + faceless square crop; faces refine the crop later.
         thumb_cols: dict = {}
 
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                img_format = img.format or "PNG"
-                width, height = img.size
-                rendered = ImageUtils.render_thumbnail(img)
-                if rendered is not None:
-                    thumbnail_bytes, bmp_w, bmp_h, crop = rendered
-                    thumb_cols = {
-                        "thumbnail_width": bmp_w,
-                        "thumbnail_height": bmp_h,
-                        "square_crop_x": crop["x"],
-                        "square_crop_y": crop["y"],
-                        "square_crop_side": crop["side"],
-                    }
-        except Exception:
-            logger.warning(
-                "Failed to process image file %s for reference folder scan.",
-                file_path,
-            )
+        # A video is not PIL's to open; the thumbnail finder renders its frame.
+        if not VideoUtils.is_video_file(file_path):
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    img_format = img.format or "PNG"
+                    width, height = img.size
+                    rendered = ImageUtils.render_thumbnail(img)
+                    if rendered is not None:
+                        thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                        thumb_cols = {
+                            "thumbnail_width": bmp_w,
+                            "thumbnail_height": bmp_h,
+                            "square_crop_x": crop["x"],
+                            "square_crop_y": crop["y"],
+                            "square_crop_side": crop["side"],
+                        }
+            except Exception as exc:
+                logger.warning(
+                    "Reference scan: could not decode %s for a thumbnail (%s: %s); "
+                    "the picture is indexed without one for now.",
+                    file_path,
+                    type(exc).__name__,
+                    exc,
+                )
 
         # Write thumbnail into image_root/.ref_thumbs/ so it doesn't land
         # inside the reference folder and get re-indexed on the next scan.

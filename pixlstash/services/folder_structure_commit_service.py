@@ -491,29 +491,35 @@ def _build_managed_picture(
     img_format = None
     thumbnail_bytes = None
     thumb_cols: dict = {}
-    try:
-        with Image.open(io.BytesIO(image_bytes)) as img:
-            img_format = img.format or "PNG"
-            width, height = img.size
-            rendered = ImageUtils.render_thumbnail(img)
-            if rendered is not None:
-                thumbnail_bytes, bmp_w, bmp_h, crop = rendered
-                thumb_cols = {
-                    "thumbnail_width": bmp_w,
-                    "thumbnail_height": bmp_h,
-                    "square_crop_x": crop["x"],
-                    "square_crop_y": crop["y"],
-                    "square_crop_side": crop["side"],
-                }
-    except Exception:
-        # Not fatal: PIL cannot open a video, and a corrupt image just means
-        # no thumbnail yet. Same swallow reference_folder_scan_task makes —
-        # the Picture row is still built and MissingThumbnailFinder can
-        # retry later.
-        logger.warning(
-            "Local import: failed to process image file %s for thumbnail.",
-            abs_path,
-        )
+    is_video = VideoUtils.is_video_file(abs_path)
+    # A video is not PIL's to open; MissingThumbnailFinder renders its frame
+    # later. Trying anyway logged a WARNING per clip that read as a failure.
+    if not is_video:
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                img_format = img.format or "PNG"
+                width, height = img.size
+                rendered = ImageUtils.render_thumbnail(img)
+                if rendered is not None:
+                    thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                    thumb_cols = {
+                        "thumbnail_width": bmp_w,
+                        "thumbnail_height": bmp_h,
+                        "square_crop_x": crop["x"],
+                        "square_crop_y": crop["y"],
+                        "square_crop_side": crop["side"],
+                    }
+        except Exception as exc:
+            # Not fatal: a corrupt image just means no thumbnail yet. Same
+            # swallow reference_folder_scan_task makes — the Picture row is
+            # still built and MissingThumbnailFinder can retry later.
+            logger.warning(
+                "Local import: could not decode %s for a thumbnail (%s: %s); "
+                "the picture is indexed without one for now.",
+                abs_path,
+                type(exc).__name__,
+                exc,
+            )
 
     if thumbnail_bytes:
         ImageUtils.write_thumbnail_bytes(image_root, relative_path, thumbnail_bytes)
@@ -527,7 +533,7 @@ def _build_managed_picture(
         size_bytes=os.path.getsize(abs_path),
         imported_at=datetime.now(timezone.utc),
         original_file_name=os.path.basename(abs_path),
-        is_video=VideoUtils.is_video_file(abs_path),
+        is_video=is_video,
         **thumb_cols,
     )
     if created_at:
