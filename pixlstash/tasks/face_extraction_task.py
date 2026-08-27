@@ -30,7 +30,7 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
-from pixlstash.utils.vram_utils import empty_cuda_cache
+from pixlstash.utils.vram_utils import empty_cuda_cache, is_vram_oom
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -535,6 +535,14 @@ class FaceExtractionTask(BaseTask):
                 for idx, res in zip(safe_indices, batch_results):
                     results[idx] = res
             except Exception as exc:
+                if is_vram_oom(exc):
+                    # Never "no faces". Inside FaceExtractionTask this result
+                    # becomes a sentinel row per picture, and sentinels are
+                    # never re-scanned — so a full card (another process
+                    # holding VRAM) would silently and permanently mark every
+                    # picture in the batch as faceless. The runner retries an
+                    # OOM; let it.
+                    raise
                 logger.warning(
                     "Batch face detection failed (%s) for %d images "
                     "\u2014 treating all as having no faces: %s",

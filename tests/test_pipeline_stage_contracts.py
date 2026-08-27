@@ -279,3 +279,63 @@ def test_a_finished_face_batch_is_not_re_selected_while_its_rows_are_in_flight(
             f"pictures {sorted(re_selected & set(ids))} were offered to a second "
             "face task before their rows had landed"
         )
+
+
+def test_a_full_card_is_never_recorded_as_no_faces():
+    """An ORT allocation failure must propagate to the runner's OOM retry.
+
+    Swallowed, it returned "no faces" for the whole batch, and inside
+    FaceExtractionTask that is a sentinel row per picture — permanent, because
+    sentinels are never re-scanned. Seen 2026-08-27 with another process
+    holding the card: 70 pictures in four batches, all reported faceless.
+    """
+    import numpy as np
+
+    from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+
+    class _FullCardApp:
+        pass
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        def run_batch(self, _images):
+            raise RuntimeError(
+                "[ONNXRuntimeError] : 1 : FAIL : Failed to allocate memory for "
+                "requested buffer of size 64241920"
+            )
+
+    import pixlstash.tasks.face_extraction_task as module
+
+    original = module.BatchedFaceRunner
+    module.BatchedFaceRunner = _Runner
+    try:
+        image = np.zeros((256, 256, 3), dtype=np.uint8)
+        with pytest.raises(RuntimeError, match="Failed to allocate memory"):
+            FaceExtractionTask.detect_faces_in_images(_FullCardApp(), [image, image])
+    finally:
+        module.BatchedFaceRunner = original
+
+
+def test_a_non_memory_detector_failure_still_degrades_to_no_faces():
+    """The swallow stays for what it was written for: a genuinely bad image."""
+    import numpy as np
+
+    from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+    import pixlstash.tasks.face_extraction_task as module
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        def run_batch(self, _images):
+            raise ValueError("cv2 could not resize a degenerate frame")
+
+    original = module.BatchedFaceRunner
+    module.BatchedFaceRunner = _Runner
+    try:
+        image = np.zeros((256, 256, 3), dtype=np.uint8)
+        assert FaceExtractionTask.detect_faces_in_images(object(), [image]) == [[]]
+    finally:
+        module.BatchedFaceRunner = original
