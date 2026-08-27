@@ -73,6 +73,32 @@ class LibrarySwitchError(LibraryError):
     """A switch was refused or failed, with the session left on its old library."""
 
 
+def _bring_up(vault, label: str) -> None:
+    """Build the inference engine, then start the vault's background workers.
+
+    ``Vault.start()`` alone gets the WorkPlanner running, but every
+    engine-gated finder — tags, descriptions, face extraction, embeddings,
+    likeness — returns ``None`` for as long as ``Vault._engine`` is ``None``,
+    so a switched-to library would sit there with the planner sweeping and no
+    AI work ever queued, until the next restart. ``app.main`` does this for the
+    boot vault; a switch has to do it for its own.
+
+    A failed engine build costs the AI workers, not the switch: the library is
+    perfectly usable without them, and raising here would roll the user back to
+    the library they just left.
+    """
+    try:
+        vault.ensure_ready()
+    except Exception:
+        logger.exception(
+            "Could not build the inference engine for the %s library; it will "
+            "serve without tagging, descriptions, face extraction or embeddings "
+            "until the next restart",
+            label,
+        )
+    vault.start()
+
+
 def known_vault_revisions() -> set[str]:
     """Return every Alembic revision id this build understands."""
     revisions: set[str] = set()
@@ -304,7 +330,7 @@ class LibrarySwitchService:
             # Treat any exception from this point as a retired old handle.
             old_retirement_started = True
             previous.close()
-            incoming.start()
+            _bring_up(incoming, "incoming")
 
             # The candidate is now fully started and admission is still closed.
             # Remove every old-generation capability/artifact before publishing
@@ -366,7 +392,7 @@ class LibrarySwitchService:
                     recovered.auth_service = self._server.auth
                     self._server.apply_user_settings_to_vault(recovered)
                     self._server.reconcile_library_settings(recovered, previous_library)
-                    recovered.start()
+                    _bring_up(recovered, "recovered previous")
                     self._server.library_registry.set_active(previous_library.id)
                     self._server.vault = recovered
                     self._server.auth.vault_db = recovered.db

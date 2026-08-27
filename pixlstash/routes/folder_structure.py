@@ -264,6 +264,9 @@ def create_router(server) -> APIRouter:
             task_id = str(uuid.uuid4())
             read = FolderStructureRead(
                 root,
+                exclude={
+                    os.path.join(server.vault.image_root, "snapshots"),
+                },
                 detect_faces=detect,
                 existing_entities=entities,
                 progress=lambda stage, processed, total: _on_progress(
