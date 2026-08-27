@@ -679,6 +679,12 @@ def local_import_pictures(
         picture_ids.extend(
             server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
         )
+        # The rows are visible to every finder now, but the WorkPlanner only
+        # sweeps on a wake or when its backoff (up to MAX_INTERVAL_S) expires,
+        # and an idle library has it parked at the maximum. Poke it per chunk
+        # so faces, quality and the rest start on the first 128 pictures
+        # rather than on the commit's end-of-run notify.
+        server.vault.wake()
         processed += len(chunk)
         if on_progress is not None:
             on_progress(processed, total)

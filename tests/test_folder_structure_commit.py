@@ -432,6 +432,29 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     assert len(new_thumbs) == 3, "each imported image should get its own thumbnail"
 
 
+def test_local_import_wakes_the_planner_as_each_chunk_lands(owner_env, monkeypatch):
+    """Workers must start on the first indexed chunk, not on the commit's end.
+
+    The planner sweeps only on a wake or when its backoff expires, and an idle
+    library has it parked at `MAX_INTERVAL_S`. The chunk inserts alone never
+    woke it, so every finder sat out the whole indexing stage and the AI work
+    began on the end-of-commit notify - measured: first task submitted the
+    same second the commit reported `done`, for imports up to ten seconds long.
+    """
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-wakes")
+    _make_tree(root, {"": ["a.jpg", "b.jpg"]})
+
+    wakes = []
+    monkeypatch.setattr(server.vault, "wake", lambda: wakes.append(1))
+    ids = commit_service.local_import_pictures(server, root, expected_pictures=2)
+
+    assert len(ids) == 2
+    assert wakes, "the chunk landed without waking the WorkPlanner"
+
+
 def test_local_import_skips_dot_folders(owner_env):
     """A vault's own caches (`.ref_thumbs/`, `.pixlstash` sidecars) can sit
     right inside `image_root`, which `local_import`'s root commonly IS. A

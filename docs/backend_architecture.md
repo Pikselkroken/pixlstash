@@ -6014,6 +6014,17 @@ mid-batch for reasons that have nothing to do with completion. It has a
 deadline: a stuck scan must fail the commit rather than hang the screen
 forever.
 
+**`local_import_pictures` wakes the planner after every chunk it inserts.**
+The rows are visible to the finders the moment a chunk's transaction commits,
+but the WorkPlanner only sweeps on a wake or when its backoff expires, and an
+idle library has that backoff parked at `MAX_INTERVAL_S` (10 s). The only wake
+the commit used to send was the `CHANGED_PICTURES` notify at the end of
+`_run_commit`, so for any import shorter than the remaining backoff the AI
+workers started the same second the commit reported `done`. A `vault.wake()`
+per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
+running on the first chunk while the walk continues; it is a scheduler poke,
+not an event, so the SPA is still told about the import once, at the end.
+
 ### A read commits once, enforced
 
 `apply_mapping` is not idempotent, and cannot cheaply be made so: it walks
