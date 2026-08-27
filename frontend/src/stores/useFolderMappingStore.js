@@ -9,7 +9,7 @@ import { onSessionReset } from "../utils/apiClient";
  * v1.11 Phase 3's "Cancel and organise later": the server keeps the read's
  * result in memory for the process's lifetime (integration_architecture.md
  * §20), so all the client needs to survive a reload is which task this was
- * and where it pointed — which is what makes the mapping screen reachable
+ * and where it pointed - which is what makes the mapping screen reachable
  * from the sidebar afterwards. `localStorage` rather than only this store's
  * own state, because "afterwards" includes a page reload, not just a closed
  * dialog.
@@ -17,12 +17,12 @@ import { onSessionReset } from "../utils/apiClient";
  * Reset on session change, the same reasoning as `useModelFoldersStore`: the
  * path is a host fact about this machine and the read is owner-only, so none
  * of it may survive into a different credential's session, and any scan
- * being waited on is abandoned with it — the server thread carries on, but
+ * being waited on is abandoned with it - the server thread carries on, but
  * this session no longer has standing to poll for it.
  *
  * `taskId` can be the empty string: "Add a library" saves an entry here
  * *before* any read has started, for a "pictures" verdict's switch-then-reload
- * — `mode: "local_import"` and an empty `taskId` mean "start scanning this
+ * - `mode: "local_import"` and an empty `taskId` mean "start scanning this
  * known path fresh", which `FolderMappingWizard`'s `resume` handling already
  * treats correctly (an empty `resumeTaskId` is falsy, so the scan step starts
  * a new read rather than reattaching to one). `mode` defaults to `"reference"`
@@ -64,7 +64,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
-      // See save() — nothing to recover from here either.
+      // See save() - nothing to recover from here either.
     }
   }
 

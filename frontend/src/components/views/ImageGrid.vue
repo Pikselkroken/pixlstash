@@ -153,7 +153,7 @@
          A second, dedicated instance so grid-menu and overlay-menu state stay
          cleanly separated. It runs in overlay-mode (restricted action set +
          dark skin) and every action is scoped to the single overlay picture via
-         overlay-specific handlers — never the grid selection. -->
+         overlay-specific handlers - never the grid selection. -->
     <ImageGridContextMenu
       overlay-mode
       :visible="overlayCtxVisible"
@@ -464,7 +464,7 @@
               ? "new picture"
               : "new pictures"
           }}
-          — Load
+          - Load
         </button>
         <button
           v-if="wsStore.sortChangedExternalCount > 0"
@@ -473,7 +473,7 @@
           @click="emit('load-sort-changed')"
         >
           <v-icon :size="16" aria-hidden="true">mdi-refresh</v-icon>
-          View changed externally — Refresh
+          View changed externally - Refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
@@ -791,7 +791,7 @@
                 <!-- In-flight rotate. Raised the moment the gesture is sent and
                      dropped when the tile actually turns, which is a beat later
                      than the click: the new bitmap is decoded first so the
-                     shape and the picture change in one frame. Decorative —
+                     shape and the picture change in one frame. Decorative -
                      the operation receipt is what announces the result. -->
                 <div
                   v-if="rotatingIconFor(img)"
@@ -931,10 +931,10 @@
                 title="This picture is the stack's cover"
                 >Cover</span
               >
-              <!-- Top-right badge column — the shared home for corner
+              <!-- Top-right badge column - the shared home for corner
                    indicators (stack count in the corner, hover-only stars
                    below it, right-aligned, 2px gap). The stack count is
-                   PERMANENT — how many pictures a tile stands for is a fact
+                   PERMANENT - how many pictures a tile stands for is a fact
                    about the tile, and hiding it until hover is what made
                    stacks invisible while browsing. The hover behaviour
                    therefore lives on the container's other children, not the
@@ -1064,7 +1064,7 @@
     <!-- The grid's ONE bottom-edge surface (merged-grid-action-pill.md). Before
          the merge the search bar and the selection pill were independent mounts
          that could both be up at once, and only the pill registered a bottom
-         anchor — so notice cards landed on top of the search bar. -->
+         anchor - so notice cards landed on top of the search bar. -->
     <GridActionPill
       :search-active="searchResultsActive"
       :selection-active="showSelectionBar"
@@ -1521,7 +1521,7 @@ const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
 const contextMenuClickedFace = ref(null);
-// ── Overlay (lightbox) context menu — state kept separate from the grid menu.
+// ── Overlay (lightbox) context menu - state kept separate from the grid menu.
 // The image object arrives in the request payload from ImageOverlay (it owns
 // the currently-displayed picture + its loaded faces), so this never depends on
 // the grid selection.
@@ -1548,7 +1548,7 @@ const faceLikenessSearchFaceId = ref(null);
 const faceSearchCharacter = ref(null); // { id, name }
 // The cut applied to the ranked list. Starts at the same value the backend's
 // SourceFaceLikenessTask already treats as "same person, safe to inherit a
-// character automatically" — a second, UI-local number would drift from it.
+// character automatically" - a second, UI-local number would drift from it.
 const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
 // The fetch floor. Pictures below it are never fetched, so the slider cannot be
 // dragged under it without a refetch; that is why it is also the slider's min.
@@ -1867,7 +1867,7 @@ async function runPluginWithParameters(
     //
     // De-duplicated because the backend builds `duplicate_picture_ids` by
     // walking the output hashes (`image_plugins/service.py`), so two sources
-    // that filter down to the same image report the same picture id twice —
+    // that filter down to the same image report the same picture id twice -
     // and the sentence counts pictures in the library, not outputs produced.
     const duplicateIds = Array.isArray(res?.duplicate_picture_ids)
       ? res.duplicate_picture_ids
@@ -2007,7 +2007,7 @@ function handleComfyuiRun(payload) {
 }
 
 // ── Remix ("Generate variants…") ─────────────────────────────────────────
-// Acts on the RIGHT-CLICKED picture, not the selection — the dialog discloses
+// Acts on the RIGHT-CLICKED picture, not the selection - the dialog discloses
 // that and offers a route to the batch panel when a wider selection is live.
 const remixDialogOpen = ref(false);
 const remixImage = ref(null);
@@ -2451,7 +2451,7 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
-    // Only refresh the grid when a tag filter is active — without a filter,
+    // Only refresh the grid when a tag filter is active - without a filter,
     // tagging doesn't change anything visible in the grid (thumbnails and sort
     // order are unaffected), so refreshing just hammers the DB for no benefit.
     if (
@@ -2676,7 +2676,7 @@ function getVideoThumbnailSrc(img) {
   // Build a stable URL without the pixel_sha cache-buster so the browser treats
   // this as the same resource as the overlay's videoSrc (which also omits it).
   // Using buildMediaUrl here would add ?v=pixel_sha, causing two concurrent
-  // requests to different URLs for the same file — the browser aborts one,
+  // requests to different URLs for the same file - the browser aborts one,
   // leaving the overlay's <video> element stuck loading.
   return `${props.backendUrl}/pictures/${img.id}.${img.format.toLowerCase()}`;
 }
@@ -2685,7 +2685,7 @@ function getVideoThumbnailSrc(img) {
 // FACE BBOX FUNCTIONS
 // ============================================================
 // selectedFaceIds, isFaceSelected, toggleFaceSelection, clearFaceSelection,
-// onFaceBboxDragStart — moved to useMultiSelect composable.
+// onFaceBboxDragStart - moved to useMultiSelect composable.
 
 // Square-crop render helpers (thumbnail v2). Square mode sprite-crops the whole
 // AR bitmap to the stored face-weighted rectangle; justified mode shows the
@@ -2775,7 +2775,7 @@ function getFaceBboxOverlays(img) {
   }));
 }
 
-// Detection (object) bbox overlays — mirror getFaceBboxOverlays, but colour
+// Detection (object) bbox overlays - mirror getFaceBboxOverlays, but colour
 // each box by its label so boxes sharing a label share a colour.
 function getDetectionBboxOverlays(img) {
   void faceOverlayRedrawKey.value; // depend on redraw key
@@ -3100,7 +3100,7 @@ const noticeStore = useNoticeStore();
 function errorDetail(err, fallback = "Please try again.") {
   // Delegates: this used to be a verbatim copy of `errorMessage`'s body under a
   // name that shadowed the `errorDetail` it meant to call, so it recursed until
-  // the stack blew — and every failure path in this component reports through
+  // the stack blew - and every failure path in this component reports through
   // it, which turned each of them from "a notice explaining what went wrong"
   // into a RangeError with no notice at all. Caught by a test that made a
   // rotate fail on purpose.
@@ -3122,7 +3122,7 @@ const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
 // there it joins the bottom-edge contract (notice-surface.md §2.4). Above that
-// width it sits outside the notice column's footprint and contributes nothing —
+// width it sits outside the notice column's footprint and contributes nothing -
 // which is what `narrowOnly` encodes.
 const breadcrumbEl = ref(null);
 useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
@@ -3217,8 +3217,8 @@ function handleImageError(img, event) {
   console.error("[ImageGrid] Image load error for", src);
 }
 
-// clearSelection — moved to useMultiSelect composable.
-// getDragSelectionIds/setupMultiExportDrag/prepareThumbnailNativeDrag/handleThumbnailPointerRelease — moved to useGridDragDrop composable.
+// clearSelection - moved to useMultiSelect composable.
+// getDragSelectionIds/setupMultiExportDrag/prepareThumbnailNativeDrag/handleThumbnailPointerRelease - moved to useGridDragDrop composable.
 
 // Video refs for hover play/pause in grid
 // ============================================================
@@ -3702,12 +3702,12 @@ function handleRemoveFromCharacter(payload) {
 //
 // This was a dialog only because no notice host existed. It is a `warning`
 // notice now (notice-surface.md §1): it reports an outcome already committed,
-// needs no consent, and enumerates nothing — so it fails all three dialog tests.
+// needs no consent, and enumerates nothing - so it fails all three dialog tests.
 // The dialog's title + body collapse to the one sentence the surface allows,
 // and its `hint` becomes the action, which routes to the locked set the user has
 // to unlock.
 //
-// Both cards are scoped (notice-surface.md §9.6) — see `lockedDeleteNotice`,
+// Both cards are scoped (notice-surface.md §9.6) - see `lockedDeleteNotice`,
 // declared with the selection state it watches.
 /**
  * Report the locked-set outcome, if there is one to report.
@@ -3743,7 +3743,7 @@ function showLockedDeleteNotice(message) {
       },
     },
   });
-  // After the flush this operation's own selection edit schedules — see
+  // After the flush this operation's own selection edit schedules - see
   // useScopedNotice: arming any earlier would let the delete dismiss its own
   // report.
   lockedDeleteNotice.arm();
@@ -3751,7 +3751,7 @@ function showLockedDeleteNotice(message) {
 
 // `idsOverride` scopes the delete to an explicit picture list (the overlay
 // context menu passes `[overlayImageId]`). When set, the grid selection is
-// neither read for the target NOR mutated as a side effect — the overlay owns
+// neither read for the target NOR mutated as a side effect - the overlay owns
 // its own post-delete cleanup (it closes the lightbox). Default (null) is the
 // grid path: act on, and update, `selectedImageIds`.
 async function deleteSelected(idsOverride = null) {
@@ -3828,7 +3828,7 @@ async function deleteSelected(idsOverride = null) {
     return;
   }
 
-  // Pictures frozen by a locked set are SKIPPED by the bulk delete — the server
+  // Pictures frozen by a locked set are SKIPPED by the bulk delete - the server
   // returns 200 with `skipped_locked`. If every id in the batch is one of those,
   // the request provably cannot delete anything, so don't send it: explain
   // instead. (Attempting and silently no-op'ing is what produced the reported
@@ -3868,7 +3868,7 @@ async function deleteSelected(idsOverride = null) {
 
     // Only drop the tiles the server actually deleted. Removing the skipped ones
     // too would hide pictures that are still in the library until the next
-    // refetch — a second, quieter version of the same lie.
+    // refetch - a second, quieter version of the same lie.
     const removedIds = idsToRemove.filter(
       (id) => !skippedLocked.has(String(id)),
     );
@@ -3890,7 +3890,7 @@ async function deleteSelected(idsOverride = null) {
       selectedImageIds.value = selectedImageIds.value.filter((id) =>
         skippedLocked.has(String(id)),
       );
-      // Drop the range-selection anchor unless it is one of the survivors —
+      // Drop the range-selection anchor unless it is one of the survivors -
       // otherwise a later shift-click would anchor on a deleted picture.
       const stillSelected = new Set(selectedImageIds.value.map(String));
       if (!stillSelected.has(String(lastSelectedImageId.value))) {
@@ -4055,17 +4055,17 @@ let rotateQueue = Promise.resolve();
 /**
  * Re-read these cards' thumbnail URLs from the server.
  *
- * The card's `?v=` token is the server's, and it moves when the bitmap does —
+ * The card's `?v=` token is the server's, and it moves when the bitmap does -
  * but only if the client actually asks for it again. This is the AWAITED way to
  * ask, for a named set of cards, which is what a rotate needs: it has to settle
  * before the receipt narrates the turn.
  *
  * `fetchThumbnailsBatch` now also applies the server's URL over its own
  * `?v=<imported_at>` pre-fill, so `refreshGridImage`'s trailing batch would
- * eventually repair these tiles too — but it fires that batch un-awaited, and
+ * eventually repair these tiles too - but it fires that batch un-awaited, and
  * "eventually" is not something a caller can sequence against.
  *
- * Taking the server's URL verbatim — never stamping a buster here — is what
+ * Taking the server's URL verbatim - never stamping a buster here - is what
  * keeps the token a server contract rather than a mirror of one. Its shape
  * (`?v=<W>x<H>` plus an `o<orientation>` suffix once a picture has been turned)
  * is deliberately not parsed here for the same reason.
@@ -4156,7 +4156,7 @@ function rotatingIconFor(img) {
 // How long a tile will wait for its new bitmap before landing anyway. The commit
 // is deliberately blocked on the decode (see `applyRotatedCards`), so a request
 // that never answers would otherwise leave the card mid-gesture for good.
-// ponytail: a flat ceiling, not a per-picture budget — one number is enough
+// ponytail: a flat ceiling, not a per-picture budget - one number is enough
 // until a batch of very large thumbnails proves otherwise.
 const ROTATE_BITMAP_WAIT_MS = 5000;
 
@@ -4183,7 +4183,7 @@ function preloadBitmap(url) {
     const probe = new Image();
     probe.onload = () => {
       // decode() as well as load(), so the commit is not followed by a decode
-      // on the main thread — that is visible as a hitch on a large thumbnail.
+      // on the main thread - that is visible as a hitch on a large thumbnail.
       const decoded =
         typeof probe.decode === "function"
           ? probe.decode().catch(() => {})
@@ -4198,8 +4198,8 @@ function preloadBitmap(url) {
 /**
  * Land a rotate on its cards as ONE visual change.
  *
- * A turned picture changes two things about its tile — the shape of the box the
- * justified layout packs, and the bitmap inside it — and they arrive from
+ * A turned picture changes two things about its tile - the shape of the box the
+ * justified layout packs, and the bitmap inside it - and they arrive from
  * different places: the orientation from `/pictures/{id}/metadata`, the URL and
  * its cache token from `POST /pictures/thumbnails` (the metadata endpoint
  * carries no thumbnail URL at all). Applying each as it arrives is what made a
@@ -4208,7 +4208,7 @@ function preloadBitmap(url) {
  * the picture turn.
  *
  * So both reads happen first, the new bitmap is fetched AND decoded off-screen,
- * and only then is one write made to `allGridImages` — after which the shape and
+ * and only then is one write made to `allGridImages` - after which the shape and
  * the pixels change in the same frame. The visible cost is that the tile does
  * nothing for a moment, which is what the in-flight overlay is for.
  *
@@ -4263,7 +4263,7 @@ async function applyRotatedCards(pictureIds) {
     if (record) {
       // Taken verbatim, null included: a rotate NULLs the stored dimensions to
       // re-queue the bitmap, and `displayedAspectRatio` then falls through to
-      // the raw dimensions turned by the orientation — which is the shape the
+      // the raw dimensions turned by the orientation - which is the shape the
       // regenerated bitmap will have, so the tile does not move again later.
       const width = Number(record.thumbnail_width);
       const height = Number(record.thumbnail_height);
@@ -4509,14 +4509,14 @@ const isScrapheapView = computed(() => {
 
 // ── Scrapheap auto-empty policy ─────────────────────────────────────────────
 // Two separate things, deliberately not conflated:
-//   * the retention WINDOW — a server setting, shared via the store, shown in
+//   * the retention WINDOW - a server setting, shared via the store, shown in
 //     the scrapheap header so the policy is visible where the actions are;
-//   * each picture's purge DATE — `purge_at`, stamped by the server, which
+//   * each picture's purge DATE - `purge_at`, stamped by the server, which
 //     already accounts for the grace period applied when the window is
 //     shortened. The grid only formats the distance to it and never re-derives
 //     a purge date from the window.
 // An exempt picture carries `auto_purge_exempt: true`, a null `purge_at`, and
-// an `auto_purge_exempt_reason` naming WHY — "protected" (a reference-folder
+// an `auto_purge_exempt_reason` naming WHY - "protected" (a reference-folder
 // original) or "locked" (frozen by a locked set). The two get different badges
 // because only the second is something the user can change (unlock the set).
 // The descriptor itself is built by `buildPurgeBadge` in utils/retention.js so
@@ -4551,7 +4551,7 @@ const scrapheapPurgeBadges = computed(() => {
   const badges = new Map();
   if (!isScrapheapView.value) return badges;
   // Nothing is on a clock when auto-empty is off, so neither a countdown nor a
-  // "won't auto-delete" badge means anything — the header already states the
+  // "won't auto-delete" badge means anything - the header already states the
   // policy. Also suppressed until the policy is known, so the badges can't
   // appear and then vanish once the fetch lands.
   if (!scrapheapRetentionStore.loaded || scrapheapRetentionStore.isNever) {
@@ -4705,7 +4705,7 @@ function restoreGridFocus() {
   el.focus({ preventScroll: true });
 }
 // Grouping (project/set/character) membership is stack-atomic: it can only be
-// changed for a WHOLE stack at once — a collapsed stack tile (which represents
+// changed for a WHOLE stack at once - a collapsed stack tile (which represents
 // the whole stack) or every member of an expanded stack selected. Changing a
 // strict subset of a stack's members is refused; the user must unstack first.
 const PARTIAL_STACK_GROUPING_MESSAGE =
@@ -4725,7 +4725,7 @@ const partialStackGroupingReason = computed(() => {
   );
 
   // Which stacks does the selection touch? (Members share stack_id even when
-  // expanded — only the collapsed leader tile carries a >1 stack_count, so we
+  // expanded - only the collapsed leader tile carries a >1 stack_count, so we
   // must group by stack_id, not by per-tile count.)
   const stackIds = new Set();
   for (const id of ids) {
@@ -4771,7 +4771,7 @@ const selectionLockReason = computed(() => {
   const joined = [...names].join(", ");
   const noun = lockedIds.length === 1 ? "picture is" : "pictures are";
   return (
-    `Locked — ${lockedIds.length} selected ${noun} in the locked set ` +
+    `Locked - ${lockedIds.length} selected ${noun} in the locked set ` +
     `'${joined}'. Unlock the set to edit: right-click it in the sidebar and ` +
     `choose Unlock.`
   );
@@ -4912,7 +4912,7 @@ const snapshotsWithDeletedOpen = ref(false);
 // The tokenized destructive confirm that replaces the native window.confirm on
 // the two scrapheap purge paths. Its counts and the exact on-disk paths of the
 // protected reference-folder ORIGINALS come from an AUTHORITATIVE server preview
-// (POST /pictures/scrapheap/delete-preview) — NOT from the virtualized grid /
+// (POST /pictures/scrapheap/delete-preview) - NOT from the virtualized grid /
 // grid_lite payload, which could omit protected originals outside the loaded
 // window and undercount. When protected originals are present the dialog runs a
 // three-way, type-to-confirm flow (delete all incl. protected / delete
@@ -4936,7 +4936,7 @@ const deleteForeverIds = ref([]);
 const deleteForeverScoped = ref(false);
 // Single-use confirmation minted by the delete preview for exactly this
 // selection. The server refuses the purge without it, so it is cleared on every
-// new preview and after every attempt — a stale one must never be replayed.
+// new preview and after every attempt - a stale one must never be replayed.
 const deleteForeverConfirmToken = ref("");
 
 function openDeleteForeverForSelection(ids, scoped = false) {
@@ -5050,7 +5050,7 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
         idsToRemove.filter((id) => !skippedLocked.has(String(id))),
       );
     } else {
-      // The protected originals in the selection are intentionally kept — refetch
+      // The protected originals in the selection are intentionally kept - refetch
       // so the grid reflects exactly what the server removed.
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
@@ -5104,7 +5104,7 @@ function showSnapshotsWithDeleted(response) {
 // `imagesLoading || filteredGridCount === 0` terms describe the loaded grid, not
 // the heap. The sidebar context menu navigates here and asks for the confirm in
 // the same gesture, so it always arrives while the view-switch fetch is still in
-// flight and the grid has just been reset — the request was silently dropped and
+// flight and the grid has just been reset - the request was silently dropped and
 // the menu item looked like it only navigated. What is actually in the heap is
 // decided one step later by the AUTHORITATIVE server preview, which counts the
 // whole heap (the grid can undercount) and declines to open the dialog when
@@ -5192,7 +5192,7 @@ async function openReferenceLocation(picId) {
     // usually a headless/remote server with no desktop file manager.
     console.warn(`Failed to open the location of picture ${picId}`, err);
     noticeStore.warning(
-      "Couldn't open that folder — the server has no desktop file manager.",
+      "Couldn't open that folder - the server has no desktop file manager.",
       { key: "open-location" },
     );
   }
@@ -5333,7 +5333,7 @@ watch(
       return;
     }
     if (overlayOpen.value) {
-      // Overlay is open — quietly refresh in the background without clearing
+      // Overlay is open - quietly refresh in the background without clearing
       // allGridImages, so the overlay doesn't lose focus or state mid-edit.
       debouncedFetchAllGridImages();
       fetchAllPicturesCount();
@@ -5389,7 +5389,7 @@ const {
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
 // they describe: the sentence is about THIS selection in THIS view, and it
 // carries an action, so it is sticky and nothing would otherwise take it down.
-// The signature is everything the message asserts — which pictures are selected,
+// The signature is everything the message asserts - which pictures are selected,
 // where they are being viewed, and which sets are locked. Change any of them and
 // the card is describing the past, so it goes. Unlocking the set is the
 // important one: it is the fix the card asks for, and leaving the warning up
@@ -5459,7 +5459,7 @@ const {
 
 // ---- Justified-mode card geometry ----
 // Each card carries an exact inline width/height from the packed layout so the
-// flex-wrap lines break exactly where useJustifiedLayout computed the rows —
+// flex-wrap lines break exactly where useJustifiedLayout computed the rows -
 // the invariant the spacer/fetch arithmetic depends on.
 const justifiedInfoRowExtra = computed(() =>
   gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
@@ -5597,7 +5597,7 @@ const pendingTagFilterRefresh = ref(false);
 const pendingOverlayGridRefresh = ref(false);
 // Pictures whose smart score changed while the overlay was open. Reconciled by
 // repositioning each card on close; see handleOverlayChange. Above this many the
-// per-id fetches cost more than one re-sort, so we fall back to a full reload —
+// per-id fetches cost more than one re-sort, so we fall back to a full reload -
 // mirroring MAX_TARGETED_UPDATE in useGridRealtimeSync.
 const pendingOverlaySmartScoreIds = new Set();
 const MAX_DEFERRED_SMART_SCORE_REPOSITIONS = 25;
@@ -6354,7 +6354,7 @@ function handleOverlayChange(payload) {
   }
   if (!imageId) return;
   // The picture's own bytes changed (an in-place rotate from the lightbox).
-  // Nothing is inserted, removed or reordered — the card is the same card — but
+  // Nothing is inserted, removed or reordered - the card is the same card - but
   // both its shape and its bitmap move, from two different reads, and they have
   // to land together or the tile turns twice on screen. `applyRotatedCards`
   // owns that; see its docstring.
@@ -6404,7 +6404,7 @@ function closeOverlay() {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
   // A deferred smart-score re-rank is reconciled by moving just the affected
-  // cards. Only when no broader refresh is already queued — a full reload
+  // cards. Only when no broader refresh is already queued - a full reload
   // re-sorts everything anyway, so repositioning first would be wasted work (and
   // the reload's own resetThumbnailState would discard it).
   const deferredSmartScoreIds = Array.from(pendingOverlaySmartScoreIds);
@@ -6446,7 +6446,7 @@ function closeOverlay() {
     // Preserve scroll, exactly as the non-deferred siblings of this refresh do
     // (see the fields.stack / smart-score branches in handlePictureChanged).
     // Those set the flag right before fetching, but when the overlay is open they
-    // only raise pendingOverlayGridRefresh and return — so the flag never got set
+    // only raise pendingOverlayGridRefresh and return - so the flag never got set
     // and the deferred fetch ran as a non-preserving one. That resets
     // visibleStart/visibleEnd to the top of the list (useGridFetch) while
     // scrollTop stays where the user left it, so the grid renders the first
@@ -6592,7 +6592,7 @@ watch(
 );
 
 // Switching square <-> justified changes the whole row model (uniform grid vs
-// packed rows), so the geometry must be recomputed at once — otherwise the mode
+// packed rows), so the geometry must be recomputed at once - otherwise the mode
 // only takes effect after an unrelated relayout (a resize, or the full refresh
 // the maintainer hit). Mirror the columns watch: re-measure row height, re-pack,
 // recompute the visible range, and refetch the now-visible thumbnails.
@@ -6770,11 +6770,11 @@ const canShowAllPicturesButton = computed(() => {
 //
 // Two guards beyond the count, because the count alone is not the claim:
 //
-//   * `totalAllPicturesCountLoaded` — the count starts at 0 and its fetch
+//   * `totalAllPicturesCountLoaded` - the count starts at 0 and its fetch
 //     swallows failures, so an unanswered request looks exactly like an empty
 //     library. Saying "This library is empty" over a backend that did not reply
 //     is worse than saying nothing, and this screen says it with three buttons.
-//   * `!isReadOnly` — a share recipient is not the owner of anything here.
+//   * `!isReadOnly` - a share recipient is not the owner of anything here.
 //     Every route out leads somewhere they cannot go (two open the owner's
 //     sidebar dialogs; the importer refuses a read-only token outright), and
 //     the count they get is the one the summary route refused them, not a fact
@@ -6793,7 +6793,7 @@ const showLibraryEmptyState = computed(
  * Files chosen through the empty library's "Add files…".
  *
  * The same filter and the same notice the two drop paths use
- * (`useGridDragDrop`, `useWindowFileImport`) — an OS picker's `accept` is
+ * (`useGridDragDrop`, `useWindowFileImport`) - an OS picker's `accept` is
  * advisory, so a button that skipped this would be the one import route that
  * accepts anything and says nothing. The project comes from App.vue, which
  * defaults it to the one being looked at.
@@ -7042,9 +7042,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         }
         const thumbObj = thumbData[String(gridImg.id)];
         // The server owns the thumbnail URL. Its `?v=` token is the only thing
-        // that moves when a bitmap is regenerated — the upgrade NULL-reset in
+        // that moves when a bitmap is regenerated - the upgrade NULL-reset in
         // thumbnail_generation_task, a reference-folder source swap, an in-place
-        // rotate — so the answer always replaces whatever the card is carrying,
+        // rotate - so the answer always replaces whatever the card is carrying,
         // including the `?v=<imported_at>` placeholder pre-filled just above.
         // That placeholder is a stand-in until this arrives, never a
         // replacement for it: gating on "didn't already have one" meant every
@@ -7082,7 +7082,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
             gridImg.thumbnail_height = thumbHeight;
           }
           // Face-weighted square-crop rectangle (bitmap pixel space). Nullable
-          // while a picture is still (re)processing — leave undefined so the
+          // while a picture is still (re)processing - leave undefined so the
           // square render path falls back to object-fit:cover centring until
           // the finder populates them, then upgrades reactively on the next
           // thumbnails fetch.
@@ -7152,7 +7152,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       // re-orders allGridImages *without* bumping thumbnailRequestEpoch, so the
       // epoch guard cannot catch it. Adding a penalised tag does exactly that: the
       // card moves, and a positional write-back would drop this refreshed
-      // penalised_tags payload onto whichever picture now occupies the slot —
+      // penalised_tags payload onto whichever picture now occupies the slot -
       // leaving the just-tagged card with stale data (no problem indicator) and
       // corrupting an unrelated card. The original index is still preferred when it
       // holds the right picture, so the common no-movement case is unchanged.
@@ -7161,7 +7161,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         const moved = movedIndexById.get(String(img.id));
         if (moved === undefined) {
           // Picture left the grid entirely (filtered out, or collapsed into a
-          // stack) — nothing to update.
+          // stack) - nothing to update.
           continue;
         }
         targetIndex = moved;
@@ -7344,7 +7344,7 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
-  // No menu on a ghost — before the select-on-right-click side effect below,
+  // No menu on a ghost - before the select-on-right-click side effect below,
   // which would otherwise put it in the selection. Every entry acts on the
   // selection, so the menu would be entirely disabled; and the one entry that
   // would make sense, Restore, is a second Undo affordance competing with the
@@ -7377,7 +7377,7 @@ function handleFaceBboxContextMenu(img, overlay, event) {
 // ── Overlay (lightbox) context menu ─────────────────────────────────────────
 // The overlay emits `request-context-menu` (media-area right-click or the
 // Shift+F10 / ContextMenu key) with the currently-displayed image object and a
-// screen position. Every action below is scoped to THIS one picture — the grid
+// screen position. Every action below is scoped to THIS one picture - the grid
 // selection is never read or persistently mutated.
 
 function handleOverlayContextMenuRequest(payload) {
@@ -7669,7 +7669,7 @@ watch(
       updateRowHeightFromGrid();
       if (isJustifiedMode.value) {
         // Justified rows don't follow the uniform cols/rowHeight arithmetic
-        // below — let the virtualizer derive the range from the packed model.
+        // below - let the virtualizer derive the range from the packed model.
         recalculateVisibleRange();
         return;
       }
@@ -7758,7 +7758,7 @@ function markOverlayDeferredRefresh() {
 // only when that window closes does the grid close the gap. Undo inside the
 // window un-ghosts them in place, with no refetch and no flash.
 //
-// The state machine and its clock live in `useOperationStore` — deliberately,
+// The state machine and its clock live in `useOperationStore` - deliberately,
 // because the clock IS the receipt's. Everything here is the grid's half:
 // which tiles carry the flag, and the imperative collapse when the store hands
 // the ids back.
@@ -7770,7 +7770,7 @@ function markOverlayDeferredRefresh() {
 
 const ghostedIdSet = computed(() => {
   // Not in the Scrapheap view. There these pictures are not on their way out,
-  // they have arrived — a ghosted tile would mean the opposite of what it means
+  // they have arrived - a ghosted tile would mean the opposite of what it means
   // in the grid, and the view already renders the real auto-purge countdown.
   if (isScrapheapView.value) return null;
   const ids = operationStore.ghostPictureIds;
@@ -7817,7 +7817,7 @@ watch(ghostedIdSet, (set) => {
 });
 
 // Any full refetch rebuilds the grid without the scrapheaped pictures, so there
-// is nothing left to grey out. Forget the set SILENTLY — no collapse, and the
+// is nothing left to grey out. Forget the set SILENTLY - no collapse, and the
 // receipt is untouched, because undo is still on offer, it just has no tiles to
 // put back in this view any more.
 watch(allGridImages, () => {
@@ -8185,12 +8185,12 @@ async function exportCurrentViewToFolder(options = {}) {
     const count = exportProgress.processed;
     // The server resolves the destination (realpath) before writing to it and
     // opening it, so what it actually used can differ from the raw string the
-    // picker returned (a symlink, a trailing slash, a `..`) — show that one.
+    // picker returned (a symlink, a trailing slash, a `..`) - show that one.
     const resolvedDestination = completedBody.destination || destination;
     if (completedBody.opened === false) {
       noticeStore.warning(
         `Exported ${count} picture${count === 1 ? "" : "s"} to ${resolvedDestination}, ` +
-          `but couldn't open it — no desktop file manager found on the machine running PixlStash.`,
+          `but couldn't open it - no desktop file manager found on the machine running PixlStash.`,
         { key: "export-folder" },
       );
     } else {
@@ -8341,7 +8341,7 @@ function handleSuggestPicturesForCharacter(character) {
   };
   emit("clear-search", "");
   // The clear-search emit bumps gridVersion, but that watcher throttles itself
-  // to one refresh per 1200ms — and this search is the direct result of a click,
+  // to one refresh per 1200ms - and this search is the direct result of a click,
   // so it must not be the one that gets dropped. Fetching here as well is safe:
   // the two calls share a fetch key and the second de-dups against the first.
   nextTick(() => {

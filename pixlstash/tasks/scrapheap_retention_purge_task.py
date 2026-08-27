@@ -5,8 +5,8 @@ which has already computed the due ids from ``deleted_at`` + the configured
 retention window (including the reduction grace floor). This task hands those ids
 to the ONE destruction path,
 :func:`pixlstash.services.scrapheap_service.purge_scrapheap_pictures`, with
-``include_protected=False`` — so a protected reference-folder original can never
-be destroyed by a timer, only by an explicit human confirmation — together with a
+``include_protected=False`` - so a protected reference-folder original can never
+be destroyed by a timer, only by an explicit human confirmation - together with a
 :class:`~pixlstash.services.scrapheap_service.RetentionGuard` that re-checks the
 deadline and the locked-set freeze against current state.
 """

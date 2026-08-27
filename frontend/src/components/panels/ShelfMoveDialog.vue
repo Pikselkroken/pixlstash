@@ -131,7 +131,7 @@ const itemCount = computed(() => props.items.length);
  * Two exclusions, and the server only enforces the first. A `source` folder is
  * an ai-toolkit output root: it is taken from, never written into, and
  * `ModelMover.plan` refuses it. An `external` folder is one PixlStash shares
- * with other software (the HuggingFace cache, insightface's store) — the server
+ * with other software (the HuggingFace cache, insightface's store) - the server
  * would accept the write, and it is still not ours to put files in.
  */
 const destinations = computed(() =>
@@ -232,7 +232,7 @@ async function submit() {
   working.value = false;
   // The selection is deliberately KEPT. A move changes where the files are and
   // not what the models are, so under `Group by: folder` the selected rows
-  // reappear under the destination — which is the answer to "where did they
+  // reappear under the destination - which is the answer to "where did they
   // go", and it leaves the reader able to follow with another verb.
   if (started) emit("close");
 }

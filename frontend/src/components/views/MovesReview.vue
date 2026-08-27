@@ -186,7 +186,7 @@
           </h3>
           <p class="mv-card-sub">
             already followed, nothing to decide. Their tags, scores, people
-            and projects are exactly as they were — only the path changed.
+            and projects are exactly as they were - only the path changed.
           </p>
           <div class="mv-chips">
             <span
@@ -245,7 +245,7 @@ function facetLabel(facet) {
 }
 
 /** A short "…/parent/leaf" label for a full path, for a row that has no room
- * for the whole thing and no need to prove it — the tooltip carries the rest. */
+ * for the whole thing and no need to prove it - the tooltip carries the rest. */
 function shortFolder(path) {
   const parts = String(path || "")
     .replace(/\\/g, "/")
@@ -281,14 +281,14 @@ function changeShape(item) {
   };
 }
 
-/** The resolve button's label — always names what the owner ends up with,
+/** The resolve button's label - always names what the owner ends up with,
  * never a generic verb, because this button applies a removal.
  *
  * The canonical ambiguous case (the design mock's own example) has NO
  * addition: the picture already belongs to the folder it moved into, so
  * there is nothing new to gain, only the old membership to leave. The
  * destination there is one of the picture's own `current` names for the
- * ambiguous facet — specifically the one that is not being removed — so it
+ * ambiguous facet - specifically the one that is not being removed - so it
  * is derived from `current`, never left to a fallback string that would say
  * nothing about what clicking the button actually does. */
 function onlyNowLabel(item) {
@@ -304,7 +304,7 @@ function onlyNowLabel(item) {
   return "Apply this move";
 }
 
-/** "in 2024 Shoots and Client · Nordvik" — why leaving one folder does not
+/** "in 2024 Shoots and Client · Nordvik" - why leaving one folder does not
  * say which the owner meant. */
 function currentSummary(item) {
   const facets = Object.keys(item.current || {});
@@ -326,20 +326,20 @@ async function load() {
   error.value = "";
   // fetchPending() catches its own failure into store.error and never
   // rethrows (useMovesStore is also read by the sidebar badge, which must
-  // not throw on a failed background poll) — so the failure has to be read
+  // not throw on a failed background poll) - so the failure has to be read
   // back from the store, not from a try/catch here.
   await store.fetchPending();
   if (store.error) error.value = store.error;
 }
 
-/** A row cleared from the queue whose change could not actually be made —
+/** A row cleared from the queue whose change could not actually be made -
  * most commonly a set or person name that stopped being unique between the
  * GET and the click. The row is gone either way (it was acted on by id); this
  * is what stops that from looking identical to a change that worked. */
 function warnIfSkipped(result) {
   const skipped = result?.skipped_review_ids?.length || 0;
   if (skipped) {
-    error.value = `${skipped} move${skipped === 1 ? "" : "s"} could not be applied — the name it would have used is no longer unique.`;
+    error.value = `${skipped} move${skipped === 1 ? "" : "s"} could not be applied - the name it would have used is no longer unique.`;
   }
 }
 

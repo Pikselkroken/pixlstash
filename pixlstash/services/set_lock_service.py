@@ -3,9 +3,9 @@
 A :class:`~pixlstash.db_models.picture_set.PictureSet` with ``locked=True`` is a
 hard, whole-set freeze. Two protections follow from it:
 
-* **Set-level** — the set's own fields cannot be edited, it cannot be deleted, and
+* **Set-level** - the set's own fields cannot be edited, it cannot be deleted, and
   its membership cannot change. Guarded with :func:`enforce_set_not_locked`.
-* **Picture-level** — every picture that belongs (directly, or through a stack
+* **Picture-level** - every picture that belongs (directly, or through a stack
   sibling) to at least one locked set has its *label data* frozen: confirmed-tag
   edits, description, user score, soft-delete, and tag-review decisions are all
   refused. Guarded with :func:`enforce_pictures_not_locked`.
@@ -14,14 +14,14 @@ The guards raise ``423 Locked`` with a structured ``detail`` so the frontend can
 build the "why" tooltip without string-parsing, and ``423`` cannot be confused
 with the existing ``403`` (token scope) or ``409`` (name conflict) meanings.
 
-Every guard is a plain function that takes a **pre-opened** ``Session`` — it is
+Every guard is a plain function that takes a **pre-opened** ``Session`` - it is
 called at the top of the mutation closure that already owns the session (the same
 threading discipline as ``enforce_picture_scope``). Per the services DB-access
 rule (backend_architecture.md §10.1) this module never touches ``vault.db``.
 
 Stack note: membership is stack-atomic (see ``services/stack_membership.py``), and
 a collapsed-stack *leader* shown in the grid may not itself be the row that is a
-member of a locked set — a sibling is. Every picture-level check therefore runs on
+member of a locked set - a sibling is. Every picture-level check therefore runs on
 the **stack-expanded** id list, so a stacked sibling in a locked set blocks the
 whole operation.
 
@@ -47,7 +47,7 @@ from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
-# 423 Locked — semantically exact for "the resource is frozen"; distinct from the
+# 423 Locked - semantically exact for "the resource is frozen"; distinct from the
 # 403 (token scope) and 409 (name conflict) codes already used on these routes.
 LOCKED_STATUS_CODE = 423
 
@@ -124,7 +124,7 @@ def locked_sets_for_pictures(session: Session, picture_ids) -> dict[int, list[di
     by set id for a deterministic payload.
 
     Exists so a list endpoint can label many pictures in a fixed number of
-    queries — calling :func:`locked_by_sets_for_picture` per row would be an N+1.
+    queries - calling :func:`locked_by_sets_for_picture` per row would be an N+1.
     """
     ids = [int(pid) for pid in picture_ids if pid is not None]
     if not ids:
@@ -172,7 +172,7 @@ def locked_picture_ids(session: Session, picture_ids) -> set[int]:
 
     Used by batch mutations (e.g. bulk soft-delete) that skip locked ids instead
     of failing the whole request. Only ids from the original ``picture_ids`` are
-    returned — never the expanded siblings — so callers can filter their input
+    returned - never the expanded siblings - so callers can filter their input
     list directly.
     """
     ids = [int(pid) for pid in picture_ids if pid is not None]
@@ -207,8 +207,8 @@ def locked_picture_id_subquery():
 
     The set-valued helpers above ( :func:`locked_picture_ids` and friends) answer
     "is *this* id frozen?" for a caller that already holds a bounded id list. Read
-    paths instead need to *filter* an open-ended, paged query — applying the lock
-    after ``LIMIT`` would silently shrink pages — so they need the rule expressed
+    paths instead need to *filter* an open-ended, paged query - applying the lock
+    after ``LIMIT`` would silently shrink pages - so they need the rule expressed
     as SQL rather than as a Python set. This function is that expression, and it
     is deliberately the only other place the rule is written, so the read filters
     and the write guards cannot drift apart.
@@ -285,7 +285,7 @@ def drop_locked_set_ids(
     The shared implementation behind the propagation paths' "skip the locked set,
     keep going" behaviour. A locked set's membership cannot change
     (:func:`enforce_set_not_locked`), but a derived-output propagation is not a
-    direct user request to edit that set — failing the whole generation would
+    direct user request to edit that set - failing the whole generation would
     discard work the user did ask for. So the locked sets are skipped and the
     unlocked ones still propagate.
 
@@ -308,7 +308,7 @@ def drop_locked_set_ids(
     locked = locked_set_ids(session, ids)
     if locked:
         logger.warning(
-            "Skipped '%s' into %d locked set(s) %s for picture(s) %s — a locked "
+            "Skipped '%s' into %d locked set(s) %s for picture(s) %s - a locked "
             "set's membership cannot change; the unlocked sets %s still applied",
             action,
             len(locked),
@@ -330,7 +330,7 @@ def enforce_stack_membership_not_locked(
     the **union** of its members' sets. So stacking a picture onto a stack whose
     members sit in a locked set would add that picture to the locked set.
 
-    Unlike the propagation paths (which skip — see :func:`drop_locked_set_ids`),
+    Unlike the propagation paths (which skip - see :func:`drop_locked_set_ids`),
     stacking is a **direct user request**, so it fails loudly. Skipping instead
     would leave the stack violating its own atomicity invariant, and a later
     reconcile would then quietly pull the new picture into the locked set anyway.

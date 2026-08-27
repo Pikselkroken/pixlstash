@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-if TYPE_CHECKING:  # annotations only — see the function-local import note below
+if TYPE_CHECKING:  # annotations only - see the function-local import note below
     from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
@@ -26,7 +26,7 @@ from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
-# server's import path — so importing them at module scope would make server
+# server's import path - so importing them at module scope would make server
 # startup and every single test pay that cost before doing any work.
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
     }
 )
 # The subset of the whitelist that only makes sense on a face. When no face is found
-# the quality pass falls back to a centre crop, which contains no face — judging these
+# the quality pass falls back to a centre crop, which contains no face - judging these
 # anomalies from it would be meaningless, so they are excluded there.
 FACE_QUALITY_CROP_TAGS = frozenset(
     {
@@ -134,7 +134,7 @@ class PixlStashTaggerService:
         self._image_size_full = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
         self._image_size_quality_crop = PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP
         self._batch_size_fn = batch_size_fn
-        # Model state — populated by init()
+        # Model state - populated by init()
         self._model = None
         self._labels: list | None = None
         self._label_to_idx: dict | None = None
@@ -988,7 +988,7 @@ class PixlStashTaggerService:
         for i in range(1, num):  # 0 is background
             cx, cy, cw, ch, area = (int(v) for v in stats[i])
             if area < min_area:
-                continue  # speck — not a real region
+                continue  # speck - not a real region
             x0 = max(0, cx - pad)
             y0 = max(0, cy - pad)
             x1 = min(w - 1, cx + cw - 1 + pad)
@@ -1041,7 +1041,7 @@ class PixlStashTaggerPlugin(TaggerPlugin):
 
     name: str = "pixlstash_tagger"
     display_name: str = "PixlStash Tagger"
-    description: str = "Custom anomaly/quality tagger trained for PixlStash — detects blur, artefacts, and content-specific tags."
+    description: str = "Custom anomaly/quality tagger trained for PixlStash - detects blur, artefacts, and content-specific tags."
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
     license: str = "GPL-3.0-only"
     models: list[dict[str, str]] = [
@@ -1152,11 +1152,11 @@ class PixlStashTaggerPlugin(TaggerPlugin):
         return self._service.is_loaded()
 
     def list_downloaded_artifacts(self) -> list:
-        """Return empty list — PixlStash tagger has a single non-deletable artifact."""
+        """Return empty list - PixlStash tagger has a single non-deletable artifact."""
         return []
 
     def estimated_vram_mb(self, image_count: int, parameters=None) -> int:
-        """Return 0 — VRAM is modest and managed by the service internally."""
+        """Return 0 - VRAM is modest and managed by the service internally."""
         return 0
 
     def effective_batch_size(self, parameters=None) -> int:

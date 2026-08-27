@@ -20,7 +20,7 @@
       </div>
 
       <!-- ════════════════════════════════════════════════════════════
-           OVERLAY (lightbox) MODE — a restricted, dark-surface action
+           OVERLAY (lightbox) MODE - a restricted, dark-surface action
            set that strictly COMPLEMENTS the overlay chrome. Everything
            else the grid menu offers is already reachable from the
            lightbox chrome or is multi-select-only, so it is hidden here.
@@ -230,7 +230,7 @@
             class="ctx-item ctx-item--danger"
             role="menuitem"
             :disabled="!selectedImageIds.length || isReadOnly"
-            title="Permanently delete — this cannot be undone"
+            title="Permanently delete - this cannot be undone"
             @click="onAction('delete-selected')"
           >
             <v-icon class="ctx-icon" size="15">mdi-delete-forever</v-icon>
@@ -240,7 +240,7 @@
       </template>
 
       <!-- ════════════════════════════════════════════════════════════
-           GRID MODE — the full context menu for grid cells (unchanged).
+           GRID MODE - the full context menu for grid cells (unchanged).
            ════════════════════════════════════════════════════════════ -->
       <template v-else>
       <!-- ── Set / Character / Project ─────────────────────────────── -->
@@ -710,7 +710,7 @@ const props = defineProps({
   overlayMode: { type: Boolean, default: false },
 });
 
-// The dark-surface skin is tied to overlay invocation — the menu renders over
+// The dark-surface skin is tied to overlay invocation - the menu renders over
 // the dark lightbox there and nowhere else.
 const onDark = computed(() => props.overlayMode);
 const isOverlayVideo = computed(() => props.contextImage?.mediaKind === "video");
@@ -802,7 +802,7 @@ watch(restoreSubmenuOpen, async (isOpen) => {
     recentSnapshots.value.map(async (cp) => {
       try {
         const body = await hashCompareSnapshot(cp.id, pictureIds);
-        // Bail on stale apply — a newer run has superseded this one.
+        // Bail on stale apply - a newer run has superseded this one.
         if (token !== _hashCompareRunToken) return;
         const identicalSet = new Set(body.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));
@@ -1005,7 +1005,7 @@ watch(
         try {
           previouslyFocused.focus();
         } catch {
-          // Invoker may have been unmounted (e.g. lightbox closed) — nothing
+          // Invoker may have been unmounted (e.g. lightbox closed) - nothing
           // to return focus to; the browser keeps it on <body>.
         }
         previouslyFocused = null;
@@ -1017,7 +1017,7 @@ watch(
 // Roving focus for keyboard users: Up/Down move between enabled items, Home/End
 // jump to the ends. Only fires while focus is inside the menu, so the grid menu
 // (never auto-focused) is unaffected. Every keystroke handled here also stops
-// bubbling so it never reaches the overlay's window-level key handler — which
+// bubbling so it never reaches the overlay's window-level key handler - which
 // would otherwise navigate prev/next on arrows or toggle chrome on Space while
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
@@ -1229,7 +1229,7 @@ function onDocumentMousedown(event) {
 
 function onDocumentKeydown(event) {
   if (!props.visible) return;
-  // Escape inside an open Add-to flyout dismisses that flyout, not this menu —
+  // Escape inside an open Add-to flyout dismisses that flyout, not this menu -
   // same exemption `onDocumentMousedown` already makes for clicks. Without it
   // this capture-phase handler tore the whole menu down on the first Escape
   // while the user was typing in the flyout's search box (#759). The control

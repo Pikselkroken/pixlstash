@@ -2,11 +2,11 @@
 // with `mode: "local_import"` and switches the active library, which ends in
 // a full page reload (AddLibraryDialog.vue). This is the other side of that
 // reload: SideBar has to notice the saved entry and reopen FolderMappingWizard
-// on its own, because there is no click left to hang the wizard off of — the
+// on its own, because there is no click left to hang the wizard off of - the
 // component that would have received one does not exist yet when the entry
 // was saved.
 //
-// An ordinary reference-folder pending entry must NOT auto-open — that one
+// An ordinary reference-folder pending entry must NOT auto-open - that one
 // only ever gets the "Finish organising…" row, unchanged, because its scan is
 // already running server-side regardless of what this session does.
 
@@ -141,7 +141,7 @@ describe("a pending local_import entry", () => {
 });
 
 describe("an ordinary reference-folder pending entry", () => {
-  it("does not auto-open — only the resume row offers it", async () => {
+  it("does not auto-open - only the resume row offers it", async () => {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({

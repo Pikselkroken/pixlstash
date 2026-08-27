@@ -361,8 +361,8 @@ def _force_utf8_streams():
 
     On Windows the standard streams default to the legacy ANSI codepage
     (typically ``cp1252``) rather than UTF-8. Any ``print`` of non-Latin-1
-    characters — e.g. the box-drawing glyphs in the startup banner or the
-    arrows in log messages — then raises ``UnicodeEncodeError`` and takes the
+    characters - e.g. the box-drawing glyphs in the startup banner or the
+    arrows in log messages - then raises ``UnicodeEncodeError`` and takes the
     whole backend down before the server can serve a request. Reconfiguring the
     streams to UTF-8 (with ``backslashreplace`` as a never-crash safety net for
     any stream that still can't encode a glyph) removes that failure class.
@@ -436,8 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--bootstrap",
         action="store_true",
         help=(
-            "Run the interactive first-run setup — storage path, port, HTTPS, "
-            "then the username and password — even if a config file already "
+            "Run the interactive first-run setup - storage path, port, HTTPS, "
+            "then the username and password - even if a config file already "
             "exists, and start the server afterwards. It needs a terminal: "
             "with stdin redirected the setup is skipped."
         ),

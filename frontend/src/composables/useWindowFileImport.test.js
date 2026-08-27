@@ -1,4 +1,4 @@
-// useWindowFileImport — what the window-wide catch-all does with a drop.
+// useWindowFileImport - what the window-wide catch-all does with a drop.
 //
 // Two things, and they used to be one. A model file went to the PICTURE
 // importer, which uploaded it in full before the backend skipped it as
@@ -7,7 +7,7 @@
 // menu calls. Everything else is filtered against what the staging route
 // actually accepts instead of against the (much wider) list of what the app can
 // display. Both directions are pinned: an unsupported drop imports nothing and
-// says so, a supported one still imports, and a model file lands on the shelf —
+// says so, a supported one still imports, and a model file lands on the shelf -
 // over-filtering would be its own regression.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -53,7 +53,7 @@ function drop(...names) {
   return dropOn(document.body, ...names);
 }
 
-/** The same drop, aimed at an element — the grid claims its own. */
+/** The same drop, aimed at an element - the grid claims its own. */
 function dropOn(target, ...names) {
   const files = names.map((name) => new File(["x"], name));
   const event = new Event("drop", { bubbles: true, cancelable: true });
@@ -139,7 +139,7 @@ describe("useWindowFileImport", () => {
   });
 
   it("points a browser tab at the menu instead, and uploads nothing", async () => {
-    // No shell, so no path — and without a path there is nothing to send.
+    // No shell, so no path - and without a path there is nothing to send.
     await drop("lora.safetensors");
     expect(addModelFile).not.toHaveBeenCalled();
     expect(startLocalImport).not.toHaveBeenCalled();
@@ -208,7 +208,7 @@ describe("useWindowFileImport", () => {
       await dropOn(grid, "lora.safetensors", "holiday.jpg");
       expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors");
       // The grid's own handler imports them, with the selected character
-      // threaded in — something this handler cannot do.
+      // threaded in - something this handler cannot do.
       expect(startLocalImport).not.toHaveBeenCalled();
     } finally {
       grid.remove();
@@ -256,7 +256,7 @@ describe("useWindowFileImport", () => {
     await drop("big.safetensors");
     await drop("small.safetensors");
     // The big copy is still running, so its card must still be up next to the
-    // small one's receipt — a shared key dismissed it and said "Added".
+    // small one's receipt - a shared key dismissed it and said "Added".
     const texts = notices.notices.map((n) => n.text);
     expect(texts.some((t) => t.includes("big.safetensors"))).toBe(true);
     expect(texts.some((t) => t.includes("Added small.safetensors"))).toBe(true);

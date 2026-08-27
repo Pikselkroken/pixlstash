@@ -75,7 +75,7 @@ export function useGridScoring({
     if (typeof crypto !== "undefined" && crypto.randomUUID) {
       return crypto.randomUUID();
     }
-    // Fallback for older browsers — use cryptographically secure random bytes
+    // Fallback for older browsers - use cryptographically secure random bytes
     const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
@@ -157,7 +157,7 @@ export function useGridScoring({
   function handleGuestConsentRejected() {
     guestConsentState.value = "rejected";
     guestConsentBannerVisible.value = false;
-    // Do NOT persist the session ID anywhere — if the user reloads they get a
+    // Do NOT persist the session ID anywhere - if the user reloads they get a
     // brand-new session with no connection to these scores.
     const intent = pendingGuestScoreIntent.value;
     pendingGuestScoreIntent.value = null;
@@ -213,7 +213,7 @@ export function useGridScoring({
       fetchGuestScores();
       return;
     }
-    // No cookie consent — fresh start.  The banner will appear on first score.
+    // No cookie consent - fresh start.  The banner will appear on first score.
     // (Rejected users are intentionally not remembered across page loads.)
   }
 
@@ -235,9 +235,9 @@ export function useGridScoring({
       : false;
   }
 
-  // Single source of truth for grid sort direction. ALL client-side ordering —
+  // Single source of truth for grid sort direction. ALL client-side ordering -
   // score/smart-score repositions, the apply-scores re-sort, and incremental
-  // inserts — must use the SAME rule, or a card lands in a different spot than the
+  // inserts - must use the SAME rule, or a card lands in a different spot than the
   // array it is spliced into. Nullish selectedDescending → ascending (the store
   // defaults it to a real `true`). Keep this as one computed: a lone inlined
   // `!== false` previously drifted here and mispositioned inserted cards.
@@ -265,7 +265,7 @@ export function useGridScoring({
   // the server put it, in BOTH directions. A 0 sentinel is wrong: it collides with
   // a genuine zero and, now that smart scores can be negative and null (tag edits
   // invalidate them), it mis-orders nulls relative to real scores. Route EVERY path
-  // through this helper — never an inline ternary or `?? 0` — so the insert and
+  // through this helper - never an inline ternary or `?? 0` - so the insert and
   // reposition paths cannot drift (the failure the gridSortDescending comment warns
   // of). This is only an ordering key; it must never be written back as a card's
   // displayed smart score, or a null-scored card would render a fake 0.
@@ -304,8 +304,8 @@ export function useGridScoring({
       updated[currentIndex] = { ...target, idx: currentIndex };
       allGridImages.value = updated;
       // Still invalidate: we are only here because the card's score changed, and the
-      // batch-sourced fields that change with it (penalised_tags — the problem
-      // indicator — plus faces/detections) are refreshed ONLY by a thumbnail batch.
+      // batch-sourced fields that change with it (penalised_tags - the problem
+      // indicator - plus faces/detections) are refreshed ONLY by a thumbnail batch.
       // Without this, loadedRanges still covers the window, updateVisibleThumbnails
       // no-ops, and a card whose position happens not to move keeps its stale
       // indicator. Adding a penalised tag to an already low-scoring card lands
@@ -375,7 +375,7 @@ export function useGridScoring({
       // getGridSmartScoreValue reads `smartScore` then falls back to `smart_score`
       // (grid cards / metadata responses carry both), so setting only one key would
       // let a stale value leak through the fallback and render a wrong (or fake 0)
-      // score. Both must hold the normalised value — null for "no score".
+      // score. Both must hold the normalised value - null for "no score".
       const target = {
         ...items[currentIndex],
         ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
@@ -433,7 +433,7 @@ export function useGridScoring({
 
   // Insert newly-added pictures into the grid at their sorted position without a
   // full reload. Always mutates lastFetchedGridImages then rebuilds, because the
-  // v-for key embeds img.idx — splicing allGridImages directly would corrupt the
+  // v-for key embeds img.idx - splicing allGridImages directly would corrupt the
   // virtual-scroll window. Deferred to the pill while a streaming fetch is in
   // flight (that fetch writes allGridImages wholesale from a sized placeholder).
   // `options.highlight` (default true) drives the new-picture flash. A scrapheap
@@ -452,7 +452,7 @@ export function useGridScoring({
     // not stored on the picture, so it is NOT in the `fields=grid` projection
     // (the backend has no character context to compute it there). gridImageSortKey
     // therefore falls through to `score` and would splice the card at the wrong
-    // position. Fall back to a full refetch, which DOES recompute likeness — or,
+    // position. Fall back to a full refetch, which DOES recompute likeness - or,
     // under an open overlay, defer it (the overlay-open deferral contract, §9.1)
     // so we never restructure the filmstrip mid-view.
     if (isCharacterLikenessSortActive()) {
@@ -530,7 +530,7 @@ export function useGridScoring({
 
     // An in-app ComfyUI result lands here (origin-aware WS picture_imported insert).
     // If the overlay is open with a pending comfyui refresh, reconcile it now that
-    // the new stacked output is present in lastFetchedGridImages — this is the i2i/
+    // the new stacked output is present in lastFetchedGridImages - this is the i2i/
     // upscale lightbox case that previously relied on the full-grid refetch.
     void maybeRefreshOverlayForComfyui();
   }
@@ -554,7 +554,7 @@ export function useGridScoring({
       await new Promise((resolve) => requestAnimationFrame(resolve));
       // Pass the TRUE smart score (number or null). repositionImageBySmartScore
       // derives its ordering key from the null rule and preserves null as the
-      // card's displayed value — collapsing to 0 here would both mis-order the
+      // card's displayed value - collapsing to 0 here would both mis-order the
       // card and show a fake 0.
       repositionImageBySmartScore(imageId, smartScore, latestInfo);
     }
@@ -639,7 +639,7 @@ export function useGridScoring({
     const imageId = img?.id;
     if (!imageId) {
       noticeStore.error(
-        "Couldn't set that score — the picture id is missing.",
+        "Couldn't set that score - the picture id is missing.",
         {
           key: "score-missing-id",
         },

@@ -21,7 +21,7 @@ def resolve_path_within(base_dir: str, *segments: str) -> str:
 
     Note:
         Some call sites pass values that are structurally incapable of path
-        traversal — for example, integer IDs formatted into a fixed filename
+        traversal - for example, integer IDs formatted into a fixed filename
         template such as ``f"character_{id}.png"`` where FastAPI has already
         validated the ``int`` type.  Those uses are redundant from a security
         standpoint but are kept intentionally so that CodeQL's taint-tracking

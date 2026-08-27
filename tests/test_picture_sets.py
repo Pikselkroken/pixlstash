@@ -369,7 +369,7 @@ def test_moving_set_to_new_project_disassociates_pictures_from_old():
 
 def test_moving_set_keeps_pictures_anchored_by_another_set_in_old_project():
     """A picture shared with a second set still in project A is retained in A
-    when the first set is moved out — only genuinely orphaned pictures leave."""
+    when the first set is moved out - only genuinely orphaned pictures leave."""
     temp_dir, client, server = setup_server_with_temp_db()
     try:
         project_a = client.post("/projects", json={"name": "Shared A"}).json()["id"]
@@ -574,7 +574,7 @@ def test_members_endpoint_expands_stack_siblings():
     """Sets are stack-atomic: adding any member of a stack adds every member.
 
     Adding pic_b (a non-leader stack member) makes the whole stack part of the
-    set, so both pic_a and pic_b are real members — returned with *and* without
+    set, so both pic_a and pic_b are real members - returned with *and* without
     expand_stacks. (Previously only the explicitly added picture was a member and
     siblings appeared solely via expand_stacks=true; atomic membership removes
     that partial state.)

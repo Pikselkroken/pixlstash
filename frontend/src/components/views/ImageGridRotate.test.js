@@ -7,7 +7,7 @@
 // grid already had cannot repair a tile on its own.
 //
 // The 180° case is where a half-refresh shows. A rotate rewrites the file's EXIF
-// orientation tag and leaves every pixel — and both dimensions — where they
+// orientation tag and leaves every pixel - and both dimensions - where they
 // were, so nothing derived locally can tell the browser its cached bitmap is now
 // upside down. Only the server's own version can, and only if the client actually
 // re-reads it. That is what the first test asserts: before vs after, same
@@ -127,8 +127,8 @@ function rotateCalls() {
 
 // jsdom never fetches a resource, so an `<img>` handed a src fires neither
 // `load` nor `error` and simply never settles. `applyRotatedCards` decodes the
-// new bitmap BEFORE it writes anything — that is the whole point of it, and it
-// is why the tile's shape and its picture change in the same frame — so without
+// new bitmap BEFORE it writes anything - that is the whole point of it, and it
+// is why the tile's shape and its picture change in the same frame - so without
 // a stub every rotate here would sit out its own timeout.
 //
 // Controllable rather than automatic: `holdBitmaps` is what lets a test observe
@@ -207,7 +207,7 @@ afterEach(() => {
   globalThis.Image = RealImage;
 });
 
-describe("ImageGrid — rotate in place", () => {
+describe("ImageGrid - rotate in place", () => {
   it("re-reads the thumbnail version when 180° leaves the shape alone", async () => {
     const wrapper = mountGrid();
     await wrapper.vm.$nextTick();
@@ -215,7 +215,7 @@ describe("ImageGrid — rotate in place", () => {
     const before = thumbnailOf(wrapper);
 
     // Two quarter-turns the same way. The dimensions are identical either side
-    // of them — the server's orientation component is the only thing that moved.
+    // of them - the server's orientation component is the only thing that moved.
     thumbnailVersion = "1200x1600o6";
     const firstTurn = wrapper.vm.rotateSelectedPictures("cw");
     await flushRotate();
@@ -308,7 +308,7 @@ describe("ImageGrid — rotate in place", () => {
     // portrait first, stretching the old landscape bitmap into it, and only
     // then did the picture turn.
     //
-    // So the card must not move AT ALL while the bitmap is still in flight —
+    // So the card must not move AT ALL while the bitmap is still in flight -
     // not the URL, and not the fields the aspect ratio is derived from.
     holdBitmaps = true;
     // What the server really reports right after a rotate: `apply_orientation`
@@ -324,7 +324,7 @@ describe("ImageGrid — rotate in place", () => {
     const turn = wrapper.vm.rotateSelectedPictures("cw");
     await flushRotate();
 
-    // Both reads have answered by now — only the decode is outstanding.
+    // Both reads have answered by now - only the decode is outstanding.
     expect(pendingBitmaps.length).toBe(1);
     const held = wrapper.vm.allGridImages[0];
     expect(held.thumbnail).toBe(before.thumbnail);
@@ -340,7 +340,7 @@ describe("ImageGrid — rotate in place", () => {
     expect(after.thumbnail).toContain("1200x1600o6");
     // Landed together: the server reports no dimensions until the background
     // regeneration runs, so the aspect falls through to the raw pair turned by
-    // the orientation — the shape the regenerated bitmap will have.
+    // the orientation - the shape the regenerated bitmap will have.
     expect(after.thumbnail_width).toBeNull();
     expect(after.thumbnail_height).toBeNull();
     wrapper.unmount();

@@ -50,7 +50,7 @@ def patch_runtime(monkeypatch):
     ``sc._ort()`` so that importing the server does not drag in the ML stack
     (backend_architecture §3, "ML import discipline"). Seeding the caches here
     both substitutes the fakes and stops the accessors ever attempting the real
-    import — which is exactly what these tests want.
+    import - which is exactly what these tests want.
     """
 
     def apply(torch_mod, ort_mod):

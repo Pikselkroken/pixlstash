@@ -105,7 +105,7 @@ describe("ShelfShowPanel", () => {
 
   it("offers the unidentified adapters as a box, spelled like everything else", async () => {
     // `unknown` is `detect_adapter_kind`'s refusal, and the group axis declines
-    // to head a group with it — but "which of these could we not identify" is
+    // to head a group with it - but "which of these could we not identify" is
     // still a real selection, so it stays a facet. Spelled `Unknown`, because a
     // lowercase box beside `LoRA` is the third-spelling problem again.
     const { wrapper } = await mountPanel([

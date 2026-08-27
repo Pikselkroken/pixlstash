@@ -2,7 +2,7 @@
 engine that acts on the answer (v1.11 Phases 4a and 4b).
 
 The first half is pure functions, so every case is a dict of names and a folder
-path. The second half puts files on a disk and a session over them — still no
+path. The second half puts files on a disk and a session over them - still no
 ``Server``, because the engine takes a session and a root and nothing else.
 """
 
@@ -50,7 +50,7 @@ from pixlstash.utils.library_layout import (
 )
 
 # The library the cases below are judged against: two projects, two people, one
-# set. Names, not rows — the model never sees the database.
+# set. Names, not rows - the model never sees the database.
 KNOWN = {
     Facet.PROJECT: ["2024 Shoots", "Client Nordvik"],
     Facet.PERSON: ["Mira", "Aled"],
@@ -103,7 +103,7 @@ def test_an_unnormalised_path_is_refused_whole_rather_than_tidied_up(folder):
     """Dropping the ``..`` would fabricate a level the path does not have.
 
     ``2024 Shoots/../Mira`` is a picture in ``Mira`` and nothing else; reading a
-    project level out of it would return false — a move — for a picture that
+    project level out of it would return false - a move - for a picture that
     never left one.
     """
     picture = facets(projects=["Client Nordvik"], people=["Mira"])
@@ -293,18 +293,18 @@ def test_the_new_library_default_is_project_then_person_or_set():
 
 
 # ===========================================================================
-# v1.11 Phase 4b — the move engine
+# v1.11 Phase 4b - the move engine
 #
 # The rule under test is the same sentence, now with files on a disk behind it:
 # **a picture moves only when its folder stops being true.** Almost every
-# assertion below is therefore a *negative* one — nothing moved — because that
+# assertion below is therefore a *negative* one - nothing moved - because that
 # is what the release promises. The positives are the two the design bundle's
 # table calls moves: removing the project a picture's folder is named after,
 # and swapping one for another.
 #
 # Still no ``Server``. The engine takes a session and a root, so a temp folder
 # and a file-backed SQLite engine exercise the whole of it, undo included, at a
-# fraction of the cost of standing an environment up — and this module's own
+# fraction of the cost of standing an environment up - and this module's own
 # environment already gives the pure half everything it needs.
 # ===========================================================================
 
@@ -410,7 +410,7 @@ def test_an_unsafe_unfiled_name_is_refused():
 
 
 # ---------------------------------------------------------------------------
-# reconcile_move — the mirror, for moves made outside PixlStash (v1.11 Phase 5)
+# reconcile_move - the mirror, for moves made outside PixlStash (v1.11 Phase 5)
 # ---------------------------------------------------------------------------
 
 
@@ -497,7 +497,7 @@ def test_leaving_a_shared_project_folder_is_ambiguous():
     )
     assert reconciled.outcome == MoveOutcome.AMBIGUOUS
     assert reconciled.removals == ((Facet.PROJECT, "2024 Shoots"),)
-    # Already a member of "Client Nordvik" — nothing new to add.
+    # Already a member of "Client Nordvik" - nothing new to add.
     assert reconciled.additions == ()
 
 
@@ -573,7 +573,7 @@ def _require_symlinks(tmp_path, *, directory: bool):
     `os.name`, so the case still runs on a Windows host with Developer Mode or
     admin rights, and skips with the real `OSError` on one without. Both hazards
     below need a link to *exist* to be reachable at all, so a host that cannot
-    make one is not exposed to them — failing there would report a platform
+    make one is not exposed to them - failing there would report a platform
     limitation as a bug in the engine.
     """
     probe = tmp_path / "symlink-probe"
@@ -593,7 +593,7 @@ def _require_symlinks(tmp_path, *, directory: bool):
 def library(tmp_path):
     """A library root with a layout, one project, one person, and one picture.
 
-    The picture is at ``2024 Shoots/Mira/2026-08/0412.png`` — the design
+    The picture is at ``2024 Shoots/Mira/2026-08/0412.png`` - the design
     bundle's own example, so the tail-preservation assertions are the drawn
     case rather than an invented one.
     """
@@ -650,7 +650,7 @@ def _swap_project(library):
     session = library["session"]
     # Scoped to this picture. An unfiltered delete works today only because the
     # fixture has one membership row, and would quietly remove another
-    # picture's the moment the fixture grew — which is how a test starts passing
+    # picture's the moment the fixture grew - which is how a test starts passing
     # for the wrong reason.
     for member in session.exec(
         select(PictureProjectMember).where(
@@ -716,8 +716,8 @@ def test_swapping_the_project_moves_the_file_and_keeps_the_owners_subfolder(libr
     assert picture.file_path == "Client · Nordvik/Mira/2026-08/0412.png"
     # The stored form is ``/``-separated on every platform. This one only bites
     # on Windows, which is why the file is on the OS-sensitive list: everything
-    # that reads a library picture's path — the thumbnail sibling, the layout's
-    # own component split, the grid's URL — assumes forward slashes, and
+    # that reads a library picture's path - the thumbnail sibling, the layout's
+    # own component split, the grid's URL - assumes forward slashes, and
     # ``os.path.relpath`` hands back backslashes there.
     assert "\\" not in picture.file_path
 
@@ -907,8 +907,8 @@ def test_a_symlinked_source_is_refused(library, tmp_path):
 def test_a_symlinked_destination_folder_is_refused(library, tmp_path):
     """The source is not the only path a move can escape through.
 
-    The rendered folder names cannot escape lexically — ``folder_name`` strips
-    every separator — but a directory that already exists inside the root can be
+    The rendered folder names cannot escape lexically - ``folder_name`` strips
+    every separator - but a directory that already exists inside the root can be
     a symlink, and ``os.makedirs(exist_ok=True)`` follows one. Without the
     check the file would be written outside the library while the row went on
     naming a path inside it.
@@ -1073,8 +1073,8 @@ def test_a_second_change_pushes_the_check_out_again(stamped):
     """The debounce IS the re-stamp: remove-then-add settles into one move.
 
     Asserted by planting a sentinel rather than by comparing two clock readings.
-    ``second >= first`` is true of a marker that never writes at all — it passed
-    with the whole re-stamp deleted — and two commits a microsecond apart make
+    ``second >= first`` is true of a marker that never writes at all - it passed
+    with the whole re-stamp deleted - and two commits a microsecond apart make
     the strict ``>`` a flake waiting to happen. Overwriting a stamp that is
     already set is the behaviour, so that is what is checked.
     """
@@ -1157,8 +1157,8 @@ def test_the_task_finds_only_what_is_due(stamped):
 def test_a_failure_after_the_moves_puts_every_file_back(library):
     """The rollback has to cover the caller's whole transaction, not the loop.
 
-    Everything after ``apply_moves`` can raise — two state captures, the
-    operation row, the flag clear, the commit — and the writer thread then rolls
+    Everything after ``apply_moves`` can raise - two state captures, the
+    operation row, the flag clear, the commit - and the writer thread then rolls
     the session back. A row left naming a path with no file at it is not
     cosmetic: ``MissingFilePurgeFinder`` deletes it within the hour and the
     picture's tags, sets and score go with it.
@@ -1217,7 +1217,7 @@ def test_renaming_a_person_leaves_a_same_named_sets_folder_alone(library):
 
     Renaming the person must not claim the set's folder: doing so drags the
     set's rows to a name that is not theirs and leaves the engine planning a
-    second move to undo it — two file operations on the owner's disk for a
+    second move to undo it - two file operations on the owner's disk for a
     change to an entity nobody touched.
     """
     session, root = library["session"], library["root"]
@@ -1231,7 +1231,7 @@ def test_renaming_a_person_leaves_a_same_named_sets_folder_alone(library):
     with open(os.path.join(folder, "s.png"), "wb") as handle:
         handle.write(b"pixels")
     # In the project AND the set, so `2024 Shoots/Summer/` is true of it and the
-    # engine has nothing to do — which is what makes the assertion at the end
+    # engine has nothing to do - which is what makes the assertion at the end
     # about the rename rather than about the rule.
     member = Picture(
         file_path="2024 Shoots/Summer/s.png", project_id=library["project_id"]
@@ -1355,7 +1355,7 @@ def test_the_journal_is_pruned_past_its_retention_window(library):
 
 
 # ---------------------------------------------------------------------------
-# move_reconciliation_service — classifying and clearing the queue (Phase 5)
+# move_reconciliation_service - classifying and clearing the queue (Phase 5)
 # ---------------------------------------------------------------------------
 
 
@@ -1454,7 +1454,7 @@ def test_a_move_to_an_unknown_folder_is_bucketed_off_layout(library):
 def test_an_off_layout_row_is_pruned_past_its_retention_window(library):
     """off_layout carries no decision, so it is shown once and then ages out.
 
-    Unlike unambiguous/ambiguous, nothing here waits on the owner — the
+    Unlike unambiguous/ambiguous, nothing here waits on the owner - the
     row exists so the screen can say "already followed, nothing to decide"
     at least once, not so it can sit forever as unreachable, unclearable
     state (see docs/backend_architecture.md §27).
@@ -1532,7 +1532,7 @@ def test_a_deleted_pictures_row_is_dropped_rather_than_crashing(library):
 
 
 # ---------------------------------------------------------------------------
-# The appliers — set and person, the two facets pending_summary never exercises
+# The appliers - set and person, the two facets pending_summary never exercises
 # ---------------------------------------------------------------------------
 
 

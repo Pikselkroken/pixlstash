@@ -74,5 +74,5 @@ def test_window_expiry_resets_limit():
             # Wait for the 1-second window to expire.
             time.sleep(1.1)
 
-            # Counter should have reset — request succeeds again.
+            # Counter should have reset - request succeeds again.
             assert c.get("/login").status_code == 200

@@ -1,4 +1,4 @@
-// Tags resource — the library vocabulary and per-picture tag edits.
+// Tags resource - the library vocabulary and per-picture tag edits.
 //
 // Tags live under two paths: `/tags` is the vocabulary (what tags exist and
 // how often), while `/pictures/{id}/tags` is one picture's assignment. They

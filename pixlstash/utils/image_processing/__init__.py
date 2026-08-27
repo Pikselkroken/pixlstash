@@ -1,4 +1,4 @@
-"""Image processing utilities — image loading, video, and face operations."""
+"""Image processing utilities - image loading, video, and face operations."""
 
 from pixlstash.utils.image_processing.image_utils import (  # noqa: F401
     ImageUtils,

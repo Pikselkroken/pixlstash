@@ -41,13 +41,13 @@ _NON_API_ROOT_PATHS = {
 # scripts/record_test_durations.py): every shard runs in its own process on its
 # own runner and they must agree on the partition without talking to each
 # other, so the input has to be identical, versioned with the code, and present
-# on the very first run — including on fork PRs, which cannot read caches or
+# on the very first run - including on fork PRs, which cannot read caches or
 # artifacts. Staleness is the price, and it is a cheap one: an unknown test
 # just falls back to its round-robin position.
 _TEST_DURATIONS_PATH = Path(__file__).resolve().parent / "ci_test_durations.json"
 
-# Floor charged to every test on top of its recorded time. No test is free —
-# collection, fixture teardown and reporting all cost something — but the real
+# Floor charged to every test on top of its recorded time. No test is free -
+# collection, fixture teardown and reporting all cost something - but the real
 # reason this exists is arithmetic: a greedy "put it on the cheapest shard"
 # loop never changes the cheapest shard when the item costs 0.0, so every
 # sub-millisecond test lands on the SAME runner. Measured without this floor:
@@ -191,7 +191,7 @@ def _load_recorded_durations(path: Path | None = None) -> dict[str, float]:
     makes ``--ci-shard`` behave exactly as it did before time-balancing existed
     (a pure round-robin deal), which is a slower gate but still a total
     partition. Missing file, unreadable file, truncated JSON, wrong shape and
-    nonsense values are therefore all *degradations*, never errors — but none
+    nonsense values are therefore all *degradations*, never errors - but none
     of them are silent.
     """
     path = _TEST_DURATIONS_PATH if path is None else path
@@ -255,7 +255,7 @@ def _time_balanced_shard_assignment(
 
     Longest-processing-time-first (LPT): take the tests whose duration is known,
     heaviest first, and drop each into whichever shard is currently cheapest.
-    That is the classic greedy makespan heuristic — worst case 4/3 of optimal,
+    That is the classic greedy makespan heuristic - worst case 4/3 of optimal,
     and much closer than that whenever no single test is a large fraction of a
     shard's load, which is the case here.
 
@@ -345,8 +345,8 @@ def pytest_collection_modifyitems(config, items):
     variant.
 
     ``--ci-block-shard`` (contiguous) gives shard ``k`` the ``k``-th contiguous
-    slice of the collection. Wall clock balances worse — blocks are equal in
-    test *count*, not in test *time* — but relative order is preserved inside
+    slice of the collection. Wall clock balances worse - blocks are equal in
+    test *count*, not in test *time* - but relative order is preserved inside
     every shard, so an order dependence still fails wherever both tests land in
     the same block. Only the ``total - 1`` block boundaries lose adjacency. That
     is what lets the release-prep sweep stay an ordering control while running
@@ -396,7 +396,7 @@ def pytest_collection_modifyitems(config, items):
 def pytest_configure(config):
     """Set static attributes on Server from command line options."""
     # Do not declare the model roots PixlStash owns. They are machine-global by
-    # design — one download serves every library on the host — so a Server built
+    # design - one download serves every library on the host - so a Server built
     # on a temp config dir would otherwise declare rows about the DEVELOPER'S
     # real home, and the shelf's contents would depend on which engines that
     # machine happens to have downloaded. `test_workers_api` caught it as
@@ -406,7 +406,7 @@ def pytest_configure(config):
     #
     # This used to point `PIXLSTASH_BUILTIN_MODEL_DIR` at a fresh temp directory
     # instead. That stopped working when #905 made the downloaders read the same
-    # accessor as the declaration — which is the whole point of that change, and
+    # accessor as the declaration - which is the whole point of that change, and
     # means an empty temp directory now costs every engine a fresh download on
     # every shard, rather than the warm model cache CI restores.
     Server.DEFAULT_DECLARE_MODEL_ROOTS = False
@@ -429,8 +429,8 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
 
     A relocation records where PixlStash downloads its engines
     (``downloaded_models.location``) and where the InsightFace packs live
-    (``insightface.location``). Both are **machine-global** — one download
-    serves every library and every server instance on the host — so both live in
+    (``insightface.location``). Both are **machine-global** - one download
+    serves every library and every server instance on the host - so both live in
     the platform user data directory, next to nothing else the suite touches,
     and both outlive the process that wrote them.
 
@@ -443,7 +443,7 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
     ``pytest_configure`` above already stops the suite *declaring* these roots,
     for the same reason in the other direction: they describe the developer's
     home, not the test's. This is the write half of that decision, and it is
-    made mechanically rather than remembered — three test modules redirect
+    made mechanically rather than remembered - three test modules redirect
     ``_pixlstash_data_dir`` per test to stay out of the way, which works right up
     until a relocation's worker thread finishes after the redirection is undone,
     or a fourth module forgets. Redirecting ``_pointer_path`` for the whole
@@ -457,14 +457,14 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
     **The sandbox is per test, not one shared file**, even though it is one
     directory. A record is read back on every call, so a single shared file
     would let one test's write change where every *later* test in the shard
-    downloads — a flake the sharder reshuffles between runs. The redirected name
+    downloads - a flake the sharder reshuffles between runs. The redirected name
     carries the writing test's id instead, and the check below fails the run
     with whatever the sandbox holds.
 
     **That check is a tripwire, not a census.** It sees a write made while no
     test had redirected the seam. A write from a worker thread that lands
     *during* a later test which has redirected it goes to that test's own
-    ``tmp_path`` instead — safe, which is the point, but invisible here and
+    ``tmp_path`` instead - safe, which is the point, but invisible here and
     attributed to the wrong test if it does show up, since
     ``PYTEST_CURRENT_TEST`` is process-global. So an empty sandbox is not proof
     that nothing wrote; the protection is the redirection, and this only reports
@@ -472,7 +472,7 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
 
     Nothing is restored at the end. The rebinding has to outlive the session:
     a relocation records its new location from a daemon worker thread
-    (``model_moves._start_job``), and the suite leaves such a thread unjoined —
+    (``model_moves._start_job``), and the suite leaves such a thread unjoined -
     restoring the original here would reopen the machine's file for exactly the
     write this fixture exists to stop.
     """
@@ -524,7 +524,7 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
         f"the suite lands in {machine_data_dir} and outlives the run: {leaked}. "
         "Every relocation a test starts has to finish inside it (await the 202) "
         "and the test has to redirect builtin_models._pixlstash_data_dir to a "
-        "tmp_path first — tests/test_builtin_models.py::data_dir is the shape."
+        "tmp_path first - tests/test_builtin_models.py::data_dir is the shape."
     )
 
 
@@ -536,7 +536,7 @@ def no_model_move_outlives_its_test():
     *ending* is where the work lands: folder rows are repointed, and for the
     folder PixlStash downloads into, a machine-global location is recorded. A
     test that starts one and does not wait hands all of that to whichever test
-    runs next — at a moment no fixture is holding the seams still, which is the
+    runs next - at a moment no fixture is holding the seams still, which is the
     shape that lets a recorded location escape the redirection above.
 
     Suite-wide rather than in the one module that noticed: ``_job`` is a global,
@@ -704,8 +704,8 @@ def _enforce_no_leaked_threads(session) -> None:
     """Fail the session on any thread of ours still alive when it ends.
 
     A worker thread that outlives the session is a defect on its own: the
-    object that owns it was never closed, so whatever that object held —
-    a SQLAlchemy engine, pooled SQLite connections, an fd on vault.db — is
+    object that owns it was never closed, so whatever that object held -
+    a SQLAlchemy engine, pooled SQLite connections, an fd on vault.db - is
     still live too. It is also the leading suspect for the Windows-only
     SIGSEGV that fires *seconds after* a fully green pytest summary: CPython
     kills surviving daemon threads mid-instruction during ``Py_FinalizeEx``,
@@ -713,7 +713,7 @@ def _enforce_no_leaked_threads(session) -> None:
     down with an access violation, long after pytest has stopped watching.
 
     Threads with no frame of ours anywhere in their stack are reported but not
-    failed on — a third-party pool we do not own is not ours to close.
+    failed on - a third-party pool we do not own is not ours to close.
     """
     survivors = [
         (thread, _thread_stack(thread))
@@ -760,7 +760,7 @@ def _stop_tqdm_monitors() -> None:
     """Shut down tqdm's background monitor threads.
 
     tqdm starts a ``TMonitor`` daemon per tqdm class the moment any progress
-    bar exists, and never stops it — a full Windows-shard run ends with two of
+    bar exists, and never stops it - a full Windows-shard run ends with two of
     them still ticking on a 10-second interval. They are third-party, so the
     leak gate above does not fail on them, but a daemon thread that wakes
     periodically is precisely what ``Py_FinalizeEx`` kills mid-instruction.

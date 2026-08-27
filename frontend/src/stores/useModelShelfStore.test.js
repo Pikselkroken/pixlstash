@@ -97,7 +97,7 @@ beforeEach(() => {
 
 describe("defaults", () => {
   it("shows adapters, checkpoints and unclassified files", async () => {
-    // `unknown` is first-class and never folded into either other list — and it
+    // `unknown` is first-class and never folded into either other list - and it
     // is asked for by default: a file nothing could classify is still on the
     // disk the shelf accounts for, and opt-in is how a 339 MB leftover in
     // PixlStash's own download folder stayed invisible (#927).
@@ -199,7 +199,7 @@ describe("adapter kinds", () => {
     // `model.kind` is free text and `PATCH /models` stores what it is given,
     // so `LoRA` and `lora` are one algorithm and two strings. Faceting raw
     // offered two boxes the panel now draws with the SAME label, each ticking
-    // half the rows — and the `feature` axis folds them into one group, so
+    // half the rows - and the `feature` axis folds them into one group, so
     // ticking either emptied half of a group the user can see.
     const store = useModelShelfStore();
     listAdapters.mockResolvedValue([
@@ -214,8 +214,8 @@ describe("adapter kinds", () => {
   });
 
   it("never hides a row the facet offers no box for", async () => {
-    // An adapter whose kind folds to nothing gets no checkbox — an unlabelled
-    // one is not a control — so a kind selection holds no opinion about it and
+    // An adapter whose kind folds to nothing gets no checkbox - an unlabelled
+    // one is not a control - so a kind selection holds no opinion about it and
     // must not exclude it. Hiding it would leave a row no box can bring back,
     // which is the failure the base-model facet already carries a sentinel to
     // avoid.
@@ -481,7 +481,7 @@ describe("persistence", () => {
   it("discards a blob an older build wrote, so a changed default applies", () => {
     // The regression this pins is #927 in its second half. `Unclassified`
     // shipped off, so every blob written before this carries
-    // `unclassified: false` whether or not anyone chose it — and honouring it
+    // `unclassified: false` whether or not anyone chose it - and honouring it
     // would keep the leftovers hidden from precisely the people who have used
     // the shelf longest.
     window.localStorage.setItem(
@@ -498,7 +498,7 @@ describe("persistence", () => {
     // blob holding `LoRA` outlives the fold. Matched raw it selects nothing and
     // appears in no checkbox: an empty shelf with the Adapters box reading
     // fully on, the one algorithm box reading off, and nothing on screen naming
-    // the filter doing it — escapable only by `Reset filters`, which also
+    // the filter doing it - escapable only by `Reset filters`, which also
     // discards the base models and capabilities the user did not ask to lose.
     //
     // Folded on read rather than discarded by a `FILTERS_SCHEMA_VERSION` bump,
@@ -508,7 +508,7 @@ describe("persistence", () => {
       // `"  "` is the other half of the migration: the shipped facet gated on
       // raw truthiness, so a whitespace-only kind DID get a tickable box that
       // could be persisted. Folded it is `""`, which no box offers and every
-      // row fails — the same unclearable ghost, arrived at from the other side.
+      // row fails - the same unclearable ghost, arrived at from the other side.
       JSON.stringify({ v: 1, adapterKinds: ["LoRA", "lora", " LORA ", "  "] }),
     );
     listAdapters.mockResolvedValue([adapter({ id: 1, kind: "LoRA" })]);
@@ -908,7 +908,7 @@ describe("the column widths", () => {
 
   it("ignores a column it does not have and a width that is not one", () => {
     // Every one of these coerces to 0 through `Number()` and would come back
-    // as the column's FLOOR rather than being refused — `null` in particular is a
+    // as the column's FLOOR rather than being refused - `null` in particular is a
     // value JSON can carry, so a stored blob would silently hand back a
     // floored column where the read-back loop is meant to fall through to the
     // default.
@@ -943,7 +943,7 @@ describe("the column widths", () => {
   });
 
   it("restores what was dragged, and clamps that too", () => {
-    // A blob edited by hand — or written by a build with different bounds —
+    // A blob edited by hand - or written by a build with different bounds -
     // must not hand back a shelf whose Size column is 4,000px wide.
     const store = useModelShelfStore();
     store.setColumnWidth("base", 150);
@@ -1052,7 +1052,7 @@ describe("stacks are atomic", () => {
 
   it("never hands a verb the same model twice, even drawn in two folders", () => {
     // The review of #881 read `selectedRows` as one entry per DRAWN row, which
-    // would duplicate under folder grouping — a model with copies in two
+    // would duplicate under folder grouping - a model with copies in two
     // folders is drawn twice. It is not: `selectedRows` filters `visibleRows`,
     // which is one entry per model, and the per-folder duplication happens in
     // `groups` for rendering only. Asserted rather than argued, and it stays
@@ -1087,7 +1087,7 @@ describe("stacks are atomic", () => {
 
   it("hands the verbs one member when one member is what was picked", () => {
     // The exception the expanded strip added (#1005). A member is not in
-    // `visibleRows` — the run is one row there — so without this the selection
+    // `visibleRows` - the run is one row there - so without this the selection
     // resolves to nothing and every verb gates on a phantom.
     const store = shelfWithARun();
     store.selectFromClick(3, {}, [1, 3, 4]);
@@ -1097,7 +1097,7 @@ describe("stacks are atomic", () => {
 
   it("keeps a Shift range inside the strip it was aimed at", () => {
     // An OPEN run is in the drawn order member by member, so its cover must
-    // stand for itself inside a range — expanding it as well reaches past the
+    // stand for itself inside a range - expanding it as well reaches past the
     // row the reader clicked and takes the steps below it.
     const store = shelfWithARun();
     const drawn = [4, 1, 2, 3];
@@ -1222,7 +1222,7 @@ describe("Assign", () => {
   it("sends the union, so attaching one entity keeps the others", async () => {
     // The load-bearing assertion of the whole verb. `PUT .../attachments`
     // REPLACES the set, so a write of just the new entity silently detaches
-    // every character already using the model — a data loss with no undo behind
+    // every character already using the model - a data loss with no undo behind
     // it and no error to notice.
     const store = useModelShelfStore();
     store.rows = [
@@ -1383,7 +1383,7 @@ describe("the thumbnail verb", () => {
   });
 
   it("counts a partial failure rather than claiming the whole selection", async () => {
-    // The receipt is the only record — there is no undo — so a batch that half
+    // The receipt is the only record - there is no undo - so a batch that half
     // landed must not read like one that landed.
     const store = useModelShelfStore();
     store.rows = [
@@ -1667,7 +1667,7 @@ describe("capabilities", () => {
 
   it("lists a two-capability model under EVERY feature it serves", async () => {
     // The rule this whole change exists for. A model that captions AND detects
-    // cannot be filed under one heading, so the feature axis draws it twice —
+    // cannot be filed under one heading, so the feature axis draws it twice -
     // the same fan-out `folder` already does for a file copied into two places.
     listEngines.mockResolvedValue([engine()]);
     const store = useModelShelfStore();
@@ -1748,7 +1748,7 @@ describe("capabilities", () => {
   it("groups on the algorithm only for an ADAPTER, whatever else carries a kind", async () => {
     // The `file_kind` guard. The row that pins it is one carrying a kind while
     // not being an adapter. An engine keeps its ROLE in `model.kind`, so the
-    // shape is the engine's — though today's declarations always emit that role
+    // shape is the engine's - though today's declarations always emit that role
     // as a capability too (`declared_capabilities`), so this exact row is
     // synthetic. It is the guard that is being pinned, not a state the hub
     // currently writes: without it, anything that grows a `kind` starts heading
@@ -1771,7 +1771,7 @@ describe("capabilities", () => {
     // the catch-all while a `Checkpoint` header two rows up held the
     // single packaged model that declares the capability. Nothing writes
     // `model_capability` for a scanned file, so the file kind has to be what
-    // heads the group — and it has to be the SAME key the capability uses, or
+    // heads the group - and it has to be the SAME key the capability uses, or
     // the shelf draws two groups spelled the same.
     listCheckpoints.mockResolvedValue([
       adapter({ id: 5, file_kind: "checkpoint", kind: null, capabilities: [] }),
@@ -1779,7 +1779,7 @@ describe("capabilities", () => {
     // Shaped as the declaration writes it: an HF-cache repo enters as
     // `file_kind='engine'` (`DeclaredEntry.file_kind`) and carries the
     // capability, so the merge has to survive the two rows disagreeing about
-    // their file kind — which is the whole shape of the reported bug.
+    // their file kind - which is the whole shape of the reported bug.
     listEngines.mockResolvedValue([
       engine({
         id: 6,
@@ -1844,7 +1844,7 @@ describe("capabilities", () => {
     // The hub CHECK makes an adapter's `kind` NOT NULL but not NON-EMPTY, and
     // `PATCH /models` stores free text, so a whitespace-only kind is reachable
     // over the raw API. Folded it is `""`, which would head a group with no
-    // label at all — and put an unlabelled checkbox in the Show panel.
+    // label at all - and put an unlabelled checkbox in the Show panel.
     listAdapters.mockResolvedValue([
       adapter({ id: 7, kind: "   ", capabilities: [] }),
     ]);
@@ -1859,7 +1859,7 @@ describe("capabilities", () => {
 
   it("gives a file_kind this build does not know no algorithm at all", async () => {
     // `blockOf` funnels an unrecognised `file_kind` into the adapters bucket so
-    // the row is never dropped from the shelf — which is why the guards here
+    // the row is never dropped from the shelf - which is why the guards here
     // test `file_kind === "adapter"` and not `blockOf(row) === "adapters"`.
     // Widening them would let a kind PixlStash cannot interpret head a feature
     // group, and this is the row that proves the narrow test is deliberate.
@@ -1971,7 +1971,7 @@ describe("what the base-model field completes against", () => {
 
   it("drops a row spelling the server already folded, and keeps one it did not", async () => {
     // The server drops an alias of a label it ships, so re-adding every row
-    // verbatim would offer `sdxl base` beside the `SDXL 1.0` it means — and
+    // verbatim would offer `sdxl base` beside the `SDXL 1.0` it means - and
     // with eight slots in the menu, push the canonical label off it. The client
     // cannot fold on its own; `base_model_folded` is the server's answer for
     // this row, and it is the only thing that can carry the rule.
@@ -2175,8 +2175,8 @@ describe("deleteReceipt", () => {
   });
 });
 
-// The same bytes, written twice. The hub is content-addressed — one `model`
-// row per SHA-256 — so a second `present` copy is not a second model, it is
+// The same bytes, written twice. The hub is content-addressed - one `model`
+// row per SHA-256 - so a second `present` copy is not a second model, it is
 // disk the owner can have back. Before this the fact lived only in a tooltip.
 describe("duplicate copies", () => {
   it("counts only the copies that are actually on the disk", async () => {
@@ -2189,7 +2189,7 @@ describe("duplicate copies", () => {
         ],
       }),
       // One copy and one registration. Deleting the row would free nothing, so
-      // this must not read as a duplicate — the failure mode is a shelf that
+      // this must not read as a duplicate - the failure mode is a shelf that
       // offers the owner a saving that is not there.
       adapter({
         id: 2,
@@ -2270,7 +2270,7 @@ describe("duplicate copies", () => {
     await store.fetchRows();
     store.setView({ groupBy: "folder" });
     const drawn = store.groups[0].rows;
-    // One folder, one header, two draws — and the whole point is that they are
+    // One folder, one header, two draws - and the whole point is that they are
     // distinguishable. Equal `rowKey`s put `tabindex="0"` on both at once and
     // made `indexOf` answer with the first, which is the collision the push
     // site was already warning about on the other axis.

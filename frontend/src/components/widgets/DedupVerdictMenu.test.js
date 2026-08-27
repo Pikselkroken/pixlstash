@@ -4,7 +4,7 @@
 // store hands it: that both directions of the toggle actually reach the parent,
 // that the counts it renders are the unfiltered ones (a hidden row must not
 // read as "there are none"), and that the last row standing cannot be switched
-// off — an empty gate can only ever produce an empty page, which reads as a
+// off - an empty gate can only ever produce an empty page, which reads as a
 // broken queue rather than as a choice the user made.
 
 import { describe, it, expect } from "vitest";

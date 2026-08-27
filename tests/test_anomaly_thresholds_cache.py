@@ -2,7 +2,7 @@
 
 The resolver's output is fully determined by ``(meta_path, offset, default_threshold)``,
 so a memo keyed on that tuple auto-invalidates when the offset moves or the tagger model
-(hence its meta.json path) changes — without an explicit invalidation hook. Only the file
+(hence its meta.json path) changes - without an explicit invalidation hook. Only the file
 read (``load_label_thresholds``) is skipped on a hit; the three cheap getters still run to
 build the key. The memo lives on the *vault instance*, never a module global, so separate
 vaults (and throwaway test vaults) must never share a cached map.
@@ -110,7 +110,7 @@ def test_meta_path_change_invalidates(meta_file, tmp_path, spy_load):
 
 
 def test_two_vaults_do_not_share_cache(meta_file, spy_load):
-    """Separate vault instances keep separate memos — no module-global cross-talk."""
+    """Separate vault instances keep separate memos - no module-global cross-talk."""
     vault_a = _FakeVault(meta_file, 0.0, 0.6)
     vault_b = _FakeVault(meta_file, 0.0, 0.6)
 

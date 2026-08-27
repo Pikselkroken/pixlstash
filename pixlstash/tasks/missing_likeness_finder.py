@@ -57,7 +57,7 @@ class MissingLikenessFinder(BaseTaskFinder):
             int(queue_count or 0) > 0 or int(pair_count or 0) == 0
         )
         if not has_work:
-            # Sweep done — drop the cache so the next sweep gets fresh data.
+            # Sweep done - drop the cache so the next sweep gets fresh data.
             self._bulk_cache = None
             return None
 

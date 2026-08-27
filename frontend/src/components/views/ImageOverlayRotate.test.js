@@ -13,8 +13,8 @@
 //
 // The fourth is the one most likely to ship broken, and it is worse here than
 // on the grid. A rotate rewrites the file's EXIF orientation tag and leaves
-// every pixel alone, so `pixel_sha` — the sampled content hash the media URL's
-// `?v=` was built from — does NOT move. The browser applies the orientation tag
+// every pixel alone, so `pixel_sha` - the sampled content hash the media URL's
+// `?v=` was built from - does NOT move. The browser applies the orientation tag
 // itself, so it would go on painting the bytes it already decoded, at a URL
 // nothing had changed. `orientation` is therefore part of the buster now, the
 // same decision the thumbnail token makes on the server; the last describe
@@ -32,7 +32,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 enableAutoUnmount(afterEach);
 
 // What the metadata endpoint currently reports about the picture's bytes. A
-// rotate moves `orientation` and nothing else — `pixel_sha` stays put, which is
+// rotate moves `orientation` and nothing else - `pixel_sha` stays put, which is
 // exactly why it cannot be the whole cache-buster.
 let metadataPixelSha = "sha-stable";
 let metadataOrientation = 1;
@@ -177,7 +177,7 @@ beforeEach(() => {
   }));
 });
 
-describe("ImageOverlay — the rotate buttons", () => {
+describe("ImageOverlay - the rotate buttons", () => {
   it("sends the direction the button is labelled with, with no dialog", async () => {
     const wrapper = await openOverlay();
     const { left, right } = rotateButtons(wrapper);
@@ -225,7 +225,7 @@ describe("ImageOverlay — the rotate buttons", () => {
   });
 });
 
-describe("ImageOverlay — the [ and ] shortcuts", () => {
+describe("ImageOverlay - the [ and ] shortcuts", () => {
   it("rotates on a bare bracket", async () => {
     await openOverlay();
 
@@ -309,10 +309,10 @@ describe("ImageOverlay — the [ and ] shortcuts", () => {
   });
 });
 
-describe("ImageOverlay — the picture on screen after a rotate", () => {
+describe("ImageOverlay - the picture on screen after a rotate", () => {
   it("re-requests the file when 180° leaves the pixels alone", async () => {
     // Two presses the same way is 180°. `pixel_sha` never moves across either
-    // of them — the pixels are untouched — so if the buster were the sha alone
+    // of them - the pixels are untouched - so if the buster were the sha alone
     // the `<img>` would keep the bytes it decoded before the first press.
     const wrapper = await openOverlay();
     const srcBefore = wrapper.find(".overlay-img").attributes("src");
@@ -333,7 +333,7 @@ describe("ImageOverlay — the picture on screen after a rotate", () => {
     expect(srcQuarter).not.toBe(srcBefore);
     expect(srcAfter).not.toBe(srcQuarter);
     expect(srcAfter).not.toBe(srcBefore);
-    // The orientation is the only thing carrying the change into the URL — the
+    // The orientation is the only thing carrying the change into the URL - the
     // content hash is identical on both sides of the turn and is not in it.
     expect(srcAfter).toContain("?v=o3");
     expect(srcAfter).not.toContain("sha-stable");
@@ -388,7 +388,7 @@ describe("ImageOverlay — the picture on screen after a rotate", () => {
 
   it("leaves an unrotated picture's URL exactly as it was", async () => {
     // Orientation 1 contributes nothing, so a picture that has never been
-    // turned keeps the bare URL — the same one `prefetchFullImage` and the
+    // turned keeps the bare URL - the same one `prefetchFullImage` and the
     // neighbour preloads warm from a grid record. A version that grew a suffix
     // for every picture would hand the HTTP cache a URL it has never seen the
     // day this ships, and one that disagreed with those builders would read a

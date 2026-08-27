@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 class TextScoreTask(BaseTask):
     """Task that fills in text_score on Picture rows.
 
-    Runs at low priority and is fully independent of QualityTask — it reads
+    Runs at low priority and is fully independent of QualityTask - it reads
     picture.text_score IS NULL and writes directly to the picture table.
     """
 

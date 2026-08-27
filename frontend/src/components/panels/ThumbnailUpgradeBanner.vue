@@ -1,12 +1,12 @@
 <script setup>
 /**
- * ThumbnailUpgradeBanner — non-blocking progress banner for the one-off
+ * ThumbnailUpgradeBanner - non-blocking progress banner for the one-off
  * thumbnail regeneration that runs on first launch after the v1.8.0 thumbnail
  * format change.
  *
  * The app is fully usable while this runs; the grid just shows old/degraded
  * tiles that sharpen as they rebuild. This banner is a slim, prominent,
- * dismissible in-app status bar — deliberately NOT the one-sentence notice
+ * dismissible in-app status bar - deliberately NOT the one-sentence notice
  * surface (useNoticeStore/NoticeHost), because it carries a determinate
  * progress bar.
  *
@@ -18,7 +18,7 @@
  *
  * Visibility: shown only while active. When it completes, a brief
  * "Thumbnails updated" beat plays, then the banner hides. Dismissal is
- * in-memory (this session only) — the Tasks tab still shows live progress.
+ * in-memory (this session only) - the Tasks tab still shows live progress.
  */
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -28,7 +28,7 @@ const THUMBNAIL_WORKER_KEY = "ThumbnailGenerationTask";
 // Outstanding thumbnails below which this is not an upgrade worth a banner.
 //
 // The worker is shared, and `remaining` is a library-wide count of
-// `thumbnail_width IS NULL` — so an in-place rotate, which NULLs exactly the
+// `thumbnail_width IS NULL` - so an in-place rotate, which NULLs exactly the
 // pictures it turned to re-queue their bitmaps, lights up the same row as the
 // one-off v1.8.0 regeneration did. A determinate progress bar reading "12,070 /
 // 12,073" because someone turned three photos is noise, and the rotate already
@@ -41,7 +41,7 @@ const emit = defineEmits(["view-progress"]);
 
 const tasksStore = useTasksStore();
 
-// The live snapshot for the thumbnail-regen worker (or null when absent — the
+// The live snapshot for the thumbnail-regen worker (or null when absent - the
 // steady state, once the one-off upgrade has finished and the row is gone).
 const snapshot = computed(
   () => tasksStore.workerSnapshots?.[THUMBNAIL_WORKER_KEY] || null,
@@ -74,7 +74,7 @@ const percent = computed(() =>
 // A LATCH rather than a plain threshold, because the two ends of a job need
 // different answers: a handful outstanding at the START is a rotate and must
 // never raise the banner, while a handful outstanding at the END is the tail of
-// a real upgrade and must not make it vanish at 99.9% — or, worse, declare
+// a real upgrade and must not make it vanish at 99.9% - or, worse, declare
 // "Thumbnails updated" with work still running.
 const bulkEngaged = ref(false);
 watch(
@@ -86,7 +86,7 @@ watch(
   { immediate: true },
 );
 
-// Regeneration is running while there is anything left to rebuild — and worth
+// Regeneration is running while there is anything left to rebuild - and worth
 // showing only once it was ever more than a handful.
 const isActive = computed(() => remaining.value > 0 && bulkEngaged.value);
 

@@ -19,7 +19,7 @@ const POLL_MS = 1000;
  * The longest a run of unreadable statuses may push the next reading out to.
  *
  * A failed read is "status unknown", not "the move stopped" (#1018), so the
- * loop keeps going — but a backend that is down for a minute must not be asked
+ * loop keeps going - but a backend that is down for a minute must not be asked
  * sixty times, so each consecutive failure doubles the wait up to this ceiling.
  * Fifteen seconds is late enough to be cheap and early enough that a move which
  * finished during the outage is still reported while the owner is looking.
@@ -29,8 +29,8 @@ const POLL_MAX_MS = 15000;
 /**
  * What each per-item status means in a receipt, and whether it is bad news.
  *
- * `moved` and `copied` are the same outcome by two mechanisms — a same-drive
- * `rename()` versus copy-verify-repoint-unlink — and the reader does not care
+ * `moved` and `copied` are the same outcome by two mechanisms - a same-drive
+ * `rename()` versus copy-verify-repoint-unlink - and the reader does not care
  * which, so they are counted together. The other three are each their own
  * piece of news and are never merged: `skipped` means the file was already
  * where it was being sent, `cancelled` means the queue stopped before reaching
@@ -45,7 +45,7 @@ const MOVED_STATUSES = new Set(["moved", "copied"]);
  * Landed first, then the three ways an item did not land. A receipt naming only
  * the successes would read as a clean run when a third of the batch failed, and
  * one naming only the failures sends the reader back to re-run a move that
- * mostly worked — which, on 438 GB, is not a cheap mistake.
+ * mostly worked - which, on 438 GB, is not a cheap mistake.
  *
  * @param {Array<Object>} results - the job's per-item results.
  * @param {boolean} [cancelled=false] - whether a cancel was requested.
@@ -67,7 +67,7 @@ export function moveReceipt(results, cancelled = false) {
   }
   if (failed) notes.push(`${files(failed)} could not be moved and stayed put.`);
   // A file whose `<stem>_samples/` previews did not travel with it is still
-  // `moved` — losing a preview must not cost the weights, so the server does
+  // `moved` - losing a preview must not cost the weights, so the server does
   // not fail the file for it. The status tallies above therefore cannot see it,
   // and a receipt built from them alone would call the loss a clean move. The
   // import receipt names the same thing (`importReceipt`), and this is its half.
@@ -126,7 +126,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    *
    * Held HERE rather than pushed as a notice (#900). A `warning` card clears
    * itself after six seconds, and what it is saying is that some of the
-   * owner's models did not arrive — which is the one outcome that must not
+   * owner's models did not arrive - which is the one outcome that must not
    * scroll past while they are looking elsewhere. Living in the store, it goes
    * back into the shelf's corner, where the progress was, every time the shelf
    * is mounted.
@@ -154,7 +154,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    * How far along, as a percentage of items decided.
    *
    * Items and not bytes, because `bytes_to_copy` is ZERO for a same-drive move
-   * — those are renames — so a byte-based bar would sit at 0% for the whole of
+   * - those are renames - so a byte-based bar would sit at 0% for the whole of
    * the fastest case and then jump. Items are the unit the server actually
    * reports progress in.
    */
@@ -176,7 +176,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    * only once the current one has landed, so a slow status read can never have
    * a second one queued behind it, and an unreadable one can simply wait longer
    * before trying again. The loop ends on a terminal status, a session reset or
-   * disposal — never on a failed read, which is what left the tab permanently
+   * disposal - never on a failed read, which is what left the tab permanently
    * busy (#1018).
    */
   function startPolling() {
@@ -197,7 +197,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
       } catch (err) {
         // A rejection out of a timer callback is nobody's to catch, and one
         // thrown before the finish is reported would end the loop still holding
-        // `pollHandle` and `watching` — the stuck-busy shape this whole change
+        // `pollHandle` and `watching` - the stuck-busy shape this whole change
         // is about, arriving by another door. A snapshot whose `results` is not
         // a list gets here today. Treated as an unreadable status: said out
         // loud, backed off, still watching.
@@ -207,7 +207,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
       // loop does from here would be about somebody else's session.
       if (startedAt !== epoch) return;
       // `watching` is cleared by the reading that consumed a terminal status
-      // and reported it, and by nothing else — an unread status leaves it up,
+      // and reported it, and by nothing else - an unread status leaves it up,
       // and we try again. Testing the job's status instead would end the loop
       // on a failed read whenever the last snapshot was already terminal, which
       // a job that finished before its own POST returned can be.
@@ -273,7 +273,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    * Move registered copies into a folder, and watch the job to its end.
    *
    * The POST plans the whole batch before the first byte, so a refusal here is
-   * a 4xx with a reason and NOT a half-done move — which is why the error is
+   * a 4xx with a reason and NOT a half-done move - which is why the error is
    * surfaced as a notice and the store is left idle rather than showing a
    * failed job.
    *
@@ -292,7 +292,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
   /**
    * Move a whole folder PixlStash owns to another host path, files and all.
    *
-   * The same job, watched the same way — a relocation IS a move — so it takes
+   * The same job, watched the same way - a relocation IS a move - so it takes
    * the one machine-wide slot, reports through the same progress and ends in
    * the same receipt and refresh.
    *

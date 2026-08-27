@@ -508,7 +508,7 @@ class WD14Plugin(TaggerPlugin):
 
     name: str = "wd14"
     display_name: str = "WD14 Tagger"
-    description: str = "WD14 ONNX tagger (SmilingWolf/wd-convnext-tagger-v3) — broad anime/illustration tag coverage."
+    description: str = "WD14 ONNX tagger (SmilingWolf/wd-convnext-tagger-v3) - broad anime/illustration tag coverage."
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
     # Dual: this file adapts Kohya_ss (see the Apache-2.0 attribution at the
     # top of the module) into the GPL-3.0 backend, and Apache-2.0 §4
@@ -622,7 +622,7 @@ class WD14Plugin(TaggerPlugin):
         return self._service.is_loaded()
 
     def list_downloaded_artifacts(self) -> list:
-        """Return empty list — WD14 has a single non-deletable artifact set."""
+        """Return empty list - WD14 has a single non-deletable artifact set."""
         return []
 
     def estimated_vram_mb(self, image_count: int, parameters=None) -> int:

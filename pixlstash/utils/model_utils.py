@@ -22,8 +22,8 @@ def _transformers_logging():
     Imported on demand rather than at module scope: ``transformers`` (and the
     ``sentence_transformers`` stack below it) costs seconds to import and is
     only needed once a model is actually loaded. Importing it here would make
-    every consumer of this module — including the API server and the whole test
-    suite — pay for it at startup.
+    every consumer of this module - including the API server and the whole test
+    suite - pay for it at startup.
     """
     try:
         from transformers import logging as transformers_logging
@@ -191,7 +191,7 @@ def derive_model_name(filename: str) -> str:
 # two unrelated subjects.
 #
 # ``re.ASCII`` is not decoration. Python's ``\d`` matches every Unicode decimal
-# — `v٢` would parse as version 2 — while JavaScript's does not, and
+# - `v٢` would parse as version 2 - while JavaScript's does not, and
 # `modelVersion` in `frontend/src/utils/modelShelf.js` mirrors this rule. Two
 # halves that disagree about what a version is would put a member under a
 # version the server never assigned it.
@@ -213,7 +213,7 @@ def split_model_version(filename: str) -> tuple[str, str | None]:
         ``None`` when the name carries no version token. Case is preserved
         because this token is put back into a stack's name, and folding it would
         silently rename every ``_V2`` run on the shelf to ``v2``. Comparison is
-        never done on this string — :func:`version_sort_key` parses it, and that
+        never done on this string - :func:`version_sort_key` parses it, and that
         is what makes the case irrelevant everywhere it matters.
 
     Examples:

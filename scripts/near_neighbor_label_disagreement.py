@@ -76,7 +76,7 @@ def load_tag_merges(override_path: str | None):
 
     Source of truth is PixlStash's editable ``DEFAULT_TAG_MERGES`` constant (so it can
     be loosened as the model improves). Pass ``--tag-remap`` to override with a JSON
-    file — e.g. pixltagger's ``pixlstash.json``, whose ``tag_remap`` may also contain
+    file - e.g. pixltagger's ``pixlstash.json``, whose ``tag_remap`` may also contain
     ``null`` ("drop") entries, which are ignored here since they don't merge into a parent.
     """
     if override_path:
@@ -193,7 +193,7 @@ def write_suggestions(
         ).fetchone()
         if not has:
             sys.exit(
-                "ERROR: tag_suggestion table missing — run migration 0057 first "
+                "ERROR: tag_suggestion table missing - run migration 0057 first "
                 "(alembic upgrade head, or start PixlStash once)."
             )
         if replace_tag is not None:
@@ -352,7 +352,7 @@ def main():
     elif merge_src:
         print(f"Merges: source {merge_src}; nothing merges into {args.tag!r}.")
     else:
-        print("Merges: none loaded — using literal tags only.")
+        print("Merges: none loaded - using literal tags only.")
 
     t0 = time.time()
     ids, paths, emb, has_literal, has_concept = load_vault(
@@ -364,7 +364,7 @@ def main():
     extra = f" (+{n_concept - n_literal} via merges)" if n_concept != n_literal else ""
     print(
         f"Loaded  {n} embedded pictures, {n_literal} tagged {args.tag!r}, "
-        f"{n_concept} incl. merges{extra} — base rate {n_concept / n:.1%} in {time.time() - t0:.1f}s"
+        f"{n_concept} incl. merges{extra} - base rate {n_concept / n:.1%} in {time.time() - t0:.1f}s"
     )
 
     t1 = time.time()
@@ -400,7 +400,7 @@ def main():
         )
 
     # A mutually-disagreeing pair yields both an ADD and a REMOVE suspect for the same
-    # two images — collapse to one per pair so it isn't reviewed twice.
+    # two images - collapse to one per pair so it isn't reviewed twice.
     rows = dedupe_by_pair(rows)
     # Highest-disagreement, most-near-identical first.
     rows.sort(key=lambda r: (r["score"], r["twin_sim"]), reverse=True)

@@ -217,7 +217,7 @@ def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:
     """Return ``(layout, unfiled)`` for this library's own picture root.
 
     ``(None, None)`` means the root has no layout, which is every library until
-    its owner picks one — and while it has none, nothing is ever placed by the
+    its owner picks one - and while it has none, nothing is ever placed by the
     layout and nothing is ever moved by it.
 
     Per library rather than per user because it describes this library's own

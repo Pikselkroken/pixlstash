@@ -11,7 +11,7 @@ const isReadOnly = computed(() => sessionContext.value?.scope === 'READ');
 
 // Per-tab client id, mirrored from useWsStore into module scope so the request
 // interceptor can attach it without depending on Pinia being initialised. Used
-// ONLY for echo-matching of our own WebSocket events — never for authorization.
+// ONLY for echo-matching of our own WebSocket events - never for authorization.
 // Capped at 200 chars to match the backend's X-Client-Id limit.
 let _clientId = null;
 
@@ -21,7 +21,7 @@ function setRequestClientId(clientId) {
 }
 
 // ── Auth-context transitions ────────────────────────────────────────────────
-// Every credential change — login, logout, share-token entry, vault switch —
+// Every credential change - login, logout, share-token entry, vault switch -
 // is announced here, once, so no store has to invent its own detection. Any
 // store holding scope-filtered server data (whose CONTENT is an authorization
 // decision) registers here and drops that data synchronously, before the next
@@ -43,8 +43,8 @@ function onSessionReset(handler) {
  * Announce that the credential changed. Handlers run synchronously; one that
  * throws is logged and never stops the others.
  *
- * The transport's own identity — the share token it attaches to every request,
- * and the session context that `isReadOnly` is derived from — is dropped here
+ * The transport's own identity - the share token it attaches to every request,
+ * and the session context that `isReadOnly` is derived from - is dropped here
  * too, AFTER the handlers. Both outlived a credential change before (issue
  * #655 item 4): `Root.vue` calls `activateShareToken()` before validating the
  * token, so an invalid `?token=` left `_shareToken` set while the login screen
@@ -230,7 +230,7 @@ function isMutatingRequest(config) {
 // A multipart body must not inherit this instance's JSON default. Axios 1.x
 // reads the request's own Content-Type in `transformRequest`, and when it says
 // `application/json` it converts a FormData into `JSON.stringify(
-// formDataToJSON(form))` — a File or Blob serialises to `{}`, so
+// formDataToJSON(form))` - a File or Blob serialises to `{}`, so
 // `POST /models/{id}/icon` received the literal body `{"file":{}}` and answered
 // 422. Cleared HERE rather than remembered at each call site: three uploaders
 // passed `Content-Type: multipart/form-data` themselves and the fourth
@@ -242,7 +242,7 @@ function isMutatingRequest(config) {
 // carries no boundary, and only the thing that serialises the body can know
 // one. Deleting is what hands that decision to the adapter, which then writes
 // the header with the boundary it generated. So a caller cannot set a
-// FormData's content type here — deliberately, because a caller cannot know it.
+// FormData's content type here - deliberately, because a caller cannot know it.
 function stripContentTypeForFormData(config) {
   if (typeof FormData === 'undefined' || !(config?.data instanceof FormData)) {
     return;
@@ -252,7 +252,7 @@ function stripContentTypeForFormData(config) {
   // `AxiosHeaders.delete` is the public way, and by this point in the pipeline
   // `config.headers` is one of those. Its own-property store is an
   // implementation detail, so the plain-object walk is the fallback rather than
-  // the route — it also covers a config assembled by hand, e.g. in a test.
+  // the route - it also covers a config assembled by hand, e.g. in a test.
   if (typeof headers.delete === 'function') {
     headers.delete('Content-Type');
     return;
@@ -379,7 +379,7 @@ async function checkLoginStatus() {
 apiClient.interceptors.response.use((response) => response, (error) => {
   if (error.response && error.response.status === 401) {
     const url = error?.config?.url || '';
-    // Don't log out when operating under a share token — a 401 just means
+    // Don't log out when operating under a share token - a 401 just means
     // this particular endpoint isn't accessible to the token's scope.
     if (!url.includes('/users/me/auth') && !_shareToken) {
       console.error('Unauthorised! Logging out...');

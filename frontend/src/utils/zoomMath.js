@@ -4,10 +4,10 @@
 //
 // The wheel means ZOOM for the whole gesture (owner requirement): wheel over
 // a candidate opens the zoom and continued wheeling keeps magnifying, one
-// continuous motion. These functions are pure so the invariants — the
+// continuous motion. These functions are pure so the invariants - the
 // exponential step, the fit floor and ceiling, and above all the CURSOR
 // ANCHOR (the image point under the pointer stays stationary through every
-// scale change, a binding requirement) — are pinned by unit tests instead of
+// scale change, a binding requirement) - are pinned by unit tests instead of
 // riding on jsdom's non-existent layout.
 //
 // Two anchor solvers share one equation, one per pan transport:
@@ -30,11 +30,11 @@ export const ZOOM_MAX_SCALE = 8;
  * an `exit`-policy zoom surface back to its parent (Compare's blink-zoom).
  * Accumulation is the hysteresis: reaching fit stops there (the clamp
  * swallows the remainder of that tick), and only further deliberate wheeling
- * leaves — a trackpad's momentum crumbs cannot blow through, and the boundary
+ * leaves - a trackpad's momentum crumbs cannot blow through, and the boundary
  * cannot flap because reopening takes a wheel over a thumbnail again.
  *
  * Three standard 120-delta notches (owner requirement, 2026-07-30: the old
- * single notch exited too easily — reaching fit should meet deliberate
+ * single notch exited too easily - reaching fit should meet deliberate
  * resistance before the view closes). The accumulator starts counting only
  * once the scale sits on the fit floor, and ANY zoom-in movement resets it.
  */
@@ -78,7 +78,7 @@ export function atFitFloor(scale, fitScale) {
 
 /**
  * The scroll offsets that keep the image point under the cursor stationary
- * across a scale change — the binding anchor requirement, and the standard
+ * across a scale change - the binding anchor requirement, and the standard
  * map/photo-viewer behaviour.
  *
  * The image is centred by auto margins while smaller than the container, so
@@ -137,7 +137,7 @@ export function anchorZoomScroll({
  *   visual = containerCentre + offset + p * scale
  * so the cursor pins  p = (cursor − centre − offset) / scale  and the new
  * offset re-solves that for the new scale. The offset is clamped so the image
- * edge never crosses its viewport edge — while the image is smaller than the
+ * edge never crosses its viewport edge - while the image is smaller than the
  * container on an axis the range is zero and the image re-centres, which is
  * also what re-clamping on zoom-out relies on.
  *

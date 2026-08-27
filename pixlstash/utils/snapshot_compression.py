@@ -6,8 +6,8 @@ features) inside the snapshot *without* the on-disk cost, the ``.sqlite``
 file is compressed with zstd at rest and decompressed to a temp file only
 when it is actually read (restore / preview).
 
-SQLite cannot query a compressed file in place — its pager needs random,
-seekable page access — so a snapshot is treated as an archive: compress on
+SQLite cannot query a compressed file in place - its pager needs random,
+seekable page access - so a snapshot is treated as an archive: compress on
 creation, decompress to a scratch ``.sqlite`` before any DB work. This module
 is the single place that knows the on-disk format.
 
@@ -33,7 +33,7 @@ LEGACY_SUFFIX = ".sqlite"
 # Compression level. Level 3 is zstd's default: it gave a ~3x ratio on real
 # embedding-heavy snapshots at ~0.03s for a 14 MB file (≈8x faster than gzip
 # for an essentially identical ratio). Higher levels buy little here because
-# float32 embeddings are close to incompressible — the win is structural.
+# float32 embeddings are close to incompressible - the win is structural.
 _COMPRESSION_LEVEL = 3
 
 # Chunk size for streaming copy_stream (1 MiB).
@@ -49,7 +49,7 @@ _SCRATCH_DIRNAME = ".tmp"
 def snapshot_scratch_dir(vault_root: str) -> str:
     """Return (creating if needed) the on-vault scratch dir for snapshot work.
 
-    The scratch ``.sqlite`` is the **full** vault DB — now that embeddings are
+    The scratch ``.sqlite`` is the **full** vault DB - now that embeddings are
     retained it can be hundreds of MB to several GB. Keeping it on the vault
     filesystem rather than the system ``/tmp`` avoids ENOSPC / RAM blow-ups when
     ``/tmp`` is a small tmpfs or root partition, which is exactly the failure

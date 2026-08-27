@@ -219,7 +219,7 @@ describe("api/pictures", () => {
   });
 
   // The server refuses the purge without the preview's single-use
-  // confirm_token, so the field must always be on the wire — never silently
+  // confirm_token, so the field must always be on the wire - never silently
   // dropped when a caller forgets it.
   it("purgeScrapheap always sends confirm_token", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });

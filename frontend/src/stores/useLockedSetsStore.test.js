@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 // A locked set 12 ("Eval slice") locks pictures 1 and 2; set 13 ("Frozen v2")
-// also locks picture 2 — so picture 2 is locked by two sets.
+// also locks picture 2 - so picture 2 is locked by two sets.
 function seed(store) {
   store.sets = [
     { id: 12, name: "Eval slice", picture_ids: [1, 2] },
@@ -31,7 +31,7 @@ describe("buildLockReason", () => {
   it("names a single locking set", () => {
     const reason = buildLockReason(["Eval slice"]);
     expect(reason).toContain("the locked set 'Eval slice'");
-    expect(reason).toMatch(/^Locked —/);
+    expect(reason).toMatch(/^Locked - /);
     expect(reason).toContain("untick Locked in Edit set");
   });
 

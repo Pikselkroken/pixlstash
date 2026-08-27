@@ -58,7 +58,7 @@ const candidate = (over = {}) => ({
   ...over,
 });
 
-describe("utils/dedup — megapixels", () => {
+describe("utils/dedup - megapixels", () => {
   it("derives megapixels from the dimensions", () => {
     expect(candidateMegapixels(candidate({ width: 6000, height: 4000 }))).toBe(
       24,
@@ -75,7 +75,7 @@ describe("utils/dedup — megapixels", () => {
   });
 });
 
-describe("utils/dedup — the cover formula", () => {
+describe("utils/dedup - the cover formula", () => {
   it("scores pixels x4 + tags x3 + score x2", () => {
     const c = candidate({ width: 1000, height: 1000, tag_count: 2, score: 3 });
     // 1 MP -> 4, 2 tags -> 6, score 3 -> 6
@@ -145,7 +145,7 @@ describe("utils/dedup — the cover formula", () => {
   });
 });
 
-describe("utils/dedup — compare highlighting", () => {
+describe("utils/dedup - compare highlighting", () => {
   it("bestOf returns the maximum of a read field", () => {
     const list = [{ size: 8.4 }, { size: 1.1 }, { size: 12.6 }];
     expect(bestOf(list, (c) => c.size)).toBe(12.6);
@@ -158,7 +158,7 @@ describe("utils/dedup — compare highlighting", () => {
   });
 });
 
-describe("utils/dedup — evidence and paths", () => {
+describe("utils/dedup - evidence and paths", () => {
   // Counter-evidence first, because a collapsed row only has room for two pills
   // and the warning is the half that matters.
   it("orderEvidence puts counter-evidence first", () => {
@@ -218,7 +218,7 @@ describe("utils/dedup — evidence and paths", () => {
   });
 });
 
-describe("utils/dedup — confidence", () => {
+describe("utils/dedup - confidence", () => {
   // "Exact" is a different claim from "100% similar"; blurring them makes a
   // near-duplicate suggestion look more certain than it is.
   it("labels the exact tier distinctly", () => {

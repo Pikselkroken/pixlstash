@@ -1,4 +1,4 @@
-"""Tests for SnapshotService — creation, listing, deletion, and GFS retention."""
+"""Tests for SnapshotService - creation, listing, deletion, and GFS retention."""
 
 import json
 import os
@@ -264,7 +264,7 @@ def test_snapshot_if_due_skips_when_recent(server):
 
     result = server.vault.snapshot_service.snapshot_if_due("test")
 
-    assert result is None, "Should skip — a snapshot was just taken"
+    assert result is None, "Should skip - a snapshot was just taken"
     assert _count_db_snapshots(server) == 1
 
 

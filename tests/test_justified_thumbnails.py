@@ -66,7 +66,7 @@ def test_bitmap_size_long_edge_cap_shrinks_short_edge():
 
 
 def test_bitmap_size_extreme_panorama():
-    # 12:1 — long edge hits the cap, short edge is a thin strip; square side then
+    # 12:1 - long edge hits the cap, short edge is a thin strip; square side then
     # equals that short edge (the accepted extreme-panorama edge case).
     w, h = ImageUtils.thumbnail_bitmap_size(6000, 500)
     assert w == THUMBNAIL_LONG_EDGE_CAP
@@ -278,7 +278,7 @@ def test_no_thumbnail_mode_regen_machinery():
 
 def test_mode_patch_only_touches_the_user_preference():
     # Switching mode mutates the user's preference and nothing thumbnail-related
-    # on any picture — generation never reads it.
+    # on any picture - generation never reads it.
     user = SimpleNamespace(thumbnail_mode="square", thumbnail_width=999)
     apply_user_config_patch(user, {"thumbnail_mode": "justified"})
     assert user.thumbnail_mode == "justified"
@@ -304,7 +304,7 @@ def test_regeneration_announces_the_pictures_it_repaired(tmp_path):
 
     While a picture sits at ``thumbnail_width IS NULL`` it has no stored aspect
     ratio, so its card lays out with the wrong shape, and its cache token is
-    ``"0"``. This task fixes both — and used to tell nobody, so an open grid kept
+    ``"0"``. This task fixes both - and used to tell nobody, so an open grid kept
     painting the pre-rotate tile until the whole view was reloaded by hand.
     """
     _write_source(tmp_path, "announced.png", 800, 400)

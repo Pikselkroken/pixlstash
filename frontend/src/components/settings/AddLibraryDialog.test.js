@@ -60,7 +60,7 @@ vi.mock("../../api/folders", () => ({
 // exercise.
 vi.mock("../../utils/reloadPage", () => ({ reloadPage: vi.fn() }));
 
-// Addable, but NOT the "pictures" verdict — the default for every test that
+// Addable, but NOT the "pictures" verdict - the default for every test that
 // is about the ask/inspect/add mechanics rather than about what "pictures"
 // specifically does once added.
 const VAULT = {
@@ -254,7 +254,7 @@ describe("adding it", () => {
   it("does not silently fail on the first press when blur lands before the click", async () => {
     // A browser orders mousedown -> blur -> click. `@blur` re-inspects, and
     // before the no-op guard that cleared the verdict synchronously, so the
-    // click that followed found nothing to add and did nothing — every time,
+    // click that followed found nothing to add and did nothing - every time,
     // on the first press, with no message.
     //
     // The slow answer is load-bearing. With a mock that settles inside the
@@ -352,7 +352,7 @@ describe("adding it", () => {
 
   it("does not come back still reading a folder it was closed on", async () => {
     // Reopening bumps the epoch, which orphans the in-flight request AND its
-    // epoch-guarded `finally` — so the flag has to be cleared by the reset.
+    // epoch-guarded `finally` - so the flag has to be cleared by the reset.
     inspectLibraryPath.mockImplementationOnce(() => new Promise(() => {}));
     const wrapper = mountDialog();
     await settle(wrapper);
@@ -412,7 +412,7 @@ describe("a 'pictures' verdict", () => {
     });
     expect(switchStore.currentLibrary?.name).toBe("Family Photos");
 
-    // Unlike the other verdicts, this dialog does not announce "Added" —
+    // Unlike the other verdicts, this dialog does not announce "Added" -
     // the page is about to reload into the new library entirely.
     expect(wrapper.emitted("added")).toBeFalsy();
     expect(wrapper.emitted("close")).toBeTruthy();

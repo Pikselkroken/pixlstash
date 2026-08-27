@@ -2,15 +2,15 @@
 //
 // Reported bug: "Keep cover only" collapsed a stack of five to its cover and the
 // surviving cover went on rendering a stack badge of five, forever. `stack_count`
-// is DERIVED — the server computes it per stack over LIVE members in the listing
-// projection, and `GET /pictures/{id}/metadata` does not carry it at all — so the
+// is DERIVED - the server computes it per stack over LIVE members in the listing
+// projection, and `GET /pictures/{id}/metadata` does not carry it at all - so the
 // per-card `refreshGridImage` every other realtime branch uses cannot repair a
 // badge. `refreshStackFacets` is the read that can.
 //
 // The constraint that shapes it: `debouncedFetchAllGridImages()` would fix the
 // badge and destroy the feature, because a refetch rebuilds the grid without the
-// scrapheaped copies and takes the ghosted tiles — and with them the one-click
-// undo they advertise — off the screen. So this asserts the badge in both
+// scrapheaped copies and takes the ghosted tiles - and with them the one-click
+// undo they advertise - off the screen. So this asserts the badge in both
 // directions AND that no grid refetch is issued and no ghost window is closed.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -105,7 +105,7 @@ function stackRow(count) {
   ];
 }
 
-/** The grid's own list queries — the signature of a full reload. */
+/** The grid's own list queries - the signature of a full reload. */
 function gridQueryCount() {
   return apiGet.mock.calls.filter(([url]) => {
     const u = String(url ?? "");
@@ -119,7 +119,7 @@ function cardFor(vm, id) {
 
 /**
  * Mount the REAL ImageGrid and seed it through its own imperative insert path,
- * which is the same `fields=grid` listing the streaming fetch uses — so the
+ * which is the same `fields=grid` listing the streaming fetch uses - so the
  * mounted cards carry exactly the shape the server sends, `stack_count`
  * included.
  */

@@ -3,7 +3,7 @@
 Two additive, independent snapshots that make review sessions durable across a
 later re-scan re-parenting their rows (see the tag-review-rewrite branch):
 
-* ``review.receipt_snapshot`` (TEXT/JSON) — frozen ``{"receipt", "progress"}``
+* ``review.receipt_snapshot`` (TEXT/JSON) - frozen ``{"receipt", "progress"}``
   written when a review is ARCHIVED/ABORTED. A closed review's receipt/progress
   otherwise aggregate LIVE over its suggestion rows, so a later scan that
   re-parents those rows into a new review would silently shrink the closed
@@ -11,7 +11,7 @@ later re-scan re-parenting their rows (see the tag-review-rewrite branch):
   closed before this column existed (fall back to live aggregation).
 
 * ``tag_suggestion.prior_review_id`` / ``prior_status`` / ``prior_reviewed_at``
-  — the decision an ``include_reviewed`` re-parent overwrites is captured here
+  - the decision an ``include_reviewed`` re-parent overwrites is captured here
   first, so undo can restore it (re-exposing the original decision for normal
   reversal) instead of silently erasing it. NULL for rows never re-parented
   over a decision.

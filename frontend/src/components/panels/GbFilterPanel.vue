@@ -615,7 +615,7 @@ const props = defineProps({
 const filterStore = useFilterStore();
 const gridStore = useGridStore();
 
-// Live "N matches" count for the header — published by ImageGrid into the grid
+// Live "N matches" count for the header - published by ImageGrid into the grid
 // store (the full fetched set length, not the virtualised window).
 const gbMatchCountLabel = computed(() => {
   const n = Number(gridStore.matchCount || 0);
@@ -1004,7 +1004,7 @@ watch(
   },
   // immediate: the menu mounts this panel lazily *already open*, so a plain
   // (change-only) watch would miss that first true and never load the ComfyUI
-  // model/LoRA options — which is why the models filter wasn't showing.
+  // model/LoRA options - which is why the models filter wasn't showing.
   { immediate: true },
 );
 </script>
@@ -1101,7 +1101,7 @@ watch(
   min-width: 0;
 }
 /* Unscored is the complement of a score range, not a point on it. Dimming the
-   two star rows while it is on shows they are off without disabling them —
+   two star rows while it is on shows they are off without disabling them -
    clicking a star still turns Unscored back off. */
 .gb-score-dimmed {
   opacity: 0.4;
@@ -1300,7 +1300,7 @@ watch(
 .gb-comfy-list:last-child {
   margin-bottom: 0;
 }
-/* One compact full-width row per model/LoRA — matches the menu's .tbm-check
+/* One compact full-width row per model/LoRA - matches the menu's .tbm-check
    density instead of Vuetify's chunky checkbox rows. */
 .gb-comfy-check {
   display: flex;

@@ -115,7 +115,7 @@ watch(
   <v-dialog v-model="open" max-width="460" @click:outside="open = false">
     <v-card v-if="plugin" class="tagger-settings-dialog">
       <v-card-title class="tagger-settings-title">
-        {{ plugin.display_name }} — Settings
+        {{ plugin.display_name }} - Settings
       </v-card-title>
 
       <v-card-text class="tagger-settings-body">
@@ -205,7 +205,7 @@ watch(
   >
     <v-card class="label-thresholds-dialog">
       <v-card-title class="label-thresholds-dialog-title">
-        PixlStash Tagger — Label Thresholds
+        PixlStash Tagger - Label Thresholds
       </v-card-title>
       <v-card-text class="label-thresholds-dialog-body">
         <div v-if="labelThresholdsLoading" class="label-thresholds-loading">

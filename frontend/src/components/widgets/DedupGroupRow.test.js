@@ -41,7 +41,7 @@ function mountRow(props = {}) {
   });
 }
 
-describe("DedupGroupRow — the tab order", () => {
+describe("DedupGroupRow - the tab order", () => {
   // Twenty groups on screen is well over a hundred buttons. A Tab key that
   // walks all of them is a Tab key nobody presses twice.
   it("keeps every control out of the tab order on an unfocused row", () => {
@@ -64,10 +64,10 @@ describe("DedupGroupRow — the tab order", () => {
   });
 });
 
-describe("DedupGroupRow — modified clicks select rows, not text", () => {
+describe("DedupGroupRow - modified clicks select rows, not text", () => {
   // Shift-click means "extend the row selection". The browser reads the same
   // gesture as "extend the text selection", and it acts on mousedown, before
-  // the click handler runs — so the row must refuse the default there.
+  // the click handler runs - so the row must refuse the default there.
   it("prevents the browser default on a shift or ctrl/cmd press", () => {
     const wrapper = mountRow();
     for (const modifier of ["shiftKey", "ctrlKey", "metaKey"]) {
@@ -90,7 +90,7 @@ describe("DedupGroupRow — modified clicks select rows, not text", () => {
   });
 });
 
-describe("DedupGroupRow — what assistive tech is told", () => {
+describe("DedupGroupRow - what assistive tech is told", () => {
   // The focused-row treatment is five CSS signals and nothing else, which says
   // nothing at all to a screen reader.
   it("marks the focused row as current", () => {
@@ -131,9 +131,9 @@ describe("DedupGroupRow — what assistive tech is told", () => {
   });
 });
 
-describe("DedupGroupRow — the verdict key scheme (amendment #3)", () => {
-  // One chip per button — the PRIMARY key shown (S, Stack's synonym, is
-  // taught in copy, never as a second chip) — while aria-keyshortcuts
+describe("DedupGroupRow - the verdict key scheme (amendment #3)", () => {
+  // One chip per button - the PRIMARY key shown (S, Stack's synonym, is
+  // taught in copy, never as a second chip) - while aria-keyshortcuts
   // carries the full machine-readable set: the chips are aria-hidden, and
   // before this nothing announced the keys at all.
   it("chips show Enter and K; aria-keyshortcuts carries the full set", () => {
@@ -148,7 +148,7 @@ describe("DedupGroupRow — the verdict key scheme (amendment #3)", () => {
   });
 });
 
-describe("DedupGroupRow — what the verdicts cost", () => {
+describe("DedupGroupRow - what the verdicts cost", () => {
   // Neither verdict asks for a confirmation, so each has to say what it does
   // before it is pressed rather than after.
   it("says that stacking deletes nothing and can be undone", () => {
@@ -176,11 +176,11 @@ describe("DedupGroupRow — what the verdicts cost", () => {
   });
 });
 
-describe("DedupGroupRow — the decided row's timestamp and alignment", () => {
+describe("DedupGroupRow - the decided row's timestamp and alignment", () => {
   const ISO = "2026-07-30T14:05:00"; // naive UTC, the house convention
 
   // The stamp follows the USER'S date-format setting, through the same
-  // formatUserDate(iso, dateFormat) pattern every other timestamp uses —
+  // formatUserDate(iso, dateFormat) pattern every other timestamp uses -
   // proven by rendering differently under two settings, each matching the
   // shared util's output for that setting.
   it("stamps the decision time in the user's own date format", () => {
@@ -251,7 +251,7 @@ describe("DedupGroupRow — the decided row's timestamp and alignment", () => {
   });
 });
 
-describe("DedupGroupRow — double-click opens Compare", () => {
+describe("DedupGroupRow - double-click opens Compare", () => {
   // Double-click means "open this" everywhere files are listed, so the row
   // answers it with the same Compare the C key and the button reach.
   it("emits compare on a double-click on the row surface", async () => {
@@ -291,7 +291,7 @@ describe("DedupGroupRow — double-click opens Compare", () => {
   });
 });
 
-describe("DedupGroupRow — hover score overlays", () => {
+describe("DedupGroupRow - hover score overlays", () => {
   /** A two-copy group carrying stars and smart scores. */
   const scored = {
     ...group(2),
@@ -302,7 +302,7 @@ describe("DedupGroupRow — hover score overlays", () => {
   };
 
   // Both overlays render inside the unit's box (hover reveal is the grid's CSS
-  // recipe, which jsdom does not compute — the structure and null handling
+  // recipe, which jsdom does not compute - the structure and null handling
   // are the testable surface). The stars sit in the top-right column, which is
   // a SIBLING of the tile button so it can also host the deck badge.
   it("renders the grid's star overlay and a smart score chip per thumbnail", () => {
@@ -507,7 +507,7 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
   });
 });
 
-describe("DedupGroupRow — the size control", () => {
+describe("DedupGroupRow - the size control", () => {
   // One number drives the row. Sizing the box in CSS and the placeholder in JS
   // from two copies of the height is how a row starts jumping as it decodes.
   it("lays the strip out from the height it is given", () => {

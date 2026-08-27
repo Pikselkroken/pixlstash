@@ -3,7 +3,7 @@
 // GPU overlay) via the Electron preload bridge (window.pixlstashDesktop). The
 // same choice is offered on the first-run welcome screen; this is where it can
 // be changed afterwards. Switching the runtime restarts the local server, which
-// reloads this page — so a successful action ends with the app reloading.
+// reloads this page - so a successful action ends with the app reloading.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { login } from "../../utils/apiClient";
 import { getAuthState } from "../../api/users";
@@ -28,7 +28,7 @@ const emit = defineEmits(["update:check-for-updates"]);
 
 const isBackend = computed(() => props.view === "backend");
 
-// "Check for updates automatically" — lives on the Backend tab's Desktop block.
+// "Check for updates automatically" - lives on the Backend tab's Desktop block.
 const checkForUpdatesModel = computed({
   get: () => props.checkForUpdates ?? false,
   set: (value) => emit("update:check-for-updates", value),
@@ -52,7 +52,7 @@ const server = ref(null); // { enabled, port, ssl, urls }
 const serverDraft = ref({ enabled: false, port: 9537, ssl: false });
 
 // Owner-account state. A fresh desktop owner is auto-logged-in over loopback
-// with NO username/password, but remote devices must sign in — so the backend
+// with NO username/password, but remote devices must sign in - so the backend
 // refuses to bind the network listener until the owner is claimed. We collect a
 // username + password here and claim the account (POST /login, loopback-only)
 // before enabling remote access, so the server actually comes up reachable.
@@ -99,7 +99,7 @@ let portCheckTimer = null;
 let portCheckSeq = 0;
 
 // The running external listener owns its own port, so probing that exact port
-// reports it "in use" by us — not a real conflict. Ignore that self-case.
+// reports it "in use" by us - not a real conflict. Ignore that self-case.
 const portIsOwnRunning = computed(
   () =>
     !!server.value?.enabled &&
@@ -292,7 +292,7 @@ async function guarded(fn) {
   }
 }
 
-// Persisting the settings restarts the backend, which reloads this page — so a
+// Persisting the settings restarts the backend, which reloads this page - so a
 // successful Apply ends with the app reloading onto the new loopback URL. When
 // turning remote access ON for an unclaimed account, we first claim the owner
 // (set username + password via POST /login) so the network listener can bind;
@@ -300,7 +300,7 @@ async function guarded(fn) {
 // be silently unreachable.
 async function applyServer() {
   if (busy.value || !desktop) return;
-  // Capture before any mutation — accountClaimed flips once the claim lands.
+  // Capture before any mutation - accountClaimed flips once the claim lands.
   const claiming = serverDraft.value.enabled && !accountClaimed.value;
   ownerError.value = "";
   if (claiming && !ownerFormValid.value) {
@@ -453,7 +453,7 @@ watch(
 
         <!-- Saved-on but the listener can't bind without an owner login. -->
         <div v-if="server.enabled && !accountClaimed" class="settings-error">
-          Remote access is enabled but not active yet — set an owner login below
+          Remote access is enabled but not active yet - set an owner login below
           to start it.
         </div>
 
@@ -461,7 +461,7 @@ watch(
         <div v-if="needsOwnerSetup" class="owner-setup">
           <div class="owner-setup-desc">
             Remote devices sign in with an owner username and password. Set one
-            now — until you do, PixlStash keeps the network listener off so
+            now - until you do, PixlStash keeps the network listener off so
             another device on your network can't claim your library.
           </div>
           <input
@@ -558,7 +558,7 @@ watch(
         </SettingsRow>
       </SettingsTwoCol>
       <!-- Full width, not a half of the pair above: its sub names a path, and
-           the Windows one wraps to four lines in a half-width row — most of what
+           the Windows one wraps to four lines in a half-width row - most of what
            pushed this pane past its fixed height. -->
       <SettingsRow
         v-if="shellCommand !== null"
@@ -610,7 +610,7 @@ watch(
         <!-- One unified runtime list: the built-in runtime first, then every
              GPU overlay. Exactly one row reads "· active" (each row derives it
              from its own `active` flag), and rows never appear, disappear, or
-             move as the active runtime changes — only status text and actions
+             move as the active runtime changes - only status text and actions
              swap. That keeps the section legible right after a failed GPU
              activation reverts to the built-in runtime. -->
         <SettingsRow
@@ -673,7 +673,7 @@ watch(
         </SettingsRow>
 
         <div v-if="!state.items.length" class="compute-note">
-          No discrete GPU detected — the built-in runtime is the best fit for
+          No discrete GPU detected - the built-in runtime is the best fit for
           this machine.
         </div>
 

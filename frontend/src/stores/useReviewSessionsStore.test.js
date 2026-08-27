@@ -174,7 +174,7 @@ describe("resolveCurrent (via answerBinary)", () => {
 // {done, pending} object, dropping `locked` and `skipped`. ReviewSessionView
 // renders its "N suspects frozen by a locked set" badge from
 // `session.progress.locked`, so the badge silently vanished on the reviewer's
-// first decision — the count dropped with no explanation, which is precisely
+// first decision - the count dropped with no explanation, which is precisely
 // what the locked bucket was added to explain.
 
 describe("bumpProgress bucket preservation", () => {
@@ -536,7 +536,7 @@ describe("skip", () => {
     await store.skip();
 
     // The card stays out of the queue and counts as skipped, but a 404 means the
-    // suggestion is already gone — so NO undo entry is recorded (a bogus entry
+    // suggestion is already gone - so NO undo entry is recorded (a bogus entry
     // would later POST /reopen on a dead id and 404 again).
     expect(store.queues[1].items).toHaveLength(0);
     expect(store.tallies[1].skipped).toBe(1);
@@ -666,7 +666,7 @@ describe("undoChangesAndAbort", () => {
     expect(store.sessions).toHaveLength(0);
   });
 
-  it("counts only decisions as changes — skips are not changes", async () => {
+  it("counts only decisions as changes - skips are not changes", async () => {
     const store = useReviewSessionsStore();
     seedSession(store, {
       id: 8,
@@ -809,7 +809,7 @@ describe("receiptFor / decidedCountFor stay live after decisions", () => {
   it("does NOT double-count after a mid-session refresh (QA regression)", async () => {
     const store = useReviewSessionsStore();
     seedSession(store, item);
-    // Open: seed from the pre-decision receipt (zeros) — this also marks the id
+    // Open: seed from the pre-decision receipt (zeros) - this also marks the id
     // as seeded so a later refetch can't fold decisions in again.
     apiClient.get.mockResolvedValueOnce({
       data: { receipt: { removed: 0, added: 0, kept: 0 } },
@@ -833,7 +833,7 @@ describe("receiptFor / decidedCountFor stay live after decisions", () => {
     });
     await store.refreshSession(1);
 
-    // Still 1 — the live receipt was not folded into the already-counted tally.
+    // Still 1 - the live receipt was not folded into the already-counted tally.
     expect(store.receiptFor(1).removed).toBe(1);
     expect(store.decidedCountFor(1)).toBe(1);
   });
@@ -864,7 +864,7 @@ describe("receiptFor / decidedCountFor stay live after decisions", () => {
 
   it("archived reviews read the frozen server snapshot (no local tally)", () => {
     const store = useReviewSessionsStore();
-    // Not an open session — an archived review's frozen receipt is authoritative.
+    // Not an open session - an archived review's frozen receipt is authoritative.
     store.archived = [{ id: 3 }];
     store.details = { 3: { receipt: { removed: 4, added: 1, kept: 2 } } };
     expect(store.receiptFor(3)).toMatchObject({ removed: 4, added: 1, kept: 2 });

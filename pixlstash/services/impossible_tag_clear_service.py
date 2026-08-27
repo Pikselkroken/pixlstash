@@ -3,7 +3,7 @@
 The human reviews the filtered grid, multi-selects the genuinely-wrong pictures, and
 clears. For each selected picture this removes exactly the tags the active filters imply
 (see :func:`pixlstash.utils.service.person_tags.tags_to_clear`) and records a human
-**NEG** per ``(picture, tag)`` — like the suggestion-accept path, so a deliberate cleanup
+**NEG** per ``(picture, tag)`` - like the suggestion-accept path, so a deliberate cleanup
 is durable training signal, not a silent delete. The NEG is recorded *unconditionally*
 (not gated to the anomaly vocabulary, unlike the manual tag-panel remove): the whole point
 here is to capture reviewed person-tag negatives for a future person-tagger.
@@ -124,7 +124,7 @@ def _clear_tags_in_session(
 
 def restore_in_session(session: Session, pairs: list[tuple[int, str]]) -> list[int]:
     """Re-add removed tags and clear their ledger entries (undo). Returns touched pids."""
-    # Skip any picture that has since become frozen by a locked set — restoring a
+    # Skip any picture that has since become frozen by a locked set - restoring a
     # tag onto it would mutate the frozen set's labels.
     locked = locked_picture_ids(session, [pid for pid, _tag in pairs])
     if locked:
@@ -136,7 +136,7 @@ def restore_in_session(session: Session, pairs: list[tuple[int, str]]) -> list[i
         pairs = [(pid, tag) for pid, tag in pairs if pid not in locked]
     touched: set[int] = set()
     # Clearing the ledger entries reverses the human NEGs the clear recorded, which
-    # moves the scorer's anomaly inputs back — invalidate in one bulk UPDATE.
+    # moves the scorer's anomaly inputs back - invalidate in one bulk UPDATE.
     with invalidate_on_anomaly_change(
         session, [pid for pid, _tag in pairs], context="impossible-tag restore"
     ):

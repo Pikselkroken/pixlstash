@@ -2,8 +2,8 @@
 
 **This is the record that keeps the product from arguing with itself.** The
 layout engine moves a file; the reference-folder scan walks the same tree a few
-minutes later, sees the file at a new path, and — correctly, for a move the
-owner made in their file manager — reads it as intent. Without a record saying
+minutes later, sees the file at a new path, and - correctly, for a move the
+owner made in their file manager - reads it as intent. Without a record saying
 *that one was ours*, v1.11 Phase 5 reconciles our own write back into an
 assignment change, which makes the folder untrue again, which moves the file
 again. The two flip each other forever, and every flip is a real file on a real
@@ -34,8 +34,8 @@ from sqlmodel import Field, SQLModel
 #: Each change re-stamps ``Picture.layout_check_due_at``, so the clock restarts
 #: rather than accumulating.
 #:
-#: It lives here rather than beside the engine so ``database.py``'s flush hook —
-#: the thing that does the stamping — can reach it without importing the whole
+#: It lives here rather than beside the engine so ``database.py``'s flush hook -
+#: the thing that does the stamping - can reach it without importing the whole
 #: service at start-up.
 CHECK_DEBOUNCE_S: float = 5.0
 
@@ -62,7 +62,7 @@ class PictureMove(SQLModel, table=True):
             key, for the reason ``Character.thumbnail_picture_id`` is one:
             pictures are hard-deleted on scrapheap purge, and a real FK would
             abort those deletes for every picture that happens to have moved.
-            A dangling id here is harmless — the row is matched by path.
+            A dangling id here is harmless - the row is matched by path.
         old_path: Where the file was, exactly as ``Picture.file_path`` held it.
         new_path: Where the engine put it, likewise.
         moved_at: When the move was applied.

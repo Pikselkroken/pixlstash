@@ -6,7 +6,7 @@
 #
 # THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Plugin template — copy this file to your user plugin directory to get started.
+"""Plugin template - copy this file to your user plugin directory to get started.
 
 Licensing note:
 This template and the plugin API base class are MIT-licensed so external/user
@@ -19,7 +19,7 @@ Quick-start
 1. Copy this file to your user plugin directory (PixlStash logs the path on startup).
 2. Rename it (anything except ``plugin_template.py``).
 3. Fill in your plugin name, display name, parameters, and ``run()`` logic.
-4. Restart PixlStash Server — your plugin will appear in the Filters menu.
+4. Restart PixlStash Server - your plugin will appear in the Filters menu.
 
 User plugin directories
 -----------------------
@@ -40,7 +40,7 @@ from pixlstash.image_plugins.base import ImagePlugin
 class MyPlugin(ImagePlugin):
     """One-line description of what this plugin does."""
 
-    # Unique snake_case identifier — must be distinct from all other plugins.
+    # Unique snake_case identifier - must be distinct from all other plugins.
     name = "my_plugin"
 
     # Label shown in the Filters dropdown.
@@ -55,7 +55,7 @@ class MyPlugin(ImagePlugin):
     license = "MIT"  # your *code*, an SPDX identifier where there is one
 
     # One entry per model or remote service you load, empty when you load none.
-    # This is the one a user actually needs — your code's license says nothing
+    # This is the one a user actually needs - your code's license says nothing
     # about the weights you download.
     models = []
 
@@ -70,7 +70,7 @@ class MyPlugin(ImagePlugin):
 
         Supported types: "number", "integer", "boolean", "string".
 
-        A dropdown is "string" plus an "enum" list — there is no "select"
+        A dropdown is "string" plus an "enum" list - there is no "select"
         type in the image-plugin UI, and a field declared that way renders as
         a free-text input.  See docs/writing-image-filter-plugins.md §3.
         """

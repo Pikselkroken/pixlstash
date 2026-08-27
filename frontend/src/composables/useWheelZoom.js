@@ -1,7 +1,7 @@
 // The zoom family's stateful core: continuous cursor-anchored wheel zoom over
 // a fit→max continuum with fit and 100% as snap stops. The pure arithmetic
 // (exponential step, anchor equations, delta normalization, percent format)
-// lives in utils/zoomMath.js; this composable is the glue — the scale ref and
+// lives in utils/zoomMath.js; this composable is the glue - the scale ref and
 // fit measurement, the wheel handler, snap-to-stop, the floor-policy dispatch,
 // pan clamping, and the settle detection that feeds the aria announcer.
 //
@@ -10,7 +10,7 @@
 // wheel-delta normalization, the 500 ms settle window, and the percent
 // formatter are constants of the family. Per-surface parameters are the entry
 // level (always fit), the max scale, the floor behavior (`rest`: hard clamp at
-// fit, the surface is a destination — vs `exit`: three accumulated notches of
+// fit, the surface is a destination - vs `exit`: three accumulated notches of
 // deliberate resistance at the floor leave the surface, Compare's
 // hysteresis), and the pan transport
 // (this composable speaks transform offsets via anchorZoomOffset; a
@@ -229,7 +229,7 @@ export function useWheelZoom(options = {}) {
     });
     if (!deltaY) return false;
     if (deltaY > 0 && atFitFloor(scale.value, fitScale.value)) {
-      // Wheel-out at the floor: policy dispatch. `rest` is the hard clamp —
+      // Wheel-out at the floor: policy dispatch. `rest` is the hard clamp -
       // the surface is a destination, wheeling out simply rests at fit.
       if (floorPolicy === "exit") {
         // The accumulation starts only AT the floor; a pause longer than the
@@ -263,7 +263,7 @@ export function useWheelZoom(options = {}) {
   }
 
   /** Snap to a stop on the continuum. Announces immediately (a snap is a
-   * deliberate, discrete act — no settle window). */
+   * deliberate, discrete act - no settle window). */
   function snapTo(target, anchor = null) {
     if (scale.value === null) return;
     const clamped = Math.max(

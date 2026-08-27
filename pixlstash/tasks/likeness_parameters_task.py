@@ -59,7 +59,7 @@ class LikenessParametersTask(BaseTask):
             len(ids),
         )
 
-        # Fetch existing blobs in a concurrent read session — outside the
+        # Fetch existing blobs in a concurrent read session - outside the
         # serialised write queue so all worker threads can do this in parallel.
         blobs_by_id = self._db.run_immediate_read_task(
             LikenessParameterUtils.fetch_blobs_for_ids, ids

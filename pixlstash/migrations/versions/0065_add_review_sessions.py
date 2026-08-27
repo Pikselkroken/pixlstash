@@ -2,7 +2,7 @@
 
 A review is one tag + an optional frozen scope + one scan's results (see
 docs/reviews/2026-07-review-sessions-redesign-draft.md). Suggestions gain a
-nullable review_id FK (ON DELETE SET NULL — decisions outlive their session)
+nullable review_id FK (ON DELETE SET NULL - decisions outlive their session)
 and a neighbors TEXT column holding the k-nearest-neighbour evidence JSON
 captured at scan time. A partial unique index enforces one OPEN review per tag.
 
@@ -86,7 +86,7 @@ def upgrade() -> None:
     # table incl. its FKs, which breaks on partial/synthetic DBs (migration
     # tests) where the picture table is absent. SQLite supports an inline
     # REFERENCES clause on ADD COLUMN, but Alembic's add_column emits the FK
-    # as a separate (unsupported) ALTER — so use SQLite's native DDL directly
+    # as a separate (unsupported) ALTER - so use SQLite's native DDL directly
     # (the vault DB is SQLite by project invariant).
     existing_columns = {c["name"] for c in inspector.get_columns("tag_suggestion")}
     if "review_id" not in existing_columns:

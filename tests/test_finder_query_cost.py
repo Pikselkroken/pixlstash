@@ -5,8 +5,8 @@ candidate query runs continuously even on a fully-processed library where it
 matches nothing. Two of them were the dominant background read:
 
 * ``MissingThumbnailFinder._fetch_missing`` selected the FULL ``Picture`` ORM
-  entity — including ``image_embedding``, ``text_embedding`` and
-  ``likeness_parameters``, three LargeBinary columns — plus every ``Face`` column
+  entity - including ``image_embedding``, ``text_embedding`` and
+  ``likeness_parameters``, three LargeBinary columns - plus every ``Face`` column
   including ``features``, for every candidate row.
 * ``SmartScoreTask.find_pictures_missing_smart_score`` did the same, and nothing
   downstream reads anything but ``pic.id``.
@@ -16,18 +16,18 @@ non-deleted row to prove there was no work.
 
 Three properties are asserted here, one per failure mode:
 
-1. **Plan** — each probe is served by its partial index, so it touches only rows
+1. **Plan** - each probe is served by its partial index, so it touches only rows
    that actually need work. This database never runs ``ANALYZE``: there is no
    ``sqlite_stat1``, so the planner scores a partial index by the table's default
    row estimate and only prefers it when it claims MORE equality terms than the
    index it competes with. That is why both indexes lead with the nullable column
    (``IS NULL`` is an equality term for SQLite) followed by ``deleted``, and why
    an ``(id)``-only partial index would be built, maintained, and never used.
-2. **Columns** — the thumbnail probe's emitted SQL names no BLOB column.
-3. **Round trip** — the narrowed load still carries everything
+2. **Columns** - the thumbnail probe's emitted SQL names no BLOB column.
+3. **Round trip** - the narrowed load still carries everything
    ``ThumbnailGenerationTask`` reads. ``run_immediate_read_task`` closes the
    session, so the task runs against DETACHED pictures and any attribute the
-   ``load_only`` forgot raises ``DetachedInstanceError`` at runtime — which
+   ``load_only`` forgot raises ``DetachedInstanceError`` at runtime - which
    ``_run_task`` catches per picture and logs, so the only visible symptom would
    be thumbnails silently never being generated. That is the canary below.
 
@@ -202,7 +202,7 @@ def test_smart_score_probe_is_served_by_its_partial_index(tmp_path):
     NOT through the plain ``ix_picture_smart_score`` that the column's
     ``index=True`` creates. That index can serve ``smart_score IS NULL``, but the
     planner only picks it once ``sqlite_stat1`` exists, and nothing in PixlStash
-    runs ``ANALYZE`` — so on a real vault the probe fell back to
+    runs ``ANALYZE`` - so on a real vault the probe fell back to
     ``ix_picture_deleted`` and walked the whole library.
     """
     with Vault(image_root=str(tmp_path)) as vault:
@@ -229,7 +229,7 @@ def test_character_features_rollup_is_served_by_its_partial_index(tmp_path):
     ``character_id = ?`` probe. ``ix_face_character_features`` and
     ``ix_face_character_id`` cost the same for an equality lookup when there is no
     ``sqlite_stat1`` (nothing here runs ``ANALYZE``), and SQLite breaks that tie by
-    index-creation order — which ``metadata.create_all()`` iterates from a set, so
+    index-creation order - which ``metadata.create_all()`` iterates from a set, so
     it differs between processes. An earlier revision of this test asserted the
     equality shape and failed roughly every other run for exactly that reason.
     The one-pass shape is chosen unconditionally, and is what ``GET /characters``
@@ -313,7 +313,7 @@ def test_finder_to_thumbnail_task_round_trip_on_detached_pictures(tmp_path):
 
     ``_run_task`` catches per-picture exceptions and logs them, so a
     ``DetachedInstanceError`` from a column the ``load_only`` forgot would not
-    fail loudly — it would just stop producing thumbnails forever. Hence the
+    fail loudly - it would just stop producing thumbnails forever. Hence the
     explicit attribute reads before the run, and the file-level assertions after.
     """
     with Vault(image_root=str(tmp_path)) as vault:
@@ -387,7 +387,7 @@ def test_the_face_finder_can_fill_every_slot_it_says_it_has(tmp_path):
 
     A picture keeps matching ``~faces.any()`` until its task finishes, so with a
     candidate window of exactly one batch the second sweep re-read the same
-    hundred rows, found all of them claimed, and returned None — which the
+    hundred rows, found all of them claimed, and returned None - which the
     planner answers with a backoff that grows 1.8x a time. Two idle slots and a
     lengthening sleep, on a library with thousands of pictures left to do.
     """
@@ -425,7 +425,7 @@ def test_undecodable_pictures_cannot_wedge_the_face_finder(tmp_path):
 
     They are filtered *after* the query by ``_filter_and_claim``, so a run of
     them long enough to fill the candidate window handed back a list that
-    claimed nothing — every sweep, forever, with real work sitting behind them.
+    claimed nothing - every sweep, forever, with real work sitting behind them.
     """
     from pixlstash.tasks.missing_face_extraction_finder import (
         FACE_EXTRACTION_BATCH_LIMIT,
@@ -484,7 +484,7 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
 def test_a_tag_drain_leaves_wd14_to_the_idle_sweep(tmp_path):
     """The drain used to tear the WD14 session down; with per-row dependencies
     a finder drains many times per pass, so the session now outlives the drain
-    and only the idle sweep frees it — and only when models are not kept."""
+    and only the idle sweep frees it - and only when models are not kept."""
     from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
     unloads = []
@@ -640,7 +640,7 @@ def test_tag_probe_is_served_by_the_tag_index(tmp_path):
 
 def test_tagging_starts_per_picture_as_soon_as_its_faces_are_known(tmp_path):
     """A picture whose face row exists is tagged while its neighbour, still in
-    the face stage, is not — and a no-face sentinel row counts as known.
+    the face stage, is not - and a no-face sentinel row counts as known.
     """
     from pixlstash.db_models import Tag
     from pixlstash.db_models.tag import make_tag_sentinel

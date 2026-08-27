@@ -1,6 +1,6 @@
 """Add the human-label ledger to tag_prediction.
 
-Records an explicit human POS/NEG decision per (picture, tag) — so a reviewed negative
+Records an explicit human POS/NEG decision per (picture, tag) - so a reviewed negative
 (a human removing/declining a tag) is durable supervision instead of being lost to an
 absent Tag row. ``status`` stays as review-UI state; ``label_state``/``label_source`` are
 the supervision signal training reads.
@@ -8,7 +8,7 @@ the supervision signal training reads.
 Backfill is deliberately conservative: ``status`` is auto-flipped by the background
 TagTask from the applied tags, so it is *not* a reliable record of who decided. The only
 unambiguous historical human signal in tag_prediction is the synthetic ``manual`` rows
-that ``reject_tag_prediction`` writes — those become human NEGs. Everything else stays
+that ``reject_tag_prediction`` writes - those become human NEGs. Everything else stays
 UNKNOWN and is captured going forward by record_human_label.
 
 Revision ID: 0060_tag_prediction_label_ledger

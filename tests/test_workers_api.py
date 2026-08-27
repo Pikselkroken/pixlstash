@@ -103,7 +103,7 @@ def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
         # The sentinel proves the branch ran: a picture-scoped worker shows it.
         assert workers[TaskType.QUALITY.value]["total"] == 4242
         # No hub registration in this fixture, so there is no shelf to count and
-        # the honest answer is zero — never the picture library's total.
+        # the honest answer is zero - never the picture library's total.
         assert snapshot["total"] == 0
         assert snapshot["current"] == 0
     finally:

@@ -5,7 +5,7 @@ Usage
 Regenerate in-place:
     python scripts/render_backend_architecture.py
 
-Check (CI mode — exit 1 if the file would change):
+Check (CI mode - exit 1 if the file would change):
     python scripts/render_backend_architecture.py --check
 
 The script injects content between ``<!-- AUTOGEN:start -->`` /
@@ -134,7 +134,7 @@ def _generate_route_table() -> str:
             summary = operation.get("summary", "")
             rows.append((http_method, path, tags, summary))
 
-    # WebSocket routes don't appear in OpenAPI — add manually from schema info comment.
+    # WebSocket routes don't appear in OpenAPI - add manually from schema info comment.
     rows.append(("WS", "/api/v1/ws/updates", "config", "Real-time event stream"))
     rows.append(("WS", "/api/v1/ws/comfyui", "comfyui", "ComfyUI workflow progress"))
 
@@ -189,7 +189,7 @@ def _extract_broadcast_set() -> frozenset[str]:
             if names:
                 return frozenset(names)
 
-    # Fail loud rather than silently returning an empty set — an empty set would
+    # Fail loud rather than silently returning an empty set - an empty set would
     # (wrongly) classify every event as internal and ship a false doc. If
     # _should_send_ws_update moves again or changes shape, surface it here.
     raise RuntimeError(

@@ -1,4 +1,4 @@
-// Background-worker progress resource — GET /workers/progress.
+// Background-worker progress resource - GET /workers/progress.
 //
 // This is a poll endpoint: `useTasksStore` is the app's single poller and
 // fans the result out to the Tasks tab, the activity light, and the thumbnail

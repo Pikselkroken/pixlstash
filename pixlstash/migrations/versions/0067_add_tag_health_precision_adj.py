@@ -3,7 +3,7 @@
 Wave A of the tag-review-takeover design (docs/reviews/tag-review-tagger-takeover-design.md
 §3): est_wrong_adj / est_missing_adj discount est_wrong/est_missing by the tag's
 measured precision from the latest TaggerRun report, so an unreliable tag doesn't
-dominate the board's "estimated fixes" ranking. Additive, nullable columns — the cache
+dominate the board's "estimated fixes" ranking. Additive, nullable columns - the cache
 is wholesale-replaced on the next rebuild, so no NULL-reset/backfill is needed here;
 existing rows simply carry NULL for the new columns until the next
 ``POST /tag_health/rebuild``.

@@ -30,7 +30,7 @@ export function useSidebarRefresh({ sidebarRef }) {
   function refreshSidebar(options = {}) {
     sidebarRef.value?.refreshSidebar(options);
     // The shared character/set/project lists ride the same triggers (this is what
-    // `characters_changed` lands on). Refetch ONLY — a ws payload never writes
+    // `characters_changed` lands on). Refetch ONLY - a ws payload never writes
     // into the cache, since `origin_client_id` is echo-matching, not authority
     // (integration_architecture.md §8.1). The call is de-duplicated against the
     // sidebar's own refresh above, and it also covers the case where the sidebar

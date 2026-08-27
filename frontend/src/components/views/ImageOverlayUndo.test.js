@@ -124,7 +124,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("ImageOverlay — the undo binding", () => {
+describe("ImageOverlay - the undo binding", () => {
   it("undoes on Ctrl+Z while the lightbox is open", async () => {
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
@@ -224,7 +224,7 @@ describe("ImageOverlay — the undo binding", () => {
   });
 });
 
-describe("ImageOverlay — the narration on this surface", () => {
+describe("ImageOverlay - the narration on this surface", () => {
   it("renders the receipt in the lightbox's own chrome", async () => {
     const store = useOperationStore();
     const wrapper = await openOverlay();

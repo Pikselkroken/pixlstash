@@ -1,8 +1,8 @@
 """Start a new plugin as a pull request against the plugins repository.
 
 Backs ``pixlstash-cli plugins create``.  The repository README already
-documents the manual procedure — clone, ``cp -r`` an example, rename the
-folder, rename the module, rewrite the header and the README — and every step
+documents the manual procedure - clone, ``cp -r`` an example, rename the
+folder, rename the module, rewrite the header and the README - and every step
 of it is a place to get it wrong quietly: a folder under the wrong kind, an
 image plugin whose ``.py`` no longer matches its folder, a header still
 crediting the example's author.  This module performs that procedure.
@@ -271,7 +271,7 @@ def _has_fork_remote(directory: Path) -> bool:
     contributor can push.
 
     A probe, not a command: a checkout git will not answer for is one we cannot
-    say is a fork, and "no" is the safe answer — it costs a warning telling the
+    say is a fork, and "no" is the safe answer - it costs a warning telling the
     contributor to check their remotes, where raising would stop the scaffold.
     """
     listed = subprocess.run(
@@ -475,7 +475,7 @@ _LINE_LENGTH = 88
 def _header_literal(field_name: str, value: str, width: int = _LINE_LENGTH) -> str:
     """Return ``    field = "value"``, wrapped across lines if it will not fit.
 
-    A description written as a sentence — which is what the wizard asks for —
+    A description written as a sentence - which is what the wizard asks for -
     routinely overruns the line length, and ``ruff format`` would then want to
     reformat a file nobody has touched yet.  Adjacent string literals are one
     constant to :mod:`ast`, so the header readers see no difference.
@@ -680,8 +680,8 @@ def scaffold(
         source_folder, folder, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
     )
 
-    # An image plugin's folder holds one `.py` named after it — the loader
-    # scans for files and never sees the folder — so the rename is part of the
+    # An image plugin's folder holds one `.py` named after it - the loader
+    # scans for files and never sees the folder - so the rename is part of the
     # contract rather than tidiness.
     module = folder / primary.file.name
     if module.name != "__init__.py":
@@ -694,7 +694,7 @@ def scaffold(
     source = source.replace(primary.name, name)
     source = source.replace(primary.class_name, class_name_for(name))
     # What the contributor said the plugin is for goes here as well as in the
-    # README: this is the file they — or the coding agent they hand it to —
+    # README: this is the file they - or the coding agent they hand it to -
     # will have open, and a docstring still saying TODO next to a README that
     # does not is the pair that gets left inconsistent.
     said = " ".join((purpose or "").split())
@@ -1082,7 +1082,7 @@ def compare_url(submission: Submission) -> str:
     """Return the web URL that opens *submission*'s pull request by hand.
 
     The branch is on whatever ``origin`` is, and for everyone but a maintainer
-    that is a fork — where ``compare/<branch>`` names a branch the upstream
+    that is a fork - where ``compare/<branch>`` names a branch the upstream
     repository does not have.  GitHub spells a cross-repository comparison
     ``main...<owner>:<branch>``, so the owner has to be read off the remote.
     An unreadable remote falls back to the same-repository form: a URL that

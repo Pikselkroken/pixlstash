@@ -17,7 +17,7 @@ class Review(SQLModel, table=True):
     never destroys rows.
 
     Scope (``project_id`` / ``set_id`` / ``character_id``) is frozen at
-    creation — a different scope is a different review. ``character_id`` is a
+    creation - a different scope is a different review. ``character_id`` is a
     string because it may hold the literal ``"UNASSIGNED"`` besides numeric ids.
 
     Status lifecycle: ``OPEN`` → ``ARCHIVED`` (completed) or ``ABORTED``
@@ -31,7 +31,7 @@ class Review(SQLModel, table=True):
 
     tag: str = Field(index=True)
 
-    # Frozen scope, nullable — all None means "whole vault".
+    # Frozen scope, nullable - all None means "whole vault".
     project_id: Optional[int] = Field(default=None)
     set_id: Optional[int] = Field(default=None)
     character_id: Optional[str] = Field(default=None)  # numeric str or "UNASSIGNED"

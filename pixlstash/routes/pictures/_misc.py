@@ -176,7 +176,7 @@ def register_routes(router, server):
         # unscoped == no filter. This is all-or-nothing (403 if *any* requested
         # id is out of scope) rather than a silent partial drop, because the
         # optional positional `captions` array below is aligned 1:1 to
-        # picture_ids — dropping ids here would misalign captions to the wrong
+        # picture_ids - dropping ids here would misalign captions to the wrong
         # pictures.
         scope_allowed = fetch_scope_allowed_picture_ids(server, request)
         if scope_allowed is not None and any(
@@ -625,7 +625,7 @@ def register_routes(router, server):
 
         # Post-group filter: if tag/score/comfyui filters are active, keep only
         # groups where at least one member satisfies all the criteria. The full
-        # group is still returned — the filter just decides whether the group is
+        # group is still returned - the filter just decides whether the group is
         # shown at all.
         has_extra_filters = any(
             [
@@ -659,7 +659,7 @@ def register_routes(router, server):
                 query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
                 # This post-filter narrows an already-id-bounded set; only the
                 # deleted lifecycle clause plus score/comfyui/tag predicates apply
-                # (no format/buckets/face — those were handled when the candidate
+                # (no format/buckets/face - those were handled when the candidate
                 # set was built).  All compiled by the shared PredicateFilter.
                 query = PredicateFilter(
                     min_score=min_score_value,

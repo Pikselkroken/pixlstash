@@ -5,12 +5,12 @@ soft-deleted pictures whose retention deadline has passed and, if there are any,
 schedules one :class:`ScrapheapRetentionPurgeTask` for that batch.
 
 Deadline = ``max(deleted_at + scrapheap_retention_days,
-scrapheap_retention_reduced_at + 1 day)`` — the second term is a FLOOR measured
+scrapheap_retention_reduced_at + 1 day)`` - the second term is a FLOOR measured
 from the last window *lowering*, so after a reduction nothing is purgeable for a
 day regardless of how long it has been in the scrapheap. The finder returns no
 work at all when:
 
-* ``scrapheap_retention_days`` is ``None`` ("Never" — auto-purge disabled), or
+* ``scrapheap_retention_days`` is ``None`` ("Never" - auto-purge disabled), or
 * nothing is past its deadline.
 
 ``None`` is the DEFAULT, so on an install where nobody has turned auto-empty on
@@ -22,8 +22,8 @@ from the candidate query itself and are exempt from any timer; only the manual,
 consent-gated ``include_protected=true`` delete-forever can destroy them.
 
 A config save NEVER triggers a purge: the only trigger is this finder's own
-timer, so lowering the window takes effect on the next cycle at the earliest —
-and, thanks to the grace floor, no earlier than a day after the save — never
+timer, so lowering the window takes effect on the next cycle at the earliest -
+and, thanks to the grace floor, no earlier than a day after the save - never
 synchronously inside the PATCH request.
 
 Pictures frozen by a locked picture-set are excluded from the candidate query
@@ -72,7 +72,7 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
         # ``None``, NOT 0.0. ``time.monotonic()``'s reference point is undefined
         # (CPython docs: "only the difference between the results of two calls
         # is valid"); on Linux it is seconds since BOOT. So 0.0 is not a "never
-        # checked" sentinel — it is an absolute instant, and on a host that
+        # checked" sentinel - it is an absolute instant, and on a host that
         # booted less than _CHECK_INTERVAL_S ago ``now - 0.0`` is *below* the
         # interval, which reads as "checked recently" and silently suppresses
         # the first sweep. That is real on a fresh container/VM (and is exactly
@@ -88,7 +88,7 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
     def find_task(self):
         retention_days = self._vault.scrapheap_retention_days
         if retention_days is None:
-            # "Never" — auto-purge is disabled entirely. Nothing is ever
+            # "Never" - auto-purge is disabled entirely. Nothing is ever
             # destroyed by the timer while this is set.
             return None
 
@@ -124,7 +124,7 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
 
         logger.info(
             "ScrapheapRetentionPurgeFinder: %d scrapheap picture(s) past the "
-            "%s-day retention window — scheduling auto-purge",
+            "%s-day retention window - scheduling auto-purge",
             len(due_ids),
             retention_days,
         )

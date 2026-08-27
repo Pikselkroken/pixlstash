@@ -91,8 +91,8 @@ class ListenersMixin:
     def _build_electron_configs(self, loop_host, loop_port):
         """Build the uvicorn configs (and banner rows) for the desktop listeners.
 
-        Always yields the loopback listener — plain HTTP on the ephemeral
-        ``loop_host``/``loop_port`` the shell forces (PIXLSTASH_HOST/PORT) — and,
+        Always yields the loopback listener - plain HTTP on the ephemeral
+        ``loop_host``/``loop_port`` the shell forces (PIXLSTASH_HOST/PORT) - and,
         when the user has enabled remote access, a second *external* listener on
         the configured port (optionally HTTPS). Both serve the same FastAPI app;
         the external one runs with ``lifespan='off'`` so the loopback server is

@@ -30,10 +30,10 @@ class BulkCandidateArrays:
     and can be shared safely across concurrent tasks.
     """
 
-    ids: np.ndarray  # (N,) int64 — picture IDs
+    ids: np.ndarray  # (N,) int64 - picture IDs
     param_matrix: np.ndarray  # (N, num_params) float32
-    emb_norm: np.ndarray  # (N, emb_dim) float32 — L2-normalised
-    phash_vec: np.ndarray  # (N,) uint64 — integer phash values for vectorised XOR
+    emb_norm: np.ndarray  # (N, emb_dim) float32 - L2-normalised
+    phash_vec: np.ndarray  # (N,) uint64 - integer phash values for vectorised XOR
     id_to_idx: Dict[int, int]  # id → row index in the arrays
 
 
@@ -236,11 +236,11 @@ class LikenessUtils:
         id_to_idx = bulk.id_to_idx
 
         queued_ids_arr = np.array(list(queued_ids), dtype=np.int64)
-        queued_mask = np.isin(ids_arr, queued_ids_arr)  # (N,) bool — no Python loop
+        queued_mask = np.isin(ids_arr, queued_ids_arr)  # (N,) bool - no Python loop
         n = len(ids_arr)
 
         # ------------------------------------------------------------------ #
-        # Sliding-window pair accumulation — fully numpy, no Python dict.     #
+        # Sliding-window pair accumulation - fully numpy, no Python dict.     #
         #                                                                      #
         # Each (param, k) combination yields a small numpy array of valid     #
         # pair int64-encodings: (canon_a << 32) | canon_b.  All arrays are    #
@@ -330,14 +330,14 @@ class LikenessUtils:
         if not pair_chunks:
             return []
 
-        # Count occurrences entirely in numpy — no Python dict.
+        # Count occurrences entirely in numpy - no Python dict.
         all_encoded = np.concatenate(pair_chunks)  # 1-D int64
         unique_encoded, counts = np.unique(all_encoded, return_counts=True)
         keep = unique_encoded[counts >= self.MIN_PARAM_OVERLAP]
         if keep.size == 0:
             return []
 
-        # Decode back to (a, b) pairs — both are in id_to_idx by construction.
+        # Decode back to (a, b) pairs - both are in id_to_idx by construction.
         cand_a = keep & np.int64(0xFFFFFFFF)  # low 32 bits
         cand_b = (keep >> 32) & np.int64(0xFFFFFFFF)  # high 32 bits
 

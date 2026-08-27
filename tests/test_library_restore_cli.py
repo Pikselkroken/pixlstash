@@ -259,7 +259,7 @@ def test_restore_warns_about_space_in_the_one_prompt_it_already_asks(
     """A shortfall is a warning beside the existing question, not a second one.
 
     Two prompts about one decision is how people learn to hold down `y`. It also
-    has to appear *before* anything is unpacked — the whole reason planning
+    has to appear *before* anything is unpacked - the whole reason planning
     reads only the front of the archive.
     """
     from pixlstash.services import library_restore_service as restore
@@ -487,7 +487,7 @@ def test_containment_backstop_refuses_a_target_outside_the_root():
     """Asserted directly: on POSIX no name reaching it can escape, so nothing else covers it.
 
     The check exists for the Windows join behaviour the name checks cannot see.
-    Without a direct test it would be unfalsifiable on the Linux gate — a guard
+    Without a direct test it would be unfalsifiable on the Linux gate - a guard
     that no test can fail is indistinguishable from one that does nothing.
     """
     from pixlstash.services.library_restore_service import RestoreError, _contained

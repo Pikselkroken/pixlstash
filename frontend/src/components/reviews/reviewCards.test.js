@@ -1,7 +1,7 @@
 // Component mount/update coverage for the review-session decision UI.
 //
-// These were absent (only the store was unit-tested), which is how BUG-RS-1 — a
-// render crash on the Loading -> card transition — shipped past 189 unit + 61
+// These were absent (only the store was unit-tested), which is how BUG-RS-1 - a
+// render crash on the Loading -> card transition - shipped past 189 unit + 61
 // API tests. Each test MOUNTS a review component with representative props and
 // asserts it renders AND survives an update without throwing.
 //
@@ -153,7 +153,7 @@ describe("ReviewBinaryCard", () => {
 
   it("marks a locked neighbour thumb with a reference-only lock", () => {
     // Neighbour 12 is in a locked set; the suspect (10) and other neighbours
-    // are not — exactly one thumb lock should appear.
+    // are not - exactly one thumb lock should appear.
     lockPictures("Frozen eval", [12]);
     const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });
     const locks = w.findAll(".rs-thumb-lock");
@@ -194,7 +194,7 @@ describe("ReviewPairCard", () => {
   });
 
   // On a PAIR card both pictures are written by some corner, so a locked pane
-  // BLOCKS decisions — it is not an inert reference. The badge must say so
+  // BLOCKS decisions - it is not an inert reference. The badge must say so
   // rather than reuse the reference-only wording (which belongs to the binary
   // card's neighbour thumbs).
   it("marks a locked twin pane as blocking, not reference-only", () => {
@@ -210,7 +210,7 @@ describe("ReviewPairCard", () => {
   });
 
   it("reads the locking set name from the payload without the lock store", () => {
-    // No lockedSetsStore entry at all — the suggestion payload ships the names.
+    // No lockedSetsStore entry at all - the suggestion payload ships the names.
     const w = mount(ReviewPairCard, {
       props: {
         item: pairItem({
@@ -264,10 +264,10 @@ describe("ReviewDecisionBar", () => {
   });
 
   // A blocked control must stay in the tab order. `disabled` removes it, so a
-  // keyboard user could never reach it to discover why it does nothing — the
+  // keyboard user could never reach it to discover why it does nothing - the
   // same silence the whole change exists to remove.
   it("marks blocked decisions aria-disabled (focusable), never disabled", () => {
-    const reason = "Can't decide — this picture is in the locked set 'Frozen eval'.";
+    const reason = "Can't decide - this picture is in the locked set 'Frozen eval'.";
     const w = mount(ReviewDecisionBar, {
       props: {
         kind: "binary",
@@ -276,7 +276,7 @@ describe("ReviewDecisionBar", () => {
         gamify: false,
         hold: false,
         blocked: { yes: reason, no: reason },
-        lockNote: "Locked by 'Frozen eval' — Skip to move on",
+        lockNote: "Locked by 'Frozen eval' - Skip to move on",
         lockDetail: reason,
       },
       global: globalOpts,
@@ -295,7 +295,7 @@ describe("ReviewDecisionBar", () => {
     expect(chip.attributes("id")).toBeTruthy();
     expect(yes.attributes("aria-describedby")).toBe(chip.attributes("id"));
 
-    // Skip must stay fully enabled — it makes no backend change and is the only
+    // Skip must stay fully enabled - it makes no backend change and is the only
     // way past a locked card.
     const skip = w.findAll(".rs-decide-btn").find((b) => b.text().includes("Skip"));
     expect(skip.attributes("disabled")).toBeUndefined();
@@ -451,7 +451,7 @@ describe("ReviewSessionView", () => {
     await w.find(".rs-decide-btn--yes").trigger("click");
     await flushPromises();
 
-    // No network write at all — the card is refused client-side, not by a 423.
+    // No network write at all - the card is refused client-side, not by a 423.
     expect(apiClient.post).not.toHaveBeenCalled();
     // The reason is announced assertively, in a clipped (not display:none) node.
     const live = w.find('[aria-live="assertive"]');
@@ -464,7 +464,7 @@ describe("ReviewSessionView", () => {
   });
 
   // The keyboard path used the `return attempt(x), true` comma operator, which
-  // reported the key consumed even when attempt() bailed — the overlay then
+  // reported the key consumed even when attempt() bailed - the overlay then
   // called preventDefault() and the user got nothing at all.
   it("announces on a blocked keyboard shortcut instead of swallowing it", async () => {
     const store = useReviewSessionsStore();
@@ -498,7 +498,7 @@ describe("ReviewSessionView", () => {
   });
 
   // Over-blocking regression guard: an unlocked card must behave exactly as
-  // before — no chip, no aria-disabled, and a real decision dispatched.
+  // before - no chip, no aria-disabled, and a real decision dispatched.
   it("leaves an unlocked card completely unaffected", async () => {
     const store = useReviewSessionsStore();
     seed(store, { items: [binaryItem({ id: 1, picture_id: 10 })], loading: false, error: null });
@@ -540,7 +540,7 @@ describe("ReviewSessionView", () => {
     await nextTick();
 
     const undo = w.findAll(".rs-decide-btn").find((b) => b.text().includes("Undo"));
-    // Focusable, marked, and explained — not a dead `disabled` control.
+    // Focusable, marked, and explained - not a dead `disabled` control.
     expect(undo.attributes("aria-disabled")).toBe("true");
     expect(undo.attributes("disabled")).toBeUndefined();
     expect(undo.attributes("title")).toContain("Holiday 2019");
@@ -549,7 +549,7 @@ describe("ReviewSessionView", () => {
     await flushPromises();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(w.find('[aria-live="assertive"]').text()).toContain("Can't undo");
-    // The undo stack is untouched — nothing was optimistically reversed.
+    // The undo stack is untouched - nothing was optimistically reversed.
     expect(store.undoStacks.sess1).toHaveLength(1);
   });
 

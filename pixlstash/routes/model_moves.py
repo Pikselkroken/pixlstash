@@ -5,7 +5,7 @@ folder of 1,806 adapters is 438 GB, so the copying runs on a thread and the
 client watches; the *validation* is not deferred, though. ``ModelMover.plan``
 runs inside the POST and refuses the whole batch before the first byte if the
 destination is unusable, an item names no row, a path escapes its folder, or the
-copy would not fit — so a mistake is an immediate 4xx rather than a job that dies
+copy would not fit - so a mistake is an immediate 4xx rather than a job that dies
 on file 1,500 having already moved 1,499, which nothing can undo.
 
 **One move at a time**, machine-wide. Two concurrent moves would race for the
@@ -17,7 +17,7 @@ moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
 **Relocating a folder PixlStash owns lives here too**, at
-``POST /model-folders/{folder_id}/relocate``, despite the path — because a
+``POST /model-folders/{folder_id}/relocate``, despite the path - because a
 relocation *is* a move, of everything one folder holds, and it runs the same
 single job slot and the same job clients poll. Doing it any other way
 would mean a second implementation of the ordering. Three folders qualify and
@@ -26,7 +26,7 @@ the managed store, the folder PixlStash downloads its own engines into (#905,
 closing #112), and the InsightFace packs (#906).
 
 **Two of the three are a batch of files and reuse ``ModelMover`` whole. The
-InsightFace packs are not.** The shelf catalogues a *pack* — a directory — and
+InsightFace packs are not.** The shelf catalogues a *pack* - a directory - and
 not the ``.onnx`` files inside it, so there is no per-file row to repoint and no
 ``sha256`` to verify a copy against; that one moves directories with
 ``model_mover.move_directory``. What all three share is :func:`_start_job` (the
@@ -48,8 +48,8 @@ landed and before the hub is told: its **companion** files are carried across
 label set is a broken engine), and the new location is **recorded**, so every
 downloader follows the folder instead of re-fetching what was just moved.
 
-The InsightFace packs add the second of those and not the first — a pack has no
-companions, because the whole directory moves — and record their root the same
+The InsightFace packs add the second of those and not the first - a pack has no
+companions, because the whole directory moves - and record their root the same
 way, in a pointer file beside the download folder's. Their one difference from
 both is what the owner names: ``payload.path`` is the InsightFace **root**, and
 the packs land in ``<path>/models``, because that subdirectory is the library's
@@ -103,7 +103,7 @@ from pixlstash.utils.reference_folder_validator import validate_reference_folder
 logger = get_logger(__name__)
 
 # The one in-flight move, machine-wide, plus the last finished one so a client
-# that was not watching can still read the outcome. Guarded by ``_job_lock`` —
+# that was not watching can still read the outcome. Guarded by ``_job_lock`` -
 # the worker thread's writes included, through ``_record_result`` /
 # ``_finish_job``, because ``_snapshot`` reads the dict in several steps and a
 # write landing between them is a torn snapshot.
@@ -173,7 +173,7 @@ class RelocateRequest(BaseModel):
             "InsightFace's own layout rather than ours to name. Symlinks are "
             "resolved before the path is checked against the system-directory "
             "blocklist and before it is recorded, so the folder is registered at "
-            "the location it really lands in — a link into `/usr` is refused "
+            "the location it really lands in - a link into `/usr` is refused "
             "rather than followed. Owner-chosen and therefore trusted, exactly "
             "as a reference folder is; the blocklist is there to catch the "
             "accident, not an attacker."
@@ -197,7 +197,7 @@ class MoveItemResult(BaseModel):
     detail: Optional[str] = Field(
         default=None,
         description=(
-            "Why, when the status is `failed` — and, on a file that moved, why "
+            "Why, when the status is `failed` - and, on a file that moved, why "
             "its `<stem>_samples/` previews did not come with it. A failed "
             "samples carry is deliberately not a failed file: losing a preview "
             "must not cost the weights."
@@ -217,7 +217,7 @@ class MoveStatusResponse(BaseModel):
     total: int = Field(
         default=0,
         description=(
-            "Items this move will decide — every one you sent, including the "
+            "Items this move will decide - every one you sent, including the "
             "ones already in the destination folder."
         ),
     )
@@ -265,8 +265,8 @@ def _record_result(job: dict, outcome: MoveOutcome) -> None:
     """Append one decided file to the job, under the lock the readers hold.
 
     The worker thread is the only writer and ``GET`` / ``DELETE`` are the only
-    readers, but ``_snapshot`` reads ``job["results"]`` *twice* — once for
-    ``done`` and once for the list itself — so an append landing between those
+    readers, but ``_snapshot`` reads ``job["results"]`` *twice* - once for
+    ``done`` and once for the list itself - so an append landing between those
     two reads hands the client a snapshot whose ``done`` does not match its
     ``results``. Sharing ``_job_lock`` is what makes the module docstring's
     locking claim true rather than aspirational.
@@ -312,13 +312,13 @@ def _start_job(
     One slot machine-wide, and it is ``model_mover.SHELF_IO_LOCK``, the *same*
     slot an ai-toolkit import takes: two file operations at once race for the
     free space each of them checked and for the destination names each of them
-    found free. The loser is a 409 and never queues — see the lock's own note.
+    found free. The loser is a 409 and never queues - see the lock's own note.
 
     The work itself is a callback rather than a ``MovePlan`` because the shelf
     has two shapes of relocation, and only one of them is a batch of files. An
     InsightFace pack is a *directory* the shelf catalogues as one row, so its
-    relocation moves directories; everything around the work — the slot, the
-    job dict clients poll, the cancel flag, the release-on-failure — is
+    relocation moves directories; everything around the work - the slot, the
+    job dict clients poll, the cancel flag, the release-on-failure - is
     identical and is here rather than written twice.
 
     Args:
@@ -403,7 +403,7 @@ def _register_or_reuse(hub, path: str) -> int:
     minutes a relocation takes, because the managed row is what "the default
     destination" resolves to. It is promoted in one transaction at the end.
 
-    Reuses a row already at that path — a retry of an interrupted relocation
+    Reuses a row already at that path - a retry of an interrupted relocation
     lands here, and ``model_folder.path`` is UNIQUE.
     """
     existing = hub.fetchone("SELECT id FROM model_folder WHERE path = ?", (path,))
@@ -430,8 +430,8 @@ def _finish_relocation(
     one must exist, and costs nothing for the built-in download folder.
 
     The old folder's ``missing`` and ``unreachable`` rows are carried across
-    rather than dropped. They are tombstones — a file the shelf once saw and can
-    re-link by content — and the store moving is not news about whether those
+    rather than dropped. They are tombstones - a file the shelf once saw and can
+    re-link by content - and the store moving is not news about whether those
     files came back.
 
     Args:
@@ -459,7 +459,7 @@ def _move_leftovers(source: str, destination: str) -> None:
     engine file alone: the tagger's label set, its revision sidecar and WD14's
     ``selected_tags.csv`` are declared as **companions** and have no row. Leaving
     them behind would move a tagger to a folder where it does not work, and the
-    engine would then download the whole thing again — the exact failure #905 is
+    engine would then download the whole thing again - the exact failure #905 is
     about.
 
     The managed store deliberately does NOT do this: what the owner left in it is
@@ -533,7 +533,7 @@ def create_router(server) -> APIRouter:
         """Put one planned batch of *files* on the single move thread.
 
         Shared by the plain move and by the managed store's relocation, because
-        that relocation *is* a move — of every file one folder holds. The
+        that relocation *is* a move - of every file one folder holds. The
         InsightFace packs go through :func:`_start_job` directly instead: their
         registered rows are directories, so there is no ``MovePlan`` to execute.
 
@@ -569,8 +569,8 @@ def create_router(server) -> APIRouter:
         "/model-moves",
         summary="Move model files into another registered folder",
         description=(
-            "Validates the whole batch first — destination, every item, path "
-            "containment and free space — and refuses it before writing a byte "
+            "Validates the whole batch first - destination, every item, path "
+            "containment and free space - and refuses it before writing a byte "
             "if anything is wrong. Then copies on a thread and returns 202. Per "
             "file the order is copy, verify by SHA-256, repoint the row and "
             "commit, and only then unlink, so an interruption leaves a "
@@ -644,8 +644,8 @@ def create_router(server) -> APIRouter:
         **Canonicalized before the blocklist runs, and the canonical form is
         what gets registered.** Two reviews disagreed about this. The security
         sign-off filed the lexical check under "explicitly not a finding" on
-        the owner-trust ruling — an owner who may name any destination directly
-        gains nothing by naming one through a symlink — and that is correct *as
+        the owner-trust ruling - an owner who may name any destination directly
+        gains nothing by naming one through a symlink - and that is correct *as
         a statement about boundaries*. It is not what this check is. There is no
         non-owner principal to keep out, so the blocklist is not a boundary at
         all: it is the guard that stops the owner relocating their models onto
@@ -682,8 +682,8 @@ def create_router(server) -> APIRouter:
         """Move the InsightFace packs to a new root and point the pipeline at it.
 
         **The path names the InsightFace *root*, not the folder.** ``models`` is
-        the library's own layout — ``FaceAnalysis`` joins it onto whatever root
-        it is given — so the relocatable unit is the root and the shelf's folder
+        the library's own layout - ``FaceAnalysis`` joins it onto whatever root
+        it is given - so the relocatable unit is the root and the shelf's folder
         follows it to ``<path>/models``. Naming the folder directly would mean
         accepting only paths whose last component is ``models``, which is a
         worse thing to ask of the owner than one documented sentence.
@@ -691,20 +691,20 @@ def create_router(server) -> APIRouter:
         **A pack is a directory**, not a file, so this does not go through
         ``ModelMover``: there is no per-file row to repoint and no ``sha256`` to
         verify against. :func:`~pixlstash.services.model_mover.move_directory`
-        keeps the equivalent guarantee — a complete pack survives at one end or
+        keeps the equivalent guarantee - a complete pack survives at one end or
         the other.
 
         **Everything else is the shared relocation.** The destination is
         registered as an ordinary ``user`` folder while the packs move and
         promoted to this folder's ``identity`` by :func:`_finish_relocation` once
-        they have landed, so the pack rows — the ``missing`` ones included, which
-        are tombstones — travel across exactly as the other two relocations move
+        they have landed, so the pack rows - the ``missing`` ones included, which
+        are tombstones - travel across exactly as the other two relocations move
         theirs. The recorded root is written first, for the reason
         ``set_builtin_model_dir`` is: a root recorded before the packs arrived
         would send the next download into an empty directory.
 
         Interrupted halfway, the packs that moved are at the new root, the rest
-        are at the old one, and the recorded root still names the old one — so
+        are at the old one, and the recorded root still names the old one - so
         face extraction keeps working and re-running finishes the job.
 
         Args:
@@ -835,7 +835,7 @@ def create_router(server) -> APIRouter:
                     source_dir,
                 )
                 return
-            # The pointer, then the hub — the download folder's order, and
+            # The pointer, then the hub - the download folder's order, and
             # correct here for the same reason: a root recorded before the packs
             # arrived would send the next download to an empty directory.
             try:
@@ -851,8 +851,8 @@ def create_router(server) -> APIRouter:
                     "new root: %s. The shelf will show them there, but the next "
                     "start will resolve the default root again and download into "
                     "it. What failed is the write of the pointer file named in "
-                    "that error — it lives in the platform user data directory, "
-                    "NOT under %s — so make that file writable and re-run the "
+                    "that error - it lives in the platform user data directory, "
+                    "NOT under %s - so make that file writable and re-run the "
                     "relocation.",
                     destination_dir,
                     exc,
@@ -881,8 +881,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Moves everything the folder holds to a new host path and points the "
             "folder at it. For the managed store and PixlStash's download folder "
-            "this is a model move like any other — copy, verify by SHA-256, "
-            "repoint the row and commit, then unlink, per file — so an "
+            "this is a model move like any other - copy, verify by SHA-256, "
+            "repoint the row and commit, then unlink, per file - so an "
             "interruption leaves duplicates rather than rows naming files that "
             "are gone, and a move within one filesystem is a rename. "
             "Three folders can be relocated: the managed store; the folder "
@@ -896,7 +896,7 @@ def create_router(server) -> APIRouter:
             "downloads and the shelf all follow it without a restart. "
             "A folder you registered is one you moved yourself; register it "
             "again at its new path. The HuggingFace cache cannot be relocated at "
-            "all — its location is `HF_HOME`, read at import by a library shared "
+            "all - its location is `HF_HOME`, read at import by a library shared "
             "with your other tools."
         ),
         status_code=202,
@@ -932,8 +932,8 @@ def create_router(server) -> APIRouter:
         is_download_folder = is_builtin_model_dir(folder["path"])
         if is_insightface_models_dir(folder["path"]):
             # The one relocation whose rows are directories, so it does not run
-            # a `MovePlan` at all. Everything around the work — the job slot,
-            # the destination validation, the ending — is still shared.
+            # a `MovePlan` at all. Everything around the work - the job slot,
+            # the destination validation, the ending - is still shared.
             return _snapshot(
                 _relocate_insightface_packs(dict(folder), payload, identity)
             )
@@ -965,15 +965,15 @@ def create_router(server) -> APIRouter:
 
         mover = ModelMover(server.hub)
         try:
-            # ``flatten=False``: the store is ``movable='root_only'`` — it moves
-            # as a unit — so its tree has to arrive as a tree. Flattening would
+            # ``flatten=False``: the store is ``movable='root_only'`` - it moves
+            # as a unit - so its tree has to arrive as a tree. Flattening would
             # make ``runA/model.safetensors`` and ``runB/model.safetensors``
             # collide, refusing the relocation permanently with advice ("move
             # them separately") naming a verb the shelf does not have, and with
             # only one such file it would silently drop the subdirectory.
             # ``relocating=True``: the store is ``root_only``, which refuses a
             # per-item move out of it, and a relocation is the one case where
-            # that is not what is happening — the folder is going with the
+            # that is not what is happening - the folder is going with the
             # files. The route above has already refused every folder whose
             # ``kind`` is not ``managed``, so this cannot reach the engines,
             # the InsightFace packs or the HuggingFace cache.
@@ -1018,8 +1018,8 @@ def create_router(server) -> APIRouter:
                         "the new location: %s. The shelf will show them there, "
                         "but the next start will resolve the default folder "
                         "again and download into it. What failed is the write "
-                        "of the pointer file named in that error — it lives in "
-                        "the platform user data directory, NOT under %s — so "
+                        "of the pointer file named in that error - it lives in "
+                        "the platform user data directory, NOT under %s - so "
                         "make that file writable and re-run the relocation.",
                         destination_path,
                         exc,

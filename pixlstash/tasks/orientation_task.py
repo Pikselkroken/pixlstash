@@ -1,4 +1,4 @@
-"""Backfill ``Picture.orientation`` — the mirrored EXIF orientation tag.
+"""Backfill ``Picture.orientation`` - the mirrored EXIF orientation tag.
 
 The operation log records orientation as a reversible facet (§21), and it
 captures that facet from the **column**, never from the file: capture runs for
@@ -7,7 +7,7 @@ picture would make a 2,700-row tag edit do 5,400 file opens on the single DB
 writer thread.
 
 A NULL column is therefore a picture whose rotate could not be recorded honestly
-— the ``before_state`` would say ``null`` and undo would have nothing to write
+- the ``before_state`` would say ``null`` and undo would have nothing to write
 back. Every row predating the column is NULL, so this task exists to fill them.
 The rotate endpoint does not wait for it (it primes its own targets first); this
 is what keeps the rest of the library ready.

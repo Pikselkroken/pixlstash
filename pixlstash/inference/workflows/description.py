@@ -57,8 +57,8 @@ class DescriptionWorkflow:
             stop_event: Optional :class:`threading.Event` the caller sets to
                 cancel.  It is checked between images and handed to the plugin,
                 so a cancel stops the batch instead of running it out.  The
-                event belongs to the caller — ``DescriptionTask`` passes its own
-                — because the workflow object running a batch is not always the
+                event belongs to the caller - ``DescriptionTask`` passes its own
+                - because the workflow object running a batch is not always the
                 one the task was constructed with (CPU spillover builds a fresh
                 one on every access).
 
@@ -201,7 +201,7 @@ class DescriptionWorkflow:
 
         for picture in pictures:
             # Videos are captioned one at a time in this loop, and a video is
-            # the slowest single item there is — so the check belongs here and
+            # the slowest single item there is - so the check belongs here and
             # not only on the still-image chunks below.
             if stop_event is not None and stop_event.is_set():
                 break
@@ -244,7 +244,7 @@ class DescriptionWorkflow:
         When Florence is already resident in GPU memory only the per-image
         activation scratch is charged, avoiding a false-positive VRAM gate
         stall on warm runs. The cold-start charge follows the *configured*
-        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) — a
+        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) - a
         constant pinned to base would under-count and spill on large-ft.
 
         Args:
@@ -287,9 +287,9 @@ class DescriptionWorkflow:
         that is simply correct: ``generate_batch`` falls back to Florence-2, so
         Florence is what loads. For a plugin that returns 0 or raises it is
         a deliberate charge for the wrong model, because that plugin *does*
-        run. 0 is ambiguous at this seam — it is the base class default, and
+        run. 0 is ambiguous at this seam - it is the base class default, and
         also its documented "CPU-only" value, and the two cannot be told apart
-        — so the fallback is kept for both: the host cannot invent a figure for
+        - so the fallback is kept for both: the host cannot invent a figure for
         a model it knows nothing about, and for the CPU-only reading the error
         is a harmless over-charge. ``TaggerPlugin.estimated_vram_mb`` tells
         authors to charge for a cold start rather than rely on this (#967).

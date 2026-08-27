@@ -6,8 +6,8 @@
 // the three claims that fix makes:
 //
 //   • Ctrl+Z and `U` are the SAME request, through one gate.
-//   • That gate answers all three outcomes — done, blocked by a locked set, and
-//     nothing to undo — because a shortcut that silently does nothing is
+//   • That gate answers all three outcomes - done, blocked by a locked set, and
+//     nothing to undo - because a shortcut that silently does nothing is
 //     indistinguishable from a broken one.
 //   • It is the REVIEW's undo, never the app-wide operation stack. A review
 //     decision also flips its suggestion row's status and writes the human-label
@@ -116,7 +116,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("review undo — one gate for `U` and Ctrl+Z", () => {
+describe("review undo - one gate for `U` and Ctrl+Z", () => {
   it("runs the review's own undo for both keys", async () => {
     const store = seedWithHistory(useReviewSessionsStore());
     const undo = vi.spyOn(store, "undo").mockResolvedValue(undefined);
@@ -168,7 +168,7 @@ describe("review undo — one gate for `U` and Ctrl+Z", () => {
   });
 });
 
-describe("review undo — the three outcomes are all answered", () => {
+describe("review undo - the three outcomes are all answered", () => {
   it("says so, and never touches the app-wide stack, when there is nothing to undo", async () => {
     const store = seedEmpty(useReviewSessionsStore());
     const notices = useNoticeStore();
@@ -256,7 +256,7 @@ function press(key, init = {}) {
   return event;
 }
 
-describe("ReviewSessionsOverlay — Ctrl+Z is no longer dead", () => {
+describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
   it("routes the chord to the review's own undo and consumes it", async () => {
     const { w } = await mountOverlayWithSession();
 

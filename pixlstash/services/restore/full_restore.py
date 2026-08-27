@@ -75,7 +75,7 @@ class FullRestoreMixin:
         4. Dispose the live engine, copy the snapshot over the live DB, and
            re-open it.
         5. Clear every API token (see ``_clear_hub_api_tokens``) and the vault's
-           guest state (see ``_clear_guest_state``) — a restore always leaves the
+           guest state (see ``_clear_guest_state``) - a restore always leaves the
            vault with no tokens, whatever the snapshot held.
         6. Delete rows whose files are missing and perform post-swap cleanup.
         7. Reset the in-memory authentication state the swap invalidated (see
@@ -166,7 +166,7 @@ class FullRestoreMixin:
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
         # Emit STARTED only AFTER the snapshot is known to exist (and the
-        # lock was already acquired in the outer ``restore_full``) — a 404
+        # lock was already acquired in the outer ``restore_full``) - a 404
         # or 409 must not leave the UI with ``activeJob`` set forever.
         # Anything that throws or early-returns from here on emits FAILED
         # so the frontend can clear ``activeJob``.
@@ -249,7 +249,7 @@ class FullRestoreMixin:
         #     deleted_file_log were intentionally, permanently deleted: they
         #     must never be resurrected (even if the file somehow lingers on
         #     disk), and they must not count toward the missing-file ratio
-        #     below — an intentional purge is not a mount failure.
+        #     below - an intentional purge is not a mount failure.
         path_shas, pixel_shas = self._load_deleted_file_index()
         deleted_ids = self._find_permanently_deleted_ids(
             upgraded_snapshot, path_shas, pixel_shas
@@ -267,7 +267,7 @@ class FullRestoreMixin:
         # failure rather than legitimate deletions. Refuse to wipe
         # metadata for that many pictures unless the caller has
         # explicitly opted in to "I know my data looks wrong, proceed".
-        # Known permanent deletions are excluded — they are expected to be
+        # Known permanent deletions are excluded - they are expected to be
         # gone, so they never read as a mount failure.
         # Skipped when the snapshot is too small for the ratio to mean
         # anything (a one-picture snapshot whose file the user deleted
@@ -282,7 +282,7 @@ class FullRestoreMixin:
             ratio_pct = 100.0 * len(suspicious_missing) / total_pictures
             raise RuntimeError(
                 f"{len(suspicious_missing)} of {total_pictures} pictures "
-                f"({ratio_pct:.0f}%) are missing on disk — refusing to "
+                f"({ratio_pct:.0f}%) are missing on disk - refusing to "
                 "overwrite the live DB and drop metadata for that many "
                 "pictures, this looks like a network mount issue. If you "
                 "really did delete that many files, pass "
@@ -290,7 +290,7 @@ class FullRestoreMixin:
             )
 
         if dry_run:
-            logger.info("RestoreService: dry_run=True — skipping DB swap.")
+            logger.info("RestoreService: dry_run=True - skipping DB swap.")
             shutil.rmtree(os.path.dirname(upgraded_snapshot), ignore_errors=True)
             return report
 
@@ -315,12 +315,12 @@ class FullRestoreMixin:
 
         # 3c. Capture the snapshot index BEFORE the swap. The ``Snapshot`` table
         #     lives inside the live DB, so the file swap rolls it back to
-        #     whatever snapshots existed when the target snapshot was taken —
+        #     whatever snapshots existed when the target snapshot was taken -
         #     every newer snapshot (and the OPPORTUNISTIC safety snapshot taken
         #     in step 1) would vanish from the list even though their .sqlite +
         #     .manifest.json files are untouched on disk. We replay the missing
         #     rows into the swapped DB during cleanup so restoring an older
-        #     snapshot never hides newer restore points — the user can always
+        #     snapshot never hides newer restore points - the user can always
         #     roll forward again. The ``id`` is deliberately not captured: rows
         #     are re-inserted with fresh autoincrement ids to avoid colliding
         #     with the restored DB's own snapshot ids.
@@ -342,7 +342,7 @@ class FullRestoreMixin:
 
         # 3d. Capture the permanent-deletion ledger BEFORE the swap. Like the
         #     Snapshot index, deleted_file_log lives inside the live DB, so the
-        #     file swap rolls it back to its snapshot-era contents — losing the
+        #     file swap rolls it back to its snapshot-era contents - losing the
         #     record of every file deleted since. We replay the live rows into
         #     the swapped DB during cleanup so "what has been permanently
         #     deleted (and is therefore unrestorable)" survives the restore.
@@ -383,13 +383,13 @@ class FullRestoreMixin:
                 )
 
         # 3e. Capture the RESOLVED paths of every LIVE, non-deleted picture. These
-        #     are the files currently in active use — including content that was
+        #     are the files currently in active use - including content that was
         #     (re-)added AFTER the target snapshot. If the snapshot holds a
         #     scrapheap (``deleted=True``) row that resolves to one of these
         #     files, the swap would RESURRECT that stale ghost on top of a file
         #     the user is actively using: the row's real content was overwritten
         #     after the snapshot, so the entry is unrestorable, but emptying the
-        #     scrapheap would then hard-delete the live file (data loss — the file
+        #     scrapheap would then hard-delete the live file (data loss - the file
         #     was legitimately added after the snapshot and is NOT in
         #     deleted_file_log). ``_post_restore_cleanup`` drops such ghosts
         #     (keeping the file). deleted_file_log only guards intentionally-
@@ -401,9 +401,9 @@ class FullRestoreMixin:
         #     ``resolve_picture_path(image_root, file_path)`` then ``os.remove``):
         #     resolve against the SAME ``vault_root``, then ``realpath`` +
         #     ``normcase`` so a stored path that differs as a STRING but names the
-        #     same on-disk file is still caught. This is a real scenario here —
+        #     same on-disk file is still caught. This is a real scenario here -
         #     reference-folder pictures store ABSOLUTE ``file_path`` while
-        #     imported/managed pictures store RELATIVE — and also covers ``./`` /
+        #     imported/managed pictures store RELATIVE - and also covers ``./`` /
         #     ``//`` prefixes, symlinks, and case differences. Raw file_paths are
         #     read under the DB lock (cheap); the filesystem resolution runs here,
         #     off the lock. Captured AFTER the planner/task-runner are stopped so a
@@ -418,7 +418,7 @@ class FullRestoreMixin:
             return os.path.normcase(os.path.realpath(resolved))
 
         def _confirmably_differs(snap_sha: Optional[str], live_shas: set) -> bool:
-            # True only when BOTH sides are known and none match — i.e. the file
+            # True only when BOTH sides are known and none match - i.e. the file
             # on disk is provably DIFFERENT content from the snapshot row (the
             # CSO's purge-evasion case: content C1 was purged, different content
             # C2 is alive at the same path). A NULL ``pixel_sha`` on either side
@@ -460,7 +460,7 @@ class FullRestoreMixin:
         )
 
         def _do_swap():
-            # Runs as a control task — the writer thread does NOT open a
+            # Runs as a control task - the writer thread does NOT open a
             # Session for this op, so there is no session bound to the
             # soon-to-be-disposed engine. _swap_database holds
             # exclusive_engine_access internally to fence out readers.
@@ -471,7 +471,7 @@ class FullRestoreMixin:
             # rows whose file_path RESOLVES to a LIVE, non-deleted file (a file
             # re-added after the snapshot). Resurrecting these on top of an
             # active file lets a later "empty scrapheap" hard-delete that live
-            # file — the exact data-loss vector for content added after the
+            # file - the exact data-loss vector for content added after the
             # snapshot. Drop the ghost rows (the swap NEVER touches image files,
             # so the live file is preserved and simply becomes an orphan, the
             # same safe outcome as any other added-after picture). Both sides use
@@ -496,23 +496,23 @@ class FullRestoreMixin:
             # ``deleted_ids`` drops any SNAPSHOT picture whose path/content sha is
             # in ``deleted_file_log`` so intentionally-purged content is never
             # resurrected. But the ledger is keyed by path/content, not by picture
-            # identity: a path (or content hash) purged in the past — its file kept
+            # identity: a path (or content hash) purged in the past - its file kept
             # on disk because the reference folder is protected
-            # (``allow_delete_file=False``) — that the user has since RE-INDEXED is
+            # (``allow_delete_file=False``) - that the user has since RE-INDEXED is
             # alive again. Dropping it is silent data loss. Here the row is
             # ``deleted=False``: if its file resolves to one the LIVE DB is
             # actively using (``live_active_map``), the user is keeping it.
             #
             # Content-aware (CSO purge-evasion guard): rescue only when the
             # snapshot row is NOT ``_confirmably_differs`` from the live content at
-            # that path — i.e. the shas MATCH, or either side is NULL
+            # that path - i.e. the shas MATCH, or either side is NULL
             # (not-yet-hashed → unconfirmable → keep, never re-drop a reference
             # picture). When BOTH shas are known and DIFFER, the on-disk file is
             # genuinely different content that merely shares a purged path, so the
             # stale snapshot row stays dropped and is not resurrected. The ledger
             # still drops any purged path with no live active picture
             # (``test_full_restore_skips_permanently_deleted_picture``: row removed
-            # from live, file lingers — its path is NOT in ``live_active_map``).
+            # from live, file lingers - its path is NOT in ``live_active_map``).
             # Genuinely missing files (``missing_ids``) are never rescued: there is
             # no file to protect, and the check is independent of the ledger.
             rescued_ids: set[int] = set()
@@ -539,7 +539,7 @@ class FullRestoreMixin:
                 report.permanently_deleted_count -= len(rescued_ids)
                 logger.info(
                     "RestoreService: kept %d ledger-matched picture(s) after "
-                    "restore — their file resolves to a live, actively-used "
+                    "restore - their file resolves to a live, actively-used "
                     "picture (re-indexed after an earlier purge), so the "
                     "permanent-deletion ledger must not drop them.",
                     len(rescued_ids),
@@ -573,7 +573,7 @@ class FullRestoreMixin:
                 logger.info(
                     "RestoreService: dropped %d picture row(s) after restore "
                     "(%d missing-file, %d permanently deleted, %d scrapheap "
-                    "ghost(s) shadowing a live added-after file — files kept; "
+                    "ghost(s) shadowing a live added-after file - files kept; "
                     "%d ledger match(es) rescued as live).",
                     result.rowcount,
                     len(missing_ids),
@@ -583,7 +583,7 @@ class FullRestoreMixin:
                 )
             # Re-arm the scrapheap retention clock. The swapped-in snapshot DB
             # carries each scrapheap row's ORIGINAL ``deleted_at``, which for any
-            # snapshot older than the retention window is already expired — the
+            # snapshot older than the retention window is already expired - the
             # first 15-minute sweep after the restore would then permanently
             # destroy the very scrapheap the user just restored AND write
             # ``file_removed=True``, so a second restore could not bring it back.
@@ -602,7 +602,7 @@ class FullRestoreMixin:
             if rearmed.rowcount:
                 logger.info(
                     "RestoreService: re-armed the scrapheap retention clock on "
-                    "%d restored scrapheap picture(s) — each gets a full "
+                    "%d restored scrapheap picture(s) - each gets a full "
                     "retention window from the restore, never a resumed one.",
                     rearmed.rowcount,
                 )
@@ -639,7 +639,7 @@ class FullRestoreMixin:
             # about snapshots that existed when the target snapshot was taken;
             # re-insert any captured row whose file still exists on disk and
             # isn't already present (deduped by relative_path). This brings the
-            # newer snapshots — and the safety snapshot from step 1 — back into
+            # newer snapshots - and the safety snapshot from step 1 - back into
             # the list so they remain valid restore points.
             existing_snapshot_paths = set(
                 session.exec(select(Snapshot.relative_path)).all()
@@ -659,7 +659,7 @@ class FullRestoreMixin:
                     )
                     continue
                 if not os.path.exists(abs_snap):
-                    # File was pruned/deleted since capture — skip rather than
+                    # File was pruned/deleted since capture - skip rather than
                     # leave a dangling index row pointing at nothing.
                     logger.warning(
                         "RestoreService: snapshot file %s missing on disk; "
@@ -711,7 +711,7 @@ class FullRestoreMixin:
         if auth_service is not None:
             auth_service.close_auth_for_restore(restore_request_lease)
 
-        # Steps 4-8 wrapped in try/finally so the planner always restarts —
+        # Steps 4-8 wrapped in try/finally so the planner always restarts -
         # if _do_swap or the cleanup raises, leaving the planner stopped
         # would silently halt every background worker (daily snapshots,
         # missing-file detection, embedding generation, ...) until restart.
@@ -758,8 +758,8 @@ class FullRestoreMixin:
 
         Clearing ``usertoken`` in the swapped-in database is only half of it.
         ``AuthService`` keeps process-local state derived from the *previous*
-        file — a token cache with its own TTL, ``active_session_ids``, the
-        session-to-token maps, and a cached copy of the owner row — none of
+        file - a token cache with its own TTL, ``active_session_ids``, the
+        session-to-token maps, and a cached copy of the owner row - none of
         which the swap touches. Left alone, a session established before the
         restore keeps authenticating against a database that no longer contains
         the credential it was issued for, and a cached token keeps validating
@@ -774,7 +774,7 @@ class FullRestoreMixin:
         closed since before the swap, so no request can repopulate the cache in
         the queue gap. ``reset_after_restore`` re-reads the
         owner row through the ordinary writer queue, which is exactly why it
-        must not be called from inside the swap — doing so would take the
+        must not be called from inside the swap - doing so would take the
         writer queue while the engine lock is held and hang the request path.
 
         Failure is raised: although the database swap has happened, restore
@@ -824,7 +824,7 @@ class FullRestoreMixin:
         whichever token is created next.
 
         Runs as an ordinary writer task, submitted only after
-        ``run_control_task(_do_swap)`` has returned — the swap has therefore
+        ``run_control_task(_do_swap)`` has returned - the swap has therefore
         completed and released ``exclusive_engine_access``, and this session is
         opened on the re-created engine.  Nothing here runs while the engine
         lock is held.
@@ -930,7 +930,7 @@ class FullRestoreMixin:
         """Read the live ``deleted_file_log`` into (path_shas, pixel_shas).
 
         These identify content the user has *permanently* deleted (see
-        ``DeletedFileLog``). Both are one-way hashes — ``path_sha`` is the
+        ``DeletedFileLog``). Both are one-way hashes - ``path_sha`` is the
         SHA-256 of a picture's vault path, ``pixel_sha`` its content hash.
         Restore consults them so a snapshot taken before the deletion can
         never resurrect that content, and so the missing-file ratio safety
@@ -943,12 +943,12 @@ class FullRestoreMixin:
         content is NOT gone, so restore must never treat it as a permanent
         deletion and drop the alive, file-present picture. The scanner reads the
         ledger separately (all rows) to avoid auto re-importing those kept paths.
-        Existing pre-migration rows default to ``file_removed=True`` — they
+        Existing pre-migration rows default to ``file_removed=True`` - they
         predate the distinction and are treated as genuinely deleted so the
         never-resurrect guarantee holds for them.
 
         Returns:
-            ``(path_shas, pixel_shas)`` — path and content hashes recorded as
+            ``(path_shas, pixel_shas)`` - path and content hashes recorded as
             permanently deleted (file actually removed from disk).
         """
 
@@ -1007,7 +1007,7 @@ class FullRestoreMixin:
         Path-based wrapper around ``_match_deleted_picture_ids`` used by the
         full restore (which works from the snapshot file rather than an open
         session). Fails open: any read error returns an empty set so a restore
-        is never blocked by an unreadable ledger scan — the missing-file pass
+        is never blocked by an unreadable ledger scan - the missing-file pass
         still drops files that are absent on disk.
 
         Args:
@@ -1047,7 +1047,7 @@ class FullRestoreMixin:
         The new DB is first copied to a sibling temp file on the same
         filesystem and then moved into place with ``os.replace`` (an atomic
         rename within a filesystem).  This guarantees the live file is always
-        either the old or the new database — a crash mid-copy can never leave
+        either the old or the new database - a crash mid-copy can never leave
         it truncated or partially written.
 
         Args:
@@ -1066,7 +1066,7 @@ class FullRestoreMixin:
                 db._engine.dispose()
                 # With every connection gone, the retained location guard may
                 # (and on Windows MUST) release its fd: os.replace onto a file
-                # with an open handle is WinError 5 there. Ordering matters —
+                # with an open handle is WinError 5 there. Ordering matters -
                 # guard only after dispose, or closing it strips the process's
                 # POSIX locks out from under the live connections (the
                 # corruption the guard retention exists to prevent). No new
@@ -1096,7 +1096,7 @@ class FullRestoreMixin:
                 with open(staged_db_path, "rb+") as staged_fd:
                     # VACUUM INTO created the snapshot at 0644 & ~umask and
                     # copy2 preserved that mode, so under umask 002 a restore
-                    # would leave the live vault.db group-writable — which the
+                    # would leave the live vault.db group-writable - which the
                     # trusted-location check then refuses on the next startup.
                     # Windows has no fchmod and no real mode bits.
                     if hasattr(os, "fchmod"):

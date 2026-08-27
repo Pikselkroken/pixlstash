@@ -342,7 +342,7 @@ describe("DedupCompareDialog: the wheel", () => {
     wrapper.unmount();
   });
 
-  it("continued wheeling zooms in — it never flips the candidate", async () => {
+  it("continued wheeling zooms in - it never flips the candidate", async () => {
     const wrapper = mountDialog();
     await wrapper.findAll(".dc-thumb")[0].trigger("wheel", { deltaY: -100 });
     const surface = await primeZoom(wrapper);
@@ -378,7 +378,7 @@ describe("DedupCompareDialog: the wheel", () => {
     expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
     expect(wrapper.vm.isZoomOpen()).toBe(true);
 
-    // At the floor, sub-resistance accumulation keeps the zoom open — a full
+    // At the floor, sub-resistance accumulation keeps the zoom open - a full
     // two notches is still not enough...
     wheel(surface, 120);
     wheel(surface, 120);
@@ -531,7 +531,7 @@ describe("DedupCompareDialog: the smart score column", () => {
   }
 
   // The metadata panel's own precision (toFixed(2)); the dash for a copy
-  // whose siblings have a score and it does not — the row is group-level,
+  // whose siblings have a score and it does not - the row is group-level,
   // like Location, so the cards keep the same shape.
   it("shows each copy's smart score, best-marked, on every card", () => {
     const cards = mountDialog({
@@ -682,7 +682,7 @@ describe("DedupCompareDialog: the verdict footer", () => {
   // A shortcut shown next to the action it triggers is the only kind anyone
   // discovers; Stack always wore its Enter chip, Keep separate lacked its S.
   // Amendment #3: K keeps separate; S became Stack's synonym (taught in
-  // copy, not chrome — one chip per button, the primary key shown). The
+  // copy, not chrome - one chip per button, the primary key shown). The
   // machine-readable set rides aria-keyshortcuts, since the chips are
   // aria-hidden.
   it("shows the shortcut on both verdicts: Enter on Stack, K on Keep separate", () => {

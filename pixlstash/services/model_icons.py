@@ -1,8 +1,8 @@
 """The model shelf's icon store: content-addressed marks beside the hub.
 
 **A sample and an icon are different objects and neither substitutes for the
-other.** A *sample* is what a model produces — derived, plural, automatic. An
-icon is what a model *is* — authored, singular, chosen once. It answers "which
+other.** A *sample* is what a model produces - derived, plural, automatic. An
+icon is what a model *is* - authored, singular, chosen once. It answers "which
 one is this?", which is the question a 1,806-row shelf asks at a glance, and it
 is the only one of the two a checkpoint can ever have: PixlStash registers a
 checkpoint in place, possibly at 24 GB and possibly never used, so there is no
@@ -26,7 +26,7 @@ fourth mechanism would break one of them:
    a library switch exactly as the model row does.
 
 **Orphans are left in place.** Because the store is content-addressed and shared,
-clearing one model's icon cannot delete the file — another row may name the same
+clearing one model's icon cannot delete the file - another row may name the same
 hash, and checking costs a scan of the column on every clear. An unreferenced
 icon is a few KB of WebP; a wrongly deleted one is a mark forty rows lose at
 once. A sweep can reclaim them later if it ever matters.
@@ -114,7 +114,7 @@ def store_icon(hub_path: str, data: bytes) -> str:
 
     Stored as given rather than re-encoded. Re-encoding would be the moment to
     normalise to WebP, but it would also mean decoding attacker-influenced image
-    data on the server for a file that is only ever handed back to a browser —
+    data on the server for a file that is only ever handed back to a browser -
     and the browser decodes it either way. The name keeps the ``.webp`` suffix
     because that is what the ruling specified for the store's shape; the served
     media type comes from sniffing the bytes, never from the suffix.
@@ -150,7 +150,7 @@ def store_icon(hub_path: str, data: bytes) -> str:
         return digest
 
     # Written to a temporary name and renamed, so a crash mid-write cannot leave
-    # a truncated file under a name that claims to be the hash of its content —
+    # a truncated file under a name that claims to be the hash of its content -
     # which every later reader would then trust.
     partial = f"{target}.partial"
     with open(partial, "wb") as handle:

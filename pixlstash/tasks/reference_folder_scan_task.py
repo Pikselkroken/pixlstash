@@ -116,7 +116,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         if not os.path.isdir(resolved):
             logger.warning(
-                "Reference folder %s (resolved: %s) is not a directory — marking mount_error",
+                "Reference folder %s (resolved: %s) is not a directory - marking mount_error",
                 self._folder_path,
                 resolved,
             )
@@ -125,7 +125,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         if not os.access(resolved, os.R_OK | os.X_OK):
             logger.warning(
-                "Reference folder %s (resolved: %s) is not readable — marking mount_error",
+                "Reference folder %s (resolved: %s) is not readable - marking mount_error",
                 self._folder_path,
                 resolved,
             )
@@ -197,7 +197,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
-        # may have been written next to source files by an older version — they
+        # may have been written next to source files by an older version - they
         # are not real pictures and would cause infinite re-indexing churn.
         _thumb_suffix = f"_thumb{THUMBNAIL_EXTENSION}"
         other_roots = self._other_resolved_paths
@@ -277,7 +277,7 @@ class ReferenceFolderScanTask(BaseTask):
         # scan once it completes (see the end of _run_task).  No routine path
         # (sync-toggle, rename, relocate, mount-recovery, watcher, periodic
         # re-scan) ever sets it, so a routine scan can never override the ledger
-        # — this closes the edge where an already-emptied folder whose
+        # - this closes the edge where an already-emptied folder whose
         # last_scanned was reset would have resurfaced removed-but-kept files.
         # On the explicit path we re-import ledger-listed files that are actually
         # present on disk and clear their ledger entries so restore resurfaces
@@ -321,7 +321,7 @@ class ReferenceFolderScanTask(BaseTask):
         # Clear the permanent-deletion ledger rows for the re-imported paths so a
         # subsequent restore no longer treats them as deleted.  Safe by
         # construction: every path_sha here belongs to a file found on disk in
-        # this scan, so the content is present — clearing cannot resurrect gone
+        # this scan, so the content is present - clearing cannot resurrect gone
         # content.
         if override_path_shas:
 
@@ -392,7 +392,7 @@ class ReferenceFolderScanTask(BaseTask):
                     [(old_path, new_path) for _, new_path, _, old_path in pairs],
                 )
                 # The journal's only other reader is ``LayoutMoveTask``, which
-                # runs only when a picture is due a check — so in a library
+                # runs only when a picture is due a check - so in a library
                 # where the owner only ever renames things, nothing would ever
                 # prune the rows a rename writes. This scan runs on its own
                 # schedule and is the journal's other consumer, so it is where
@@ -403,7 +403,7 @@ class ReferenceFolderScanTask(BaseTask):
                 for pic_id, new_path, thumbnail_carried, old_path in pairs:
                     pic = session.get(Picture, pic_id)
                     if pic is None:
-                        # The row went between the scan's read and this write —
+                        # The row went between the scan's read and this write -
                         # the purge sweep is the likely author.  The pair has
                         # already been taken out of removed_paths and new_paths,
                         # so the file is now neither moved nor imported until the
@@ -520,9 +520,9 @@ class ReferenceFolderScanTask(BaseTask):
         # --- Handle sidecar changes (and exports) for existing pictures ---
         # For each picture we reconcile the tags sidecar and the description
         # sidecar independently in both directions:
-        #   read  — an external file that appeared or changed is imported (cheap
+        #   read  - an external file that appeared or changed is imported (cheap
         #           os.stat() gate so content is only read when mtime differs);
-        #   write — when the folder syncs that type and a picture with content
+        #   write - when the folder syncs that type and a picture with content
         #           has no sidecar yet, the file is created on disk (export).
         # An empty sidecar is never created.
         tags_by_pic: dict[int, list[str]] = {}
@@ -567,7 +567,7 @@ class ReferenceFolderScanTask(BaseTask):
             ) -> None:
                 # A sidecar re-sync writes confirmed tags/description onto EXISTING
                 # pictures; a picture frozen by a locked set is read-only, so skip
-                # it (background task — skip-and-log rather than raising 423).
+                # it (background task - skip-and-log rather than raising 423).
                 locked = locked_picture_ids(session, [u["pic_id"] for u in updates])
                 if locked:
                     logger.info(
@@ -591,7 +591,7 @@ class ReferenceFolderScanTask(BaseTask):
                         pic_db.description = u["new_description"]
                     session.add(pic_db)
                     if "new_tags" in u:
-                        # Replace tags — an empty list means all tags were removed.
+                        # Replace tags - an empty list means all tags were removed.
                         session.exec(delete(Tag).where(Tag.picture_id == u["pic_id"]))
                         tags = u["new_tags"]
                         if tags:
@@ -634,7 +634,7 @@ class ReferenceFolderScanTask(BaseTask):
             "moved_picture_ids": moved_picture_ids,
             "external_moved_picture_ids": external_moved_picture_ids,
             # v1.11 Phase 5: which of those were actually queued for
-            # reconciliation review — empty whenever this root has no layout,
+            # reconciliation review - empty whenever this root has no layout,
             # even though external_moved_picture_ids is not.
             "external_moves_queued_for_review": (
                 external_moved_picture_ids if self._layout is not None else []
@@ -781,7 +781,7 @@ class ReferenceFolderScanTask(BaseTask):
         on disk.  A present file whose ``pixel_sha`` has not been backfilled yet
         makes the whole folder unmatchable rather than merely uncounted.
         Identical pixels at several paths are genuine copies, and the rows
-        behind them can differ in tags, sets and scores — pairing them by guess
+        behind them can differ in tags, sets and scores - pairing them by guess
         would move one picture's work onto another picture's file, which is the
         loss this exists to prevent.  Ambiguous groups fall through to the
         delete-and-re-add path, which is no worse than the behaviour before
@@ -795,8 +795,8 @@ class ReferenceFolderScanTask(BaseTask):
         Scoped to one reference folder, because the scan is: a file moved
         between two reference folders is a removal in one scan and an addition
         in another, with no shared pass to match them in.  Since the scan walks
-        the whole tree under the root, moving between subfolders — the case
-        this is for — is within scope.
+        the whole tree under the root, moving between subfolders - the case
+        this is for - is within scope.
         """
         if not removed_paths or not new_paths:
             return {}

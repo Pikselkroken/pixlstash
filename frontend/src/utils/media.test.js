@@ -141,7 +141,7 @@ describe('buildMediaUrl', () => {
 
   // The buster is the EXIF orientation, not the content hash: an in-place
   // rotate copies every pixel through, so the hash cannot express the one edit
-  // that needs busting — and `orientation` is in the grid projection, so the
+  // that needs busting - and `orientation` is in the grid projection, so the
   // lightbox and both full-image preloaders build the same URL from the same
   // record. A picture that has never been turned keeps its bare URL.
   it('busts the URL on the orientation, not the content hash', () => {
@@ -165,7 +165,7 @@ describe('buildMediaUrl', () => {
 })
 
 describe('displayedAspectRatio', () => {
-  it('takes the thumbnail bitmap as-is — it is already EXIF-transposed', () => {
+  it('takes the thumbnail bitmap as-is - it is already EXIF-transposed', () => {
     expect(
       displayedAspectRatio({
         thumbnail_width: 300,
@@ -179,7 +179,7 @@ describe('displayedAspectRatio', () => {
 
   // The window an in-place rotate opens: apply_orientation NULLs the thumbnail
   // dimensions to re-queue the bitmap, so a turned card sits on the RAW
-  // width/height — which do not swap — until the sweep lands. Unswapped here,
+  // width/height - which do not swap - until the sweep lands. Unswapped here,
   // the tile keeps its pre-rotate shape and then jumps.
   it('swaps the raw dimensions for a quarter-turned picture', () => {
     expect(displayedAspectRatio({ width: 4000, height: 3000 })).toBeCloseTo(4 / 3)
@@ -206,7 +206,7 @@ describe('displayedAspectRatio', () => {
 describe('IMPORT_FILE_ACCEPT', () => {
   // The empty-library card shipped with `image/*,video/*` and nothing else, so
   // a zip or a caption file could only be reached through the picker's "All
-  // Files" — an import route the app supports and its own dialog hid. These
+  // Files" - an import route the app supports and its own dialog hid. These
   // assert the offer against the predicate rather than against a copy of the
   // string, so the two cannot drift apart silently again.
 
@@ -227,7 +227,7 @@ describe('IMPORT_FILE_ACCEPT', () => {
     // matters. So walk the predicate's own lists instead.
     //
     // Media is carried by the two wildcards rather than named extension by
-    // extension, so those are asserted outright — removing either would hide
+    // extension, so those are asserted outright - removing either would hide
     // every picture and every video while leaving the subset check green.
     expect(IMPORT_FILE_ACCEPT).toContain('image/*')
     expect(IMPORT_FILE_ACCEPT).toContain('video/*')

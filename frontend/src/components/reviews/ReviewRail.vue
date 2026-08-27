@@ -13,7 +13,7 @@
       <h1 class="rs-rail-title">Review tags</h1>
     </div>
 
-    <!-- Scrollable middle — navigation keeps priority over the sticker shelf. -->
+    <!-- Scrollable middle - navigation keeps priority over the sticker shelf. -->
     <div class="rs-rail-scroll">
       <button
         class="rs-rail-item rs-rail-board"
@@ -62,7 +62,7 @@
              button (never nested inside the session button above) so it stays
              a valid, independently focusable control; revealed on hover /
              focus-within of the wrap. The row itself also opens the session
-             (matching the rest of the card) — only the abort button, which
+             (matching the rest of the card) - only the abort button, which
              stops its click from bubbling here, behaves differently. -->
         <div class="rs-rail-session-meta" @click="store.openSession(s.id)">
           <span class="rs-rail-session-scope" :title="scopeLabel(s)">{{
@@ -104,7 +104,7 @@
           <!-- Clearing every receipt is permanent, so it takes two clicks
                (same arm→"Sure?"→wipe pattern as the sticker shelf clear): the
                first arms a state that auto-reverts after a few seconds, the
-               second wipes the list. Only the receipts go — the decisions were
+               second wipes the list. Only the receipts go - the decisions were
                written through during each review and are untouched. -->
           <button
             class="rs-archived-clear"
@@ -112,7 +112,7 @@
             type="button"
             :title="
               archivedClearArmed
-                ? 'Click again to clear every archived review — this cannot be undone'
+                ? 'Click again to clear every archived review - this cannot be undone'
                 : 'Clear all archived reviews'
             "
             :aria-label="
@@ -128,7 +128,7 @@
         </div>
         <!-- Each row is a wrapper DIV so the per-item delete can be a real
              sibling <button> (never nested inside the receipt button), revealed
-             on hover / focus-within — mirrors the open-session rows above. -->
+             on hover / focus-within - mirrors the open-session rows above. -->
         <div
           v-for="a in store.archived"
           :key="a.id"
@@ -218,7 +218,7 @@
     <!-- Sticker shelf: earned rewards live here. Capped (~1/3 rail height) and
          scrollable so it always yields space to the navigation above; stickers
          shrink when the collection grows. Only shown while "Pretend this is
-         fun" is on — the collection is kept, not cleared, so toggling the
+         fun" is on - the collection is kept, not cleared, so toggling the
          setting back restores it. -->
     <div v-if="store.gamify && store.stickers.length" class="rs-shelf">
       <div class="rs-rail-label rs-shelf-label">
@@ -235,7 +235,7 @@
           type="button"
           :title="
             clearArmed
-              ? 'Click again to clear every sticker — this cannot be undone'
+              ? 'Click again to clear every sticker - this cannot be undone'
               : 'Clear all stickers'
           "
           @click="onClearClick"
@@ -264,7 +264,7 @@
           :size="store.stickers.length > 12 ? 27 : 34"
           :tilt="((i % 5) - 2) * 4"
           :fresh="i === store.stickers.length - 1"
-          :label="s.tag ? `${s.label} — earned reviewing “${s.tag}”` : s.label"
+          :label="s.tag ? `${s.label} - earned reviewing “${s.tag}”` : s.label"
         />
       </div>
     </div>
@@ -302,7 +302,7 @@ function onClearClick() {
   store.clearStickers();
 }
 
-// Two-step clear-all for the Archived list — same arm→confirm→wipe pattern as
+// Two-step clear-all for the Archived list - same arm→confirm→wipe pattern as
 // the sticker shelf clear above, with its own ref + timer (never shared).
 const archivedClearArmed = ref(false);
 let archivedClearTimer = null;
@@ -399,7 +399,7 @@ function progressPct(s) {
   return found ? Math.round((doneOf(s) / found) * 100) : 0;
 }
 
-// "21/23 · 2 skipped" — the skipped tail is visible from the rail.
+// "21/23 · 2 skipped" - the skipped tail is visible from the rail.
 function progressText(s) {
   const skipped = store.skippedCountFor(s.id);
   const base = `${doneOf(s)}/${foundOf(s)}`;
@@ -448,7 +448,7 @@ function scopeSetLocked(s) {
 function scopeSetLockTitle(s) {
   const set = scopeSet(s);
   const name = set?.name ?? s.scope?.set_id;
-  return `'${name}' is locked — its pictures are read-only.`;
+  return `'${name}' is locked - its pictures are read-only.`;
 }
 
 function shortDate(iso) {
@@ -563,7 +563,7 @@ function archivedSummary(a) {
 }
 
 /* The wrap itself carries the card surface (hover / active) so it extends
-   under the abort row below — otherwise the shaded background stops at the
+   under the abort row below - otherwise the shaded background stops at the
    session button and abort reads as floating outside the card. */
 .rs-rail-session-wrap {
   border-radius: var(--radius-sm);
@@ -614,7 +614,7 @@ function archivedSummary(a) {
   transition: width 0.2s;
 }
 /* Bottom row of the card: scope label + abort share one line. Also opens the
-   session on click (like the rest of the card) — cursor says so too. */
+   session on click (like the rest of the card) - cursor says so too. */
 .rs-rail-session-meta {
   display: flex;
   align-items: center;
@@ -640,7 +640,7 @@ function archivedSummary(a) {
 /* Abort control: a real sibling button, invisible until the row is hovered or
    anything in it has focus (focus-within keeps it keyboard-reachable).
    `visibility` (not `display`) so its box stays reserved in the meta row at
-   all times — otherwise the row (and the whole card) grows taller the moment
+   all times - otherwise the row (and the whole card) grows taller the moment
    the button appears, since it's taller than the scope label beside it. */
 .rs-rail-abort {
   visibility: hidden;
@@ -775,7 +775,7 @@ function archivedSummary(a) {
 }
 
 /* The wrap carries the card surface (hover / active) so it extends under the
-   delete button beside the receipt button — same structure as the session
+   delete button beside the receipt button - same structure as the session
    rows above. */
 .rs-rail-archived-wrap {
   display: flex;
@@ -819,7 +819,7 @@ function archivedSummary(a) {
 /* Per-item delete: a real sibling button, invisible until the row is hovered or
    anything in it has focus (focus-within keeps it keyboard-reachable).
    `visibility` (not `display`) so its box stays reserved and revealing it never
-   reflows the row — same technique as the session abort control. */
+   reflows the row - same technique as the session abort control. */
 .rs-rail-archived-del {
   visibility: hidden;
   flex-shrink: 0;

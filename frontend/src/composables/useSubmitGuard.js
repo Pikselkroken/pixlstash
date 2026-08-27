@@ -1,8 +1,8 @@
 // One in-flight submit at a time, plus the pending flag its button wears.
 //
 // The bug this exists for (#647): a create form's button stays live while its
-// POST is in flight, so a double-click — or an impatient second click while the
-// server is busy captioning an import — sends the request twice and the library
+// POST is in flight, so a double-click - or an impatient second click while the
+// server is busy captioning an import - sends the request twice and the library
 // gains two identical people, sets, or folders. The window is invisible to the
 // user and widest exactly when the server is slowest, which is when they are
 // most likely to click again.
@@ -20,7 +20,7 @@
 // It deliberately does NOT catch. A guard that swallowed the rejection would
 // hide the failure these forms already report through `useNoticeStore` or an
 // inline error line. `pending` clears in `finally`, so a failed submit re-enables
-// its button and the user can retry — which is the other half of what #647 asks
+// its button and the user can retry - which is the other half of what #647 asks
 // for.
 
 import { ref } from "vue";

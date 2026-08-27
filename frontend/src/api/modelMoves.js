@@ -1,4 +1,4 @@
-// Moving model files between registered folders — /model-moves.
+// Moving model files between registered folders - /model-moves.
 //
 // Three routes over ONE job, machine-wide, because a move is not a
 // request-shaped operation: a folder of 1,806 adapters is 438 GB, so the
@@ -37,7 +37,7 @@ export async function startModelMove(destinationFolderId, items) {
 /**
  * Move a folder PixlStash owns to another host path, files and all.
  *
- * A relocation IS a move — of every file one folder holds — so it runs the same
+ * A relocation IS a move - of every file one folder holds - so it runs the same
  * job and is watched through the same status route. Two folders qualify, and
  * the list response says which: offer this on the rows whose `relocatable` is
  * true, never on `movable === "root_only"`, which is also what the InsightFace

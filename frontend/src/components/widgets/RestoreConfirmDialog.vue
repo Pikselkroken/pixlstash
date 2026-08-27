@@ -163,13 +163,13 @@ async function handleRestore(opts = {}) {
   restoring.value = true;
   restoreError.value = "";
   if (!confirmRestoreDependencies) {
-    // Fresh attempt — clear any stale missing-deps prompt.
+    // Fresh attempt - clear any stale missing-deps prompt.
     missingDependencies.value = null;
   }
 
   // A full-vault restore is the long-running, progress-tracked path, and the
   // POST stays open for the whole swap (the backend route is synchronous).
-  // It can never surface a missing-dependencies re-prompt — only per-resource
+  // It can never surface a missing-dependencies re-prompt - only per-resource
   // / batch restores do. So close the dialog the moment the request is
   // dispatched, otherwise the "Restore in progress…" banner renders behind a
   // dialog that only closes once the restore has already finished. Any
@@ -201,7 +201,7 @@ async function handleRestore(opts = {}) {
     dialogOpen.value = false;
   } catch (err) {
     const detail = err?.response?.data?.detail;
-    // 409 with code=missing_dependencies — switch to the confirm prompt
+    // 409 with code=missing_dependencies - switch to the confirm prompt
     // instead of treating it as a failure. Only reachable on the
     // per-resource / batch path, where the dialog is still open.
     if (
@@ -225,7 +225,7 @@ async function handleRestore(opts = {}) {
       return;
     }
     if (closeOnDispatch) {
-      // The dialog is already gone — surface the failure on the store banner.
+      // The dialog is already gone - surface the failure on the store banner.
       store.error = message;
     } else {
       restoreError.value = message;
@@ -241,7 +241,7 @@ function confirmRestoreDependencies() {
 }
 
 function declineRestoreDependencies() {
-  // User refused — leave the live DB untouched. Drop back to the
+  // User refused - leave the live DB untouched. Drop back to the
   // preview screen so they can either cancel or pick a different
   // snapshot.
   missingDependencies.value = null;
@@ -262,7 +262,7 @@ const canRestore = computed(
     !restoring.value &&
     preview.value != null &&
     preview.value?.snapshot?.is_compatible !== false &&
-    // Full-vault restore is irreversible-grade destructive — require an
+    // Full-vault restore is irreversible-grade destructive - require an
     // explicit acknowledgement that this overwrites the entire DB.
     (!isFullVaultRestore.value || fullVaultAcknowledged.value),
 );
@@ -322,7 +322,7 @@ const canRestore = computed(
               {{ cp.kind }}
             </v-chip>
             <span class="restore-picker-label">
-              {{ cp.label || "—" }}
+              {{ cp.label || " - " }}
             </span>
             <span
               class="restore-picker-date"
@@ -369,7 +369,7 @@ const canRestore = computed(
               {{ preview.snapshot?.kind }}
             </v-chip>
             <span class="restore-preview-cp-label">
-              {{ preview.snapshot?.label || "—" }}
+              {{ preview.snapshot?.label || " - " }}
             </span>
             <span
               class="restore-preview-cp-date"
@@ -508,7 +508,7 @@ const canRestore = computed(
       </div>
 
       <!-- ── Missing-dependencies prompt ──────────────────────────────────
-           Server returned 409 missing_dependencies — ask the user whether
+           Server returned 409 missing_dependencies - ask the user whether
            to also restore the listed parents from the snapshot. Replaces
            the normal action footer until the user picks YES or NO. -->
       <template v-if="!isPickerStep && missingDependencies">

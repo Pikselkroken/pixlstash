@@ -1,6 +1,6 @@
 <template>
   <!-- Ordinary decisions: a small tick/glow pulse only (full fireworks are
-       reserved for sticker moments). Purely visual — pointer-events: none. -->
+       reserved for sticker moments). Purely visual - pointer-events: none. -->
   <div
     v-if="on && glowKey"
     :key="`glow-${glowKey}`"
@@ -210,8 +210,8 @@ onUnmounted(() => {
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);
 }
 
-/* Award plays near the rail/header edge — top-left of the session area, out of
-   the card's way — then flies down-left toward the shelf. */
+/* Award plays near the rail/header edge - top-left of the session area, out of
+   the card's way - then flies down-left toward the shelf. */
 .rs-award {
   position: absolute;
   inset: 0;
@@ -243,7 +243,7 @@ onUnmounted(() => {
   text-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
 }
 
-/* Reduced motion: no pop, no flight — a gentle fade-in/out in place. */
+/* Reduced motion: no pop, no flight - a gentle fade-in/out in place. */
 .rs-award--reduced .rs-award-fly {
   animation: rs-award-fade 1.4s ease both;
 }

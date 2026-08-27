@@ -78,7 +78,7 @@ def upgrade() -> None:
             # JSON list[int] of affected object ids.
             sa.Column("target_ids", sa.Text(), nullable=False),
             sa.Column("target_count", sa.Integer(), nullable=False, server_default="0"),
-            # JSON {"<target_id>": {facet: value}} — only the changed facets.
+            # JSON {"<target_id>": {facet: value}} - only the changed facets.
             sa.Column("before_state", sa.Text(), nullable=True),
             sa.Column("after_state", sa.Text(), nullable=True),
             # WS-envelope provenance, carried explicitly from the request.

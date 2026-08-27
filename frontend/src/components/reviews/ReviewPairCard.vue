@@ -1,7 +1,7 @@
 <template>
   <div class="rs-pair">
     <!-- Banner: the only context where Both / Neither / Left / Right mean
-         anything — two images that are versions of ONE shot. The question is
+         anything - two images that are versions of ONE shot. The question is
          merged in so the decision bar stays buttons-only. -->
     <div class="rs-pair-banner">
       <v-icon size="24" class="rs-pair-banner-icon"
@@ -9,7 +9,7 @@
       >
       <div class="rs-pair-banner-text">
         <span class="rs-pair-banner-title"
-          >These two are versions of the same shot{{ reasonText }} — their
+          >These two are versions of the same shot{{ reasonText }} - their
           labels disagree.</span
         >
         <span class="rs-pair-banner-sub"
@@ -18,7 +18,7 @@
           }}”?</span
         >
       </div>
-      <span v-if="item._isNew" class="rs-pair-new">NEW — from refresh</span>
+      <span v-if="item._isNew" class="rs-pair-new">NEW - from refresh</span>
     </div>
 
     <div class="rs-pair-body">
@@ -79,7 +79,7 @@
 
 <script setup>
 // Pair card: ONLY for true versions of one shot (same PictureStack or
-// dhash-near). LEFT is always the tagged side, RIGHT the untagged side —
+// dhash-near). LEFT is always the tagged side, RIGHT the untagged side -
 // which picture id is which depends on the suggestion direction (same
 // convention as the old overlay and the store's pairSides()).
 import { computed, inject } from "vue";
@@ -286,7 +286,7 @@ function openZoom(id, ext) {
   cursor: zoom-in;
 }
 
-/* Reference-only lock badge — translucent corner chip. Uses the shared
+/* Reference-only lock badge - translucent corner chip. Uses the shared
    `--scrim-photo` token (dark scrim over the photo) matching this card's tag
    chips, so mdi-lock-outline reads on any image. */
 .rs-lock-badge {

@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 # Thumbnails are served under content-addressed URLs (the ?v=WxH version changes
 # whenever the bitmap is regenerated), so browsers may cache them briefly but must
-# revalidate afterwards — that keeps reference-folder source swaps (same URL, new
+# revalidate afterwards - that keeps reference-folder source swaps (same URL, new
 # bytes) from serving stale forever, which the previous header-less heuristic
 # caching allowed. `private` stops shared proxies caching access-controlled
 # thumbnails. FileResponse still emits ETag/Last-Modified for cheap 304s.
@@ -95,7 +95,7 @@ def register_routes(router, server):
         pixels are copied through and only the EXIF orientation tag changes, so
         the stored bitmap is now sideways relative to the file. ``apply_orientation``
         NULLs ``thumbnail_width``/``height`` to re-queue the regeneration, but
-        that runs on a background sweep — until it lands this route was handing
+        that runs on a background sweep - until it lands this route was handing
         back the pre-rotate bitmap, which is why a rotate used to paint the wrong
         way round and only correct itself on a second refresh.
 
@@ -459,7 +459,7 @@ def register_routes(router, server):
                     "square_crop_side",
                     "imported_at",
                     # Feeds `thumbnail_cache_version` below. `select_fields` is an
-                    # allowlist, so anything absent is DEFERRED — and these rows
+                    # allowlist, so anything absent is DEFERRED - and these rows
                     # outlive their session, which turns a deferred read into
                     # `DetachedInstanceError` for every picture in the batch.
                     # `getattr(pic, ..., None)` does not save you: SQLAlchemy

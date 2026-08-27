@@ -2,7 +2,7 @@
 
 Two routes, and the split between them is the whole point: **listing a run costs
 nothing and changes nothing.** ``GET /model-folders/{id}/runs`` reads filenames
-and one ``config.yaml`` per run — it does not hash, copy, move or write anything,
+and one ``config.yaml`` per run - it does not hash, copy, move or write anything,
 so the card grid can be drawn for an entire output root before the user has
 decided about any of it. That property is what keeps face recognition and
 hashing out of the browsing path, and it must not be eroded by adding "just one"
@@ -29,7 +29,7 @@ reads every run under it, which is the same authority as
 ``model-folders/{id}/rescan``; the import writes files into one registered folder
 and may unlink them from another, which is the ``model-moves`` authority; and
 both sample routes read inside a registered folder, which is the authority
-``GET /adapters/{sha256}/file`` sits on for the same reason — bytes out of a
+``GET /adapters/{sha256}/file`` sits on for the same reason - bytes out of a
 registered root are a capability of their own, and "no host path crosses the
 wire" is not the argument (recorded against that route on 2026-08-11).
 """
@@ -155,7 +155,7 @@ class ImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_folder_id: int = Field(
-        description="A registered `source` folder — an ai-toolkit output root."
+        description="A registered `source` folder - an ai-toolkit output root."
     )
     run_name: str = Field(
         description=(
@@ -190,7 +190,7 @@ class ImportedFile(BaseModel):
     detail: Optional[str] = Field(
         default=None,
         description=(
-            "Why, when it failed — and, on a file that imported, why its "
+            "Why, when it failed - and, on a file that imported, why its "
             "previews did not come with it."
         ),
     )
@@ -198,7 +198,7 @@ class ImportedFile(BaseModel):
         default=0,
         description=(
             "Previews copied into this checkpoint's `<stem>_samples/` directory. "
-            "Zero for a run with no samples, and for a copy that failed — "
+            "Zero for a run with no samples, and for a copy that failed - "
             "`detail` says which."
         ),
     )
@@ -232,7 +232,7 @@ def sample_path_within(run_dir: str, filename: str) -> str:
 
     A named function rather than two lines inside the handler, because it is the
     only place on the shelf where a caller-supplied name becomes a path whose
-    *bytes* are served — and because over HTTP it is nearly untestable. Both
+    *bytes* are served - and because over HTTP it is nearly untestable. Both
     route segments are single URL path segments and Starlette percent-decodes
     before matching, so ``{filename}`` is structurally incapable of carrying a
     ``/``: on POSIX there is no reachable traversal through the route at all.
@@ -251,7 +251,7 @@ def sample_path_within(run_dir: str, filename: str) -> str:
     ``resolve_path_within`` derives its safe base by ``realpath``-ing the base it
     is *handed*. Passing ``run_dir/samples`` directly therefore makes a
     **symlinked** ``samples`` its own safe base, and every file under the link
-    target passes containment — an arbitrary-image reader for any allowlisted
+    target passes containment - an arbitrary-image reader for any allowlisted
     extension. That is not hypothetical for a ``source`` folder: unlike every
     other registered path, its contents are third-party tool output the owner
     merely pointed at, and both tarballs and git repositories carry symlinks. A
@@ -283,7 +283,7 @@ def model_sample_path_within(folder_path: str, relpath: str, filename: str) -> s
     contained against the registered ``model_folder.path`` first, because
     ``resolve_path_within`` realpaths the base it is handed and passing the
     derived directory straight in would make a *symlinked* ``<stem>_samples``
-    its own safe base — an arbitrary-image reader for any allowlisted extension.
+    its own safe base - an arbitrary-image reader for any allowlisted extension.
     The filename is then contained against that resolved directory rather than
     against the folder, because a single folder-level join would let
     ``../alice.safetensors`` through: it lands inside the registered folder, so
@@ -374,7 +374,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Describes every run under a registered `source` folder: its steps, "
             "its previews, and what its config says it was trained against. "
-            "**Nothing is hashed, copied, moved or written** — the whole card "
+            "**Nothing is hashed, copied, moved or written** - the whole card "
             "grid can be drawn before the user decides about any of it."
         ),
         tags=["model_shelf"],
@@ -403,7 +403,7 @@ def create_router(server) -> APIRouter:
         summary="One preview image from a training run",
         description=(
             "Serves a sample ai-toolkit rendered during the run, so a step can "
-            "be judged before it is imported. Reads and changes nothing else — "
+            "be judged before it is imported. Reads and changes nothing else - "
             "the same promise the run listing makes.\n\n"
             "**Both path segments are names, never paths.** The run name is "
             "joined to the registered output root and the filename to that "
@@ -453,11 +453,11 @@ def create_router(server) -> APIRouter:
     def _samples_location(model_id: int) -> Optional[dict]:
         """The first present copy of a model whose samples directory is there.
 
-        A model can hold several ``model_file`` rows — the shelf's whole
-        content/location split — and only one of them need have travelled with
+        A model can hold several ``model_file`` rows - the shelf's whole
+        content/location split - and only one of them need have travelled with
         its previews. Ordered by ``(model_folder_id, relpath)``, which **is**
-        ``model_file``'s primary key (``hub/schema.py``) — the table has no
-        ``id`` column — so the answer is stable rather than whatever SQLite
+        ``model_file``'s primary key (``hub/schema.py``) - the table has no
+        ``id`` column - so the answer is stable rather than whatever SQLite
         hands back first. Spelled out because a reviewer read "the location
         primary key" as ``mf.id`` and called the ordering a mismatch.
 
@@ -498,11 +498,11 @@ def create_router(server) -> APIRouter:
         "/models/{model_id}/samples",
         summary="The training previews stored beside one imported checkpoint",
         description=(
-            "Lists the filenames in that model's `<stem>_samples/` directory — "
+            "Lists the filenames in that model's `<stem>_samples/` directory - "
             "the previews its training run rendered, copied in with the "
             "checkpoint and carried along by a later move. Filtered to the "
             "image extensions the byte route serves, so an unrelated file "
-            "dropped into the directory is not advertised — the filter is on "
+            "dropped into the directory is not advertised - the filter is on "
             "the name, so a symlink whose target carries a different extension "
             "can still be listed and then refused. An empty list for a model "
             "that was not imported from a run."
@@ -592,7 +592,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Copies the selected checkpoints into a folder the shelf catalogues "
             "and registers them as one stack. Per file the order is copy, verify "
-            "by SHA-256, register the row and commit, and only then unlink — so "
+            "by SHA-256, register the row and commit, and only then unlink - so "
             "an interruption leaves a duplicate, never a row naming a file that "
             "is gone. The run's own files are removed only when the source "
             "folder carries `delete_after_import`."

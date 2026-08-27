@@ -1,10 +1,10 @@
-// Overlay close — reconcile a deferred smart-score re-rank without a full re-sort.
+// Overlay close - reconcile a deferred smart-score re-rank without a full re-sort.
 //
 // Editing tags in the image overlay under SMART_SCORE sort used to refresh twice:
 //   1. the realtime-sync path opportunistically repositions the card once the
 //      backend rescore lands (refreshSmartScoreForImage → repositionImageBySmartScore),
 //   2. and handleOverlayChange separately raised pendingOverlayGridRefresh, which
-//      closeOverlay flushed as a full reload — a complete re-score of every
+//      closeOverlay flushed as a full reload - a complete re-score of every
 //      candidate (511 pictures in the reported session) producing the same order.
 //
 // The deferred path now records which pictures changed and repositions just those
@@ -73,7 +73,7 @@ describe("overlay close smart-score reconcile", () => {
 
   it("defers to a pending tag-filter refresh", () => {
     // Under an active tag filter the picture may no longer match the query, so a
-    // reposition is not enough — it has to leave the grid.
+    // reposition is not enough - it has to leave the grid.
     const result = reconcileOnClose({
       deferredIds: new Set([1141]),
       pendingTagFilterRefresh: true,

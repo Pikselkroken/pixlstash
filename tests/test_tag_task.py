@@ -358,7 +358,7 @@ def test_an_undecodable_picture_is_marked_once_from_the_crop_pass(tmp_path):
 
 
 def _rotated_jpeg(tmp_path, name, size=(4608, 2592), orientation=6):
-    """A landscape JPEG that EXIF says is portrait — an ordinary phone photo."""
+    """A landscape JPEG that EXIF says is portrait - an ordinary phone photo."""
     from PIL import Image as PILImage
 
     path = tmp_path / name

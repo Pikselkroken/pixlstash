@@ -1,4 +1,4 @@
-"""PixlStash Views — sets, people and projects as folders of links (v1.11 Phase 7).
+"""PixlStash Views - sets, people and projects as folders of links (v1.11 Phase 7).
 
 The claims this file exists to keep true, in the order they matter:
 
@@ -11,12 +11,12 @@ The claims this file exists to keep true, in the order they matter:
 3. **Multi-membership costs nothing.** A picture in two projects appears in two
    folders and its one real file never moves.
 4. **A location that cannot hold the tree is refused with a reason** rather than
-   half-written — measured refusals, one per hazard the spike found
+   half-written - measured refusals, one per hazard the spike found
    (``docs/spikes/views-links.md``).
 5. **The link mode is measured, not predicted.** ``test_this_filesystem_offers``
    is the probe running on whatever filesystem the suite is on, which is how the
-   Windows answer — symlinks need administrator rights or Developer Mode, hard
-   links do not — arrives from the gate's own Windows shards rather than from a
+   Windows answer - symlinks need administrator rights or Developer Mode, hard
+   links do not - arrives from the gate's own Windows shards rather than from a
    manual.
 """
 
@@ -89,7 +89,7 @@ def test_this_filesystem_offers_a_link_mode(tmp_path):
 
     On Linux and macOS that is a symlink. On Windows it is a symlink when the
     process holds ``SeCreateSymbolicLinkPrivilege`` (administrator or Developer
-    Mode) and a hard link otherwise — the gate's Windows shards are where that
+    Mode) and a hard link otherwise - the gate's Windows shards are where that
     answer comes from, and this assertion is what reports it. A filesystem with
     neither, exFAT above all, returns ``None`` and a reason; that is a supported
     outcome for the feature and a failure here only if it happens on the
@@ -142,7 +142,7 @@ def test_a_published_entry_is_a_link_and_not_a_copy(tmp_path, library):
     """The claim is "nothing is duplicated", and a copy satisfies every other
     assertion in this file: it reads back the same bytes, it survives an rmtree
     of the tree, and the original is untouched. So the property is asserted
-    directly — the entry is a symlink, or it shares an inode with the original —
+    directly - the entry is a symlink, or it shares an inode with the original -
     because an "rmtree survives" test only asserts a documented property of the
     standard library and would still pass with ``publish`` replaced by
     ``shutil.copy``."""
@@ -249,7 +249,7 @@ def test_a_symlink_standing_in_for_a_kind_folder_never_steers_the_rebuild_out(
 ):
     """rmtree fails on a symlinked directory and makedirs then follows it.
 
-    Skipped where a *directory* symlink cannot be created at all — Windows
+    Skipped where a *directory* symlink cannot be created at all - Windows
     without Developer Mode or admin rights. The hazard needs one to exist, so a
     host that cannot make one is not exposed to it; failing here would report
     the feature's supported hard-link fallback as a bug.
@@ -466,7 +466,7 @@ def test_a_name_that_already_looks_disambiguated_still_gets_its_own_folder(
     """Suffixing once is not enough when the suffixed form is itself taken.
 
     Two sets called ``s`` and ``s (2)`` collide the moment the first is given
-    picture 2's disambiguator, and a single pass would hand back a duplicate —
+    picture 2's disambiguator, and a single pass would hand back a duplicate -
     an ``EEXIST`` at link time, reported to the owner as a filesystem refusal.
     """
     image_root, paths = library
@@ -554,7 +554,7 @@ def test_two_pictures_with_the_same_filename_both_appear(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Where views may not go — one refusal per hazard the spike measured
+# Where views may not go - one refusal per hazard the spike measured
 # ---------------------------------------------------------------------------
 
 
@@ -608,7 +608,7 @@ def test_a_views_root_inside_another_registered_library_is_refused(tmp_path, lib
     """v1.11 lets the owner register several libraries from Settings.
 
     A views tree inside a dormant one breaks that library's backups exactly as
-    it would the active one's, and this vault cannot see the hub registry — so
+    it would the active one's, and this vault cannot see the hub registry - so
     the roots are passed in.
     """
     image_root, _paths = library

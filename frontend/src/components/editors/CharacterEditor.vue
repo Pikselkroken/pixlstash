@@ -8,9 +8,9 @@
     <!-- Two columns rather than one tall stack, so the form stops outgrowing
          the viewport and scrolling its own body. The columns are a CSS reflow
          of unchanged source order: the form fields are in the first column and
-         the reference grid — which picks the thumbnail — in the second, so tab
+         the reference grid - which picks the thumbnail - in the second, so tab
          order is exactly what it was single-column. Tabs were the stated alternative and were
-         rejected — a field hidden behind a tab is a field you cannot check
+         rejected - a field hidden behind a tab is a field you cannot check
          before Ctrl+Enter saves. Creating a person has no right column (no
          reference images, no adapters yet), so it stays the narrow one-column
          dialog it has always been. -->
@@ -53,7 +53,7 @@
             person. Click one to use it as this person's thumbnail.
           </p>
           <!-- Named through its heading, or the group is an unlabelled pile of
-               images — the same wiring AdapterTray puts on its list, and it
+               images - the same wiring AdapterTray puts on its list, and it
                matters more here now that the block is its own column rather
                than the thing directly under the heading in one stack. -->
           <div
@@ -71,7 +71,7 @@
                 <!-- The picture itself is the control: clicking one makes it
                      this person's thumbnail, which is what the feature asked
                      for. Preview moved onto its own corner button rather than
-                     sharing the click — one gesture cannot mean two things. -->
+                     sharing the click - one gesture cannot mean two things. -->
                 <button
                   type="button"
                   class="ref-picture-pick"
@@ -82,7 +82,7 @@
                   :aria-label="`Use reference image ${index + 1} as the thumbnail`"
                   :title="
                     isThumbnail(pic)
-                      ? 'This is the thumbnail — click to go back to the automatic choice'
+                      ? 'This is the thumbnail - click to go back to the automatic choice'
                       : 'Use this as the thumbnail'
                   "
                   @click="toggleThumbnail(pic)"
@@ -122,12 +122,12 @@
             </div>
           </div>
           <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
-            No reference images yet — add more scored pictures of this person.
+            No reference images yet - add more scored pictures of this person.
           </p>
           <!-- The pin survives changes to this list (it is recomputed from
                scores, so a pinned picture can drop out of it). Without this the
                person keeps a thumbnail the editor shows no mark for and offers
-               no way back from — the badge is the only control, and it is not
+               no way back from - the badge is the only control, and it is not
                on screen. -->
           <p v-if="pinnedPictureIsOffList" class="ref-pictures-help">
             The thumbnail is pinned to a picture that is no longer among these.
@@ -139,9 +139,9 @@
       </div>
       <!-- Keyed on the open count rather than gated on `open`. Vuetify does
            unboot the dialog body once the transition finishes, so the key is
-           belt-and-braces for the re-read — the freshness of a list written on
+           belt-and-braces for the re-read - the freshness of a list written on
            ANOTHER surface (the shelf) should not rest on that lazy-mount
-           behaviour, which is a detail rather than a contract — but unlike
+           behaviour, which is a detail rather than a contract - but unlike
            `v-if` it does NOT unmount the tray as the dialog closes. That is
            what this is really for. `v-if="props.open"` did,
            and since this row spans both columns it took the widest block in the
@@ -149,7 +149,7 @@
            the id comes from the latched local copy: the host nulls the prop on
            the way out. Spans both columns: its cards auto-fill at 180px, so a
            full-width row holds three of them instead of one (670px of inner
-           width — 720 less the border and the --space-6 padding — against a
+           width - 720 less the border and the --space-6 padding - against a
            180px minimum track and a --space-3 gap). -->
       <AdapterTray
         v-if="openCount > 0"
@@ -228,7 +228,7 @@ const props = defineProps({
 // An existing person is the only case with a right column: reference images are
 // `v-if`'d on the id and the adapter tray renders nothing without one. Creating
 // therefore keeps the 480 single-column dialog rather than a 720 one with an
-// empty half. Written by the watcher below rather than computed off the prop —
+// empty half. Written by the watcher below rather than computed off the prop -
 // see the note there for why the close path must not recompute it.
 const isExisting = ref(false);
 
@@ -263,14 +263,14 @@ const localCharacter = ref({
 
 // What the server had when the form was filled. The PATCH treats an ABSENT
 // `thumbnail_picture_id` as "leave the pin alone" and `null` as "clear it", so
-// the key is only sent when the user actually picked something — a host that
+// the key is only sent when the user actually picked something - a host that
 // hands the editor a character row without the field can then never wipe a pin
 // it never showed.
 const initialThumbnailPictureId = ref(null);
 
 // One numeric form for the pin, everywhere. `isThumbnail` compared as strings
 // while the "did the user pick?" check in `submitCharacter` compares with
-// `===`, so a string id from either side would have made the two disagree —
+// `===`, so a string id from either side would have made the two disagree -
 // the badge on and the key suppressed.
 function pictureId(pic) {
   const raw = pic?.id ?? pic;
@@ -284,7 +284,7 @@ function isThumbnail(pic) {
   );
 }
 
-// True while a pin names a picture the current reference list does not hold —
+// True while a pin names a picture the current reference list does not hold -
 // including one whose read has not landed yet, which is why the loading flag is
 // part of it: the notice must not flash under a grid that is still filling.
 const pinnedPictureIsOffList = computed(
@@ -315,12 +315,12 @@ const previewPic = ref(null);
 // The read this fetch answers is two sequential round trips wide, and the
 // dialog is a shared, permanently-mounted instance: the user can close it or
 // open a different person inside that window, and the late response would then
-// paint one person's reference images — their FACE — under another's name. Only
+// paint one person's reference images - their FACE - under another's name. Only
 // the newest request may write anything, including the loading flag.
 //
 // A counter, not a comparison against `props.character.id`: the same person can
 // be closed and reopened while the first read is still in flight, and an id
-// equal to itself would let that abandoned request through — its late failure
+// equal to itself would let that abandoned request through - its late failure
 // would then wipe the list the reopened dialog had already filled. Identity of
 // the REQUEST is the question, and only a counter answers it.
 let referenceRequestId = 0;
@@ -348,7 +348,7 @@ async function fetchReferencePictures(characterId, requestId) {
     // Only the newest request owns the flag: an older one clearing it would
     // drop a mid-fetch person to `[]` + not-loading, which renders as "No
     // reference images yet". A closing dialog starts no new request, so this
-    // one is still the newest and does clear it — the flag cannot stick.
+    // one is still the newest and does clear it - the flag cannot stick.
     if (!superseded()) referencePicturesLoading.value = false;
   }
 }
@@ -371,7 +371,7 @@ watch(
     // The preview is the one exception to "change nothing on the way out", and
     // it is an exception because it is not part of the dialog: it is teleported
     // to <body> at z-index 9999 and covers the whole app. Left up, it outlives
-    // the dialog that owned it — Ctrl+Enter saves and closes from underneath an
+    // the dialog that owned it - Ctrl+Enter saves and closes from underneath an
     // open preview, and the Escape that would dismiss it goes with the dialog's
     // own listener, so the scrim strands with only a mouse click to clear it.
     // Dropped on both edges: out, so nothing is orphaned; in, so a preview that
@@ -380,7 +380,7 @@ watch(
     if (!isOpen) return;
     openCount.value += 1;
     isExisting.value = !!charId;
-    // Every open invalidates whatever was in flight, the create path included —
+    // Every open invalidates whatever was in flight, the create path included -
     // otherwise the previous person's read stays "newest" and writes under a
     // dialog that has moved on.
     const requestId = ++referenceRequestId;
@@ -580,7 +580,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 /* Vuetify caps the dialog at `calc(100% - 48px)`, so it stops being 720 wide
    below a 768px viewport and each column falls under the ~300px the fields
    want (299px at a 720px viewport). 720 is where that is unambiguous. Drop to
-   the single column the editor has always had — and give the reference block
+   the single column the editor has always had - and give the reference block
    back the rule that separates it from the fields stacked above it there. */
 @media (max-width: 720px) {
   .editor-body--split {
@@ -610,7 +610,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 
 /* --text-xs, not --text-sm: this hint sits under a `.section-label` heading at
    --text-2xs, and it was a full two ramp steps above it. --text-xs over
-   --text-2xs is the pairing AdapterTray already uses for exactly this — one
+   --text-2xs is the pairing AdapterTray already uses for exactly this - one
    step, with the heading carrying its rank on case, weight and tracking.
    Alpha 0.7 for the same reason AdapterTray's lines carry it: at 12px this is
    SMALL text and owes 4.5:1 (visual-language.md §4). It shipped at 0.5, which
@@ -625,7 +625,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 /* --text-xs and alpha 0.7 for the same reasons as the hint above it: these two
-   render adjacently when the list is empty, and 0.4 measured 2.43:1 — the
+   render adjacently when the list is empty, and 0.4 measured 2.43:1 - the
    quietest thing in the dialog was the one line explaining why it is empty. */
 .ref-pictures-empty {
   font-size: var(--text-xs);
@@ -720,7 +720,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   transition: opacity var(--dur-2) var(--ease-standard);
 }
 
-/* Revealed on hover, and always for the keyboard — an affordance that only
+/* Revealed on hover, and always for the keyboard - an affordance that only
    exists under a pointer is one a keyboard user cannot reach. */
 .ref-picture-frame:hover .ref-picture-zoom,
 .ref-picture-zoom:focus-visible {

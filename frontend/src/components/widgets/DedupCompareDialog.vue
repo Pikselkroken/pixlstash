@@ -19,15 +19,15 @@
  *
  * The whole decision is made here: the verdict buttons live in this dialog's
  * footer, so opening Compare is not a detour the user has to back out of before
- * they can act. The component is presentational for the queue state — it reads
- * props and emits intent — but it OWNS the zoom (the design system's
+ * they can act. The component is presentational for the queue state - it reads
+ * props and emits intent - but it OWNS the zoom (the design system's
  * full-screen blink compare): which candidate is up, fit vs actual pixels, the
  * pan. The queue's keyboard model drives that state through the exposed API so
  * there is exactly one key owner.
  *
  * Layout, per the owner's calls (2026-07-29): the dialog takes the full grid
- * space (AppDialog `fullscreen`), the images dominate — down-scaled ORIGINALS,
- * not thumbnails, because the whole point of Compare is fine detail — and the
+ * space (AppDialog `fullscreen`), the images dominate - down-scaled ORIGINALS,
+ * not thumbnails, because the whole point of Compare is fine detail - and the
  * metadata sits under each picture as the design system's compact two-column
  * label-over-value grid instead of a tall row list.
  *
@@ -320,7 +320,7 @@ const bestTagCount = computed(() => bestOf(faces.value, (c) => c.tag_count));
 const bestSmartScore = computed(() => bestOf(faces.value, candidateSmartScore));
 
 /**
- * Whether ANY copy carries a displayable smart score — the same group-level
+ * Whether ANY copy carries a displayable smart score - the same group-level
  * decision the Location row makes, and for the same reason: the meta grid's
  * height comes off the image, so the row appears on every card or on none,
  * keeping the pictures registered against each other. Against a backend that
@@ -366,7 +366,7 @@ function sharpnessText(candidate) {
  * The Location row is a whole extra line in the meta grid, and the meta grid is
  * what the image area gives its leftover height to. With the row rendered per
  * candidate, one reference-folder copy next to a library-managed one produced
- * two cards whose pictures started and ended at different heights — the
+ * two cards whose pictures started and ended at different heights - the
  * comparison's whole premise is that the images are registered against each
  * other, so the row is a group-level decision: every card gets it, or none do.
  */
@@ -1105,10 +1105,10 @@ function tagText(candidate) {
 // ── Zoom: the design system's full-screen blink compare ────────────────────
 // One candidate fills the screen; flipping in place (arrows, 1-9) makes the
 // differences jump out as motion. The magnification is a CONTINUOUS scale
-// (owner requirement): the wheel means zoom for the whole gesture — wheel up
+// (owner requirement): the wheel means zoom for the whole gesture - wheel up
 // over a candidate opens the zoom and continued wheeling keeps magnifying,
 // anchored at the cursor (binding: the image point under the pointer stays
-// stationary through every scale change) — and wheeling out three full
+// stationary through every scale change) - and wheeling out three full
 // notches of deliberate resistance past the fit floor leaves the zoom back
 // to Compare. Fit and 100% (actual
 // pixels) are SNAP STOPS on the continuum (the header buttons and the P key),
@@ -1148,7 +1148,7 @@ const zoomFitScale = ref(1);
 /** The displayed image's natural pixel size, measured on load. */
 const zoomNatural = ref(null);
 /** Outward wheel delta accumulated while AT the fit floor; three full
- * notches of deliberate resistance close the zoom (the hysteresis — see
+ * notches of deliberate resistance close the zoom (the hysteresis - see
  * ZOOM_EXIT_RESISTANCE in utils/zoomMath.js). A pause longer than the
  * gesture gap starts the count over. */
 let zoomCloseAccumulator = 0;
@@ -1283,7 +1283,7 @@ function closeZoom() {
   panState = null;
 }
 
-/** Flip forward/back, wrapping — a blink loop, not a bounded carousel. The
+/** Flip forward/back, wrapping - a blink loop, not a bounded carousel. The
  * scale and pan are deliberately NOT reset: flipping at identical
  * magnification is what makes differences read as motion (the new image's
  * own fit floor re-clamps on load). */
@@ -1318,7 +1318,7 @@ const zoomAtFit = computed(() => nearScale(zoomFitScale.value));
 const zoomAtActual = computed(() => nearScale(1));
 
 /** The readout: percentage of ACTUAL pixels, the photo-tool convention.
- * Visibility of status — it is also what makes the blink guarantee (same
+ * Visibility of status - it is also what makes the blink guarantee (same
  * magnification across flips) verifiable by eye. */
 const zoomPercent = computed(() =>
   zoomScale.value === null ? null : formatZoomPercent(zoomScale.value),
@@ -1338,7 +1338,7 @@ function snapZoomTo(target) {
   );
 }
 
-/** P: flip between the two snap stops — fit and 100% — exactly the two
+/** P: flip between the two snap stops - fit and 100% - exactly the two
  * states the old toggle had, now as points on the continuum. */
 function toggleZoomPixels() {
   if (!zoomOpen.value) return;
@@ -1396,7 +1396,7 @@ const zoomOverflowing = computed(() => {
 /**
  * Apply a new scale with the CURSOR ANCHOR (binding): the image point under
  * the pointer is computed before the change, the scale applied, and the
- * scroll re-solved so that point is back under the pointer — clamped at the
+ * scroll re-solved so that point is back under the pointer - clamped at the
  * edges. The scroll is written after the DOM has adopted the new image size.
  *
  * @param {number} next
@@ -1495,7 +1495,7 @@ function requestClose() {
 
 // ── Wheel: the mouse's way into (and through) the zoom ─────────────────────
 // Scrolling over a candidate's picture opens the blink compare on it, like
-// the zoom button. Inside the zoom, the wheel flips candidates in Fit — the
+// the zoom button. Inside the zoom, the wheel flips candidates in Fit - the
 // same in-place flip the arrow keys do, so differences read as motion. In
 // Actual pixels the surface is a scroll-to-pan container, so the wheel stays
 // native there and the flip gesture deliberately does not exist.
@@ -1503,7 +1503,7 @@ function requestClose() {
 /**
  * Wheel over a candidate's picture: wheel UP (the zoom-in direction) opens
  * the zoom, and the SAME gesture's next ticks keep zooming in over the zoom
- * surface — one continuous motion, no meaning-switch. The opening event only
+ * surface - one continuous motion, no meaning-switch. The opening event only
  * opens (at fit), so the first tick after it steps once and cannot
  * overshoot; a wheel DOWN over a thumbnail is already fully zoomed out and
  * deliberately does nothing (and is not hijacked).
@@ -1527,7 +1527,7 @@ function onThumbWheel(unitIndex, event) {
  * The wheel inside the zoom means ZOOM, continuously: up magnifies, down
  * shrinks toward the fit floor, and three further full notches AT the floor
  * (deliberate resistance) close back to Compare (the accumulator is the
- * hysteresis — see ZOOM_EXIT_RESISTANCE in utils/zoomMath.js). Always
+ * hysteresis - see ZOOM_EXIT_RESISTANCE in utils/zoomMath.js). Always
  * preventDefault: the wheel must never scroll the page or the dialog behind
  * the zoom.
  *
@@ -1797,7 +1797,7 @@ function onZoomContextMenu() {
         <button
           type="button"
           class="dc-zoom"
-          title="Zoom — full-screen blink compare (Z)"
+          title="Zoom - full-screen blink compare (Z)"
           :aria-label="`Zoom ${unitName(unit, index)}`"
           @click.stop="openZoom(unitZoomStart(index))"
         >
@@ -2218,7 +2218,7 @@ function onZoomContextMenu() {
           <button
             type="button"
             :class="{ 'dc-zv-on': zoomAtFit }"
-            title="Snap to fit — every candidate in the same box, the blink registered"
+            title="Snap to fit - every candidate in the same box, the blink registered"
             @click="snapZoomTo(zoomFitScale)"
           >
             <v-icon size="15">mdi-fit-to-screen-outline</v-icon>
@@ -2227,7 +2227,7 @@ function onZoomContextMenu() {
           <button
             type="button"
             :class="{ 'dc-zv-on': zoomAtActual }"
-            title="Snap to 1:1 — resolution differences show as size jumps (P)"
+            title="Snap to 1:1 - resolution differences show as size jumps (P)"
             @click="snapZoomTo(1)"
           >
             <v-icon size="15">mdi-magnify-scan</v-icon>
@@ -2277,7 +2277,7 @@ function onZoomContextMenu() {
           ><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place,
           differences jump out as motion</span
         >
-        <span>Scroll zooms, drag pans — zoom out past Fit to leave</span>
+        <span>Scroll zooms, drag pans - zoom out past Fit to leave</span>
         <span><kbd>P</kbd> Fit ↔ 100%</span>
         <!-- The legend names the verdicts the footer is actually offering; the
              keys are the same two in both modes, the outcomes are not. -->

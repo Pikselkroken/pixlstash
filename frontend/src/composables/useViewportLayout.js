@@ -42,7 +42,7 @@ export function useViewportLayout({ mainAreaRef }) {
   function updateMaxColumns() {
     // Maintain the responsive column bounds. gridStore.columns is derived from
     // the size level and clamps itself to these bounds, so there is nothing to
-    // write back here — updating the bounds re-evaluates the derived count.
+    // write back here - updating the bounds re-evaluates the derived count.
     const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
     if (!width) {
       gridStore.minColumns = MIN_COLUMNS;

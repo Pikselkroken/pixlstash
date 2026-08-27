@@ -36,7 +36,7 @@ beforeEach(() => {
   apiClient.delete.mockReset();
 });
 
-describe("api/dedup — scope and policy fragments", () => {
+describe("api/dedup - scope and policy fragments", () => {
   // ScopeRequestModel forbids extra fields, so a label or a glyph here is a 422.
   it("scopeBody emits only the two fields the server accepts", () => {
     expect(scopeBody("set", 12)).toEqual({ scope_type: "set", scope_id: "12" });
@@ -66,7 +66,7 @@ describe("api/dedup — scope and policy fragments", () => {
   });
 });
 
-describe("api/dedup — the policy endpoint", () => {
+describe("api/dedup - the policy endpoint", () => {
   it("getPolicy reads the defaults and bounds", async () => {
     apiClient.get.mockResolvedValue({
       data: { defaults: { threshold: 0.9 }, bounds: { min_threshold: 0.65 } },
@@ -77,7 +77,7 @@ describe("api/dedup — the policy endpoint", () => {
   });
 });
 
-describe("api/dedup — the queue", () => {
+describe("api/dedup - the queue", () => {
   it("listGroups reads the first page with the tier gate off", async () => {
     apiClient.get.mockResolvedValue({ data: { groups: [], scan: {} } });
     await listGroups();
@@ -96,12 +96,12 @@ describe("api/dedup — the queue", () => {
   });
 
   // The decided page's own filter. The open queue's groups carry no verdict, so
-  // the server refuses the param there — the client must not send it either.
+  // the server refuses the param there - the client must not send it either.
   it("listGroups sends the verdict filter on the decided page only", async () => {
     apiClient.get.mockResolvedValue({ data: { groups: [] } });
     await listGroups({ decided: true, verdicts: ["stacked"] });
     expect(apiClient.get.mock.calls[0][1].params.verdict).toEqual(["stacked"]);
-    // A repeatable query param, not axios' default `verdict[]=` — that key
+    // A repeatable query param, not axios' default `verdict[]=` - that key
     // means nothing to FastAPI and the filter would be dropped in silence.
     expect(apiClient.get.mock.calls[0][1].paramsSerializer).toEqual({
       indexes: null,
@@ -193,7 +193,7 @@ describe("api/dedup — the queue", () => {
   });
 });
 
-describe("api/dedup — counts", () => {
+describe("api/dedup - counts", () => {
   // The global badge comes back whether or not a scope was asked for, which is
   // what stops the sidebar and a context menu quoting different numbers.
   it("getCounts posts an empty scope list for the badge alone", async () => {
@@ -231,7 +231,7 @@ describe("api/dedup — counts", () => {
   });
 });
 
-describe("api/dedup — scans", () => {
+describe("api/dedup - scans", () => {
   it("startScan nests the scope in the body", async () => {
     apiClient.post.mockResolvedValue({ data: { status: "running" } });
     await startScan({ scopeType: "folder", scopeId: "/mnt/a" });
@@ -249,7 +249,7 @@ describe("api/dedup — scans", () => {
   });
 });
 
-describe("api/dedup — verdicts", () => {
+describe("api/dedup - verdicts", () => {
   // The signature rides in the body, so it never has to survive a path.
   it("stackGroup posts the signature, cover and exclusions", async () => {
     apiClient.post.mockResolvedValue({ data: { stack_id: 5 } });
@@ -341,7 +341,7 @@ describe("api/dedup — verdicts", () => {
   });
 });
 
-describe("api/dedup — bulk auto-stack", () => {
+describe("api/dedup - bulk auto-stack", () => {
   // The safe direction is the default: a caller that forgets the flag counts
   // rather than writes.
   it("autoStackExact defaults to a dry run", async () => {

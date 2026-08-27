@@ -19,23 +19,23 @@ class InsightActionModel(BaseModel):
 
     ``kind`` is a closed vocabulary the frontend switches on. Every value here
     is emitted by :mod:`pixlstash.services.library_insights_service`, and the
-    frontend handles exactly these — a value listed and never sent is dead
+    frontend handles exactly these - a value listed and never sent is dead
     code on both sides:
 
-    * ``unassigned_in_folder`` — the unassigned view, narrowed to ``path``.
-    * ``unassigned_with_face`` — the unassigned view, narrowed to pictures that
+    * ``unassigned_in_folder`` - the unassigned view, narrowed to ``path``.
+    * ``unassigned_with_face`` - the unassigned view, narrowed to pictures that
       hold a face. Unassigned means no face here is named and ``with_face``
       means there is one, so the pair is the counted set exactly.
-    * ``duplicates_in_folder`` — the duplicate queue, scoped to ``path``.
-    * ``duplicates`` — the duplicate queue, unscoped. Sent when the two folders
+    * ``duplicates_in_folder`` - the duplicate queue, scoped to ``path``.
+    * ``duplicates`` - the duplicate queue, unscoped. Sent when the two folders
       have no ancestor that would narrow anything.
-    * ``settings`` — the settings dialog, on the pane named by ``tab``.
+    * ``settings`` - the settings dialog, on the pane named by ``tab``.
     """
 
     label: str = Field(description="The button's words, e.g. 'Sort them'.")
     note: str = Field(
         default="",
-        description="What the button opens, under it — 'rapid triage', 'people review'.",
+        description="What the button opens, under it - 'rapid triage', 'people review'.",
     )
     kind: str = Field(description="Which destination, from the closed set above.")
     path: Optional[str] = Field(
@@ -93,8 +93,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Every check the 'About your library' screen runs, in both "
             "directions: a check that found nothing returns ``state='clear'`` "
-            "rather than disappearing. Computed live on each call — there is no "
-            "cache to rebuild and no background job behind this — so 'Look "
+            "rather than disappearing. Computed live on each call - there is no "
+            "cache to rebuild and no background job behind this - so 'Look "
             "again' is just another GET. Nothing on this surface writes, queues "
             "work, or moves a file."
         ),

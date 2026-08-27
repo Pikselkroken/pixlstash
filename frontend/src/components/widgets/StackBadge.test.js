@@ -16,7 +16,7 @@ function mountBadge(props = {}) {
   return mount(StackBadge, { ...globalOpts, props });
 }
 
-describe("StackBadge — when it appears", () => {
+describe("StackBadge - when it appears", () => {
   it("renders nothing for a lone picture", () => {
     // A badge reading "1" on every single-picture tile would be noise on the
     // overwhelming majority of the grid.
@@ -39,7 +39,7 @@ describe("StackBadge — when it appears", () => {
   });
 });
 
-describe("StackBadge — stacked vs unresolved", () => {
+describe("StackBadge - stacked vs unresolved", () => {
   it("states the stack as a fact", () => {
     // The resolved state carries no question mark: this stack exists.
     const wrapper = mountBadge({ count: 4 });
@@ -159,7 +159,7 @@ describe("StackBadge: as a disclosure trigger", () => {
   });
 });
 
-describe("StackBadge — activation", () => {
+describe("StackBadge - activation", () => {
   it("emits activate when clicked", () => {
     // The parent decides what a click means; the badge only reports it.
     const wrapper = mountBadge({ count: 3 });

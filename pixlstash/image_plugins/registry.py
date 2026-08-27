@@ -74,7 +74,7 @@ class ImagePluginManager:
                         if source == "built_in" and claimed_by == "user":
                             # User directories are walked first, so a shadowed
                             # built-in arrives second and used to be logged as
-                            # "the duplicate" — pointing at the file that lost,
+                            # "the duplicate" - pointing at the file that lost,
                             # not the one that took over. Name the user file.
                             message = (
                                 f"Replaces the built-in image plugin '{plugin_name}'"
@@ -128,8 +128,8 @@ class ImagePluginManager:
             plugin = plugin_class()
             # Exercise the schema once here, where a failure is containable.
             # `list_plugins()` comprehends over every plugin and runs unguarded,
-            # so one plugin raising in `parameter_schema()` — or declaring a
-            # `models` header that is not a list of dicts — would take
+            # so one plugin raising in `parameter_schema()` - or declaring a
+            # `models` header that is not a list of dicts - would take
             # `GET /pictures/plugins` down for all of them. The tagger registry
             # probes at load for the same reason (`_register_user_plugin`).
             plugin.plugin_schema()
@@ -166,8 +166,8 @@ class ImagePluginManager:
 
         A class the module merely imported belongs to whoever defined it;
         returning it would let a plugin that imports a built-in for reference
-        ship that built-in in place of the class its author wrote, and — since
-        a user plugin also wins a name collision — replace the built-in with
+        ship that built-in in place of the class its author wrote, and - since
+        a user plugin also wins a name collision - replace the built-in with
         it. ``TaggerPluginManager._register_module_plugins`` excludes imported
         classes the same way (its extra ``__module__`` prefix clause is for the
         package shape, which this loader does not accept).
@@ -175,7 +175,7 @@ class ImagePluginManager:
         An abstract class is only a *fallback*, not a skip: an intermediate
         base above the real one must not win, but a file whose only plugin
         class is abstract is an author who forgot a method, and the
-        instantiation error names both the class and the method — a better
+        instantiation error names both the class and the method - a better
         report than "no plugin class here" for a file that plainly has one.
         """
         fallback: type[ImagePlugin] | None = None

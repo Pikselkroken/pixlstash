@@ -162,7 +162,7 @@ def _create_picture_imports(
 
     # Placement on write (v1.11 Phase 4b). Resolved once for the batch: every
     # file in it goes to the same folder, and `None` means this library has no
-    # layout — or the caller is writing somewhere that is not its root.
+    # layout - or the caller is writing somewhere that is not its root.
     subfolder = resolve_placement(server.vault.db, dest_folder)
 
     new_picture_map = {}
@@ -397,5 +397,5 @@ def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
 
 
 # enforce_picture_scope and its private _picture_id_in_scoped_* helpers live in
-# pixlstash/authz/membership.py — the single home for object-membership checks.
+# pixlstash/authz/membership.py - the single home for object-membership checks.
 # The centralised authz gate calls them; handlers no longer do (Step 5).

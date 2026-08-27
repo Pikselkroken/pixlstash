@@ -8,7 +8,7 @@
   which fill they wore, and which filter a click toggled. They differ in one more
   way that matters: not every row is clickable. A confidence row does nothing
   until a tag is selected. So interactivity is a predicate, not a boolean, and it
-  gates the row's class, its `role`, its `tabindex` and its title together — a
+  gates the row's class, its `role`, its `tabindex` and its title together - a
   row that announces itself as a button and then ignores the press is worse than
   one that never claimed to be one.
 

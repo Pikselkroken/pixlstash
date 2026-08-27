@@ -50,7 +50,7 @@ def normalize_stack_positions(session: Session, stack_id: int) -> None:
     Enforces the invariant that every non-empty stack has a *non-deleted* member
     at ``stack_position == 0``. The grid's fast SQL leader filter
     (``deleted = 0 AND (stack_id IS NULL OR stack_position = 0)``) depends on
-    this — a stack whose position-0 member is missing or soft-deleted would
+    this - a stack whose position-0 member is missing or soft-deleted would
     silently vanish from the grid even when it still has visible members.
 
     Ordering (and therefore which member becomes the position-0 leader):

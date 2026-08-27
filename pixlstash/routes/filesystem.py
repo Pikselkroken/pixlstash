@@ -1,4 +1,4 @@
-"""Filesystem browsing API — server-side directory picker for native installs."""
+"""Filesystem browsing API - server-side directory picker for native installs."""
 
 import os
 import re
@@ -157,13 +157,13 @@ def create_router(server) -> APIRouter:
                 # A DIRECTORY symlink leaving the tree is the exception, and it
                 # is ordinary rather than suspect: `Models -> /vault/Models` is
                 # how a launcher keeps its models off the system disk, and the
-                # folder picker was dropping exactly those — silently, so the
+                # folder picker was dropping exactly those - silently, so the
                 # folder simply was not there to click. Nothing is loosened by
                 # listing it: this route browses any directory the owner names,
                 # so it is reachable by typing the path already, and the
                 # fallback is the same sanitizer the browsed path itself goes
                 # through (blocklist, configured roots, then the fullmatch
-                # barrier). Files still get containment — a listed file is a
+                # barrier). Files still get containment - a listed file is a
                 # file this route is offering to read.
                 if not is_dir:
                     continue

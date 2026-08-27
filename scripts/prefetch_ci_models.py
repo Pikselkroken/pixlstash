@@ -14,9 +14,9 @@ and the service is what runs here.
 
 Two on-disk locations are involved, and both are in the cached paths:
 
-* ``~/.cache/huggingface`` — the HF hub cache, where CLIP, SBert and Florence
+* ``~/.cache/huggingface`` - the HF hub cache, where CLIP, SBert and Florence
   land.
-* ``<user_data_dir>/downloaded_models`` — where the WD14 and PixlStash taggers
+* ``<user_data_dir>/downloaded_models`` - where the WD14 and PixlStash taggers
   land, because they call ``hf_hub_download(local_dir=...)``, which bypasses
   the hub cache entirely.
 

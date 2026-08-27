@@ -16,7 +16,7 @@ class MissingQualityFinder(BaseTaskFinder):
 
     i.e. N = preload_rate × _PRELOAD_BUDGET_S (clamped to [MIN, MAX]).
 
-    This decouples from compute time entirely — compute time scales with N and
+    This decouples from compute time entirely - compute time scales with N and
     would create a collapsed feedback loop if used as the budget.  The preload
     rate (images/s) is an independent property of disk+PIL speed that responds
     directly to whether the OS page cache is cold or warm.
@@ -35,7 +35,7 @@ class MissingQualityFinder(BaseTaskFinder):
     # before that task acquires the compute semaphore.
     _PRELOAD_BUDGET_S = 2.0
 
-    # EMA smoothing — lower = smoother but slower to adapt.
+    # EMA smoothing - lower = smoother but slower to adapt.
     _EMA_ALPHA = 0.25
 
     # Maximum ratio by which the batch size may grow in a single step.
@@ -97,7 +97,7 @@ class MissingQualityFinder(BaseTaskFinder):
 
         now = time.monotonic()
         if now - self._last_find_task_at > self._IDLE_RESET_S:
-            self._ema_preload_rate = None  # disk cache cold — start conservative
+            self._ema_preload_rate = None  # disk cache cold - start conservative
             self._prev_batch_size = self._INITIAL_BATCH_SIZE
         self._last_find_task_at = now
 

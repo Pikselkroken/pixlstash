@@ -4,8 +4,8 @@ Created by :class:`~pixlstash.tasks.tag_health_auto_rebuild_finder.
 TagHealthAutoRebuildFinder` when ``GET /tag_health`` would report
 ``stale=true`` and no rebuild is already running (Spec B,
 ``docs/reviews/tag-review-board-redesign-ux-spec.md`` §4). Delegates to
-:func:`pixlstash.services.tag_health_service.start_rebuild` — the exact same
-lock-protected, idempotent entry point ``POST /tag_health/rebuild`` uses — so
+:func:`pixlstash.services.tag_health_service.start_rebuild` - the exact same
+lock-protected, idempotent entry point ``POST /tag_health/rebuild`` uses - so
 an auto-trigger racing a concurrent manual click can never double-rebuild.
 This task's own body is a thin dispatch (submit the real
 :class:`~pixlstash.tasks.tag_health_rebuild_task.TagHealthRebuildTask` and

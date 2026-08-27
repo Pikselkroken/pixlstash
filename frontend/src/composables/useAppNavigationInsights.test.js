@@ -2,7 +2,7 @@
 //
 // The screen's whole value is that a finding's button lands on the pictures
 // the finding counted. `LibraryInsights` re-emits the server's action object
-// and stops there — every decision about WHERE that goes is here, and none of
+// and stops there - every decision about WHERE that goes is here, and none of
 // it was covered until this file existed.
 //
 // Two things are pinned:
@@ -12,7 +12,7 @@
 //     contract names, carrying the folder path or the face facet that makes
 //     the destination the finding's own set rather than a superset;
 //   * `/insights` is owner-only, so a READ session neither mounts it nor sits
-//     on it — the same #1014 treatment as the model shelf, and the sibling of
+//     on it - the same #1014 treatment as the model shelf, and the sibling of
 //     `useAppNavigationModels.test.js`.
 //
 // `sessionContext` is the REAL one from `apiClient`, not a hand-set boolean, so
@@ -109,7 +109,7 @@ describe("a finding's action reaches its destination", () => {
     api.handleInsightAction({ kind: "unassigned_with_face" });
 
     // Unassigned means no face here is named; `with_face` means there is one.
-    // The pair is exactly the set the finding counted — without the facet the
+    // The pair is exactly the set the finding counted - without the facet the
     // destination is every unassigned picture, most with no face at all.
     expect(nav.push).toHaveBeenCalledWith({
       name: "character",

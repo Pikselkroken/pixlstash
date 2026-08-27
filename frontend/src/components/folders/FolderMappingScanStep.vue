@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Wizard step 1 ("Main") — runs the Phase 2 folder-structure read and shows
+ * Wizard step 1 ("Main") - runs the Phase 2 folder-structure read and shows
  * what it found. Nothing is written here; see integration_architecture.md
  * §20. Starts the read on mount and polls it to completion.
  */
@@ -18,7 +18,7 @@ import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   path: { type: String, required: true },
   // Resume an already-started (or already-settled) read instead of starting
-  // a new one — the sidebar's "finish organising" re-enters here.
+  // a new one - the sidebar's "finish organising" re-enters here.
   resumeTaskId: { type: String, default: "" },
 });
 
@@ -49,7 +49,7 @@ const summary = computed(() => {
   let silent = 0;
   for (const level of result.value.levels || []) {
     // Level 1 is always the single root folder and never carries a reading
-    // (integration_architecture.md §20) — counting it as "silent" would be
+    // (integration_architecture.md §20) - counting it as "silent" would be
     // noise on every single scan, not a finding.
     if (level.depth === 1) continue;
     for (const folder of level.folders || []) {
@@ -191,10 +191,10 @@ onUnmounted(() => {
           <li v-if="summary.tallies.project">✓ {{ summary.tallies.project }} folder(s) read as Project</li>
           <li v-if="summary.tallies.tag">✓ {{ summary.tallies.tag }} folder(s) read as Tag</li>
           <li v-if="summary.narrowed" class="scan-step__summary-muted">
-            — {{ summary.narrowed }} narrowed to a choice — you'll pick
+            - {{ summary.narrowed }} narrowed to a choice - you'll pick
           </li>
           <li v-if="summary.silent" class="scan-step__summary-muted">
-            — {{ summary.silent }} with nothing to say
+            - {{ summary.silent }} with nothing to say
           </li>
         </ul>
       </template>
@@ -271,7 +271,7 @@ onUnmounted(() => {
 
 .scan-step__stat-value {
   /* NOT --font-pixel. Tiny5 is a 5-pixel display face: "11,886" came out as
-     unreadable blocks (visual-language.md — brand-only, never reading text). */
+     unreadable blocks (visual-language.md - brand-only, never reading text). */
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;

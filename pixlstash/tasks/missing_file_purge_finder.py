@@ -43,7 +43,7 @@ class MissingFilePurgeFinder(BaseTaskFinder):
         if self._cooldown_start > 0:
             if time.monotonic() - self._cooldown_start < self.SCAN_COOLDOWN_S:
                 return None
-            # Cooldown expired — start a new pass from the beginning.
+            # Cooldown expired - start a new pass from the beginning.
             self._cursor_id = 0
             self._cooldown_start = 0.0
 
@@ -52,7 +52,7 @@ class MissingFilePurgeFinder(BaseTaskFinder):
         )
 
         if not pictures:
-            # Reached the end of the table — begin cooldown.
+            # Reached the end of the table - begin cooldown.
             self._cooldown_start = time.monotonic()
             self._cursor_id = 0
             return None

@@ -1,10 +1,10 @@
-// useEntityListsStore.js — the shared character / picture-set / project LISTS.
+// useEntityListsStore.js - the shared character / picture-set / project LISTS.
 //
 // Three surfaces need "every character", "every picture set" and "every
 // project": the sidebar tree, the image context menu's Person/Set/Project
 // flyouts, and the tag-review scope pickers. Each used to fetch and keep its
 // own private copy, and the context menu refetched all three on every hover
-// (the menu is `v-if`-mounted, so its children — and their only cache — were
+// (the menu is `v-if`-mounted, so its children - and their only cache - were
 // destroyed on every close). On a large library those reads are slow enough to
 // make the flyouts feel stuck. See frontend_architecture.md §4 Tier 1.
 //
@@ -43,7 +43,7 @@
 //     already in flight when the context changed is DISCARDED (the `epoch`
 //     guard below) rather than written into the new session's cache.
 //   * `invalidate()` only ever triggers a server-authoritative refetch. Nothing
-//     here is ever patched from a WebSocket event payload — `origin_client_id`
+//     here is ever patched from a WebSocket event payload - `origin_client_id`
 //     is attacker-controllable and is echo-matching only (integration
 //     _architecture.md §8.1).
 
@@ -104,7 +104,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   const trailingInvalidations = new Map();
 
   // Bumped by reset(). A response tagged with a stale epoch is dropped instead
-  // of being written into the cache — otherwise a list fetched under the
+  // of being written into the cache - otherwise a list fetched under the
   // previous credential could land after a logout and render to the next one.
   let epoch = 0;
 
@@ -120,7 +120,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   /**
    * Is this kind loading with nothing to show yet?
    *
-   * A revalidation over a warm cache is deliberately NOT "loading" — the point
+   * A revalidation over a warm cache is deliberately NOT "loading" - the point
    * of the cache is that the previous list stays on screen meanwhile.
    *
    * @param {string} kind
@@ -177,7 +177,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
    * Read one list from the server, de-duplicated while a request is in flight.
    *
    * This is the "revalidate" half of stale-while-revalidate: callers that are
-   * rendering a menu should NOT await it — the reactive getters already hold
+   * rendering a menu should NOT await it - the reactive getters already hold
    * the previous list, and this call swaps in the fresh one when it lands.
    *
    * On failure the previous list is kept (a stale menu beats an empty one) and
@@ -209,7 +209,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
     pending.value = { ...pending.value, [kind]: true };
     const request = FETCHERS[kind]({ baseUrl })
       .then((rows) => {
-        // The credential changed while this was in flight — this response
+        // The credential changed while this was in flight - this response
         // belongs to the previous session and must not be shown.
         if (requestEpoch !== epoch) return [];
         if (!Array.isArray(rows)) {
@@ -234,7 +234,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
         // Identity-checked: a pre-reset request can settle AFTER a post-reset
         // one for the same kind, and an unconditional delete would evict the
         // successor's dedup entry and cost a redundant third request. (No stale
-        // write is possible either way — the epoch guard above covers that.)
+        // write is possible either way - the epoch guard above covers that.)
         if (inFlight.get(kind) === request) inFlight.delete(kind);
         if (requestEpoch === epoch) {
           pending.value = { ...pending.value, [kind]: false };

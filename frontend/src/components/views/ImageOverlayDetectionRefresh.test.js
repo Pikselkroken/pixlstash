@@ -1,8 +1,8 @@
-// Overlay detection refresh — after a Segment run finishes, the open lightbox
+// Overlay detection refresh - after a Segment run finishes, the open lightbox
 // must show the new object boxes without being closed and reopened.
 //
 // The bug: `detections` is a card-content field, so useGridRealtimeSync refreshes
-// the grid card in place — and defers even that while the overlay is open (§9.1).
+// the grid card in place - and defers even that while the overlay is open (§9.1).
 // The overlay reads its boxes from /pictures/{id}/detections on card change only,
 // so nothing re-fetched them for the card already on screen.
 //
@@ -58,7 +58,7 @@ vi.mock("../../utils/apiClient", () => ({
 
 // (1) Verbatim copy of App.vue's field gate for emitting the detections signal.
 // The backend always stamps a finished DetectionTask `fields: ["detections"]`
-// (vault.py), so this matches the explicit field only — an absent/empty `fields`
+// (vault.py), so this matches the explicit field only - an absent/empty `fields`
 // list is some other change and must not trigger a detections re-read.
 function touchesDetections(fields) {
   const changedFields = Array.isArray(fields) ? fields : [];

@@ -18,7 +18,7 @@ after the copy, before commit    both paths                 the **source**
 after commit, before the unlink  both paths                 the **destination**
 ===============================  =========================  ==================
 
-Both residues are a *duplicate*, which the shelf already models — one ``model``
+Both residues are a *duplicate*, which the shelf already models - one ``model``
 row with two ``model_file`` rows is what a file copied into two registered
 folders is, and a **manual** rescan of either folder reconciles it. Neither
 residue is a dangling row. That is the acceptance bar (shelf plan §6 item 3),
@@ -28,15 +28,15 @@ and ``tests/test_model_move.py`` interrupts both windows to prove it.
 has exactly one caller, ``POST /model-folders/{id}/rescan``; nothing scans a
 model folder on start or on a schedule. So every reconciliation claim below is a
 claim about a *repair the owner can make*, not about one that happens by itself.
-The residues are chosen so that waiting costs nothing — a duplicate is
-serviceable, a dangling row is not — but nobody should read them as self-healing.
+The residues are chosen so that waiting costs nothing - a duplicate is
+serviceable, a dangling row is not - but nobody should read them as self-healing.
 
 **Same-drive is a rename and skips all of it**, per the ruling. Nothing is
 copied, nothing is verified and no space is needed, because no second copy is
 made. Its residue is narrower but not identical: the publication claims the
 destination name and then drops the source one (:func:`publish_no_clobber`), so
-a crash between it and the commit leaves the file at the destination — and, if
-the crash lands between those two syscalls, at the source as well — with the row
+a crash between it and the commit leaves the file at the destination - and, if
+the crash lands between those two syscalls, at the source as well - with the row
 still naming the source. That is a ``missing`` row and an unregistered file, or
 a plain duplicate, and a manual rescan of either folder repairs both by content,
 because ``model`` is keyed by sha256 and the row keeps its curation. An *error*
@@ -47,18 +47,18 @@ which is the trade the ruling makes.
 
 **Durability: the hub runs ``PRAGMA synchronous=NORMAL``** (``hub/db.py``), so
 "the row is committed" means committed to the WAL without an fsync, and a power
-loss — not a process kill, which WAL survives — can lose the last commit. The
+loss - not a process kill, which WAL survives - can lose the last commit. The
 consequence here is *milder* than the ordering it sits inside, not worse: the
 unlink that follows a lost commit has already removed the source, so what
 survives is the bytes at the **destination** with no row naming them. That is an
-unregistered file a rescan re-links by content with its curation intact — the
+unregistered file a rescan re-links by content with its curation intact - the
 same residue the same-drive rename window already accepts, and never a row
 naming a file that is gone. Raising the pragma to ``FULL`` would fsync every
 tiny hub write in the product to narrow that one window, which is not the trade.
 
 **The unlink is authorised by exactly one committed row, and that is checked**
 (#1017). "Commit first" above means the ``model_file`` row actually moved from
-the source key to the destination key — but SQL reports an ``UPDATE`` that
+the source key to the destination key - but SQL reports an ``UPDATE`` that
 matched nothing as success, so the commit could be a no-op and the unlink would
 run anyway, leaving the destination bytes with no row naming them. That is the
 dangling residue inverted: not a row without a file, a file without a row, and
@@ -69,7 +69,7 @@ requires **exactly one** affected row and raises :class:`RepointLost` otherwise,
 so the caller undoes its copy or its rename and fails the file before the
 unlink; and ``DELETE /model-folders/{id}`` now takes the same
 :data:`SHELF_IO_LOCK` slot, which stops the reported interleaving from starting
-but is a slot rather than a general exclusion — a rescan writes the same rows
+but is a slot rather than a general exclusion - a rescan writes the same rows
 outside this lock by design, and a multi-run import is a sequence of separate
 lock-taking requests. The rowcount check is what holds in every case.
 
@@ -135,7 +135,7 @@ STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
-# **One shelf file operation at a time, machine-wide — a move and an import
+# **One shelf file operation at a time, machine-wide - a move and an import
 # included.** They used to hold separate locks, which serialized each against
 # itself and *nothing* against the other: a move planned at 12:00 and an import
 # started at 12:01 could both decide the same destination filename was free,
@@ -144,7 +144,7 @@ STATUS_CANCELLED = "cancelled"
 # overlapping them anyway.
 #
 # **The loser fails cleanly with 409 and never retries.** Queueing would mean
-# the plan the caller was shown — free space, collisions, what is on disk — had
+# the plan the caller was shown - free space, collisions, what is on disk - had
 # been validated against a filesystem the other operation was still changing,
 # and silently re-planning under the caller is worse than telling them to press
 # it again.
@@ -169,9 +169,9 @@ class RepointLost(RuntimeError):
 
     The unlink at the end of a move is authorised by exactly one thing: the
     ``model_file`` row moving from the source key to the destination key. If
-    that row is gone by the time the commit runs — the source folder was
+    that row is gone by the time the commit runs - the source folder was
     forgotten mid-move, a delete removed the copy, a restored hub no longer has
-    it — the ``UPDATE`` matches nothing and reports success in silence, and the
+    it - the ``UPDATE`` matches nothing and reports success in silence, and the
     mover would then unlink the source and leave the destination bytes with no
     row naming them. So :meth:`ModelMover._repoint` requires **exactly one**
     affected row and raises this otherwise; the caller undoes what it wrote and
@@ -299,7 +299,7 @@ def unlink_source(source_path: str) -> None:
     """The last step of a move or an import, and only ever the last step.
 
     Its own function so the crash-window test has a seam to interrupt exactly
-    here — between a durable commit and the removal that commit authorises —
+    here - between a durable commit and the removal that commit authorises -
     without patching ``os.unlink`` for the whole process.
     """
     os.unlink(source_path)
@@ -315,8 +315,8 @@ def discard_partial(partial: str) -> None:
         logger.debug("No partial copy at %s to discard.", partial)
     except OSError as exc:
         logger.warning(
-            "Could not remove the partial copy %s: %s. It is inert — no row "
-            "names it and the scanner ignores it — but it is occupying disk.",
+            "Could not remove the partial copy %s: %s. It is inert - no row "
+            "names it and the scanner ignores it - but it is occupying disk.",
             partial,
             exc,
         )
@@ -327,8 +327,8 @@ def discard_partial_tree(partial: str) -> None:
 
     The directory counterpart of :func:`discard_partial`, and quiet for the same
     reason: the caller is already reporting a failure and a cleanup error must
-    not replace it. Whatever is left behind is inert — it carries the
-    ``.pixlstash-partial`` suffix, so no row names it and nothing loads it — but
+    not replace it. Whatever is left behind is inert - it carries the
+    ``.pixlstash-partial`` suffix, so no row names it and nothing loads it - but
     it is occupying disk, which is why the failure is logged rather than passed.
     """
 
@@ -339,8 +339,8 @@ def discard_partial_tree(partial: str) -> None:
         logger.debug("No partial copy at %s to discard.", partial)
     except OSError as exc:
         logger.warning(
-            "Could not remove the partial copy %s: %s. It is inert — no row "
-            "names it and nothing loads it — but it is occupying disk.",
+            "Could not remove the partial copy %s: %s. It is inert - no row "
+            "names it and nothing loads it - but it is occupying disk.",
             partial,
             exc,
         )
@@ -350,7 +350,7 @@ def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
     """Put *temporary_path* at *destination_path*, or fail if the name is taken.
 
     The last step of every move, and the only one that can destroy somebody
-    else's file. ``os.replace`` — and ``os.rename`` on POSIX — overwrite in
+    else's file. ``os.replace`` - and ``os.rename`` on POSIX - overwrite in
     silence, which makes the execution-time free check only as good as the gap
     that follows it, and on the copy path that gap is a whole checkpoint's copy
     and digest. A trainer or ComfyUI writing the final name inside that gap had
@@ -365,8 +365,8 @@ def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
 
     **A failure never replaces anything, and tries to leave the name free.** A
     claim that fails has written nothing at all. A claim that succeeded and could
-    not then drop the temporary name — Windows refuses to unlink a file another
-    process holds open, which is exactly what ComfyUI does with a loaded model —
+    not then drop the temporary name - Windows refuses to unlink a file another
+    process holds open, which is exactly what ComfyUI does with a loaded model -
     gives the claim back before re-raising, because leaving it would be an
     unregistered copy at the destination *and* a name that refuses every later
     move of that model. That rollback is what ``os.rename`` got for free by being
@@ -408,8 +408,8 @@ def _destination_taken(destination_path: str) -> FileExistsError:
 
     Built the three-argument way so ``errno`` and ``filename`` survive for any
     handler that has to tell EEXIST from the EPERM a filesystem without hard
-    links raises; ``str(exc)`` — what the outcome detail and the HTTP body carry
-    — then reads ``[Errno 17] <sentence>: '<path>'``, so the path is not
+    links raises; ``str(exc)`` - what the outcome detail and the HTTP body carry
+    - then reads ``[Errno 17] <sentence>: '<path>'``, so the path is not
     repeated inside the sentence.
     """
     return FileExistsError(
@@ -430,18 +430,18 @@ def _claim_destination(temporary_path: str, destination_path: str) -> bool:
     Hard links are not universal, and a move that used to work must not start
     failing because of the fix: a destination on exFAT/FAT or an SMB share has
     no links to give, and ``fs.protected_hardlinks`` (on by default) refuses a
-    link to a file the caller neither owns nor can write — a model owned by
+    link to a file the caller neither owns nor can write - a model owned by
     another uid, which a Docker ComfyUI or a NAS mount produces, and which
     ``os.rename`` moved happily because it only ever needed the *directory*.
     So the second attempt reserves the name with ``O_CREAT|O_EXCL``, which is
     equally no-clobber and equally one syscall, and replaces its own
     reservation. The residue it accepts and the link does not is a crash in
-    between, which leaves an empty file at the final name — narrow enough to
+    between, which leaves an empty file at the final name - narrow enough to
     trade for the alternative, which is refusing to move at all.
 
     Returns:
         True when *temporary_path* is still a second name for the content and
-        the caller has to drop it — the hard-link branch. False when the claim
+        the caller has to drop it - the hard-link branch. False when the claim
         consumed it, which the reservation branch does by replacing itself with
         it, so there is nothing left for the caller to unlink.
     """
@@ -479,7 +479,7 @@ def move_directory(source_path: str, destination_path: str) -> None:
     root whose registered rows are directories rather than files: an InsightFace
     pack is ``scrfd_10g_bnkps.onnx`` plus ``glintr100.onnx`` and the shelf
     catalogues the pack, not the files. The ordering is the same shape and has
-    the same property — **copy → rename into place → then remove the source** —
+    the same property - **copy → rename into place → then remove the source** -
     so every interruption leaves the pack loadable at the source, at the
     destination, or (harmlessly) at both. The intermediate copy carries
     :data:`PARTIAL_SUFFIX`, so a crash mid-copy can never leave a
@@ -487,8 +487,8 @@ def move_directory(source_path: str, destination_path: str) -> None:
     be a face pipeline that starts and then fails on a missing model.
 
     **No SHA-256 verify, unlike a model file.** These rows have no ``sha256`` to
-    compare against — the packs are declared from a directory listing, never
-    hashed — so there is nothing to verify against, and ``copytree`` raises on
+    compare against - the packs are declared from a directory listing, never
+    hashed - so there is nothing to verify against, and ``copytree`` raises on
     the I/O errors a digest would be catching. Re-running the relocation is the
     repair, and the packs are re-downloadable besides.
 
@@ -570,8 +570,8 @@ def carry_samples(
     the file at its new home, so a failure here is reported in the outcome's
     ``detail`` and the file stays moved.
 
-    Ordered by the caller — after the row commits and before the source is
-    unlinked — so ``delete_after_import`` can never outrun the copy.
+    Ordered by the caller - after the row commits and before the source is
+    unlinked - so ``delete_after_import`` can never outrun the copy.
 
     Args:
         source_path: The model file at its old location. Its samples directory
@@ -597,7 +597,7 @@ def carry_samples(
     if os.path.lexists(destination_dir):
         # Refused rather than merged or replaced, for the reason the importer
         # refuses the same name: there is no undo for shelf operations. It is
-        # also what makes the two platforms agree — ``os.rename`` over an
+        # also what makes the two platforms agree - ``os.rename`` over an
         # **empty** existing directory silently replaces it on POSIX and raises
         # on Windows, so without this check the owner's empty directory is
         # destroyed on four CI shards' worth of Linux and preserved on the other
@@ -629,8 +629,8 @@ def carry_samples(
             # copy path below, every failure runs ``discard_partial_tree`` on a
             # name carrying ``PARTIAL_SUFFIX``, so ``destination_dir`` cannot
             # exist here. ``move_directory`` copies, renames into place and
-            # removes the source *last*, so an rmtree that fails — a locked file
-            # on Windows, an EACCES on the source root, an NFS ``.nfs*`` handle —
+            # removes the source *last*, so an rmtree that fails - a locked file
+            # on Windows, an EACCES on the source root, an NFS ``.nfs*`` handle -
             # raises after the previews are already at the destination.
             # Reporting that as "not carried" sends the owner hunting for
             # previews that are exactly where they should be, and their obvious
@@ -648,8 +648,8 @@ def carry_samples(
                 exc,
             )
             # Logged, not reported: ``detail`` means "the previews did not come
-            # with it" — that is what the schema says and what the receipt
-            # counts — and they did. Leftover bytes nobody names belong in the
+            # with it" - that is what the schema says and what the receipt
+            # counts - and they did. Leftover bytes nobody names belong in the
             # log, exactly as ``discard_partial`` puts them there.
             return None
         logger.error(
@@ -670,7 +670,7 @@ def require_space(destination_path: str, bytes_to_copy: int) -> None:
     """Check free space **before the first byte**, for the whole batch.
 
     Per file would fill the disk and fail on file 1,500 of 1,806, having
-    already moved 1,499 — and there is no undo.
+    already moved 1,499 - and there is no undo.
     """
     if bytes_to_copy <= 0:
         return
@@ -727,14 +727,14 @@ class ModelMover:
         """Resolve and check a batch without writing anything.
 
         Args:
-            items: ``(model_folder.id, model_file.relpath)`` pairs — the
+            items: ``(model_folder.id, model_file.relpath)`` pairs - the
                 ``model_file`` primary key, which is what the list response
                 already gives the client for every copy of every row.
             destination_folder_id: Where they go. Must be registered, and must
                 be a folder that is catalogued in place: a ``source`` folder is
                 an ai-toolkit output root, taken *from*, never written into.
-            flatten: True — the default, and what dropping files onto a folder
-                means — lands every file at its basename. False keeps each
+            flatten: True - the default, and what dropping files onto a folder
+                means - lands every file at its basename. False keeps each
                 file's ``relpath`` verbatim, subdirectories and all, which is
                 what **relocating a whole folder** needs: a store holding
                 ``runA/model.safetensors`` and ``runB/model.safetensors`` is not
@@ -744,7 +744,7 @@ class ModelMover:
                 resolve, because there is no such verb) or, with one such file,
                 silently drop the subdirectory.
             relocating: True only for a whole-folder relocation, which is the
-                one legitimate way files leave a ``root_only`` folder — the
+                one legitimate way files leave a ``root_only`` folder - the
                 folder is going with them. It is a separate flag from
                 ``flatten`` on purpose: ``flatten`` is about the shape of the
                 destination path, this is about authority, and welding the two
@@ -752,8 +752,8 @@ class ModelMover:
                 silently inherited the right to empty the HuggingFace cache.
                 ``POST /model-folders/{id}/relocate`` is the only caller, and
                 ``relocatable_identity`` has already refused every folder but
-                the two that relocate — the managed store and PixlStash's own
-                download folder — before it gets here.
+                the two that relocate - the managed store and PixlStash's own
+                download folder - before it gets here.
 
         Returns:
             The validated :class:`MovePlan`.
@@ -814,7 +814,7 @@ class ModelMover:
         # what has to fit. Excluded for a same-device move for the same reason
         # the file is: it is a rename. **Not** exact for a same-device *copy-in*
         # (``delete_source=False``), which does copy both and is counted as
-        # zero — a pre-existing gap this inherits rather than closes, and one no
+        # zero - a pre-existing gap this inherits rather than closes, and one no
         # route reaches today because nothing passes ``delete_source=False``.
         bytes_to_copy = sum(
             move.size + samples_size(move.source_path)
@@ -863,9 +863,9 @@ class ModelMover:
                 status_code=404,
             )
         # **Two values, and the pair is the point.** `root_only` says the folder
-        # relocates as a whole — PixlStash's own downloads and the InsightFace
+        # relocates as a whole - PixlStash's own downloads and the InsightFace
         # packs. `fixed` says it cannot relocate at all, because another tool
-        # owns where it lives — the HuggingFace cache. Neither permits a
+        # owns where it lives - the HuggingFace cache. Neither permits a
         # per-item move out, so keying on one would leave the other open, which
         # is exactly how a rename of this vocabulary could silently drop the
         # protection. Refused here, at the single point every move funnels
@@ -878,7 +878,7 @@ class ModelMover:
         # DIRECTORY. Moving one does not relocate a model, it breaks
         # HuggingFace's bookkeeping for ComfyUI and everything else too. Its
         # real control is `HF_HOME`, read at import: a restart and a
-        # re-download, not a move — which is the distinction `fixed` exists to
+        # re-download, not a move - which is the distinction `fixed` exists to
         # record.
         if row["folder_movable"] in ("root_only", "fixed") and not relocating:
             raise MoveRefused(
@@ -894,8 +894,8 @@ class ModelMover:
         if folder_id == destination_folder_id:
             # Not an error: the shelf lets a user drop a mixed selection onto a
             # folder, and the files already in it are simply nothing to do. The
-            # caller still hears about them — ``plan`` turns this ``None`` into
-            # a ``skipped`` outcome — because an item that vanishes between the
+            # caller still hears about them - ``plan`` turns this ``None`` into
+            # a ``skipped`` outcome - because an item that vanishes between the
             # request and the results is one the client cannot account for.
             return None
 
@@ -927,7 +927,7 @@ class ModelMover:
         # modes**, not a sanitizer. ``basename`` neutralises ``..`` but not a
         # *symlink* standing at the destination filename: ``resolve_path_within``
         # calls ``realpath``, so a dangling ``dest/alice.safetensors ->
-        # /elsewhere/alice.safetensors`` is refused here — and only here, since
+        # /elsewhere/alice.safetensors`` is refused here - and only here, since
         # ``os.path.exists`` is False for a dangling link and the collision check
         # below would wave it through. Before #1012 that led straight into an
         # ``os.replace`` writing outside the registered folder; publication now
@@ -992,7 +992,7 @@ class ModelMover:
         the other shelf operation out of that gap; the owner, ComfyUI or a
         trainer is not under any lock of ours.
 
-        Neither run is what makes a move safe — a check is a moment and the copy
+        Neither run is what makes a move safe - a check is a moment and the copy
         that follows it takes minutes. :func:`publish_no_clobber` is what makes
         it safe, by refusing at the instant of publication. These two exist to
         refuse *early*, with a message naming the file, and to catch the case the
@@ -1035,7 +1035,7 @@ class ModelMover:
             plan: The result of :meth:`plan`.
             delete_source: False leaves the original in place, which makes this
                 a register-a-second-copy rather than a move. No route passes it
-                today — the ai-toolkit import writes its own rows, because it
+                today - the ai-toolkit import writes its own rows, because it
                 creates the ``model`` as well as the ``model_file``.
             should_cancel: Consulted **between** files. Cancelling stops the
                 queue and rolls nothing back: the files already moved are moved,
@@ -1125,7 +1125,7 @@ class ModelMover:
     def _rename(self, move: PlannedMove, plan: MovePlan) -> MoveOutcome:
         """Same filesystem: publish the destination name, then repoint.
 
-        No copy, no verify and no space check, because no second copy is made —
+        No copy, no verify and no space check, because no second copy is made -
         the ruling. The residue of a crash between the two steps is a file at the
         destination that no row names plus a row that will read ``missing``, and
         a manual rescan of either folder re-links it by content with its
@@ -1141,7 +1141,7 @@ class ModelMover:
         try:
             self._repoint(move, plan)
         except RepointLost:
-            # The row that authorised this move is gone — its folder was
+            # The row that authorised this move is gone - its folder was
             # forgotten, or the copy was deleted, while the rename ran. Same
             # undo as the key-taken case below: put the file back at the path
             # the (now absent) registration named, which is where re-adding that
@@ -1159,7 +1159,7 @@ class ModelMover:
             raise
         except sqlite3.IntegrityError:
             # Somebody registered this destination key between the check above
-            # and this commit — a rescan, which is deliberately not under
+            # and this commit - a rescan, which is deliberately not under
             # SHELF_IO_LOCK. Put the file back: the row still names the source,
             # and leaving it renamed away is the dangling row this whole module
             # exists to prevent. The racing row is left for the rescan that owns
@@ -1182,7 +1182,7 @@ class ModelMover:
             raise
         # After the row is committed, exactly as the copy path does it: a
         # failure here costs previews, never the file. Nothing is unlinked on
-        # this path — the rename *was* the move — so this is simply last.
+        # this path - the rename *was* the move - so this is simply last.
         detail = carry_samples(move.source_path, move.destination_path)
         return MoveOutcome(
             move.source_folder_id, move.source_relpath, STATUS_MOVED, detail
@@ -1223,8 +1223,8 @@ class ModelMover:
         try:
             self._repoint(move, plan, delete_source=delete_source)
         except RepointLost:
-            # Nothing has been unlinked yet — that is the whole point of the
-            # ordering — so the undo is to drop the copy. The source file is
+            # Nothing has been unlinked yet - that is the whole point of the
+            # ordering - so the undo is to drop the copy. The source file is
             # still where it was, unregistered, exactly as forgetting its folder
             # left every other file in it.
             logger.error(
@@ -1280,14 +1280,14 @@ class ModelMover:
         **The repointing branch requires exactly one affected row** and rolls
         back and raises :class:`RepointLost` otherwise. ``UPDATE`` reports zero
         rows as success, so without the check a source folder forgotten mid-move
-        — its location rows deleted — let the mover unlink the source and report
+        - its location rows deleted - let the mover unlink the source and report
         ``moved`` with nothing registering the bytes it had just written
         (#1017).
 
         **The predicate is the source key and nothing else**, deliberately.
         ``model_file`` is ``PRIMARY KEY (model_folder_id, relpath)``, so the key
         already matches at most one row and adding ``model_id`` cannot narrow a
-        real ambiguity — it can only *miss*. It would, too:
+        real ambiguity - it can only *miss*. It would, too:
         :class:`~pixlstash.tasks.checkpoint_hash_task.CheckpointHashTask` folds
         duplicate checkpoints by rewriting ``model_file.model_id`` to the
         survivor, it runs on the task runner outside ``SHELF_IO_LOCK``, and
@@ -1323,7 +1323,7 @@ class ModelMover:
                 if affected != 1:
                     # Raised inside the ``with``, so the transaction rolls back
                     # and nothing is half-written. The key is the primary key,
-                    # so this can only ever be zero — spelled ``!= 1`` because
+                    # so this can only ever be zero - spelled ``!= 1`` because
                     # what the unlink is authorised by is *one* row moving, and
                     # a schema change that widened the key must fail here rather
                     # than quietly repoint several.
@@ -1340,7 +1340,7 @@ class ModelMover:
                 # twice, so a conflict here means a racing writer took it, and
                 # ``DO UPDATE`` would repoint *their* row at this file. The
                 # UNIQUE raises and ``_copy_verify_repoint_unlink`` discards the
-                # copy it just made — the same fail-closed answer the repointing
+                # copy it just made - the same fail-closed answer the repointing
                 # branch above gets for free.
                 conn.execute(
                     "INSERT INTO model_file (model_id, model_folder_id, relpath, "

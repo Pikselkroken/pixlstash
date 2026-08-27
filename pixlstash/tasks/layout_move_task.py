@@ -2,7 +2,7 @@
 
 v1.11 Phase 4b. The background half of the move engine: the flush hook in
 ``database.py`` stamps a picture when its project / set / person membership
-changes, this task asks — once the debounce has passed — whether the folder it
+changes, this task asks - once the debounce has passed - whether the folder it
 is sitting in still describes it, and moves only the ones where the answer is
 no.
 
@@ -102,7 +102,7 @@ class LayoutMoveTask(BaseTask):
         }
 
     def _move_batch(self, session: Session, picture_ids: list):
-        """Plan, count, move, record — all inside one transaction.
+        """Plan, count, move, record - all inside one transaction.
 
         One transaction on purpose, for the reason ``run_recorded_metadata_task``
         gives: the ``Operation`` row and the change it describes have to commit
@@ -160,8 +160,8 @@ class LayoutMoveTask(BaseTask):
             session.commit()
         except BaseException:
             # The rollback has to cover the WHOLE task, not just the move loop.
-            # Everything after ``apply_moves`` — two captures, the operation row,
-            # the flag clear, the commit — can raise, and the writer thread then
+            # Everything after ``apply_moves`` - two captures, the operation row,
+            # the flag clear, the commit - can raise, and the writer thread then
             # rolls the session back while the files stay where this put them.
             # A row naming a path with no file at it is not a cosmetic
             # inconsistency: ``MissingFilePurgeFinder`` deletes that row within
@@ -186,7 +186,7 @@ class LayoutMoveTask(BaseTask):
 
         ``pixels`` because a moved file changes the thumbnail URL, which is
         derived from the path and does not come back from
-        ``GET /pictures/{id}/metadata`` — the same marker a rotate raises, for
+        ``GET /pictures/{id}/metadata`` - the same marker a rotate raises, for
         the same reason.
         """
         if not self._notifier or not picture_ids:

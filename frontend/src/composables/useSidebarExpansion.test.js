@@ -1,4 +1,4 @@
-// useSidebarExpansion — the sidebar's shape survives a reload.
+// useSidebarExpansion - the sidebar's shape survives a reload.
 //
 // The case that matters is the project tree: projects are expanded by default
 // and a watcher expands each one the first time it is seen, so persisting the

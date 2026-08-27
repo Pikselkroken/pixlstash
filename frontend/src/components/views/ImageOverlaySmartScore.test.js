@@ -1,4 +1,4 @@
-// Overlay smart-score refresh — the lightbox metadata panel must show the
+// Overlay smart-score refresh - the lightbox metadata panel must show the
 // freshly-recomputed smart score after a tag edit or a penalised-tag settings
 // change, without a full page reload.
 //
@@ -9,7 +9,7 @@
 //        2. App.vue's smart_score-signal field gate (`pictures_changed` handler).
 //        3. ImageOverlay's smartScoreUpdate watcher trigger rule.
 //   B. A mounted-component regression that drives the ACTUAL ImageOverlay through
-//      the real signal sequence — this is what catches the coalescing / bulk-drain
+//      the real signal sequence - this is what catches the coalescing / bulk-drain
 //      batch / registry-demotion cases the isolated copies cannot model.
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
@@ -85,7 +85,7 @@ function touchesSmartScore(fields) {
 // the open card REGARDLESS of whether the payload's pictureIds names it: a
 // bulk-drain event batches a whole task's ids (and can omit the open card), a
 // registry-demoted interactive rescore rides that same bulk path, and Vue
-// coalesces rapid signals — so the payload cannot be trusted to always name the
+// coalesces rapid signals - so the payload cannot be trusted to always name the
 // open card. Fires only when the signal key advances and a card is open.
 function watcherShouldRefetch(nextKey, lastKey, open, currentId) {
   if (!nextKey || nextKey === lastKey) return false;

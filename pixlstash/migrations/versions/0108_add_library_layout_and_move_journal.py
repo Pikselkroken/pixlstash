@@ -5,15 +5,15 @@ v1.11 Phase 4b, the move engine (``docs/plans/v1.11.0-existing-library.md`` §4)
 Four things, all inert on an existing library:
 
 * ``library_settings.layout`` / ``layout_unfiled`` and the same pair on
-  ``reference_folder`` — how a root is laid out. NULL means no layout, and a
+  ``reference_folder`` - how a root is laid out. NULL means no layout, and a
   root with no layout is never placed into and never moved within. Every
   existing library and every existing folder gets NULL, which is the whole
   reason "importing a real library moves zero files" is a fact rather than a
   promise.
-* ``picture.layout_check_due_at`` — when the engine should next ask whether a
+* ``picture.layout_check_due_at`` - when the engine should next ask whether a
   picture's folder is still true. NULL everywhere to begin with, indexed
   because the finder's only query asks for the rows that are not.
-* ``picture_move`` — the journal of moves PixlStash made itself, so its own
+* ``picture_move`` - the journal of moves PixlStash made itself, so its own
   writes are not read back through the reference-folder scan as owner intent.
 
 **No data is reset.** Nothing here changes what a picture is, only where the

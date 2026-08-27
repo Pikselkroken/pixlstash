@@ -69,7 +69,7 @@ export const VIDEO_EXTENSIONS = [
  * can *display*, and the import endpoint takes a much shorter list. Filtering a
  * drop against the display lists let a `.psd`, a `.pdf` or a `.wmv` upload in
  * full before the backend skipped it as unsupported and the commit came back
- * "No staged files to import" — a gigabyte spent to reach an error the name
+ * "No staged files to import" - a gigabyte spent to reach an error the name
  * already gave away.
  *
  * Mirrors `STAGING_ALLOWED_MEDIA_EXTS` in
@@ -107,7 +107,7 @@ export const CAPTION_EXTENSIONS = ["txt"];
  * `isSupportedImportFile` and there is now more than one place to forget: the
  * empty-library card shipped with `image/*,video/*` alone, which hid zip and
  * caption imports behind an "All Files" the picker only offers if you look for
- * it. `accept` remains advisory — the grid still filters what comes back — so
+ * it. `accept` remains advisory - the grid still filters what comes back - so
  * this decides what the picker *offers*, not what the app will take.
  *
  * Both spellings of each non-media type are listed because browsers disagree
@@ -118,7 +118,7 @@ export const CAPTION_EXTENSIONS = ["txt"];
 export const IMPORT_FILE_ACCEPT =
   "image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain";
 
-/** What the model shelf catalogues — `pixlstash/routes/model_files.py`. */
+/** What the model shelf catalogues - `pixlstash/routes/model_files.py`. */
 const MODEL_FILE_EXTENSION = ".safetensors";
 
 export function isSupportedImageFile(file) {
@@ -252,7 +252,7 @@ export async function extractSupportedImportFilesFromDataTransfer(
 
   // IMPORTANT: Safari clears the DataTransfer object after the first `await`,
   // so all synchronous DataTransfer access must complete before any async work.
-  // webkitGetAsEntry() is the primary method — it is synchronous, handles
+  // webkitGetAsEntry() is the primary method - it is synchronous, handles
   // directories, and is supported in all modern browsers (Chrome, Edge,
   // Firefox, Safari). getAsFile() serves as a per-item fallback.
   const webkitEntries = [];
@@ -387,7 +387,7 @@ export function getPictureId(id) {
  *
  * **Keyed on `orientation` alone, and that is the whole point.** An in-place
  * rotate rewrites the EXIF orientation tag and copies every pixel through, so
- * the content hash does not move — and the browser, which applies the tag
+ * the content hash does not move - and the browser, which applies the tag
  * itself, goes on painting the bytes it already decoded. `pixel_sha` was the
  * token here and could not express the one edit that needs it.
  *
@@ -400,7 +400,7 @@ export function getPictureId(id) {
  * `orientation` is, so every builder produces the same URL from the first
  * paint and no pinning is needed. (See `Picture.grid_fields()`.)
  *
- * Orientation 1 — and a record that carries none — contributes nothing, so a
+ * Orientation 1 - and a record that carries none - contributes nothing, so a
  * picture that has never been turned keeps the URL it has always had.
  *
  * @param {Object|null} image - a grid or metadata picture record.
@@ -413,7 +413,7 @@ export function mediaVersion(image) {
     : "";
 }
 
-/** Orientations that put the picture on its side — 90° either way. */
+/** Orientations that put the picture on its side - 90° either way. */
 const QUARTER_TURNED_ORIENTATIONS = new Set([5, 6, 7, 8]);
 
 /**
@@ -423,7 +423,7 @@ const QUARTER_TURNED_ORIENTATIONS = new Set([5, 6, 7, 8]);
  * display space:
  *
  *   * `thumbnail_width`/`height` are the stored bitmap's, rendered from the
- *     EXIF-transposed decode — already turned, never turn them again;
+ *     EXIF-transposed decode - already turned, never turn them again;
  *   * `width`/`height` are the RAW stored ones and do **not** move when a
  *     picture is rotated in place (that rewrites one tag and copies every pixel
  *     byte through), so the quarter turns have to be applied here.
@@ -432,7 +432,7 @@ const QUARTER_TURNED_ORIENTATIONS = new Set([5, 6, 7, 8]);
  * NULLs the thumbnail dimensions to re-queue the bitmap, so every card sits on
  * `width`/`height` from the rotate until the regeneration sweep lands. Without
  * the swap the tile keeps its pre-rotate shape and then jumps when the
- * regenerated dimensions arrive — the reflow-then-repaint a rotate used to do
+ * regenerated dimensions arrive - the reflow-then-repaint a rotate used to do
  * in two visible steps.
  *
  * @param {Object|null} image - a grid or metadata picture record.
@@ -484,7 +484,7 @@ export function isFileDrag(dataTransfer) {
  *
  * This must be distinguished from an external OS file drop because the desktop
  * shell (Electron) populates `dataTransfer.files` with the dragged in-page image
- * as a real File — which the web does not — so a `files.length > 0` check alone
+ * as a real File - which the web does not - so a `files.length > 0` check alone
  * misreads an internal assign-drag as a file import. Only `types` is readable
  * during `dragover` (the payload itself is protected until `drop`), so key off
  * the type list, the same signal the drop handlers use.
@@ -518,7 +518,7 @@ export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
 
 /**
  * Payload `type` to its marker. A kind absent from this map gets no marker, so
- * no drop target accepts it — an unmapped payload must fail closed rather than
+ * no drop target accepts it - an unmapped payload must fail closed rather than
  * inherit the picture marker and be filed as a picture drag (issue #757 again,
  * one payload kind later).
  */

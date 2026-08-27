@@ -2,10 +2,10 @@
 
 Two tiers, both computed by one function over one reduced form:
 
-* **Topology** — node classes and named-input edges, nothing else. The only
+* **Topology** - node classes and named-input edges, nothing else. The only
   tier computable from *either* ComfyUI serialisation, which is what lets a
   dropped ``workflow.json`` be filed without ComfyUI running.
-* **Recipe (structural)** — that graph plus its topology assets: the model and
+* **Recipe (structural)** - that graph plus its topology assets: the model and
   image filenames a node names. Parameters and volatile values are nulled, so
   a recipe is prompt-free by construction and safe to keep forever.
 
@@ -28,7 +28,7 @@ side: a colon path (``75:61``) is an id, and ids do not reach the hash.
 The UI format is where subgraphs *do* matter, and :func:`reduce_ui_graph`
 inlines ``definitions.subgraphs`` before keying. A subgraph instance's ``type``
 is a per-definition UUID, so treating it as an opaque node both under-counts the
-graph and gives two people who built the same thing different keys — see
+graph and gives two people who built the same thing different keys - see
 §Subgraphs.
 
 **Accepted residual:** WL refinement cannot separate every pair of
@@ -60,7 +60,7 @@ REFINEMENT_ROUNDS = 4
 
 # Recursion guard for the UI graph's boundary and passthrough walks. Counted in
 # CALL frames, and `source_of` and `resolve_output` each take one, so this is
-# ~128 hops rather than 256 — comfortably past any chain of reroutes a person
+# ~128 hops rather than 256 - comfortably past any chain of reroutes a person
 # would build, while still bounded well under CPython's own recursion limit.
 _MAX_RESOLVE_DEPTH = 256
 
@@ -111,7 +111,7 @@ _TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I
 # a filename and 255 bytes is the component limit on every filesystem
 # PixlStash runs on, so neither guard can reject a real asset. Measured: zero
 # real TA values trip either. They are the backstop for a prose field this
-# module has not been told about — 5,066 genuine `lora_name` and `image` values
+# module has not been told about - 5,066 genuine `lora_name` and `image` values
 # DO contain spaces, which is why "has a space" is not one of these rules.
 _MAX_FILENAME_LENGTH = 255
 
@@ -122,8 +122,8 @@ _MAX_FILENAME_LENGTH = 255
 _SHA256_FIELD_RE = re.compile(r"(^|_)sha256$")
 
 # Defense in depth against a third-party node that puts a credential in a
-# widget. Nothing in the shipped ComfyUI-PixlStash suite does — its connection
-# settings never reach the workflow JSON — but the stored document is kept
+# widget. Nothing in the shipped ComfyUI-PixlStash suite does - its connection
+# settings never reach the workflow JSON - but the stored document is kept
 # forever and shared, so a matching field is dropped from it outright.
 SECRET_FIELD_RE = re.compile(r"(api_?key|token|auth|password|secret)", re.IGNORECASE)
 
@@ -204,8 +204,8 @@ def _is_link(value: Any) -> bool:
     """True for an API-format ``[node_id, output_slot]`` connection.
 
     **The node id must be a string, and that is load-bearing rather than
-    defensive.** A widget can legitimately hold a two-element list of numbers —
-    a resolution pair, a pair of coordinates — and reading one as a connection
+    defensive.** A widget can legitimately hold a two-element list of numbers -
+    a resolution pair, a pair of coordinates - and reading one as a connection
     puts a bucket-P value into the topology *and* writes a dangling edge into
     the stored document. The spec calls that direction unrecoverable:
     "misclassifying a param as T shatters grouping into near-duplicate recipes
@@ -367,7 +367,7 @@ def drop_widgets(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
     """The topology tier: the same graph with every widget removed.
 
     Topology is *node classes and named-input edges, nothing else*, so it is
-    literally the structural reduction minus its assets — which is also why a
+    literally the structural reduction minus its assets - which is also why a
     recipe can never span two topologies.
     """
     return {
@@ -399,7 +399,7 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
 
     Weisfeiler-Leman refinement over sorted neighbour lists, then a sorted
     multiset of node descriptors. Nothing here reads a node id, so relabelling
-    every node — or nesting half of them in a subgraph — cannot change the
+    every node - or nesting half of them in a subgraph - cannot change the
     result.
     """
     if not nodes:
@@ -448,8 +448,8 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
 def _wired_inputs(node: ReducedNode, labels: dict[str, str]) -> list[list[Any]]:
     """The node's connections, named by the upstream *label* rather than its id.
 
-    An input whose source is absent from the graph keeps the edge — a dangling
-    connection is part of the shape — but carries an empty label, so every
+    An input whose source is absent from the graph keeps the edge - a dangling
+    connection is part of the shape - but carries an empty label, so every
     dangling edge of the same name and slot looks alike.
     """
     return sorted(
@@ -623,7 +623,7 @@ class _UiGraph:
                 # A muted or bypassed instance does not execute, and neither
                 # does anything inside it. Expanding it anyway would leave its
                 # whole node set standing while every edge through it vanished
-                # — a key for a graph ComfyUI has never run. The instance node
+                # - a key for a graph ComfyUI has never run. The instance node
                 # itself stays registered and is dropped by `reduce`, exactly
                 # as a bypassed ordinary node is.
                 continue
@@ -691,7 +691,7 @@ class _UiGraph:
             # A link naming a node that is nowhere in the file. Dropping it
             # would hash identically to the same graph with that connection
             # deleted, and would do so while the API-side reduction KEEPS its
-            # dangling edges — so the two serialisations of one workflow could
+            # dangling edges - so the two serialisations of one workflow could
             # key differently, which is the portability claim this tier exists
             # for. Measured: zero occurrences in 28,069 real UI graphs, so this
             # refuses malformed input rather than rejecting anything real.
@@ -807,7 +807,7 @@ def reduce_ui_graph(workflow: dict, *, inline: bool = True) -> dict[str, Reduced
     Args:
         workflow: The UI-format workflow document.
         inline: Expand ``definitions.subgraphs`` first. **Only ever False in
-            the fixture that proves the step is not silently droppable** — a
+            the fixture that proves the step is not silently droppable** - a
             collapsed graph keys as a fraction of its node count and its
             instance types are per-user UUIDs.
     """

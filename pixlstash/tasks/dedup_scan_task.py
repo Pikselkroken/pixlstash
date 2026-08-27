@@ -644,7 +644,7 @@ class DedupScanTask(BaseTask):
             seen_pictures: set[int] = set()
             # Pairs are kept across buckets so a chain spanning two buckets folds
             # into ONE group rather than two. That is a real requirement, but it
-            # is also the scan's only unbounded structure, so it is capped —
+            # is also the scan's only unbounded structure, so it is capped -
             # see MAX_TRACKED_PAIRS.
             pair_cache: dict[tuple[int, int], float] = {}
             pair_cap_reported = False
@@ -655,7 +655,7 @@ class DedupScanTask(BaseTask):
                 # touching one of these are re-persisted below; previously the
                 # scan re-derived and re-wrote EVERY group after EVERY bucket,
                 # which is O(buckets x groups) DELETE+INSERT on the single DB
-                # writer thread — every import, tag edit and verdict queues
+                # writer thread - every import, tag edit and verdict queues
                 # behind a running scan.
                 touched: set[int] = set()
                 bucket_status: dict = {}

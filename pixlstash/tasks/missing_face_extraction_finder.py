@@ -31,14 +31,14 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
             return None
 
         # Fetch more than one task's worth, and exclude undecodable pictures at
-        # the query — the same two things every other batch finder here already
+        # the query - the same two things every other batch finder here already
         # does, and this one did neither.
         #
         # The candidate window was exactly one batch while `max_inflight_tasks`
         # promises three. A picture keeps matching `~faces.any()` until its task
         # finishes, so the moment the first 100 were claimed, every later sweep
         # re-read those same 100, filtered all of them out as claimed, and
-        # returned None — which the planner reads as "no work" and answers with
+        # returned None - which the planner reads as "no work" and answers with
         # a backoff that grows by 1.8x each time. Two slots that could never
         # fill, and a growing sleep between the batches that did: the stall was
         # the finder starving itself, not the GPU.
@@ -75,7 +75,7 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         quickly" is a claim about a model that is 400 MB on disk; what actually
         happens is five ONNX sessions rebuilt against the CUDA provider with an
         EXHAUSTIVE cudnn algo search, seconds each, and it was happening between
-        batches rather than at the end of the work — every exhaustion of the
+        batches rather than at the end of the work - every exhaustion of the
         finder counts, and the finder used to exhaust itself constantly (see
         `find_task`). A setting whose whole purpose is to stop that cannot be
         overridden by the one path that reloads most often.

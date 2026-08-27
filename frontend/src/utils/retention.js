@@ -3,7 +3,7 @@
 // Pure functions and constants only (no Vue, no network), so the settings
 // control, the scrapheap header, and the grid tiles all speak one vocabulary.
 //
-// IMPORTANT — the grace math lives on the server. The backend stamps every
+// IMPORTANT - the grace math lives on the server. The backend stamps every
 // scrapheap picture with an absolute `purge_at` timestamp that already accounts
 // for the grace period applied when the retention window is shortened (a FLOOR
 // measured from the reduction itself: after a lowering nothing is purgeable for
@@ -92,7 +92,7 @@ export function selectValueToRetention(value) {
  * The server declares which windows it accepts (`scrapheap_retention_choices`),
  * so that list wins over the local default when present. A server configured
  * out-of-band to some other positive value must still display truthfully rather
- * than silently snapping to a neighbour — so an unrecognised current value is
+ * than silently snapping to a neighbour - so an unrecognised current value is
  * inserted in sorted order.
  *
  * @param {number|null} current - the currently configured retention.
@@ -152,7 +152,7 @@ export function parseServerTimestamp(isoStr) {
  * Whole days remaining until the server's `purge_at` timestamp.
  *
  * Rounds up, so a picture purging in six hours still reads "1 day left" rather
- * than "0" — and clamps at zero for a timestamp that has already passed but
+ * than "0" - and clamps at zero for a timestamp that has already passed but
  * whose sweep has not run yet.
  *
  * @param {string|null|undefined} purgeAt - the server's `purge_at` (ISO 8601).
@@ -194,7 +194,7 @@ export const EXEMPT_REASON_LOCKED = "locked";
 export const PROTECTED_BADGE_LABEL = "Protected";
 
 /** Full explanation, used as the protected badge's accessible label/tooltip. */
-export const PROTECTED_BADGE_TITLE = "Protected — won't auto-delete";
+export const PROTECTED_BADGE_TITLE = "Protected - won't auto-delete";
 
 /** Badge copy for a picture frozen by a locked set. */
 export const LOCKED_BADGE_LABEL = "Locked set";
@@ -204,11 +204,11 @@ export const LOCKED_BADGE_LABEL = "Locked set";
  * the lever (unlocking it), so the state does not read as unexplained.
  */
 export const LOCKED_BADGE_TITLE =
-  "In a locked set — won't auto-delete. Unlock the set to put it back on the auto-empty clock.";
+  "In a locked set - won't auto-delete. Unlock the set to put it back on the auto-empty clock.";
 
 // ── Lowering the window is destructive ──────────────────────────────────────
 // Raising the window, or switching to Never, only ever spares pictures. LOWERING
-// it makes pictures eligible for permanent, unrecoverable deletion — and the
+// it makes pictures eligible for permanent, unrecoverable deletion - and the
 // biggest jump (Never → 30) is the one that reads most like a harmless dropdown
 // pick. So a reduction is confirmed; every other direction stays one click.
 //
@@ -230,7 +230,7 @@ export function retentionRank(days) {
 }
 
 /**
- * Is moving from `previous` to `next` a REDUCTION — i.e. does it expose
+ * Is moving from `previous` to `next` a REDUCTION - i.e. does it expose
  * pictures to auto-deletion that were previously safe?
  *
  * @param {number|null} previous - the currently saved window.
@@ -268,12 +268,12 @@ export const RETENTION_PURGE_WARNING =
  * @param {number|null} options.nextDays - the window being switched to.
  * @param {number} [options.wouldPurgeCount] - server's `would_purge_count`. A
  *   value that is absent or not a number is treated as UNVERIFIED, never as
- *   zero — see below.
+ *   zero - see below.
  * @param {string|null} [options.firstPurgeAt] - server's `first_purge_at` (ISO).
  * @param {(iso: string) => string} [options.formatDate] - renders that instant.
  * @param {boolean} [options.verified=true] - was the impact successfully read?
  * @returns {{title: string, body: string, warning: string, confirmLabel: string}|null}
- *   `null` when a verified check found nothing would be deleted — a reduction
+ *   `null` when a verified check found nothing would be deleted - a reduction
  *   that destroys nothing needs no confirmation.
  */
 export function buildRetentionReductionMessage({
@@ -287,7 +287,7 @@ export function buildRetentionReductionMessage({
   const confirmLabel = `Change to ${target}`;
 
   // FAIL SAFE, NOT FAIL OPEN. `null` from this function means "save without
-  // asking", so an unreadable count must never collapse into 0 — a 200 whose
+  // asking", so an unreadable count must never collapse into 0 - a 200 whose
   // body is missing or garbled would then silently schedule deletion.
   //
   // The check is on the TYPE, not on `Number(...)`: JS coercion maps `null`,
@@ -317,7 +317,7 @@ export function buildRetentionReductionMessage({
   if (count === 0) return null;
 
   const noun = count === 1 ? "picture" : "pictures";
-  // Deletion starts when the reduction grace elapses, NOT on save. Say so — the
+  // Deletion starts when the reduction grace elapses, NOT on save. Say so - the
   // difference is the user's window to change their mind.
   const when = firstPurgeAt
     ? `, starting ${formatDate(firstPurgeAt)}`
@@ -335,8 +335,8 @@ export function buildRetentionReductionMessage({
  *
  * DEFENSIVE ORDERING: `auto_purge_exempt_reason` is newer than
  * `auto_purge_exempt`. A server that sends the boolean but not the reason (or
- * sends a reason this build does not know) falls back to "protected" — the
- * pre-existing behaviour — so a version skew degrades to the old labelling
+ * sends a reason this build does not know) falls back to "protected" - the
+ * pre-existing behaviour - so a version skew degrades to the old labelling
  * rather than dropping the badge or mislabelling an exempt picture as expiring.
  *
  * @param {Object|null|undefined} picture - a scrapheap grid picture.
@@ -395,7 +395,7 @@ export function buildPurgeBadge(picture, options = {}) {
   }
 
   const days = daysUntilPurge(picture.purge_at, now);
-  // No `purge_at` means nothing is scheduled (retention "Never") — no badge.
+  // No `purge_at` means nothing is scheduled (retention "Never") - no badge.
   if (days === null) return null;
   return {
     // The last day gets an emphasised variant; the label carries the meaning

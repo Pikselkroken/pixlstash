@@ -49,7 +49,7 @@ def _disable_background_tagger(server):
     * ``MissingTagFinder`` claims any sentinel-carrying picture, runs the tagger,
       then ``TagTask._add_tags_bulk`` *deletes every ``Tag`` row for that picture*
       (sentinel and seeded tags alike) and rewrites them, plus writes
-      ``TagPrediction`` rows on the tagger's own ``model_version`` — moving
+      ``TagPrediction`` rows on the tagger's own ``model_version`` - moving
       ``_current_model_version`` off the seeded ``"v1"`` and dropping the seeded
       predictions out of the version-pinned ``est_wrong``/``est_missing`` signals.
     * ``MissingTagPredictionFinder`` back-fills predictions for any picture that
@@ -57,10 +57,10 @@ def _disable_background_tagger(server):
       ``no-model`` row), which would flip its ``has_model`` to true.
 
     Both only fire once the (uncached) tagger model finishes downloading and
-    running, so the failure is timing-dependent — green on a cold cache, red on a
+    running, so the failure is timing-dependent - green on a cold cache, red on a
     warm one. Clearing ``active_tag_plugin`` bails ``MissingTagFinder`` (it treats
     a falsy active plugin as "off") and, together with the matching guard in
-    ``MissingTagPredictionFinder``, bails the backfill too — removing the race at
+    ``MissingTagPredictionFinder``, bails the backfill too - removing the race at
     the source instead of trying to out-wait it.
     """
     server.vault.set_tagger_settings({"active_tag_plugin": None})
@@ -128,7 +128,7 @@ def _force_variable_limit(server, limit=999):
     so subsequent connections are recreated with the lowered ceiling. Used to
     reproduce the historical 999-variable ceiling regardless of the running
     SQLite build's much higher default, so a large scope filtered by a plain
-    ``.in_(ids)`` would raise ``OperationalError`` — proving the temp-table
+    ``.in_(ids)`` would raise ``OperationalError`` - proving the temp-table
     scope path is what keeps the query alive. Call AFTER seeding (an ORM bulk
     insert may itself batch many parameters).
     """
@@ -380,7 +380,7 @@ def test_tag_health_scoped_restricts_signals_and_tag_list():
         assert srows["t"]["est_missing"] == 0  # p_out is outside the scope
         assert "only_out" not in srows
 
-        # An unknown scope id is a valid empty scope — no rows, not an error.
+        # An unknown scope id is a valid empty scope - no rows, not an error.
         empty = client.get(f"{API}/tag_health", params={"set_id": 99999}).json()
         assert empty["scoped"] is True
         assert empty["rows"] == []
@@ -462,7 +462,7 @@ def test_tag_health_scoped_survives_large_scope():
 
         def seed(session):
             # Core bulk insert bypasses the per-picture metadata-hash ORM hooks
-            # (fast for 1500 rows). ``deleted`` is set explicitly — the model's
+            # (fast for 1500 rows). ``deleted`` is set explicitly - the model's
             # Python default is not applied by a Core insert.
             session.execute(
                 sa_insert(Picture),
@@ -549,7 +549,7 @@ def test_tag_health_scoped_has_model_true_for_older_version_in_scope():
                 )
             )
             # A NEWER generation exists vault-wide but OUT of scope, so
-            # current_version is v_new and "t" is in the current vocabulary —
+            # current_version is v_new and "t" is in the current vocabulary -
             # yet no in-scope prediction is on v_new.
             session.add(
                 TagPrediction(
@@ -583,7 +583,7 @@ def test_tag_health_set_scoped_board_reports_vocabulary_both_ways():
     generation ever predicted anywhere is still out-of-vocabulary
     (has_model=false).
 
-    This is the end-to-end guard for the reported bug — applying a picture-set
+    This is the end-to-end guard for the reported bug - applying a picture-set
     filter in the review overlay reported "not in the tagger's vocabulary" for
     every row, because has_model was a *scope-restricted* current-version count.
     The negative direction is asserted in the same response so a fix that simply
@@ -737,7 +737,7 @@ def test_tag_health_empty_vault_and_rebuild_idempotence():
 
 def test_tag_health_est_wrong_missing_pinned_to_current_model_version():
     """5a: est_wrong/est_missing must only count predictions from the current
-    model version — a stale generation's rows must not leak in, even though
+    model version - a stale generation's rows must not leak in, even though
     the same tag also has current-version rows."""
     temp_dir, client, server = _setup()
     try:
@@ -841,12 +841,12 @@ def test_tag_health_est_missing_excludes_human_rejected_pictures():
         t = {r["tag"]: r for r in body["rows"]}["t"]
 
         # Only the un-reviewed picture is counted; the human-rejected one is
-        # excluded (pre-fix this was 2 — the bug).
+        # excluded (pre-fix this was 2 - the bug).
         assert t["est_missing"] == 1
         # est_missing_adj tracks the corrected raw count (no report → fallback).
         assert t["est_missing_adj"] == round(1 * DEFAULT_TAG_PRECISION)
         # The rejected row is still surfaced as a model dispute (unchanged), so
-        # nothing is lost — it just isn't double-counted as an estimated fix.
+        # nothing is lost - it just isn't double-counted as an estimated fix.
         assert t["model_disputes"] == 1
         assert t["has_model"] is True
     finally:
@@ -903,7 +903,7 @@ def test_tag_health_est_wrong_excludes_human_confirmed_pictures():
         t = {r["tag"]: r for r in body["rows"]}["t"]
 
         # Only the un-reviewed tagged picture is counted; the human-confirmed one
-        # is excluded (pre-fix this was 2 — the bug).
+        # is excluded (pre-fix this was 2 - the bug).
         assert t["est_wrong"] == 1
         assert t["est_wrong_adj"] == round(1 * DEFAULT_TAG_PRECISION)
         # The confirmed row is still surfaced as a model dispute (unchanged).
@@ -915,8 +915,8 @@ def test_tag_health_est_wrong_excludes_human_confirmed_pictures():
 
 def test_tag_health_default_tag_merges_folds_across_all_signals():
     """5b: a DEFAULT_TAG_MERGES child ("extra digit") must fold into its
-    parent's ("malformed hand") board row across every signal — not just
-    est_wrong/est_missing — and must not get a row of its own."""
+    parent's ("malformed hand") board row across every signal - not just
+    est_wrong/est_missing - and must not get a row of its own."""
     temp_dir, client, server = _setup()
     try:
         # est_wrong: one parent-literal hit, one child-literal hit.
@@ -1127,7 +1127,7 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
 
         def seed(session):
             session.add(Tag(picture_id=l_wrong, tag="t"))
-            # model_disputes + verified (human POS the model doubts — NOT est_wrong,
+            # model_disputes + verified (human POS the model doubts - NOT est_wrong,
             # since est_wrong now counts only un-reviewed pictures).
             session.add(
                 TagPrediction(
@@ -1215,7 +1215,7 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
                         label_source="human",
                     )
                 )
-                # Two ACCEPTED reviewed later than the live ones — would push
+                # Two ACCEPTED reviewed later than the live ones - would push
                 # overturn to 3/4 and last_reviewed to t_later if counted.
                 session.add(
                     TagSuggestion(
@@ -1268,7 +1268,7 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
         assert scoped_resp.status_code == 200, scoped_resp.text
         scoped = {r["tag"]: r for r in scoped_resp.json()["rows"]}["t"]
 
-        # Expected values — live pictures only (4 predictions: 1 verified/disputed,
+        # Expected values - live pictures only (4 predictions: 1 verified/disputed,
         # 1 un-reviewed est_wrong, 1 est_missing, 1 boundary; overturn 1/1; last
         # review at t_live).
         signal_keys = [
@@ -1312,8 +1312,8 @@ def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
 
     The `all_tags` universe (ground_truth_tags / predicted_tags) joins Picture
     and filters `deleted.is_(False)`, matching every signal query, so a tag
-    reachable only through deleted pictures — via a `Tag` row or a
-    `TagPrediction` row — produces no board row at all (rather than a spurious
+    reachable only through deleted pictures - via a `Tag` row or a
+    `TagPrediction` row - produces no board row at all (rather than a spurious
     all-zero one). A tag on a live picture still gets its row.
     """
     temp_dir, client, server = _setup()
@@ -1360,7 +1360,7 @@ def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
         # Live-picture tags still appear.
         assert "live_tag" in tags
         assert "live_pred_tag" in tags
-        # Deleted-only tags must not appear at all — not even as an all-zero row.
+        # Deleted-only tags must not appear at all - not even as an all-zero row.
         assert "deleted_gt_only" not in tags
         assert "deleted_pred_only" not in tags
     finally:
@@ -1369,7 +1369,7 @@ def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
 
 def test_tag_health_ground_truth_counts_pictures_and_folds_merge_aliases():
     """``ground_truth`` counts distinct in-scope, non-deleted PICTURES carrying
-    the folded tag — not ``tag`` rows — in both the cached and the scoped payload.
+    the folded tag - not ``tag`` rows - in both the cached and the scoped payload.
 
     Three things are asserted deliberately:
 
@@ -1379,7 +1379,7 @@ def test_tag_health_ground_truth_counts_pictures_and_folds_merge_aliases():
       UNIQUE constraint is on (picture_id, tag), so both rows can coexist; a
       naive per-literal-tag sum would report it twice);
     * the resulting number equals ``|{pictures with any tag in scan_tag's equiv
-      set}|`` — the correspondence the "this review would find nothing" gate
+      set}|`` - the correspondence the "this review would find nothing" gate
       rests on (see ``tag_scan_service.scan_tag``'s ``equiv``).
     """
     from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
@@ -1388,7 +1388,7 @@ def test_tag_health_ground_truth_counts_pictures_and_folds_merge_aliases():
     try:
         p_parent = _upload_named(client)  # "malformed hand"
         p_child = _upload_named(client)  # "extra digit" (merge alias)
-        p_both = _upload_named(client)  # both literals — one picture, counts once
+        p_both = _upload_named(client)  # both literals - one picture, counts once
         p_solo = _upload_named(client)  # unrelated tag with no aliases
         p_pred = _upload_named(client)  # prediction only, zero ground truth
         p_deleted = _upload_named(client)  # "malformed hand" but soft-deleted
@@ -1477,7 +1477,7 @@ def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
     near-zero-ground-truth branch (``n_ground_truth < MIN_GROUND_TRUTH_FOR_VOTE``)
     and its ONLY source of suspects is ``_load_confidence_fallback``, whose WHERE
     clause is documented as mirroring this module's ``est_missing`` aggregate
-    one-for-one — same ``EST_MISSING_MIN_CONF``, same current-model-version pin,
+    one-for-one - same ``EST_MISSING_MIN_CONF``, same current-model-version pin,
     same ``Tag.picture_id IS NULL`` outer join, same ``label_state == "UNKNOWN"``
     (see the coupling note in ``tag_scan_service._load_confidence_fallback``'s
     docstring). The board can therefore promise "``ground_truth == 0`` and
@@ -1486,7 +1486,7 @@ def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
     This asserts the two agree on the PICTURE SET, across every predicate that
     differentiates them at zero ground truth (confidence threshold, model-version
     pin, human ruling). Change one side's predicate without the other and this
-    fails — which is the point. (``Tag.picture_id IS NULL`` is not exercised
+    fails - which is the point. (``Tag.picture_id IS NULL`` is not exercised
     here because it is vacuously true for both at zero ground truth: no picture
     carries the tag.)
     """
@@ -1499,7 +1499,7 @@ def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
     try:
         p_hit_a = _upload_named(client)  # conf 0.95, current version, un-ruled
         p_hit_b = _upload_named(client)  # conf 0.95, current version, un-ruled
-        p_low = _upload_named(client)  # conf 0.85 — under the threshold
+        p_low = _upload_named(client)  # conf 0.85 - under the threshold
         p_stale = _upload_named(client)  # conf 0.99 on a superseded version
         p_rejected = _upload_named(client)  # conf 0.95 but human-REJECTED (NEG)
 
@@ -1539,7 +1539,7 @@ def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
                 )
             session.commit()
             # Human REJECT keeps the 0.95 confidence and writes no Tag row, so
-            # only the label_state filter can exclude it — on both sides.
+            # only the label_state filter can exclude it - on both sides.
             record_human_label(session, p_rejected, "coldstart", NEG)
             session.commit()
 
@@ -1719,7 +1719,7 @@ def test_tag_health_stale_true_after_new_tagger_run():
 
 def test_tag_health_stale_true_after_reviewed_suggestion():
     """A reviewed TagSuggestion alone (no new picture, no new TaggerRun) must
-    flip stale — this is Spec B's added signal, beyond what
+    flip stale - this is Spec B's added signal, beyond what
     review_service._latest_vault_change already covers, because every
     accept/dismiss/swap changes a tag's est_wrong/est_missing/mismatch/
     overturn_rate without necessarily touching Picture or TaggerRun."""
@@ -1787,7 +1787,7 @@ def test_tag_health_rebuild_clears_staleness():
 
 def test_tag_health_scoped_response_is_never_stale():
     """A scoped board (project/set/character filter) is always computed live,
-    never cached — stale=false regardless of vault activity."""
+    never cached - stale=false regardless of vault activity."""
     temp_dir, client, server = _setup()
     try:
         pid = _upload_named(client)
@@ -1814,7 +1814,7 @@ def test_tag_health_auto_rebuild_finder_fires_when_stale_and_respects_debounce()
     """Spec B backend: a periodic finder (same shape as
     EnsureGfsSnapshotFinder's monotonic-clock check-interval gate)
     dispatches a rebuild through the same idempotent `start_rebuild` path
-    `POST /tag_health/rebuild` uses when the cache is stale, and debounces —
+    `POST /tag_health/rebuild` uses when the cache is stale, and debounces -
     it must not requeue every tick even while the cache stays stale
     (AUTO_REBUILD_CHECK_INTERVAL_S)."""
     from pixlstash.tasks.tag_health_auto_rebuild_finder import (

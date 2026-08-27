@@ -5,9 +5,9 @@ day, tiered so each day's snapshot is promoted to the highest period it opens.
 On any given check the finder schedules at most one snapshot, of the highest
 tier that is *due*:
 
-* ``MONTHLY`` — no MONTHLY snapshot exists for the current calendar month.
-* ``WEEKLY``  — no WEEKLY-or-MONTHLY snapshot exists for the current ISO week.
-* ``DAILY``   — no automatic snapshot at all exists for today (UTC).
+* ``MONTHLY`` - no MONTHLY snapshot exists for the current calendar month.
+* ``WEEKLY``  - no WEEKLY-or-MONTHLY snapshot exists for the current ISO week.
+* ``DAILY``   - no automatic snapshot at all exists for today (UTC).
 
 Because a higher tier also satisfies the lower slots (a MONTHLY counts as this
 week's WEEKLY and today's DAILY), an aligned boundary day produces a single
@@ -59,7 +59,7 @@ class EnsureGfsSnapshotFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        # ``None``, NOT 0.0 — ``time.monotonic()``'s reference point is undefined
+        # ``None``, NOT 0.0 - ``time.monotonic()``'s reference point is undefined
         # (on Linux it is seconds since BOOT), so 0.0 is an absolute instant, not
         # a "never checked" sentinel. On a host that booted less than the check
         # interval ago, ``now - 0.0`` falls BELOW the interval and silently
@@ -99,7 +99,7 @@ class EnsureGfsSnapshotFinder(BaseTaskFinder):
         if kind is None:
             return None
 
-        logger.info("EnsureGfsSnapshotFinder: %s snapshot due — scheduling one", kind)
+        logger.info("EnsureGfsSnapshotFinder: %s snapshot due - scheduling one", kind)
         from pixlstash.tasks.ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
 
         return EnsureGfsSnapshotTask(self._vault, kind)

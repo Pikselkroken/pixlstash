@@ -3,7 +3,7 @@
 // Every route the shelf calls is owner-only, so the destination was live for a
 // session the backend refuses on all of it. The rule it now follows is the
 // demo site's, stated in `e2e/specs/read-only-features.spec.js`: show-but-
-// disable, never hide — the demo IS a read-only session, and a hidden feature
+// disable, never hide - the demo IS a read-only session, and a hidden feature
 // there advertises a smaller product than PixlStash is. So the row stays, goes
 // inert, and says why, exactly like Duplicates beside it.
 //
@@ -11,7 +11,7 @@
 // and the collapsed dock. The dock half was written twice before this file
 // existed and neither version was tested.
 //
-// `useAppNavigationModels.test.js` covers the other half — that a pasted
+// `useAppNavigationModels.test.js` covers the other half - that a pasted
 // `/models` URL never mounts the shelf.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -88,7 +88,7 @@ function respond(url) {
 
 /**
  * Mount the sidebar. `docked` renders the collapsed dock instead of the
- * expanded rail — a separate branch of the template with its own copy of both
+ * expanded rail - a separate branch of the template with its own copy of both
  * destinations.
  */
 async function mountSidebar({ docked = false } = {}) {
@@ -145,7 +145,7 @@ describe("the expanded rail's Models entry", () => {
 
     // The anchor. A read-only render that produced no rail at all would leave
     // every "the entry is not clickable" assertion below passing for the wrong
-    // reason — and Duplicates being inert-not-hidden is the very contract this
+    // reason - and Duplicates being inert-not-hidden is the very contract this
     // change is following, so it is worth pinning in the same breath.
     const duplicates = wrapper
       .findAll(".sidebar-list-item")

@@ -5,7 +5,7 @@ or power loss mid-write leaves a zero-length or half-written file.  For
 ``server-config.json`` that is fatal: the server cannot parse it on the next
 boot.  These helpers stage the new content in a sibling temp file, fsync it,
 then ``os.replace`` it over the target (an atomic rename on POSIX and Windows),
-and fsync the parent directory so the rename itself survives a crash — matching
+and fsync the parent directory so the rename itself survives a crash - matching
 the durability the restore subsystem already uses for the DB swap.
 """
 
@@ -24,7 +24,7 @@ def write_json_atomic(path: str, data: Any, *, indent: int = 2) -> None:
     """Serialise *data* as JSON and write it to *path* atomically.
 
     The file at *path* is either fully replaced with the new content or left
-    untouched — it is never observed truncated or half-written, even if the
+    untouched - it is never observed truncated or half-written, even if the
     process crashes mid-write.
 
     Args:

@@ -180,7 +180,7 @@ def _scope_predicates_for_leaders(
     A second spelling is how the leader and the members get to disagree.
 
     Only the predicates that can hide a stack's global position-0 member belong
-    here. A score range or a tag filter can too, in principle — they are left
+    here. A score range or a tag filter can too, in principle - they are left
     out deliberately, because both are already applied to every member and a
     stack whose every member fails them has no row to show either way. A FOLDER
     and a FACE facet are different: they are *where the picture is* and *what is
@@ -205,7 +205,7 @@ class Picture(SQLModel, table=True):
     description: Optional[str] = None
     format: Optional[str] = None
     # RAW, un-rotated pixel dimensions as stored in the file. They do NOT swap
-    # when the EXIF orientation changes — an in-place rotate rewrites one tag and
+    # when the EXIF orientation changes - an in-place rotate rewrites one tag and
     # copies every pixel byte through, so the stored bitmap keeps its shape.
     width: Optional[int] = None
     height: Optional[int] = None
@@ -214,7 +214,7 @@ class Picture(SQLModel, table=True):
     # source of truth: the file is. The column exists because
     # ``capture_state_in_session`` runs for every recorded operation, and reading
     # the tag off disk there would make a 2,700-row tag edit do 5,400 file opens
-    # on the single DB writer thread. NULL means "not yet read" —
+    # on the single DB writer thread. NULL means "not yet read" -
     # ``MissingOrientationFinder`` backfills it.
     orientation: Optional[int] = Field(default=None)
     size_bytes: Optional[int] = None
@@ -1090,7 +1090,7 @@ class Picture(SQLModel, table=True):
             )
 
             if not leader_scope:
-                # Unscoped (or multi-project) grid: fast path — the leader is
+                # Unscoped (or multi-project) grid: fast path - the leader is
                 # the global stack_position == 0, backed by the partial leader
                 # index. Left untouched so the common grid stays fast.
                 query = query.where(
@@ -1226,7 +1226,7 @@ class Picture(SQLModel, table=True):
             # The full-size media URL's `?v=` token (`mediaVersion` in
             # frontend/src/utils/media.js). An in-place rotate rewrites only the
             # EXIF orientation tag, so nothing else in this projection moves when
-            # a picture is turned — without it the lightbox, the grid's
+            # a picture is turned - without it the lightbox, the grid's
             # full-image prefetch and the neighbour preloads all build the same
             # unchanged URL and the browser repaints the pre-rotate bytes.
             "orientation",
@@ -1379,7 +1379,7 @@ class Picture(SQLModel, table=True):
         ).apply(query)
 
         if stack_leaders_only:
-            # Same rule and same implementation as `find` — see
+            # Same rule and same implementation as `find` - see
             # `stack_leader_filter`. This branch used to be a fourth private
             # copy of it, and the copy was the slow shape.
             leader_scope: list = []
@@ -1486,15 +1486,15 @@ class Picture(SQLModel, table=True):
 
         The leaders-only fast path represents a stack by its **global**
         ``stack_position == 0`` member. That is right only for an unnarrowed
-        grid: any predicate that can hide that member — a project, an id list, a
-        folder, a face facet — drops the whole stack from a grid whose own
+        grid: any predicate that can hide that member - a project, an id list, a
+        folder, a face facet - drops the whole stack from a grid whose own
         pictures are right there. The owner reported it as a set showing 5 tiles
         for its 6 members and no stack at all (#670/#1746).
 
         The rule is one sentence: **represent each stack by its best-ranked
         member that is itself in scope.** This is the single implementation of
-        it. Before this there were three — the id-list branch here, the
-        project branch here, and a fourth written for `find_unassigned` — and
+        it. Before this there were three - the id-list branch here, the
+        project branch here, and a fourth written for `find_unassigned` - and
         only the first had been made fast.
 
         **The shape is the measured one, not the obvious one.** Comparing each
@@ -1513,13 +1513,13 @@ class Picture(SQLModel, table=True):
         unscoped fast path **2.0 ms**, folder-scoped through this filter
         **9.1 ms**, folder-scoped on the unassigned view **13.8 ms**. The
         previous behaviour for a folder scope was the 2.0 ms fast path and it
-        was wrong — it dropped every stack whose cover sat in another folder —
+        was wrong - it dropped every stack whose cover sat in another folder -
         so the ~7 ms is the price of the grid agreeing with itself, not a
         regression against a correct baseline.
 
         Args:
             scope_predicates: The narrowing clauses, against ``Picture`` itself.
-                Must be the SAME predicates the outer query applies — two
+                Must be the SAME predicates the outer query applies - two
                 spellings of "in scope" is how the leader and the members get
                 to disagree about which stack is showing.
 

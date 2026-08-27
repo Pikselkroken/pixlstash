@@ -2,8 +2,8 @@
 
 Three routes and one rule between them: **a picture moves only when its folder
 stops being true.** Choosing a layout reorganises nothing, because every path
-already in the library is what the assignments were read from. Drift — a folder
-that is still true but is not what the owner would pick today — is *offered*
+already in the library is what the assignments were read from. Drift - a folder
+that is still true but is not what the owner would pick today - is *offered*
 here and never taken automatically.
 
 The automatic half has no route at all: it is ``LayoutMoveTask``, woken by the
@@ -30,7 +30,7 @@ from pixlstash.utils.library_layout import (
     parse_layout,
 )
 
-#: Most ids one "Move to match" request may carry — the same number as
+#: Most ids one "Move to match" request may carry - the same number as
 #: ``ROTATE_MAX_IDS``, and for the same two reasons. Every id is a file
 #: operation on the owner's own disk, and the whole request runs in one
 #: transaction on the single DB writer thread, so a batch large enough to be
@@ -72,7 +72,7 @@ class LayoutPatch(BaseModel):
         default=None,
         description=(
             "One safe path component for the unfiled folder; null means "
-            "`_Inbox`. It is never the library root — the root is where an "
+            "`_Inbox`. It is never the library root - the root is where an "
             "unmigrated flat library lives, and those files must never move."
         ),
     )
@@ -82,7 +82,7 @@ class PictureLayoutResponse(BaseModel):
     """What `GET /pictures/{id}/layout` answers.
 
     Declared rather than returned as a bare dict so the Scalar reference renders
-    a body instead of `null` — `tests/test_openapi_response_schemas.py` guards
+    a body instead of `null` - `tests/test_openapi_response_schemas.py` guards
     that for every 2xx JSON response, and it is the reason this model exists.
 
     Every field but `status` is nullable, and all three go null together for a
@@ -109,7 +109,7 @@ class PictureLayoutResponse(BaseModel):
         default=None,
         description=(
             "The **Move to match** offer, or null when there is nothing to "
-            "offer — no layout, an off-layout folder of the owner's own, or a "
+            "offer - no layout, an off-layout folder of the owner's own, or a "
             "picture already where the layout would put it. An offer is never "
             "a correction: the folder it is in has not stopped being true."
         ),
@@ -167,7 +167,7 @@ def create_router(server) -> APIRouter:
             "keeps working exactly as it did.\n\n"
             "What the layout decides from here on is where a *new* picture is "
             "written, and where a picture goes when the folder it is in stops "
-            "describing it — removing the project its folder is named after, "
+            "describing it - removing the project its folder is named after, "
             "or swapping one for another. Adding a second project or a second "
             "person moves nothing.\n\n"
             "A malformed layout is refused with 400 rather than stored: a "
@@ -222,7 +222,7 @@ def register_picture_routes(router: APIRouter, server) -> None:
     They live on the **pictures** router rather than on this module's own, and
     that is a routing fact rather than a preference: ``_crud`` registers the
     ``/pictures/{id}/{field}`` field-allowlist catch-all, and anything matching
-    that shape must be registered ahead of it or the catch-all answers first —
+    that shape must be registered ahead of it or the catch-all answers first -
     with a 400 naming a field nobody asked for. ``_anomaly`` and
     ``_character_likeness`` are here for the same reason, and
     ``routes/pictures/__init__.py`` says so at the call site.
@@ -297,7 +297,7 @@ def register_picture_routes(router: APIRouter, server) -> None:
                     "change_kind": "updated",
                     # A moved file changes the thumbnail URL, which is derived
                     # from the path and does not come back from the metadata
-                    # endpoint — the marker a rotate raises, for the same reason.
+                    # endpoint - the marker a rotate raises, for the same reason.
                     "fields": ["file_path", "pixels"],
                     "source": "ui",
                     "origin_client_id": getattr(

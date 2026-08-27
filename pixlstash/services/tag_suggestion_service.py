@@ -3,7 +3,7 @@
 A :class:`TagSuggestion` is a *suspected* label fix produced by a finder (near-neighbor
 disagreement, model mining, propagation). This module is the human half of the loop:
 list the ranked suspects, and apply or dismiss them. Applying a suggestion writes
-through to the ``Tag`` table — the system of record — so the fix lands in the data the
+through to the ``Tag`` table - the system of record - so the fix lands in the data the
 tagger retrains on:
 
   * accept a ``remove`` suggestion → delete the wrongly-applied ``Tag`` row.
@@ -58,8 +58,8 @@ class SuggestionConflictError(Exception):
     """Accepting a suggestion is refused because the world moved under it.
 
     Raised (not silently swallowed) when applying a suggestion's writeback would
-    act on stale evidence — the suspect picture is soft-deleted, or a human has
-    since recorded the opposite label — so accepting it would reverse a manual
+    act on stale evidence - the suspect picture is soft-deleted, or a human has
+    since recorded the opposite label - so accepting it would reverse a manual
     fix or tag a deleted picture. The caller sees an explicit failure instead of
     a silent, harmful no-op.
     """
@@ -130,7 +130,7 @@ def list_suggestions(
     """
 
     def _fetch(session: Session) -> list[TagSuggestion]:
-        # Withhold still-PENDING suspects frozen by a locked set — every action
+        # Withhold still-PENDING suspects frozen by a locked set - every action
         # on them 423s, so listing them offers work that cannot be done. Same
         # rule and same PENDING-only scoping as the review queue
         # (review_service.list_review_suggestions); a row decided before the
@@ -301,7 +301,7 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
 
-        # Lock guard: accepting writes the POS/NEG label ledger onto the suspect —
+        # Lock guard: accepting writes the POS/NEG label ledger onto the suspect -
         # exactly the data a locked set freezes. Refuse when the suspect is locked.
         enforce_pictures_not_locked(
             session, [suggestion.picture_id], "accept a suggestion on a locked picture"
@@ -309,7 +309,7 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
         # F2 guard 1: never write a Tag onto a soft-deleted (or missing)
         # picture. Its card is filtered out of the review queue, so accepting
-        # one is always acting on a stale card — refuse loudly rather than
+        # one is always acting on a stale card - refuse loudly rather than
         # silently tagging a deleted picture.
         picture = session.get(Picture, suggestion.picture_id)
         if picture is None or picture.deleted:
@@ -349,14 +349,14 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
                     # human label was recorded *since* the suggestion was raised
                     # (labeled_at strictly newer than created_at). A human label
                     # that PREDATES the suggestion is not a manual fix the accept
-                    # would reverse — the sibling manual-remove path flips such a
-                    # POS→NEG with no guard — so it must stay acceptable (B1).
+                    # would reverse - the sibling manual-remove path flips such a
+                    # POS→NEG with no guard - so it must stay acceptable (B1).
                     labeled_at = human.labeled_at
                     created_at = suggestion.created_at
                     if labeled_at is None or created_at is None:
                         # Missing timestamp shouldn't happen in practice; we
                         # cannot establish staleness, so do NOT refuse (allow the
-                        # accept) — but log the anomaly with full context rather
+                        # accept) - but log the anomaly with full context rather
                         # than swallow it silently.
                         logger.warning(
                             "accept_suggestion: suggestion %s (picture %s, tag "
@@ -418,7 +418,7 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     F9b: a PENDING/SKIPPED row that was re-parented over a prior decision
     (``include_reviewed`` reopened a decided row into a new review) carries that
     decision in ``prior_*``. Reversing such a row makes no label change here;
-    instead it peels the re-parent back — restoring the row to its prior
+    instead it peels the re-parent back - restoring the row to its prior
     review/status/reviewed_at, re-exposing the original decision for a normal
     reversal, then clearing ``prior_*``. The prior decision's own label write is
     left standing until that re-exposed row is itself reversed. (A row decided
@@ -473,7 +473,7 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     elif suggestion.prior_status is not None:
         # F9b: an undecided (PENDING/SKIPPED) row re-parented over a prior
         # decision. No label change was made in THIS review, so peel the
-        # re-parent back — restore the captured prior tuple (review/status/
+        # re-parent back - restore the captured prior tuple (review/status/
         # reviewed_at), re-exposing the original decision for a normal reversal,
         # then clear prior_*. The prior decision's label write is untouched.
         suggestion.review_id = suggestion.prior_review_id
@@ -499,7 +499,7 @@ def reopen_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         suggestion = session.get(TagSuggestion, suggestion_id)
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
-        # Reopen reverses a decision's label change — re-adding/deleting Tag rows
+        # Reopen reverses a decision's label change - re-adding/deleting Tag rows
         # and clearing the ledger on the suspect and/or twin. Frozen when either
         # is in a locked set.
         enforce_pictures_not_locked(
@@ -541,7 +541,7 @@ def _confidence_map(session: Session, pids: list[int], tag: str) -> dict[int, fl
 def _decision(
     left_conf: float | None, right_conf: float | None
 ) -> tuple[str | None, float]:
-    """Place a pair in one of four corners from the tagger's per-image confidence — the
+    """Place a pair in one of four corners from the tagger's per-image confidence - the
     near-neighbour link only *selected* the pair, it doesn't vote. ``left`` is the flagged
     image, ``right`` its untagged twin.
 
@@ -596,7 +596,7 @@ def _set_tag(
 
     The single chokepoint for suggestion-driven Tag mutations. When ``record`` (the
     default for a forward human decision), also writes the human POS/NEG to the label
-    ledger — ``present`` ⇒ POS, absent ⇒ NEG — so accepting/resolving a suggestion is
+    ledger - ``present`` ⇒ POS, absent ⇒ NEG - so accepting/resolving a suggestion is
     durable supervision. Undo paths pass ``record=False`` and clear the ledger instead.
     """
     existing = session.exec(
@@ -657,8 +657,8 @@ def bulk_accept(
       corner (see :func:`_decision`) with margin ≥ ``min_combined``;
     * the neighbour ``score`` must also be ≥ ``min_combined``.
 
-    Anything the two signals disagree on — the tagger overruling its near-twin, swaps,
-    weakly-agreeing neighbours — is left for the human to hand-review. The queue exists
+    Anything the two signals disagree on - the tagger overruling its near-twin, swaps,
+    weakly-agreeing neighbours - is left for the human to hand-review. The queue exists
     *because* the model is noisy, so a confident tagger alone is never enough to auto-edit
     a label. ``dry_run`` applies nothing and instead returns a ``sample`` of the *least
     tagger-confident* would-be resolutions (the riskiest of the agreed set, to
@@ -671,7 +671,7 @@ def bulk_accept(
     An empty set resolves nothing; ``None`` is today's unrestricted behaviour.
 
     ``review_id`` optionally restricts to one review session's rows
-    (``TagSuggestion.review_id``), so a review's "N obvious pairs —
+    (``TagSuggestion.review_id``), so a review's "N obvious pairs -
     auto-resolve?" receipt and its apply act on exactly that review's queue.
     """
 
@@ -694,7 +694,7 @@ def bulk_accept(
                 ids.add(r.twin_picture_id)
         conf_map = _confidence_map(session, sorted(ids), tag)
         # A row whose suspect OR twin is frozen by a locked set is skipped (and
-        # reported), not applied — resolving writes Tag + ledger on both. Computed
+        # reported), not applied - resolving writes Tag + ledger on both. Computed
         # once for the whole batch; used by dry-run and apply alike so their
         # counts agree.
         locked = locked_picture_ids(session, sorted(ids))
@@ -718,8 +718,8 @@ def bulk_accept(
             # near-neighbour scan proposes one corner per direction (add → "both",
             # remove → "neither"); the tagger must land in that SAME corner, and both
             # the neighbour vote (``score``) and the tagger margin (``confidence``) must
-            # clear the threshold. Mismatches — the tagger disagreeing with its near-twin,
-            # swaps, weakly-agreeing neighbours, or a twin with no prediction to compare —
+            # clear the threshold. Mismatches - the tagger disagreeing with its near-twin,
+            # swaps, weakly-agreeing neighbours, or a twin with no prediction to compare -
             # fall through to human review. (Constraining the corner this way also means
             # bulk only ever applies the scan's own proposed change, never its inverse.)
             if corner is None or corner != _neighbor_corner(r.direction):
@@ -773,7 +773,7 @@ def bulk_accept(
 
     # dry_run performs no writes (it returns before any session.commit above), so
     # dispatch it on the immediate read path instead of the serialized writer
-    # queue — otherwise a plain GET (review_service.get_review / create_review
+    # queue - otherwise a plain GET (review_service.get_review / create_review
     # call this with dry_run=True to count) stalls behind pending writes just to
     # re-run the scan+confidence-map. The real apply path keeps run_task.
     if dry_run:
@@ -789,7 +789,7 @@ def bulk_reopen(vault: "Vault", ids: list[int], review_id: int | None = None) ->
     a review-scoped batch undo can never touch another session's decisions.
     With ``review_id`` set and ``ids`` empty, ALL of that review's decided rows
     are reopened (the "Undo N changes" abort flow). SKIPPED rows are always
-    left as-is in review-scoped mode — they made no changes to undo.
+    left as-is in review-scoped mode - they made no changes to undo.
     """
 
     def _bulk(session: Session) -> dict:
@@ -869,7 +869,7 @@ def fix_twin_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             raise ValueError("suggestion has no twin to fix")
         # fix-twin writes the Tag + ledger onto the TWIN. The plan lets a locked
         # picture appear as a read-only twin, so this is exactly where a write
-        # could reach frozen data — refuse when the twin is locked.
+        # could reach frozen data - refuse when the twin is locked.
         enforce_pictures_not_locked(
             session, [twin_id], "fix a suggestion's locked twin"
         )
@@ -907,7 +907,7 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
         if suggestion.twin_picture_id is None:
             raise ValueError("suggestion has no twin to swap")
-        # swap writes Tag + ledger on BOTH the suspect and its twin — refuse when
+        # swap writes Tag + ledger on BOTH the suspect and its twin - refuse when
         # either is frozen by a locked set.
         enforce_pictures_not_locked(
             session,
@@ -941,7 +941,7 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
 
 def skip_suggestion(vault: "Vault", suggestion_id: int) -> dict:
-    """Mark a suggestion SKIPPED — the reviewer cannot decide, so the item
+    """Mark a suggestion SKIPPED - the reviewer cannot decide, so the item
     leaves the queue with NO decision made.
 
     Unlike dismiss (which affirms the current label and writes the human
@@ -977,7 +977,7 @@ def skip_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
 
 def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
-    """Mark a suggestion DISMISSED — the human rejected the *suggestion*, which is itself
+    """Mark a suggestion DISMISSED - the human rejected the *suggestion*, which is itself
     a label decision: it affirms the current label is right.
 
     Dismissing is not "skip": an ``add`` suggestion says "this tag is missing", so
@@ -1002,7 +1002,7 @@ def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
         # Lock guard: dismiss affirms the current label (writes the human ledger)
-        # on the suspect — frozen when the suspect is in a locked set.
+        # on the suspect - frozen when the suspect is in a locked set.
         enforce_pictures_not_locked(
             session,
             [suggestion.picture_id],

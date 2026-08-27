@@ -427,7 +427,7 @@ def create_router(server) -> APIRouter:
         # Assignment is stack-atomic (the work function expands the request to
         # whole stacks), so the snapshot expands too. A request addressed by face
         # id does not name its pictures, so resolve them on the mutation's own
-        # session before the write — otherwise the operation would record a
+        # session before the write - otherwise the operation would record a
         # half-change that undo could not reverse.
         (faces, existing_face_ids), _operation = (
             operation_log_service.run_recorded_metadata_task(
@@ -448,7 +448,7 @@ def create_router(server) -> APIRouter:
             )
         )
         if not faces and len(existing_face_ids) > 0:
-            # All requested faces are already assigned to this character — the
+            # All requested faces are already assigned to this character - the
             # desired state is already achieved.  Return success so callers
             # (e.g. the ComfyUI node re-importing a duplicate picture) do not
             # treat this as an error.
@@ -537,7 +537,7 @@ def create_router(server) -> APIRouter:
             return faces
 
         # Unlike the assign above, this handler does not expand to stacks, so the
-        # snapshot covers exactly the requested pictures — plus the pictures of a
+        # snapshot covers exactly the requested pictures - plus the pictures of a
         # face-id-addressed request, resolved on the mutation's own session.
         operation_log_service.run_recorded_metadata_task(
             server.vault,

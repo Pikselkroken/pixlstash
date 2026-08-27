@@ -9,11 +9,11 @@ ids into a connection-scoped ``TEMP TABLE`` with a parameter-safe
 ``executemany`` insert and hands back a scalar subquery selecting that table's
 id column, so a caller swaps
 
-    col.in_(ids)                       # one bound param per id — has a ceiling
+    col.in_(ids)                       # one bound param per id - has a ceiling
 
 for
 
-    col.in_(scope_id_subquery(session, ids))   # zero id params — no ceiling
+    col.in_(scope_id_subquery(session, ids))   # zero id params - no ceiling
 
 The two forms are result-identical (a set-membership test), but the temp-table
 form binds no per-id parameters, so an arbitrarily large scope is safe.
@@ -22,7 +22,7 @@ SQLite scopes ``TEMP`` tables to the DBAPI connection, and every query in a
 single ``run_immediate_read_task`` / write-task callback runs on that one
 connection, so a table materialised at the top of a callback is visible to
 every query in it. Because the pool may hand the same connection to a later
-callback, the table is dropped and recreated on each call — stale ids never
+callback, the table is dropped and recreated on each call - stale ids never
 leak between calls. When two independent scopes must coexist in one callback
 (e.g. the raw scope and its non-deleted subset), give them distinct ``name``s
 so neither clobbers the other.
@@ -43,15 +43,15 @@ def scope_id_subquery(
 ):
     """Materialise *ids* into a ``TEMP TABLE`` and return ``SELECT id FROM temp``.
 
-    The returned selectable is meant to replace a Python-set ``.in_()`` —
-    ``some_column.in_(scope_id_subquery(session, ids))`` — with an identical
+    The returned selectable is meant to replace a Python-set ``.in_()`` -
+    ``some_column.in_(scope_id_subquery(session, ids))`` - with an identical
     membership test that binds no per-id parameters, so a scope of any size is
     safe against SQLite's bound-parameter ceiling.
 
     Args:
         session: Active session; the table is created on its bound connection.
         ids: The scope ids. May be empty, yielding a zero-row table (an empty
-            membership test — matches nothing, same as ``.in_(set())``).
+            membership test - matches nothing, same as ``.in_(set())``).
         name: Temp-table name. Pass distinct names when two scopes must live on
             the same connection at once so they do not overwrite each other.
 
@@ -68,7 +68,7 @@ def scope_id_subquery(
     conn.exec_driver_sql(f"DROP TABLE IF EXISTS temp.{name}")
     conn.exec_driver_sql(f"CREATE TEMP TABLE {name} (id INTEGER PRIMARY KEY)")
     # De-dupe (the PRIMARY KEY would reject repeats) and insert one row per
-    # execution via executemany — each execution binds a single parameter, so
+    # execution via executemany - each execution binds a single parameter, so
     # the insert itself never approaches the ceiling this helper exists to dodge.
     rows = [(int(i),) for i in set(ids)]
     if rows:

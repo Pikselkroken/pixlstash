@@ -69,7 +69,7 @@ class FaceExtractionTask(BaseTask):
     _cpu_insightface_lock = threading.Lock()
     # Live task instances that hold a reference to an InsightFace app. The app is
     # an onnxruntime session whose VRAM lives in ORT's own CUDA arena (torch's
-    # empty_cache cannot free it) — the arena is only returned to the driver when
+    # empty_cache cannot free it) - the arena is only returned to the driver when
     # the last reference to the session is dropped and it is garbage-collected.
     # Nulling only the class globals is not enough: each running task also holds
     # self._insightface_app pointing at the same object, so release must clear
@@ -83,8 +83,8 @@ class FaceExtractionTask(BaseTask):
     _active_task_lock = threading.Lock()
     # Semaphore that limits concurrent ONNX inference to 1 session at a time.
     # With INFLIGHT=2, Task 2's preload runs while Task 1 holds this semaphore,
-    # so Task 2 can start ONNX immediately after Task 1 finishes — no I/O wait.
-    # Uses the shared GPU queue — the single GPU worker ensures only one
+    # so Task 2 can start ONNX immediately after Task 1 finishes - no I/O wait.
+    # Uses the shared GPU queue - the single GPU worker ensures only one
     # face-extraction task runs at a time.  HIGH priority in the GPU queue
     # means face extraction is always preferred over tagging or embeddings.
     # gate so tagging/embedding tasks never compete while FE is active.
@@ -148,7 +148,7 @@ class FaceExtractionTask(BaseTask):
         Stills are stored as ``(bgr_image, inv_scale)``; videos as
         ``(frames, 1.0)`` where ``frames`` is the ``(frame_index, bgr_frame)``
         list :meth:`_read_video_frames` selects. Each call opens its own
-        ``cv2.VideoCapture`` — the thread-safety concern is sharing one capture,
+        ``cv2.VideoCapture`` - the thread-safety concern is sharing one capture,
         not decoding in parallel. A video that fails to decode here gets no
         entry, so the batch loop reads it synchronously instead.
         """
@@ -252,7 +252,7 @@ class FaceExtractionTask(BaseTask):
                 if self._stop_event.is_set():
                     break
 
-            # Release preloaded numpy arrays immediately — each BGR image can
+            # Release preloaded numpy arrays immediately - each BGR image can
             # be several MB; a batch of 64 can be 500+ MB held unnecessarily.
             self._preloaded_images = {}
 
@@ -500,7 +500,7 @@ class FaceExtractionTask(BaseTask):
         InsightFace pipeline without a database or ``Picture`` objects.
 
         Images with either dimension below ``_MIN_DETECTION_DIM`` are skipped
-        and returned as empty (no-face) results — they cannot contain a
+        and returned as empty (no-face) results - they cannot contain a
         detectable face and would crash InsightFace's internal cv2.resize.
 
         Args:
@@ -538,7 +538,7 @@ class FaceExtractionTask(BaseTask):
                 if is_vram_oom(exc):
                     # Never "no faces". Inside FaceExtractionTask this result
                     # becomes a sentinel row per picture, and sentinels are
-                    # never re-scanned — so a full card (another process
+                    # never re-scanned - so a full card (another process
                     # holding VRAM) would silently and permanently mark every
                     # picture in the batch as faceless. The runner retries an
                     # OOM; let it.
@@ -584,7 +584,7 @@ class FaceExtractionTask(BaseTask):
     def _read_video_frames(
         file_path: str,
     ) -> tuple[list[tuple[int, np.ndarray]], float]:
-        """Return ``(frames, inv_scale)`` — the frames face detection samples.
+        """Return ``(frames, inv_scale)`` - the frames face detection samples.
 
         ``frames`` is ``(frame_index, bgr_frame)`` pairs, each reduced so its
         longest side is at most ``INFERENCE_MAX_SIDE`` (as stills are);
@@ -626,8 +626,8 @@ class FaceExtractionTask(BaseTask):
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     # DEBUG, not WARNING: CAP_PROP_FRAME_COUNT is an estimate
-                    # for HEVC — a 47-frame iPhone clip reports 47 and cannot
-                    # read frame 45 — so the last sample often lands past the
+                    # for HEVC - a 47-frame iPhone clip reports 47 and cannot
+                    # read frame 45 - so the last sample often lands past the
                     # end. The clip still gets its other frames.
                     logger.debug(
                         "Could not read frame %s of %s from video %s",
@@ -657,7 +657,7 @@ class FaceExtractionTask(BaseTask):
 
         # Tag every face written in this batch with the pack that produced it so
         # the FACE_MODEL_REFRESH finder can detect stale embeddings on a pack
-        # change. Read once per batch — the engine pack is immutable per run.
+        # change. Read once per batch - the engine pack is immutable per run.
         model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
 
         updates = []
@@ -673,20 +673,20 @@ class FaceExtractionTask(BaseTask):
 
         # Images are preloaded in on_queued() via a background thread so that
         # I/O runs while the previous task holds the inference semaphore.
-        # Retrieve the completed dict here (instant — _run_task already joined
+        # Retrieve the completed dict here (instant - _run_task already joined
         # the preload thread via _wait_for_preload).
         preloaded = self._preloaded_images
 
         # ── Batched detection + recognition ─────────────────────────────────
         # Run detection (per-image, detector ONNX batch=1) and recognition
-        # (batched — all crops from all images in one ONNX call) up front.
+        # (batched - all crops from all images in one ONNX call) up front.
         # This replaces N×(detector + recogniser + landmark + genderage) calls
         # with N detector calls + 1 recogniser call.
         runner = BatchedFaceRunner(self._insightface_app)
         # Build the set of resolved paths for the current chunk only.  The
         # preloaded dict contains ALL task images; without this filter, every
         # chunk would run run_batch() on the full task and get_feat() on all
-        # crops — O(chunks × images) wasted work and proportionally higher
+        # crops - O(chunks × images) wasted work and proportionally higher
         # peak GPU activation memory.
         _setup_start = time.time()
         chunk_paths: set[str] = {
@@ -823,7 +823,7 @@ class FaceExtractionTask(BaseTask):
                         frames, inv_scale = preloaded_entry
                     else:
                         # Not preloaded (cancelled, or decode failed in the
-                        # pool — already logged): read on the worker thread.
+                        # pool - already logged): read on the worker thread.
                         read_start = time.time()
                         frames, inv_scale = self._read_video_frames(file_path)
                         image_load_s += time.time() - read_start
@@ -911,7 +911,7 @@ class FaceExtractionTask(BaseTask):
                     # Not a warning: most pictures have no face in them, and
                     # a warning per picture buried the real ones.
                     logger.debug("No faces found in %s (picture %s)", file_path, pic.id)
-                    # Sentinel face — no bbox, face_index=-1
+                    # Sentinel face - no bbox, face_index=-1
                     bulk_faces.append(
                         Face(
                             picture_id=pic.id,
@@ -943,7 +943,7 @@ class FaceExtractionTask(BaseTask):
         # ── Square-crop rectangle update ──────────────────────────────────
         # The whole-frame AR bitmap is face-INDEPENDENT, so detecting faces does
         # not change the thumbnail file (written at import / by the finder). We
-        # only recompute the face-weighted SQUARE-CROP rectangle in bitmap space —
+        # only recompute the face-weighted SQUARE-CROP rectangle in bitmap space -
         # pure geometry from the exif-corrected source dimensions and the detected
         # boxes, with no image re-encode or file write.
         if pending_thumb_work:
@@ -1037,7 +1037,7 @@ class FaceExtractionTask(BaseTask):
 
         Called AFTER releasing the inference semaphore so that the SQLite
         commit does not block the next task from starting inference. The
-        caller waits on the returned future before the task completes — see
+        caller waits on the returned future before the task completes - see
         `_run_task` for why that wait is load-bearing.
         """
         if not bulk_faces and not bulk_thumbnail_crops:
@@ -1051,7 +1051,7 @@ class FaceExtractionTask(BaseTask):
             except IntegrityError:
                 session.rollback()
                 logger.warning(
-                    "Bulk face insert failed (IntegrityError) — skipping batch."
+                    "Bulk face insert failed (IntegrityError) - skipping batch."
                 )
                 return
 

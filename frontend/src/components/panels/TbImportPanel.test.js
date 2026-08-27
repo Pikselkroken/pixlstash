@@ -37,7 +37,7 @@ afterEach(() => {
 describe("TbImportPanel hardening", () => {
   it("offers the picker the shared import accept, not an undefined binding", async () => {
     // A `:accept` bound to a name the <script setup> never imported renders no
-    // `accept` attribute at all — the picker then offers every file on the
+    // `accept` attribute at all - the picker then offers every file on the
     // disk, and nothing about the markup looks wrong. This asserts the rendered
     // attribute rather than the binding, because that is the difference.
     const wrapper = mountPanel();

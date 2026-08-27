@@ -11,7 +11,7 @@ is a whole file: a part-finished ``hashlib`` object cannot be pickled and
 UNIQUE, and two rows legitimately arrive at the same digest: an unhashed
 checkpoint is identified by the location it was found at, so the same file in
 two registered folders is two rows, as is the duplicate an interrupted move
-leaves behind (copy, verify, repoint, unlink — a crash between the copy and the
+leaves behind (copy, verify, repoint, unlink - a crash between the copy and the
 unlink is *designed* to leave two paths holding one file). Raising there would
 fail a background task on a state the product deliberately allows, and would do
 it repeatedly, since the finder would hand the same row back on the next sweep.
@@ -21,7 +21,7 @@ older id and whatever either row knows, and **every location either row knew
 moves to the survivor**. That last part is what ``model_file`` is for. With the
 path stored inline on the content row there was nowhere to put the second one,
 so the merge silently forgot it, the next scan re-registered it unhashed, this
-task read all 24 GB again, and the merge dropped it again — forever, once per
+task read all 24 GB again, and the merge dropped it again - forever, once per
 scan cycle.
 
 **A merge can also take a file out of a run.** The losing row is deleted, and
@@ -200,7 +200,7 @@ class CheckpointHashTask(BaseTask):
         # rather than dropped: the two rows are the same bytes, so whatever the
         # doomed one was declared to serve, the survivor serves. `OR IGNORE`
         # because the survivor may already claim it, and the leftovers then go
-        # — an orphan here would abort the delete below, not leak quietly.
+        # - an orphan here would abort the delete below, not leak quietly.
         conn.execute(
             "INSERT OR IGNORE INTO model_capability (model_id, capability) "
             "SELECT ?, capability FROM model_capability WHERE model_id = ?",
@@ -209,7 +209,7 @@ class CheckpointHashTask(BaseTask):
         conn.execute("DELETE FROM model_capability WHERE model_id = ?", (doomed["id"],))
         conn.execute("DELETE FROM model WHERE id = ?", (doomed["id"],))
         # A duplicate can be one file of a run, and the row that loses the merge
-        # leaves it without asking the stack module — the same hole Forget and
+        # leaves it without asking the stack module - the same hole Forget and
         # Delete leave, and the same repair: the survivors are renumbered, and a
         # run left with one file stops being a run. Not inherited by the
         # survivor: it may be in a run of its own, and a member cannot be in

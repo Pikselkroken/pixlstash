@@ -44,7 +44,7 @@ class MissingTagFinder(BaseTaskFinder):
     # and with per-row dependencies a finder drains and refills many times per
     # pass, so that was a reload storm. The session is bounded by its own
     # `gpu_mem_limit` now, and `Vault._maybe_aggressive_unload` frees it once
-    # every worker has been idle — only under `keep_models_in_memory=False`.
+    # every worker has been idle - only under `keep_models_in_memory=False`.
 
     def find_task(self):
         engine = self._engine_getter()
@@ -117,7 +117,7 @@ class MissingTagFinder(BaseTaskFinder):
         # write guard (`locked_picture_ids`) does: a picture merely *sharing a
         # stack* with a locked-set member was therefore selected here, ran full
         # GPU tagging, had its write skipped, kept its retag sentinel, and was
-        # selected again on the very next sweep — an unbounded inference loop.
+        # selected again on the very next sweep - an unbounded inference loop.
         # One definition on both sides is what closes it.
         locked_member = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(

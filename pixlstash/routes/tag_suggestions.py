@@ -28,7 +28,7 @@ class TagSuggestionItemResponse(BaseModel):
     **Twin fields are scope-redacted.** For a resource-scoped share token whose
     grant does not cover the twin picture, ``twin_picture_id``, ``twin_sim``,
     ``twin_ext`` and ``twin_tagger_confidence`` are ``null`` and ``reason`` is
-    replaced with a generic string — the twin's identity is not the token's to
+    replaced with a generic string - the twin's identity is not the token's to
     learn. An owner/unscoped caller always gets the full pair. Clients already
     handle a twinless row (the confidence-only bootstrap path emits one), so a
     redacted row needs no special casing.
@@ -51,7 +51,7 @@ class TagSuggestionItemResponse(BaseModel):
     # File extensions so the client can render full-res /pictures/{id}.{ext} images.
     picture_ext: Optional[str] = None
     twin_ext: Optional[str] = None
-    # The tagger's most recent raw confidence for this (picture, tag), if predicted —
+    # The tagger's most recent raw confidence for this (picture, tag), if predicted -
     # for the suspect and (so the reviewer can weigh both sides) its twin.
     tagger_confidence: Optional[float] = None
     twin_tagger_confidence: Optional[float] = None
@@ -75,7 +75,7 @@ class BulkAcceptRequest(BaseModel):
     min_combined: float = 0.9
     direction: Optional[str] = None
     dry_run: bool = False
-    # Optional review-scope narrowing — the dry-run count and the apply both honour
+    # Optional review-scope narrowing - the dry-run count and the apply both honour
     # the same filter, matched on the suspect picture only. They AND together.
     project_id: Optional[int] = None
     set_id: Optional[int] = None
@@ -182,9 +182,9 @@ def _serialize(s: TagSuggestion) -> dict:
 
 
 # Stand-in for a `reason` string that names an out-of-scope twin. The scan writes
-# the twin's id and similarity (or dhash distance) straight into `reason` — see
+# the twin's id and similarity (or dhash distance) straight into `reason` - see
 # `tag_scan_service._scan`'s "near-twin {id} (sim …)" / "near-duplicate twin {id}
-# (dhash hamming …)" strings — so the free-text field is a twin attribute too, and
+# (dhash hamming …)" strings - so the free-text field is a twin attribute too, and
 # redacting only the structured `twin_*` fields would leave the id in plain sight.
 REDACTED_TWIN_REASON = "a near-twin outside this share disagrees with this label"
 
@@ -204,7 +204,7 @@ def _redact_out_of_scope_twin(item: dict, scope_ids: set[int] | None) -> dict:
     """Strip every twin-picture attribute when the twin is outside the token scope.
 
     The list filter (``_resolve_review_picture_ids``) constrains
-    ``TagSuggestion.picture_id`` — the *suspect* — only. A suggestion is a pair,
+    ``TagSuggestion.picture_id`` - the *suspect* - only. A suggestion is a pair,
     and the twin routinely sits outside a share token's grant, so serving the row
     unmodified discloses the id, existence, file type, perceptual similarity and
     model confidence of a picture the token may not see; iterating tags would
@@ -216,7 +216,7 @@ def _redact_out_of_scope_twin(item: dict, scope_ids: set[int] | None) -> dict:
         item: A serialized suggestion dict (mutated in place and returned).
         scope_ids: Picture ids the **token** may see, from
             ``fetch_scope_allowed_picture_ids``. ``None`` (owner/unscoped) is a
-            no-op — note this must be the raw token scope, never the
+            no-op - note this must be the raw token scope, never the
             user-filter intersection, or an owner narrowing the queue by
             project/set would have their own twins redacted.
 
@@ -251,7 +251,7 @@ def _resolve_review_picture_ids(
     * **Token scope** (``fetch_scope_allowed_picture_ids``): for a scoped/READ
       share token this is the set of pictures the token may see; for an
       owner/unscoped token it is ``None`` (no restriction). This is the
-      authorization gate — it must never be widened by the user-supplied filters,
+      authorization gate - it must never be widened by the user-supplied filters,
       so it is always intersected in. These review endpoints are reachable by
       scoped READ tokens (GET is not in ``READ_BLOCKED_GET_PATHS``), so without
       this intersection a scoped token would read the whole library's queue.
@@ -341,7 +341,7 @@ def create_router(server) -> APIRouter:
                 pairs.append((s.twin_picture_id, s.tag))
         confs = tag_suggestion_service.get_tagger_confidences(server.vault, pairs)
         # The token's own scope, NOT `picture_ids` (which also folds in the
-        # caller's project/set/character narrowing) — an owner filtering the queue
+        # caller's project/set/character narrowing) - an owner filtering the queue
         # must still see their twins.
         token_scope_ids = fetch_scope_allowed_picture_ids(server, request)
         out = []
@@ -373,7 +373,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Suggestion not found")
         except tag_suggestion_service.SuggestionConflictError as exc:
             # The suspect picture was soft-deleted, or a human ledger label now
-            # contradicts the suggestion's direction — refuse rather than write a
+            # contradicts the suggestion's direction - refuse rather than write a
             # stale/harmful edit (see accept_suggestion's guards).
             raise HTTPException(status_code=409, detail=str(exc))
         pic_id = result["picture_id"]
@@ -405,7 +405,7 @@ def create_router(server) -> APIRouter:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Suggestion not found")
-        # Undo may have changed either the suspect or the twin — refresh both.
+        # Undo may have changed either the suspect or the twin - refresh both.
         _notify_changed(
             server,
             [result["picture_id"], result.get("twin_picture_id")],
@@ -442,7 +442,7 @@ def create_router(server) -> APIRouter:
         summary="Swap a pair's labels (both were wrong, opposite ways)",
         description=(
             "The tagged image is actually clean and the untagged twin actually has the "
-            "tag — untag the former and tag the latter. Marks the suggestion SWAPPED "
+            "tag - untag the former and tag the latter. Marks the suggestion SWAPPED "
             "(undoable via reopen)."
         ),
         response_model=ReviewSuggestionResponse,
@@ -467,7 +467,7 @@ def create_router(server) -> APIRouter:
         summary="Scan a tag for near-neighbour label disagreements",
         description=(
             "Runs the near-neighbour scan for the tag and rebuilds its PENDING "
-            "suggestions (reviewed rows are kept). Synchronous — fast on a typical vault."
+            "suggestions (reviewed rows are kept). Synchronous - fast on a typical vault."
         ),
         response_model=ScanResultResponse,
     )
@@ -525,7 +525,7 @@ def create_router(server) -> APIRouter:
             # scoped token today (POST + a READ token is refused by the auth
             # middleware, and "scoped" implies "READ" since ALL+resource_type is
             # refused at mint), but that equivalence is load-bearing and lives two
-            # modules away — redact here so this payload is safe on its own terms.
+            # modules away - redact here so this payload is safe on its own terms.
             token_scope_ids = fetch_scope_allowed_picture_ids(server, request)
             for s in result["sample"]:
                 s["picture_ext"] = exts.get(s["picture_id"], "")
@@ -555,7 +555,7 @@ def create_router(server) -> APIRouter:
         summary="Skip a tag-fix suggestion (no decision)",
         description=(
             "The reviewer cannot decide: marks the suggestion SKIPPED and "
-            "removes it from the queue with no decision recorded — the Tag "
+            "removes it from the queue with no decision recorded - the Tag "
             "table and the human-label ledger are untouched (unlike dismiss, "
             "which affirms the current label). Reopen re-pends it."
         ),

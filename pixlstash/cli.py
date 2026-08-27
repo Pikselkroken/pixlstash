@@ -12,7 +12,7 @@ with ``docker exec``.
 
 The library verbs destroy nothing: ``detach`` deregisters a library and never
 touches its files, and there is deliberately no ``--delete`` flag. ``restore``
-is the one that looks like an exception and is not — it writes only to a folder
+is the one that looks like an exception and is not - it writes only to a folder
 it has proved empty, and *moves* the configuration it replaces into a dated
 folder beside itself, printing the command that reopens it. ``plugins remove``
 does delete, because a CLI that installs plugins and cannot uninstall them is
@@ -163,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Print every registered library with its id, name and folder. "
             "`*` marks the active one; `(not found)` marks a registration "
-            "whose folder is missing — reconnect the drive, or point it "
+            "whose folder is missing - reconnect the drive, or point it "
             "somewhere new with `relocate`."
         ),
     )
@@ -194,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
             "hold vault.db, and any login or tokens inside that vault are "
             "ignored rather than imported. Attaching a library that was "
             "detached earlier revives its original registration, and with it "
-            "the share links and API tokens issued from it — but only while "
+            "the share links and API tokens issued from it - but only while "
             "the folder still holds that same library; a different one at "
             "that path is registered as a new library and the old tokens stay "
             "inert. Overlapping an existing library warns rather than refuses."
@@ -214,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the folder changes. The registration is kept rather than "
             "deleted, so attaching this library again brings back its share "
             "links and API tokens; until then they are inert. The active "
-            "library is refused — switch to another one first."
+            "library is refused - switch to another one first."
         ),
     )
     detach_parser.add_argument("library", help=LIBRARY_ARG_HELP)
@@ -245,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
             "not included. An existing destination file is never overwritten. "
             "Read it back with `restore`, or by hand: it is a zstd-compressed "
             "tar (a plain tar with --no-compress) holding manifest.json, "
-            "vault.db, hub.db and — unless --metadata-only was given — the "
+            "vault.db, hub.db and - unless --metadata-only was given - the "
             "library's own files under images/."
         ),
     )
@@ -310,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
             "launch offers this same approval as a `[y/N]` prompt instead, "
             "so this command is for a non-interactive upgrade (a service, a "
             "container, a script) or for approving it ahead of time. This "
-            "records the approval and nothing else — the copy, the "
+            "records the approval and nothing else - the copy, the "
             "verification and the blanking of the old identity happen the "
             "next time PixlStash starts."
         ),
@@ -658,7 +658,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
         description=(
             "A development aid for writing a plugin. NOT a security scanner:\n"
             "it does not tell you whether a plugin is safe, it RUNS it. The\n"
-            "module body — and the model itself, with --image — executes in\n"
+            "module body - and the model itself, with --image - executes in\n"
             "this process, with your permissions, exactly as it would in the\n"
             "server. Nothing is sandboxed, and nothing here inspects what the\n"
             "code does. Only test a plugin you would have installed anyway.\n"
@@ -666,12 +666,12 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "What it does check: that the plugin imports the way the server\n"
             "imports it at start-up, that every plugin class it defines\n"
             "registers, and that its parameter schema is one the settings\n"
-            "screen can render — the last of which the server does not check\n"
+            "screen can render - the last of which the server does not check\n"
             "and which fails quietly when it is wrong. Prints what registered.\n"
             "\n"
             "A `problem:` means the plugin will not work and exits 1. A\n"
-            "`warning:` means it works and could be tidier — a parameter with\n"
-            "no label, no capability flag set — and exits 0.\n"
+            "`warning:` means it works and could be tidier - a parameter with\n"
+            "no label, no capability flag set - and exits 0.\n"
             "\n"
             "Passing still is not the same as working in PixlStash: a plugin\n"
             "that hangs at import hangs the server's boot and would hang this\n"
@@ -692,7 +692,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "defaults and print what comes back. This loads the model, so it "
             "is the slow one. It stops rather than running when the plugin "
             "reports its model is missing, but a plugin that downloads inside "
-            "init() will still do so — nothing here can prevent that."
+            "init() will still do so - nothing here can prevent that."
         ),
     )
     test_parser.set_defaults(handler=_cmd_plugins_test)
@@ -733,7 +733,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "Print both plugin directories and what is installed in them. "
             "`!` marks a plugin that will not load as it stands and `*` one "
             "that replaces a built-in. Nothing is imported here, so a failure "
-            "that only happens at import — a missing dependency, say — is not "
+            "that only happens at import - a missing dependency, say - is not "
             "visible in this listing."
         ),
     )
@@ -977,7 +977,7 @@ def _cmd_restore(args: argparse.Namespace) -> int:
         print()
         print("Your current library folder is NOT touched, and nothing is deleted.")
         # The credentials come out of the archive, so restoring one you did not
-        # make is handing its author the owner account on this machine — which
+        # make is handing its author the owner account on this machine - which
         # reaches the host-capability routes, not just the restored pictures.
         # Worth saying plainly: the rest of this output reads reassuring.
         print(
@@ -1127,7 +1127,7 @@ def _ask(question: str, default: str = "") -> str:
     except EOFError as exc:
         raise PluginError(
             f"no answer to {question!r}, and stdin is closed. Pass the answers "
-            "as options instead — `plugins create --help` lists them."
+            "as options instead - `plugins create --help` lists them."
         ) from exc
     return answer or default
 
@@ -1162,7 +1162,7 @@ def _ask_paragraph(question: str) -> str:
     """Ask for as many lines as the contributor wants, ending on a blank one.
 
     What a plugin should do is the one answer that does not fit on a line, and
-    it is the answer everything downstream is built from — the README, the
+    it is the answer everything downstream is built from - the README, the
     class description, the prompt handed to a coding agent. Truncating it to
     what fits before the Enter key would be the wizard's own fault.
     """
@@ -1201,7 +1201,7 @@ def _report_readiness(readiness: plugin_create.ForkReadiness) -> bool:
     """Print what this machine can do about a pull request, and ask if it cannot.
 
     Asked before anything is cloned, because the answer decides whether the
-    last two steps this command prints are true — and being told at the end
+    last two steps this command prints are true - and being told at the end
     that you cannot push is being told too late to do anything about it.
     """
     print(f"\n{readiness.explanation}")
@@ -1569,7 +1569,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
     from pixlstash import plugin_check
 
     # Printed *before* the load, because after it the plugin's code has
-    # already run — and if the plugin hangs at import, this line is the last
+    # already run - and if the plugin hangs at import, this line is the last
     # thing on screen and the one that explains what is hanging.
     print(
         f"About to run {args.path} in this process, unsandboxed, with your "
@@ -1594,7 +1594,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         )
         print(
             f'\nRegistered "{check.name}"  '
-            f"({schema.get('display_name') or check.name})  — "
+            f"({schema.get('display_name') or check.name})  - "
             f"{capabilities or 'no capability flags'}"
         )
         _print_parameters(schema.get("parameters"))
@@ -1616,7 +1616,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
     if not report.ok:
         print(
             "\nThis plugin would not work as it stands. Fix the above and run "
-            "this again — no restart needed.",
+            "this again - no restart needed.",
             file=sys.stderr,
         )
         return EXIT_REFUSED
@@ -1625,7 +1625,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         "\nIt loads, registers and renders. That is a contract check, and it "
         "is neither a quality one nor a safety one: it says nothing about "
         "whether the captions are any good, and nothing about whether this "
-        "plugin is safe to install — it just ran it. A plugin that hangs at "
+        "plugin is safe to install - it just ran it. A plugin that hangs at "
         "import would hang the server's boot the same way it would hang this "
         "command."
     )
@@ -1749,7 +1749,7 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
         print("\n" + "    ".join(legend))
     print(
         "\nRead statically: no plugin is imported here, so a failure that only "
-        "happens at import — a missing dependency, say — is invisible above. "
+        "happens at import - a missing dependency, say - is invisible above. "
         "For a captioning plugin the server reports it under Settings › "
         "Auto-tagging; for an image filter it is reported nowhere, so check the "
         "server log."

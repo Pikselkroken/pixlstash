@@ -1,4 +1,4 @@
-// Snapshots resource — /snapshots and its restore sub-resources.
+// Snapshots resource - /snapshots and its restore sub-resources.
 //
 // URLs here are written WITHOUT the `/api/v1` prefix: the apiClient request
 // interceptor prepends it. The call sites this module replaced hardcoded the

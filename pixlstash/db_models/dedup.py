@@ -2,17 +2,17 @@
 
 Three concerns, three tables:
 
-* :class:`DedupGroup` / :class:`DedupGroupMember` — the **found groups cache**.
+* :class:`DedupGroup` / :class:`DedupGroupMember` - the **found groups cache**.
   Detection writes groups here as it finds them, so the queue is paged from the
   database by confidence descending and never materialised whole in memory (the
   design's "10 groups and 10,000 perform identically" rule). Without this cache a
   "page 40 of the queue" request would have to redo the whole scan.
-* :class:`DedupVerdict` — the **verdict memory**. Keyed on a group *signature*
+* :class:`DedupVerdict` - the **verdict memory**. Keyed on a group *signature*
   (see :func:`pixlstash.services.dedup_tier_service.group_signature`), not on
   group or picture ids, so a rescan or a re-import that produces the same set of
   files finds the same signature and never re-asks. "Keep separate" is permanent
   until the user reopens it.
-* :class:`DedupScan` — the **scan progress** behind the "scanned N of M" banner
+* :class:`DedupScan` - the **scan progress** behind the "scanned N of M" banner
   and the scoped-scan entry points, one row per scope key.
 
 Nothing here stores pixels, and no row in this module ever causes a delete: a
@@ -31,7 +31,7 @@ TIER_EXACT = "exact"
 TIER_NEAR = "near"
 TIER_EMBEDDING = "embedding"
 
-# ``DedupVerdict.verdict`` values. The only two verdicts in 1.9 — there is no
+# ``DedupVerdict.verdict`` values. The only two verdicts in 1.9 - there is no
 # deletion verdict anywhere in this release.
 VERDICT_STACKED = "stacked"
 VERDICT_KEEP_SEPARATE = "keep_separate"
@@ -57,12 +57,12 @@ class DedupGroup(SQLModel, table=True):
             :data:`TIER_EMBEDDING`). Exact is always shown; the looser tiers are
             filtered by the caller's :class:`~pixlstash.services.dedup_tier_service.TierPolicy`.
         confidence: 1.0 for an exact match, otherwise the group's weakest
-            pairwise similarity — the value the queue sorts by, descending.
+            pairwise similarity - the value the queue sorts by, descending.
         member_count: Number of members, denormalised so the queue page does not
             need a join to render "Stack 3".
-        cover_picture_id: The server's cover preselection (never silent — the
+        cover_picture_id: The server's cover preselection (never silent - the
             client shows it and the user may override with 1-9).
-        evidence: JSON ``[[text, against_bool], ...]`` — the why-pills. Stored
+        evidence: JSON ``[[text, against_bool], ...]`` - the why-pills. Stored
             with the group because it describes *this* grouping, and recomputing
             it would need the member metadata the queue page is trying to avoid
             loading for every group.

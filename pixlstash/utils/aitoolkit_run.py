@@ -123,8 +123,8 @@ class TrainingRun:
 def is_sample_filename(filename: str) -> bool:
     """Whether a filename is one ai-toolkit wrote as a step preview.
 
-    The same two tests :func:`_read_samples` applies — an image extension and
-    the ``<timestamp>__<step>_<index>`` shape — exposed because a *caller* needs
+    The same two tests :func:`_read_samples` applies - an image extension and
+    the ``<timestamp>__<step>_<index>`` shape - exposed because a *caller* needs
     to ask it of a file it did not read here: the delete verb decides whether a
     ``<stem>_samples/`` directory holds only the trainer's previews, and so is
     the model's to remove, or something the owner put there.

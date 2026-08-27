@@ -29,8 +29,8 @@ const props = defineProps({
    * `results` is empty for a dry run, by design.
    *
    * Every number this dialog renders about the run comes out of
-   * `dry_run_summary` — `{ groups, groups_by_tier, pictures,
-   * covers_gaining_tags, covers_gaining_score, covers_gaining_metadata }` —
+   * `dry_run_summary` - `{ groups, groups_by_tier, pictures,
+   * covers_gaining_tags, covers_gaining_score, covers_gaining_metadata }` -
    * because the server derives the whole summary from one read of one group
    * list, so its rows cannot disagree with each other the way two separate
    * counts across a running scan can. The top-level `groups` / `pictures` are

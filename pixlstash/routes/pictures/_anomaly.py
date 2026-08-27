@@ -147,7 +147,7 @@ def register_routes(router, server):
             )
         # The tagger is idle-unloaded between tagging runs, so during review it is
         # usually not resident. Load it on demand (mirrors how a tagging task brings
-        # it up) instead of failing — otherwise the review hint would 503 and the
+        # it up) instead of failing - otherwise the review hint would 503 and the
         # frontend would silently show nothing whenever the app is idle.
         if not service.is_loaded():
             ensure = getattr(engine, "ensure_pixlstash_tagger_ready", None)
@@ -195,7 +195,7 @@ def register_routes(router, server):
         except UnidentifiedImageError as exc:
             # The picture is not a still image PIL can decode (e.g. a video that
             # still carries anomaly tags). There is nothing to localise, so degrade
-            # to a diffuse (no-region) result instead of 500 — the UI shows nothing.
+            # to a diffuse (no-region) result instead of 500 - the UI shows nothing.
             logger.debug(
                 "anomaly_region: picture id=%s is not a decodable image: %s",
                 pic_id,

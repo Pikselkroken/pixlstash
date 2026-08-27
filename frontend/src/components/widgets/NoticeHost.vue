@@ -1,10 +1,10 @@
 <script setup>
 /**
- * The notice surface — one instance, mounted as the LAST child of
+ * The notice surface - one instance, mounted as the LAST child of
  * `.app-viewport`. Built to `docs/design/notice-surface.md`.
  *
  * Placement (§2.2): fixed, bottom-centre of the app viewport, spanning the full
- * width and centring on it — deliberately NOT tracking the sidebar or stats
+ * width and centring on it - deliberately NOT tracking the sidebar or stats
  * panel, because the host also has to render on the login screen, over
  * ImageOverlay, over ReviewSessionsOverlay and inside Settings, none of which
  * have a grid column to centre on. One stable anchor beats a conditional one.
@@ -13,7 +13,7 @@
  * underneath; only the cards themselves take pointer events.
  *
  * Its block inset is `--notice-safe-bottom` (declared in style.css), which is
- * `--space-5` plus `--floating-bottom-h` — the measured height of whatever
+ * `--space-5` plus `--floating-bottom-h` - the measured height of whatever
  * bottom-anchored chrome is currently parked in this column's footprint. App.vue
  * owns that variable. Overlap with the selection pill is therefore impossible by
  * construction rather than by a hardcoded guess.
@@ -36,7 +36,7 @@ const props = defineProps({
 
 const store = useNoticeStore();
 
-// Spec §5 — max visible 3, dropping to 2 below 600px.
+// Spec §5 - max visible 3, dropping to 2 below 600px.
 const NARROW_QUERY = `(max-width: ${NARROW_VIEWPORT_MAX_PX}px)`;
 let narrowMql = null;
 
@@ -48,7 +48,7 @@ function onNarrowChange(event) {
   applyCap(event.matches);
 }
 
-// Spec §6 rule 3 — the countdown pauses while the tab is hidden. Without this a
+// Spec §6 rule 3 - the countdown pauses while the tab is hidden. Without this a
 // notice pushed just before a tab switch expires unread, which is precisely the
 // silently-lost message the store exists to prevent.
 function onVisibilityChange() {
@@ -75,7 +75,7 @@ onBeforeUnmount(() => {
   }
 });
 
-// Spec §3.1 — outline glyphs throughout, matching the rest of the app.
+// Spec §3.1 - outline glyphs throughout, matching the rest of the app.
 const GLYPHS = {
   info: "mdi-information-outline",
   success: "mdi-check-circle-outline",
@@ -86,7 +86,7 @@ const GLYPHS = {
 const cards = computed(() => store.visible);
 
 /**
- * Spec §8 — only `error` interrupts. A warning is a partial outcome, not an
+ * Spec §8 - only `error` interrupts. A warning is a partial outcome, not an
  * emergency; announcing it assertively would train users to ignore assertive
  * announcements, which is how the real errors get missed.
  */
@@ -96,7 +96,7 @@ function roleFor(level) {
 
 // Esc dismisses the newest notice ONLY while focus is inside the host (§6).
 // A global binding would steal Esc from the grid selection and the
-// SelectionBar menus — a behaviour change that is UI/UX's call, not ours.
+// SelectionBar menus - a behaviour change that is UI/UX's call, not ours.
 function onKeydown(event) {
   if (event.key !== "Escape") return;
   const newest = cards.value[cards.value.length - 1];
@@ -165,7 +165,7 @@ const hostEl = ref(null);
 <style scoped>
 /* ── The column (spec §2.2) ────────────────────────────────────────────────
    Fixed, full-width, centred, and inert to the pointer. `bottom` transitions so
-   the stack rises and settles when the selection pill appears or goes — the
+   the stack rises and settles when the selection pill appears or goes - the
    notices move, the pill never does: it is a control the cursor is heading for
    and a transient message must not displace it. */
 .notice-host {
@@ -215,7 +215,7 @@ const hostEl = ref(null);
   overflow: hidden;
 }
 
-/* Status tint layer — sits over the opaque base, under the content. */
+/* Status tint layer - sits over the opaque base, under the content. */
 .notice-card::before {
   content: "";
   position: absolute;
@@ -234,7 +234,7 @@ const hostEl = ref(null);
 }
 
 /* Per-variant: ONLY the tint, border and rail carry the hue. The glyph and the
-   message stay `on-surface` in every variant — see spec §3.2. Three of the four
+   message stay `on-surface` in every variant - see spec §3.2. Three of the four
    status colours fail the 3:1 non-text floor as a foreground on their own tinted
    card in the light theme, so a coloured glyph would be a variant that silently
    fails on one theme. */
@@ -292,7 +292,7 @@ const hostEl = ref(null);
   margin-top: 1px;
 }
 
-/* Action — underlined `on-surface`, NOT `primary`: olive primary on the tinted
+/* Action - underlined `on-surface`, NOT `primary`: olive primary on the tinted
    card measures 4.30:1 at 13px, at or under the 4.5 floor. Underlined semibold
    on-surface is 14.3:1 and is unambiguously actionable without colour. */
 .notice-action {
@@ -356,7 +356,7 @@ const hostEl = ref(null);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 /* The hue swaps too, not just the alpha. A `dark-surface` stays dark in both
-   themes, so the theme's own status hues are the wrong values on it — the light
+   themes, so the theme's own status hues are the wrong values on it - the light
    theme's deepened `success` reads 2.96:1 against this card. The dark-surface
    status set is tuned for exactly this and measures 4.12:1 – 5.46:1 there. */
 .notice-host--on-dark .notice-card--info {
@@ -409,14 +409,14 @@ const hostEl = ref(null);
   transform: translateY(var(--space-2));
 }
 
-/* Stack reflow: transform only — never an animated height, which would reflow
+/* Stack reflow: transform only - never an animated height, which would reflow
    the whole column every frame. */
 .notice-move {
   transition: transform var(--dur-2) var(--ease-standard);
 }
 
 /* design-tokens.css already collapses every duration globally under reduced
-   motion; this is the extra step that file cannot do — a zero-duration
+   motion; this is the extra step that file cannot do - a zero-duration
    transition still SNAPS a translateY into place, which is the flicker the
    setting exists to prevent. Opacity-only cross-fade, no travel, no FLIP. */
 @media (prefers-reduced-motion: reduce) {

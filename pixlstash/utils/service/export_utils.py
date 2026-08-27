@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # is attacker-influenced at upload time, so it is sanitised at archive-build
 # time rather than trusted.
 #
-# Only genuinely dangerous characters are replaced — control characters, the
+# Only genuinely dangerous characters are replaced - control characters, the
 # Windows-reserved set, and anything that could be read as a separator. Letters
 # outside ASCII are kept, so a legitimate name like "café shot.jpg" survives
 # export intact instead of being mangled into "caf_ shot.jpg".
@@ -58,8 +58,8 @@ def _safe_archive_stem(name: str, fallback: str) -> str:
 class _FolderSink:
     """Write export members as plain files instead of into a ZIP archive.
 
-    Duck-types the two ``zipfile.ZipFile`` calls the export loop makes —
-    ``write(path, arcname=...)`` and ``writestr(arcname, data)`` — so
+    Duck-types the two ``zipfile.ZipFile`` calls the export loop makes -
+    ``write(path, arcname=...)`` and ``writestr(arcname, data)`` - so
     ``ExportUtils._write_export_pictures`` runs unchanged whether it is
     packaging a ZIP (:meth:`ExportUtils.generate_zip`) or writing straight
     into a folder (:meth:`ExportUtils.generate_folder_export`). Member names
@@ -182,11 +182,11 @@ class ExportUtils:
         Ideogram-4's documented schema:
 
         - boxes are **normalized** ``[y_min, x_min, y_max, x_max]`` on a 0-1000
-          grid (origin top-left) — resolution-independent, so the export's
+          grid (origin top-left) - resolution-independent, so the export's
           ``resolution`` setting does not affect them;
         - each detection becomes a ``compositional_deconstruction.elements``
           entry of ``type: "obj"`` with its label as ``desc`` (key order
-          ``type, bbox, desc`` is significant — the model was trained on a fixed
+          ``type, bbox, desc`` is significant - the model was trained on a fixed
           key order);
         - the picture's caption (when any) becomes ``high_level_description``;
         - ``style_description`` is omitted (it is optional, and we do not derive
@@ -278,9 +278,9 @@ class ExportUtils:
         scale_factor = scale_map.get(resolution_d, 1.0)
 
         # Bounding-box sidecar mode for the picture's stored detections:
-        #   "none"         — no sidecar
-        #   "coco-json"    — a COCO-subset {stem}.json (pixel xyxy)
-        #   "ideogram-json"— an Ideogram-4 structured-JSON caption {stem}.json
+        #   "none"         - no sidecar
+        #   "coco-json"    - a COCO-subset {stem}.json (pixel xyxy)
+        #   "ideogram-json" - an Ideogram-4 structured-JSON caption {stem}.json
         #                    (normalized yxyx 0-1000; use ai-toolkit caption_ext=json)
         # Only meaningful for FULL exports (face/crop exports have no per-image
         # JSON sidecar concept).
@@ -557,7 +557,7 @@ class ExportUtils:
         """Write every picture (and its sidecars) into *sink*.
 
         *sink* is anything with a ``zipfile.ZipFile``-shaped ``write(path,
-        arcname=...)``/``writestr(arcname, data)`` pair — a real
+        arcname=...)``/``writestr(arcname, data)`` pair - a real
         ``zipfile.ZipFile`` for :meth:`generate_zip`, or :class:`_FolderSink`
         for :meth:`generate_folder_export`. Neither this loop nor the member
         sidecar helpers it calls care which.
@@ -600,7 +600,7 @@ class ExportUtils:
                         # Case-folded key: a folder export writes real files, and
                         # "Photo.jpg"/"photo.jpg" are the same path on the
                         # case-insensitive filesystems the desktop build ships
-                        # to (Windows NTFS, default macOS APFS) — an exact-string
+                        # to (Windows NTFS, default macOS APFS) - an exact-string
                         # key would hand both the same arcname and the second
                         # would silently overwrite the first on disk.
                         dedup_key = orig_stem.casefold()
@@ -847,7 +847,7 @@ class ExportUtils:
             task_id: The export task ID.
             export_tasks: The export_tasks dict (for progress/status).
             background_data: Same as :meth:`generate_zip`, plus ``destination``
-                — an existing, writable directory on the server's own disk.
+                - an existing, writable directory on the server's own disk.
         """
         try:
             destination = background_data.get("destination")

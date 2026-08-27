@@ -2,15 +2,15 @@
 
 Covers the four things Lane E promotes server-side:
 
-* **vault-wide grouping** — union-find over the streamed likeness edge table
+* **vault-wide grouping** - union-find over the streamed likeness edge table
   produces the same connected components the grid's BFS would, including the
   transitive chain A~B~C with no A~C edge, and excludes scrapheap pictures;
-* **the confidence policy** — each axis (auto-resolve likeness, group size,
+* **the confidence policy** - each axis (auto-resolve likeness, group size,
   smart-score margin, missing smart score) independently routes a group to the
   review lane with its own reason code, and every axis is a policy parameter;
-* **merge-or-report for groups spanning existing stacks** — represented as a
+* **merge-or-report for groups spanning existing stacks** - represented as a
   ``merge_stacks`` outcome under both dispositions, never skipped;
-* **the report's arithmetic** — counts, held bytes, and the listing cap.
+* **the report's arithmetic** - counts, held bytes, and the listing cap.
 
 Plus the non-destructive invariant: planning a sweep changes no row.
 """
@@ -350,7 +350,7 @@ def test_policy_rejects_out_of_range_thresholds():
 
 
 def test_member_order_key_matches_the_shipped_stack_order():
-    """score DESC, smart score DESC, recency DESC, id ASC — the grid's order."""
+    """score DESC, smart score DESC, recency DESC, id ASC - the grid's order."""
     high_score = _member(3, score=5, smart_score=0.1, minute=0)
     high_smart = _member(1, score=5, smart_score=0.9, minute=0)
     newer = _member(2, score=5, smart_score=0.9, minute=10)

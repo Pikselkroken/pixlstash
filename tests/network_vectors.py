@@ -7,7 +7,7 @@ assertion would stop meaning anything.
 
 Which is why there are exactly three, and why they are these three. Push-time
 secret scanning treats any other RFC 1918 quad as a private address worth stopping
-a push over, and exempts only the first host of each block — every network has
+a push over, and exempts only the first host of each block - every network has
 something at ``.1``, so the address says nothing about whose. Do not write an
 RFC 1918 literal that is not from here; ``tests/test_architecture_guardrails.py``
 fails the build on one.

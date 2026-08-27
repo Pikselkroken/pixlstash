@@ -32,7 +32,7 @@ class QualityTask(BaseTask):
     # Number of threads used to decode images during preload.
     # PIL's JPEG decoder releases the GIL so threads run concurrently.  With
     # QUALITY_MAX_INFLIGHT=2 only one task preloads at a time, so this means
-    # at most _PRELOAD_WORKERS concurrent disk reads — manageable and necessary
+    # at most _PRELOAD_WORKERS concurrent disk reads - manageable and necessary
     # to decode 512px images fast enough to hide behind the previous task's
     # compute time.  Sequential (1 thread) is too slow for large batches.
     _PRELOAD_WORKERS = 4
@@ -149,7 +149,7 @@ class QualityTask(BaseTask):
     def _run_task(self):
         # Wait for preload to finish BEFORE acquiring the compute semaphore.
         # This way a slow-preloading task (e.g. large PNGs) does not block
-        # a fully-loaded task from computing — whichever task finishes
+        # a fully-loaded task from computing - whichever task finishes
         # preloading first will win the semaphore and run next.
         self._wait_for_preload()
         QualityTask._compute_semaphore.acquire()
@@ -169,7 +169,7 @@ class QualityTask(BaseTask):
         self._backfill_missing_picture_metadata(pics)
 
         t_preload_wait = time.perf_counter()
-        preloaded = self._wait_for_preload()  # instant — already joined in _run_task
+        preloaded = self._wait_for_preload()  # instant - already joined in _run_task
         t_preload_done = time.perf_counter()
 
         # Group by ACTUAL post-downscale shape so that images with different
@@ -228,7 +228,7 @@ class QualityTask(BaseTask):
             all_write_pics.extend(skipped_pics)
             all_write_qualities.extend(sentinel_qualities)
 
-        # Single write-queue call for the entire task — one commit, one lock acquisition.
+        # Single write-queue call for the entire task - one commit, one lock acquisition.
         changed = []
         t_compute_done = time.perf_counter()
         if all_write_pics:
@@ -253,7 +253,7 @@ class QualityTask(BaseTask):
             QualityTask._last_batch_size = len(pics)
 
         logger.info(
-            "QualityTask completed in %.2fs — preload_wait=%.3fs compute=%.3fs write=%.3fs updates=%s",
+            "QualityTask completed in %.2fs - preload_wait=%.3fs compute=%.3fs write=%.3fs updates=%s",
             time.time() - start,
             t_preload_done - t_preload_wait,
             compute_duration,

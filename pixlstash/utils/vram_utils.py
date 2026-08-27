@@ -80,7 +80,7 @@ def is_vram_oom(error: BaseException) -> bool:
 
     Type identity is the reliable signal (``torch.OutOfMemoryError``), but a
     plugin may run its model through a runtime that raises its own exception
-    type for the same condition, so the message is checked as well — and the
+    type for the same condition, so the message is checked as well - and the
     wrapped-cause chain with it, because ``raise RuntimeError(...) from oom``
     is exactly how a plugin reports one. ``torch`` is read from
     :data:`sys.modules` for the same reason as in :func:`empty_cuda_cache`: a
@@ -123,7 +123,7 @@ def empty_cuda_cache() -> bool:
 
     ``torch`` is looked up in :data:`sys.modules` rather than imported. If torch
     was never imported, this process cannot have allocated any CUDA memory, so
-    there is nothing to flush — and importing it here purely to discover that
+    there is nothing to flush - and importing it here purely to discover that
     would cost seconds. That matters because this module sits on the API
     server's import path and on every best-effort teardown path in the test
     suite, where the caller usually never touched a model at all.

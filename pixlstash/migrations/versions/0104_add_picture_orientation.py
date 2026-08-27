@@ -1,4 +1,4 @@
-"""Add ``picture.orientation`` — the mirrored EXIF orientation tag.
+"""Add ``picture.orientation`` - the mirrored EXIF orientation tag.
 
 In-place rotate (#950) turns a photo by rewriting one EXIF field and copying
 every pixel byte through. For that to be undoable, the operation log has to

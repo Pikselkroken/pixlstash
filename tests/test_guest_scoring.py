@@ -2,7 +2,7 @@
 
 Coverage
 --------
-1.  GET /pictures/guest-scores — empty response when no cookie present.
+1.  GET /pictures/guest-scores - empty response when no cookie present.
 2.  POST without a READ token → 403.
 3.  POST with bad session_id patterns → 400.
 4.  POST with score out of range → 400.
@@ -161,7 +161,7 @@ def test_post_requires_read_token():
 
 
 # ---------------------------------------------------------------------------
-# 3. POST — bad session_id patterns → 400
+# 3. POST - bad session_id patterns → 400
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ def test_post_bad_session_id(bad_sid):
 
 
 # ---------------------------------------------------------------------------
-# 4. POST — score out of range → 400
+# 4. POST - score out of range → 400
 # ---------------------------------------------------------------------------
 
 
@@ -219,7 +219,7 @@ def test_post_score_out_of_range(bad_score):
 
 
 # ---------------------------------------------------------------------------
-# 5. POST — non-integer score value → 400
+# 5. POST - non-integer score value → 400
 # ---------------------------------------------------------------------------
 
 
@@ -243,7 +243,7 @@ def test_post_non_integer_score():
 
 
 # ---------------------------------------------------------------------------
-# 6. POST — more than 500 entries → 400
+# 6. POST - more than 500 entries → 400
 # ---------------------------------------------------------------------------
 
 
@@ -264,7 +264,7 @@ def test_post_too_many_scores():
 
 
 # ---------------------------------------------------------------------------
-# 7. Successful POST — score persisted, in-memory tracker updated
+# 7. Successful POST - score persisted, in-memory tracker updated
 # ---------------------------------------------------------------------------
 
 
@@ -303,7 +303,7 @@ def test_post_new_session_persists_score():
 
 
 # ---------------------------------------------------------------------------
-# 8. Returning session — score upserted, last_active_at refreshed
+# 8. Returning session - score upserted, last_active_at refreshed
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +333,7 @@ def test_post_returning_session_upserts():
             # Small sleep to ensure a measurable time difference
             time.sleep(0.05)
 
-            # Second submission — change score
+            # Second submission - change score
             r = rc.post(
                 f"{API}/pictures/guest-scores",
                 json={
@@ -371,7 +371,7 @@ def test_post_returning_session_upserts():
 
 
 # ---------------------------------------------------------------------------
-# 9. GET after POST (cookie path) — scores returned
+# 9. GET after POST (cookie path) - scores returned
 # ---------------------------------------------------------------------------
 
 
@@ -413,7 +413,7 @@ def test_get_returns_scores_after_post():
 
 
 # ---------------------------------------------------------------------------
-# 10. Cookie behaviour — set_cookie=True sets cookies; False does not
+# 10. Cookie behaviour - set_cookie=True sets cookies; False does not
 # ---------------------------------------------------------------------------
 
 
@@ -456,7 +456,7 @@ def test_cookies_not_set_when_declined():
 
 
 # ---------------------------------------------------------------------------
-# 11. Concurrent session limit — new session refused at cap
+# 11. Concurrent session limit - new session refused at cap
 # ---------------------------------------------------------------------------
 
 
@@ -523,7 +523,7 @@ def test_returning_session_bypasses_concurrent_limit():
 
 
 # ---------------------------------------------------------------------------
-# 13. FIFO eviction — oldest session deleted when stored cap reached
+# 13. FIFO eviction - oldest session deleted when stored cap reached
 # ---------------------------------------------------------------------------
 
 
@@ -582,7 +582,7 @@ def test_score_sort_uses_guest_scores():
     with tempfile.TemporaryDirectory() as tmp:
         server, owner_client, read_token = _setup(tmp)
         try:
-            # Upload two pictures. They must differ in content — identical bytes
+            # Upload two pictures. They must differ in content - identical bytes
             # are rejected by import as duplicates and would leave only one row.
             png_a = _make_png_bytes(color=(200, 100, 50))
             png_b = _make_png_bytes(color=(50, 100, 200))
@@ -653,7 +653,7 @@ def test_score_sort_fallback_to_picture_score():
     with tempfile.TemporaryDirectory() as tmp:
         server, owner_client, read_token = _setup(tmp)
         try:
-            # Distinct content per file — see the note on _make_png_bytes.
+            # Distinct content per file - see the note on _make_png_bytes.
             png_x = _make_png_bytes(color=(200, 100, 50))
             png_y = _make_png_bytes(color=(50, 100, 200))
             resp = owner_client.post(
@@ -677,7 +677,7 @@ def test_score_sort_fallback_to_picture_score():
             assert len(pics) >= 2
             id_x, id_y = pics[0]["id"], pics[1]["id"]
 
-            # Owner scores: X=1, Y=5 — no guest scores set
+            # Owner scores: X=1, Y=5 - no guest scores set
             owner_client.post(
                 f"{API}/pictures/apply-scores",
                 json={"scores": {str(id_x): 1, str(id_y): 5}, "only_unscored": False},

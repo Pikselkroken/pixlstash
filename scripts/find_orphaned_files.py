@@ -5,7 +5,7 @@ This is the disk→DB direction. The complementary ``MissingFilePurgeTask``
 handles DB→disk (picture rows whose file is gone). Orphaned files typically
 accumulate from:
 
-  * restoring an older snapshot — pictures imported *after* that snapshot keep
+  * restoring an older snapshot - pictures imported *after* that snapshot keep
     their files on disk but lose their DB row;
   * crashes between writing a file and committing its row;
   * manual edits to the image folder.
@@ -137,7 +137,7 @@ def _trash_target(image_root: str, orphan: str) -> str:
 
 def main() -> None:
     # Windows consoles (and piped stdout) default to cp1252, which can't
-    # encode the ✓/… glyphs this script prints — emitting one raises
+    # encode the ✓/… glyphs this script prints - emitting one raises
     # UnicodeEncodeError. Force UTF-8 so output is identical on every platform.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):

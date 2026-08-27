@@ -1,31 +1,31 @@
 <script setup>
 /**
- * v1.11 Phase 3 — the import and mapping wizard: choose a folder, scan it
+ * v1.11 Phase 3 - the import and mapping wizard: choose a folder, scan it
  * (Phase 2), name what its levels are, and review before anything commits.
  *
  * **"Cancel" and "Organise later" are different offers, and used to be one
  * button.** "Cancel and organise later" closed the dialog having imported
  * nothing, which on the "Add a library" path left the owner looking at a
- * library that had just been created and was completely empty — the outcome
+ * library that had just been created and was completely empty - the outcome
  * people expect from *Cancel*, under a label promising the opposite. So:
  * Cancel brings nothing in, and Organise later (on the Preview step, and
  * again while the import runs) indexes everything and leaves only the folder
  * mapping for another day.
  *
  * Either way the read survives. Once a read has started, its task id is saved
- * to `useFolderMappingStore` — the server keeps the read's result in memory
- * for the process's lifetime (integration_architecture.md §20) — so closing
+ * to `useFolderMappingStore` - the server keeps the read's result in memory
+ * for the process's lifetime (integration_architecture.md §20) - so closing
  * this dialog before committing does not lose the scan; the sidebar's "Finish
  * organising…" entry reopens this same wizard with `resume` set and picks up
  * where it left off. Only a completed commit clears that saved entry, because
  * only then is there nothing left to resume.
  *
  * `mode` ("reference" default, or "local_import") decides what the Preview
- * step's commit does with the scanned pictures — see integration_architecture.md
+ * step's commit does with the scanned pictures - see integration_architecture.md
  * §22. "Add a library"'s "pictures" verdict drives `local_import`: it saves a
  * `resume` entry with an empty `taskId` and `mode: "local_import"` *before*
  * switching the active library and reloading, so the sidebar's own resume
- * mechanism reopens this wizard already pointed at the new library's root —
+ * mechanism reopens this wizard already pointed at the new library's root -
  * an empty `taskId` in `resume` is not "reattach", it is "start scanning this
  * known path fresh" (`FolderMappingScanStep` already treats a falsy
  * `resumeTaskId` that way).
@@ -46,7 +46,7 @@ const props = defineProps({
   registeredPaths: { type: Array, default: () => [] },
   // Resume a previously started, not-yet-committed read.
   resume: { type: Object, default: null },
-  // What the Preview step's commit does with the scan — ignored (in favour of
+  // What the Preview step's commit does with the scan - ignored (in favour of
   // `resume.mode`) when resuming, since the mode was fixed the moment the
   // saved entry was created.
   mode: { type: String, default: "reference" },
@@ -68,7 +68,7 @@ const currentMode = ref(props.mode);
 // Mirrors FolderMappingPreviewStep's own `committing`. A commit, once
 // started, runs to completion server-side and cannot be un-started, so while
 // this is true the dialog must not be dismissable by Escape or a backdrop
-// click — see that component's `update:committing` for why.
+// click - see that component's `update:committing` for why.
 const committing = ref(false);
 
 watch(
@@ -80,7 +80,7 @@ watch(
       label.value = props.resume.label || "";
       resumeTaskId.value = props.resume.taskId;
       readTaskId.value = props.resume.taskId;
-      // Absent on entries saved before `mode` existed — those were always
+      // Absent on entries saved before `mode` existed - those were always
       // reference-folder reads.
       currentMode.value = props.resume.mode || "reference";
       step.value = "scan";
@@ -144,12 +144,12 @@ function onMappingNext(built) {
 function organiseLater() {
   // A commit that has started cannot be cancelled (§22) and keeps running
   // server-side either way, so this must be a no-op while `committing` is
-  // true — `:persistent` on the dialog below blocks Escape and a backdrop
+  // true - `:persistent` on the dialog below blocks Escape and a backdrop
   // click, but AppDialog's header close button and `@click:outside` both
   // call this unconditionally, so the real guard has to live here rather
   // than be assumed from the dialog prop.
   if (committing.value) return;
-  // The store entry is left alone on purpose — see the header comment. There
+  // The store entry is left alone on purpose - see the header comment. There
   // is nothing to keep only when the owner never got past picking a folder.
   emit("close");
 }

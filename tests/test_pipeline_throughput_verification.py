@@ -1,7 +1,7 @@
 """Independent verification of the row-granular pipeline on a real ``Server``.
 
 One module-scoped server with the four GPU stages the throughput plan touched
-left in the planner — faces, tags, CLIP, text embeddings — and every other
+left in the planner - faces, tags, CLIP, text embeddings - and every other
 finder detached (CLAUDE.md, *Tests: reuse the environment*). Descriptions are
 switched off in the tagger settings, so the text stage has to run on tags
 alone. Each test imports its own pictures and asserts on those ids only: the
@@ -309,7 +309,7 @@ def test_tag_and_clip_work_is_found_while_the_face_stage_is_in_flight(env, monke
 
     With the face stage cut into six two-picture tasks, the tag finder must
     offer a picture the moment ITS face row lands and the CLIP finder must not
-    wait at all — both while the face finder still has tasks in flight, i.e.
+    wait at all - both while the face finder still has tasks in flight, i.e.
     before its ``[PIPELINE_PASS]`` drain. The GPU queue then orders execution:
     HIGH face tasks run ahead of MEDIUM tag/CLIP tasks, so the overlap is that
     the next stage is already queued when the last face task ends, not that a
@@ -387,7 +387,7 @@ def test_a_tag_task_starts_before_the_face_stage_drains_when_the_gpu_has_a_gap(
 ):
     """Execution-level overlap. With one face task in flight at a time the
     worker sees an empty HIGH queue between face batches and starts the queued
-    tag task there — before the face finder has drained."""
+    tag task there - before the face finder has drained."""
     vault = env["vault"]
     monkeypatch.setattr(
         missing_face_extraction_finder, "FACE_EXTRACTION_BATCH_LIMIT", 2

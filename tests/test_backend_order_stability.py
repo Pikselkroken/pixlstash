@@ -82,7 +82,7 @@ def test_date_sort_uses_seconds(sort_key, field):
     that images captured/imported within the same minute appear in the correct
     order.
     """
-    # source image to copy — any small valid image file in the test-data set
+    # source image to copy - any small valid image file in the test-data set
     logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
     if not os.path.exists(logo_src):
         pytest.skip("Logo.png not available for test image creation")

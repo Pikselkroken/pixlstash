@@ -31,9 +31,9 @@
 // The panel is IN-PLACE (absolute inside the bar, the dq-tier-wrap pattern),
 // deliberately NOT a teleported v-menu: teleport escapes the container, and
 // the rows rely on the bar's `@container toolbar (…)` queries to appear
-// exactly when their toolbar button folds. The fold is CSS both ways — every
+// exactly when their toolbar button folds. The fold is CSS both ways - every
 // foldable control exists as a bar button AND as a slotted row with the same
-// v-if, and the container queries flip which one is visible — so there is no
+// v-if, and the container queries flip which one is visible - so there is no
 // ResizeObserver and no JS measurement anywhere.
 //
 // The trigger itself stays hidden until the host's first fold step (the host
@@ -47,7 +47,7 @@ defineProps({
   /**
    * Which edge the panel hangs from. `end` (the default) opens leftward and
    * suits a trigger near the bar's right side; `start` opens rightward, which
-   * is what a trigger sitting near the LEFT edge needs — a 220px panel
+   * is what a trigger sitting near the LEFT edge needs - a 220px panel
    * right-anchored to it would open off-screen (the Duplicates bar's ⋯,
    * amendment #4).
    */
@@ -109,7 +109,7 @@ function trigger() {
 /**
  * Whether the panel is showing. A host whose surface owns the keyboard needs
  * this to tell "a key pressed inside my open menu" from "a key pressed with
- * the closed trigger focused" — the second one still belongs to the host.
+ * the closed trigger focused" - the second one still belongs to the host.
  *
  * @returns {boolean}
  */
@@ -132,7 +132,7 @@ defineExpose({ close, isOpen, trigger });
    lives there rather than here because the breakpoint differs per bar. */
 
 /* Mirrors `.bar-btn` from the hosts' bars (their scoped styles cannot cross
-   the component boundary — same note as UndoControl carries). */
+   the component boundary - same note as UndoControl carries). */
 .tbo-trigger {
   display: flex;
   align-items: center;

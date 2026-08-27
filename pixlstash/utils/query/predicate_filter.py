@@ -3,21 +3,21 @@
 PixlStash selects ``Picture`` rows by the same vocabulary (score range, smart-score
 bucket, resolution bucket, ComfyUI model/LoRA membership, tag include/exclude, hidden
 tags, tag-confidence thresholds, format, deleted/imported flags, face presence, path
-prefix, …) in several independent places.  Historically the WHERE-clause logic — down
-to byte-for-byte copies of raw ``text()`` ``EXISTS`` / ``json_each`` snippets — was
+prefix, …) in several independent places.  Historically the WHERE-clause logic - down
+to byte-for-byte copies of raw ``text()`` ``EXISTS`` / ``json_each`` snippets - was
 duplicated across all of them.
 
 ``PredicateFilter`` is the single source of truth for that logic.  It has three
 consumers:
 
-* **compile** — :meth:`predicates` / :meth:`apply` turn the declarative fields into
+* **compile** - :meth:`predicates` / :meth:`apply` turn the declarative fields into
   SQLAlchemy WHERE clauses (the raw ``text()`` snippets are moved here verbatim, bound
   params intact).
-* **match** — :meth:`matches` narrows the same predicate set to a single picture id.
+* **match** - :meth:`matches` narrows the same predicate set to a single picture id.
   This is exactly the set predicate restricted to one row; there is no separate
   Python-side re-implementation of the SQL semantics.  Staging auto-triage consumes
   this.
-* **parse** — :meth:`from_query_params` builds the filter from request query params
+* **parse** - :meth:`from_query_params` builds the filter from request query params
   (one parser, replacing the per-route copies).
 
 The name is ``PredicateFilter`` (not ``Filter``) because "filter" already means an
@@ -138,7 +138,7 @@ class PredicateFilter(BaseModel):
 
     All fields are optional / defaulted.  The defaults describe the predicate used by
     a "give me the matching live pictures" query: non-deleted, no other restrictions
-    — which is exactly what single-picture :meth:`matches` wants for auto-triage.
+    - which is exactly what single-picture :meth:`matches` wants for auto-triage.
 
     Each builder site sets the subset of fields it needs and toggles the
     flag fields (``include_deleted`` / ``only_deleted`` / ``apply_deleted_filter`` /
@@ -173,7 +173,7 @@ class PredicateFilter(BaseModel):
     # it is the one value that leaves the ``picture`` table.  An unrecognised value
     # compiles to no predicate (same as ``face_filter``).
     stack_state: Optional[str] = None
-    # "Impossible tags" grid filters — live, computed from the picture's own tags/faces
+    # "Impossible tags" grid filters - live, computed from the picture's own tags/faces
     # (no precomputed queue). Recognised kinds: ``"no_face"`` (no detected face yet a
     # face-requiring tag) and ``"no_humans"`` (no face, tagged "no humans"/"scenery", yet
     # a person-tag). Multiple kinds are OR'd. Only ever narrows a scope-enforced listing.
@@ -249,7 +249,7 @@ class PredicateFilter(BaseModel):
             prefix = self.file_path_prefix + os.sep
         # Escape LIKE special characters in the literal prefix.
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        # Only show direct children — exclude files that have another path separator
+        # Only show direct children - exclude files that have another path separator
         # after the prefix (i.e. files in sub-directories).  Check for both "/" and
         # "\" to handle all platforms.
         return [
@@ -392,7 +392,7 @@ class PredicateFilter(BaseModel):
 
         # ComfyUI membership: AND of one EXISTS per model/LoRA (used by
         # semantic_search / listing-candidate / grouped-misc sites).  ``find()`` does
-        # not set these fields — it applies its own OR + stack-expansion variant.
+        # not set these fields - it applies its own OR + stack-expansion variant.
         if self.comfyui_models_filter:
             for i, m in enumerate(self.comfyui_models_filter):
                 preds.append(
@@ -489,7 +489,7 @@ class PredicateFilter(BaseModel):
     def matches(self, session, picture_id: int) -> bool:
         """Return ``True`` if the single picture ``picture_id`` satisfies this filter.
 
-        This is the set predicate narrowed to one id — the hook consumed by staging
+        This is the set predicate narrowed to one id - the hook consumed by staging
         auto-triage.  There is no separate Python-side evaluator; the SQL semantics
         are the same as the set queries.
         """
@@ -504,7 +504,7 @@ class PredicateFilter(BaseModel):
 
         Covers the vocabulary shared by the picture-listing routes.  Membership
         params (``set``/``character``/``project``) and pagination/sort are *not*
-        read here — they are resolved separately by the caller.  Unspecified params
+        read here - they are resolved separately by the caller.  Unspecified params
         simply leave their field at the default, so a route that never sends a given
         param is unaffected.
         """

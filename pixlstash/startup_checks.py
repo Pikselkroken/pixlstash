@@ -21,7 +21,7 @@ def _torch():
 
     Imported on demand rather than at module scope. ``torch`` costs seconds to
     import and this module is reached from ``pixlstash.server``, so importing
-    it eagerly would make server startup — and every test — pay for it before a
+    it eagerly would make server startup - and every test - pay for it before a
     single check runs. A ``None`` result is never swallowed: callers surface it
     as a hard failure or a forced-CPU note.
     """
@@ -263,7 +263,7 @@ class StartupChecks:
 
         # Under the Electron desktop shell the configured host:port describes the
         # optional *external* listener, not the connection the window uses (that
-        # is an always-free ephemeral loopback port — see Server.run). So only
+        # is an always-free ephemeral loopback port - see Server.run). So only
         # check the configured port when remote access is actually enabled, and
         # check it on the interface it will really bind (0.0.0.0).
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
@@ -436,13 +436,13 @@ class StartupChecks:
             gpu_arch_note = self._detect_gpu_arch_note()
             remediation = self._onnx_cuda_remediation_hint(onnx_package, gpu_arch_note)
             conflict_note = (
-                " Both 'onnxruntime' and 'onnxruntime-gpu' are installed — "
+                " Both 'onnxruntime' and 'onnxruntime-gpu' are installed - "
                 "this conflict likely caused the fallback to CPU. "
                 "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu."
                 if self._has_onnxruntime_conflict()
                 else ""
             )
-            # If PyTorch CUDA is available the GPU works — only the ONNX WD14 tagger
+            # If PyTorch CUDA is available the GPU works - only the ONNX WD14 tagger
             # will fall back to CPU.  Treat this as a warning, not a hard failure.
             if is_explicit_gpu:
                 outcome.warnings.append(
@@ -459,7 +459,7 @@ class StartupChecks:
                     "PyTorch CUDA will still be used for all non-ONNX inference; "
                     f"the WD14 tagger ONNX model will run on CPU.{conflict_note} {remediation}"
                 )
-            # Don't return — continue with the VRAM check so other GPU paths work.
+            # Don't return - continue with the VRAM check so other GPU paths work.
 
         min_free_vram_mb = float(
             self._server_config.get(
@@ -543,11 +543,11 @@ class StartupChecks:
             major, minor = torch.cuda.get_device_capability(0)
             sm = major * 10 + minor
             # ORT 1.x releases lag behind new GPU architectures.
-            # sm >= 120 = Blackwell (RTX 5xxx) — not included in ORT until a later release.
+            # sm >= 120 = Blackwell (RTX 5xxx) - not included in ORT until a later release.
             if sm >= 120:
                 name = torch.cuda.get_device_name(0)
                 return (
-                    f" — GPU {name} (sm_{major}{minor}, Blackwell) may not be supported "
+                    f" - GPU {name} (sm_{major}{minor}, Blackwell) may not be supported "
                     "by the installed onnxruntime-gpu; upgrade to a newer ORT release or "
                     "build from source"
                 )

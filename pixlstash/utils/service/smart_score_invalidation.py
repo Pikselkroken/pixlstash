@@ -3,14 +3,14 @@
 ``Picture.smart_score`` is a cached derived value: :class:`SmartScoreTask` only ever
 picks up pictures whose ``smart_score`` is ``NULL``
 (:meth:`~pixlstash.tasks.smart_score_task.SmartScoreTask.find_pictures_missing_smart_score`),
-so a score that is already stored is never recomputed. One of its inputs — the
+so a score that is already stored is never recomputed. One of its inputs - the
 calibrated anomaly penalty applied in
-:func:`pixlstash.utils.quality.anomaly_penalty.anomaly_penalty` — is a live function of
+:func:`pixlstash.utils.quality.anomaly_penalty.anomaly_penalty` - is a live function of
 the human/model anomaly labels, which tag edits mutate. Without an explicit
 invalidation the stored score silently goes stale after a re-tag or a manual tag edit.
 
 The change signal is taken from :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`
-— *the exact function the scorer feeds from* — rather than from a derived summary such as
+- *the exact function the scorer feeds from* - rather than from a derived summary such as
 ``Picture.anomaly_tag_uncertainty``. That column is a ``max()`` over per-tag scores and is
 therefore lossy: two materially different anomaly states can collapse to the same value
 (e.g. moving a 0.8 confidence from ``bad_hands`` to ``blurry`` leaves the max at 0.8 while
@@ -21,7 +21,7 @@ construction: if the signature is unchanged, the anomaly term of the score canno
 Scope is deliberately narrow. Only the anomaly/penalised-tag predictions feed the score;
 the other inputs (image embedding, quality metrics, aesthetic score, text score) are not
 tag-derived. Editing a non-penalised content tag therefore leaves the signature untouched
-and the stored score stands — over-invalidating here would re-score the whole library on
+and the stored score stands - over-invalidating here would re-score the whole library on
 every routine re-tag, which is a serious throughput regression on a small box.
 """
 
@@ -71,13 +71,13 @@ class InteractiveRescoreRegistry:
 
     This registry lets the invalidation side record "this id was invalidated by a user
     edit from *that* tab", so the completion side can emit an immediate, origin-stamped
-    refresh for just those ids — independent of the global drain gate — while bulk
+    refresh for just those ids - independent of the global drain gate - while bulk
     backfill work still coalesces into the single drain-time emit.
 
     Thread-safe: :meth:`record` runs on the DB-task thread that performs the invalidation;
     :meth:`consume` runs on the task-completion thread. Bounded to *max_entries*; a record
     that would overflow the cap is **rejected and returned** so the caller can log the
-    demotion. A demoted id is not dropped — because it is absent from the registry, the
+    demotion. A demoted id is not dropped - because it is absent from the registry, the
     completion side simply falls back to the existing drain-time bulk emit for it.
     """
 
@@ -122,8 +122,8 @@ class InteractiveRescoreRegistry:
         """Remove *picture_ids* found in the registry and group them by origin.
 
         Returns ``{origin_client_id: [picture_id, ...]}`` for exactly the ids that were
-        registered (ids absent from the registry — background-only rescores, or entries
-        already consumed — are ignored). Consuming clears the entries so they cannot be
+        registered (ids absent from the registry - background-only rescores, or entries
+        already consumed - are ignored). Consuming clears the entries so they cannot be
         re-emitted, and so the map self-evicts as rescores land.
         """
         grouped: dict = {}
@@ -202,7 +202,7 @@ def invalidate_smart_scores(session: "Session", picture_ids: Iterable) -> int:
     tagger and the impossible-tag clear both operate on whole batches, and a
     write-per-row there would saturate the single writer queue.
 
-    Does **not** commit — the caller owns the transaction, so the invalidation lands
+    Does **not** commit - the caller owns the transaction, so the invalidation lands
     atomically with the tag mutation that caused it.
 
     Args:
@@ -287,7 +287,7 @@ def invalidate_changed_anomaly_scores(
         if demoted:
             logger.warning(
                 "Smart-score invalidation (%s): interactive rescore registry full "
-                "(cap %d); demoted %d picture id(s) to the bulk refresh path — they "
+                "(cap %d); demoted %d picture id(s) to the bulk refresh path - they "
                 "will refresh on the next full backfill drain, not immediately.",
                 context,
                 registry._max_entries,
@@ -340,7 +340,7 @@ def invalidate_for_penalised_tag_change(
 
     Re-weighting a penalised tag only moves the score of pictures that actually carry
     that tag, so invalidating the whole library (the previous behaviour) forced a full
-    re-score of every picture on any settings edit — tens of thousands of GPU-backed
+    re-score of every picture on any settings edit - tens of thousands of GPU-backed
     recomputes to fix a few hundred rows.
 
     "Carrying" spans both label sources the penalty reads: an applied :class:`Tag` row,
@@ -352,7 +352,7 @@ def invalidate_for_penalised_tag_change(
     of rows is far cheaper than missing a stale score.
 
     Issued as one bulk UPDATE per tag chunk with an ``IN (subquery)``, so no picture ids
-    are round-tripped into Python. Does **not** commit — the caller owns the transaction.
+    are round-tripped into Python. Does **not** commit - the caller owns the transaction.
 
     Args:
         session: Active DB session.
@@ -402,12 +402,12 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
     model prediction reaches the scorer at all) and the acceptance threshold ``t`` that the
     penalty normalises each detection against via ``u = (p - t) / (1 - t)``. A change to
     the offset therefore invalidates *every* cached score that has an anomaly component,
-    regardless of which specific tag is involved — so this is deliberately not scoped by
+    regardless of which specific tag is involved - so this is deliberately not scoped by
     tag the way :func:`invalidate_for_penalised_tag_change` is.
 
     The set is still bounded to *anomaly-bearing* pictures rather than the whole vault:
     the scorer's anomaly inputs come solely from :class:`TagPrediction` rows in the anomaly
-    vocabulary (:data:`~pixlstash.utils.quality.anomaly_penalty.ANOMALY_PENALTY_TAGS` —
+    vocabulary (:data:`~pixlstash.utils.quality.anomaly_penalty.ANOMALY_PENALTY_TAGS` -
     exactly what ``fetch_anomaly_confidences`` reads). A picture with no such prediction has
     no anomaly term, so the offset cannot have moved its score, and re-scoring it would be a
     needless GPU-backed recompute. Predictions are matched without a confidence gate on
@@ -415,7 +415,7 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
     old threshold can cross it and must be re-evaluated.
 
     Issued as one bulk UPDATE per tag chunk with an ``IN (subquery)``, so no picture ids are
-    round-tripped into Python. Does **not** commit — the caller owns the transaction.
+    round-tripped into Python. Does **not** commit - the caller owns the transaction.
 
     Args:
         session: Active DB session.
@@ -468,8 +468,8 @@ def invalidate_on_anomaly_change(
 
     Snapshots the scorer's anomaly inputs for *picture_ids*, runs the wrapped mutation,
     re-snapshots, and NULLs ``Picture.smart_score`` for the pictures whose signature
-    moved. Pictures whose anomaly state is untouched — the common case for a content-tag
-    edit — keep their stored score.
+    moved. Pictures whose anomaly state is untouched - the common case for a content-tag
+    edit - keep their stored score.
 
     The caller must commit after the block so the invalidation and the mutation share a
     transaction.

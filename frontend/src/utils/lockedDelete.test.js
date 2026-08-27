@@ -8,7 +8,7 @@ import {
   deleteForeverDestroyCounts,
 } from "./lockedDelete.js";
 
-describe("buildLockedDeleteMessage — nothing locked", () => {
+describe("buildLockedDeleteMessage - nothing locked", () => {
   it("says nothing when the delete did what was asked", () => {
     expect(
       buildLockedDeleteMessage({ lockedCount: 0, deletedCount: 7 }),
@@ -33,7 +33,7 @@ describe("buildLockedDeleteMessage — nothing locked", () => {
   });
 });
 
-describe("buildLockedDeleteMessage — everything locked", () => {
+describe("buildLockedDeleteMessage - everything locked", () => {
   it("reports that nothing was deleted, with the count", () => {
     const msg = buildLockedDeleteMessage({ lockedCount: 3, deletedCount: 0 });
     expect(msg.kind).toBe(LOCKED_DELETE_ALL_LOCKED);
@@ -57,7 +57,7 @@ describe("buildLockedDeleteMessage — everything locked", () => {
   });
 });
 
-describe("buildLockedDeleteMessage — partial", () => {
+describe("buildLockedDeleteMessage - partial", () => {
   it("reports both halves of the outcome", () => {
     const msg = buildLockedDeleteMessage({ lockedCount: 3, deletedCount: 4 });
     expect(msg.kind).toBe(LOCKED_DELETE_PARTIAL);
@@ -93,13 +93,13 @@ describe("buildLockedPurgeNote", () => {
 
   it("states that neither action destroys the locked pictures", () => {
     expect(buildLockedPurgeNote(2)).toBe(
-      "2 pictures are in locked sets and will be kept — neither action below deletes them.",
+      "2 pictures are in locked sets and will be kept - neither action below deletes them.",
     );
   });
 
   it("uses the singular for one picture", () => {
     expect(buildLockedPurgeNote(1)).toBe(
-      "1 picture is in a locked set and will be kept — neither action below deletes it.",
+      "1 picture is in a locked set and will be kept - neither action below deletes it.",
     );
   });
 });
@@ -127,7 +127,7 @@ describe("deleteForeverDestroyCounts", () => {
   });
 
   it("never derives a count from totalCount", () => {
-    // A total that disagrees with the buckets must not change any figure — the
+    // A total that disagrees with the buckets must not change any figure - the
     // server's classification wins, so the UI cannot drift from the sweep.
     const counts = deleteForeverDestroyCounts({ ...VERIFIED, totalCount: 999 });
     expect(counts).toEqual(deleteForeverDestroyCounts(VERIFIED));

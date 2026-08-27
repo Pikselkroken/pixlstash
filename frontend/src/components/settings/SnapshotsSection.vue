@@ -108,7 +108,7 @@ function cancelEditing(id) {
 
 async function saveLabel(id) {
   // The field is bound to both @keydown.enter and @blur. An enter-save calls
-  // cancelEditing(), which removes the editing entry and unmounts the input —
+  // cancelEditing(), which removes the editing entry and unmounts the input -
   // that unmount fires @blur and re-invokes saveLabel. Bail out when there is
   // no active edit so the second call can't PATCH the just-saved label to null.
   if (editingLabel.value[id] === undefined) {
@@ -299,7 +299,7 @@ function handleRestore(cp) {
             title="Double-click to rename"
             @dblclick="!activeJob && startEditing(cp)"
           >
-            {{ cp.label || "—" }}
+            {{ cp.label || " - " }}
           </span>
         </div>
 

@@ -45,7 +45,7 @@ import {
 const requestInterceptor = requestInterceptors[0];
 
 // The real `AxiosHeaders`, reached past this file's own `vi.mock("axios")`.
-// It is a named export of the package — `axios/unsafe/...` is a private path
+// It is a named export of the package - `axios/unsafe/...` is a private path
 // and would break on an axios release for no reason to do with this app.
 const { AxiosHeaders } = await vi.importActual("axios");
 
@@ -56,8 +56,8 @@ beforeEach(() => {
 
 describe("newOperationBatchId", () => {
   // Load-bearing: the backend accepts client ids only in the `cli-` namespace
-  // and mints its own as `srv-`, so a client can never name — and attach itself
-  // to — a server-created batch. It also validates the charset and a bounded
+  // and mints its own as `srv-`, so a client can never name - and attach itself
+  // to - a server-created batch. It also validates the charset and a bounded
   // length, and IGNORES anything else, which would silently unbatch the gesture.
   it("mints an id in the namespace and charset the backend accepts", () => {
     const id = newOperationBatchId();
@@ -75,7 +75,7 @@ describe("newOperationBatchId", () => {
 
 // The single chokepoint every store holding scope-filtered server data hangs
 // its cache-drop on (issue #646, condition C1). One mechanism, not one per
-// store — a store that had to detect a credential change itself would be a
+// store - a store that had to detect a credential change itself would be a
 // store that eventually misses one.
 describe("onSessionReset", () => {
   it("fires on logout, before the request that ends the session", async () => {
@@ -324,7 +324,7 @@ describe("a multipart body does not inherit the JSON default", () => {
   // axios 1.x reads THAT in `transformRequest`: a FormData under a JSON content
   // type is rewritten as `JSON.stringify(formDataToJSON(form))`, in which a File
   // or Blob serialises to `{}`. `POST /models/{id}/icon` therefore received the
-  // body `{"file":{}}` and answered 422 — the model shelf's Set Thumbnail verb,
+  // body `{"file":{}}` and answered 422 - the model shelf's Set Thumbnail verb,
   // both of its routes, silently dead.
   //
   // Cleared in the interceptor rather than at each call site because three of

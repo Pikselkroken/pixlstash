@@ -401,7 +401,7 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     receive({ type: "vram_oom", attempt: 1, max_attempts: 3, gave_up: false });
 
     // A share viewer cannot act on the machine's GPU, and the backend does not
-    // deliver the event to them either — this is the second lock.
+    // deliver the event to them either - this is the second lock.
     expect(useNoticeStore().notices).toHaveLength(0);
   });
 });

@@ -1,11 +1,11 @@
-// Libraries resource — the registry: list, inspect, add, rename, detach, switch.
+// Libraries resource - the registry: list, inspect, add, rename, detach, switch.
 //
 // A library is a folder holding vault.db and its images. The server keeps one
 // open at a time; switching closes it and opens another, which is why the
 // switch call ends in a full page reload rather than a store update.
 //
 // Adding a library takes a host path, so those calls are on the locality tier
-// and are refused for a remote session — which is why `can_manage` from the
+// and are refused for a remote session - which is why `can_manage` from the
 // listing gates the whole management surface rather than each button guessing.
 //
 // Per the §src/api rules the URL strings live only here.
@@ -62,8 +62,8 @@ export async function setActiveLibrary(uuid) {
 /**
  * Ask what a folder is before offering to add it.
  *
- * Answers one of five verdicts — `attached`, `overlaps`, `vault`, `pictures`,
- * `empty` — each with a `headline` and a `detail` written by the server, so the
+ * Answers one of five verdicts - `attached`, `overlaps`, `vault`, `pictures`,
+ * `empty` - each with a `headline` and a `detail` written by the server, so the
  * picker renders the registry's own words for a refusal rather than re-deriving
  * the rule. `can_add` is the only thing the UI branches on.
  *
@@ -79,7 +79,7 @@ export async function inspectLibraryPath(path) {
  *
  * Attaches when the folder already holds a vault and starts a fresh library
  * when it does not; no file is moved, renamed or copied either way. The folder
- * must already exist — the picker's `New folder` makes one. The server
+ * must already exist - the picker's `New folder` makes one. The server
  * re-inspects the path, so a folder that became covered since the picker asked
  * is still refused (409).
  *
@@ -108,7 +108,7 @@ export async function renameLibrary(uuid, name) {
  * Stop using a library. Removes no file.
  *
  * The row is kept rather than deleted, so the share links pointing at it
- * survive — inert — until the same folder is added again. The active library is
+ * survive - inert - until the same folder is added again. The active library is
  * refused (409); switch away first.
  *
  * @param {string} uuid

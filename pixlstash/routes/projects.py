@@ -53,7 +53,7 @@ from pixlstash.utils.service.filter_helpers import (
 
 logger = get_logger(__name__)
 
-# Default maximum attachment size — overridden by server_config["max_attachment_size_mb"]
+# Default maximum attachment size - overridden by server_config["max_attachment_size_mb"]
 _DEFAULT_MAX_ATTACHMENT_MB = 50
 
 
@@ -399,7 +399,7 @@ def create_router(server) -> APIRouter:
     def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
         # A set listed under this project may *also* belong to others, and its
-        # stored scalar ``project_id`` names its primary project — which is not
+        # stored scalar ``project_id`` names its primary project - which is not
         # necessarily this one. Serialising it raw hands a project-scoped token
         # another project's id (issue #125 / R1b, #708 F4).
         visible_projects = visible_project_ids(server, request)
@@ -746,7 +746,7 @@ def create_router(server) -> APIRouter:
                 if session.get(Project, pid_value) is None:
                     raise HTTPException(status_code=404, detail="Project not found")
 
-            # Pure existence read — keep it off the writer queue (issue #651).
+            # Pure existence read - keep it off the writer queue (issue #651).
             server.vault.db.run_immediate_read_task(ensure_project_exists, pid)
             conditions = [
                 Picture.deleted.is_(False),

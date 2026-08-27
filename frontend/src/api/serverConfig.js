@@ -1,9 +1,9 @@
-// Server-level configuration resource — GET/PATCH /server-config/*.
+// Server-level configuration resource - GET/PATCH /server-config/*.
 //
 // Server config is server-wide (persisted to server-config.json), not per-user,
 // and is exposed as one small endpoint per topic rather than a single blob:
-// `/server-config/snapshots`, `/server-config/watch-folders`, and — new in
-// v1.8.0 — `/server-config/scrapheap-retention`.
+// `/server-config/snapshots`, `/server-config/watch-folders`, and - new in
+// v1.8.0 - `/server-config/scrapheap-retention`.
 //
 // Per the §src/api rules the URL strings live only here, so a contract change
 // is a one-line edit rather than a hunt through components and stores.
@@ -85,11 +85,11 @@ export async function setScrapheapRetentionDays(days) {
  * `would_purge_count` already excludes protected and locked pictures (neither is
  * ever auto-purged) and is computed with the same helpers as the sweep, so the
  * number the user confirms is the number that gets deleted. `first_purge_at` is
- * when the reduction grace elapses — deletion starts then, not on save.
+ * when the reduction grace elapses - deletion starts then, not on save.
  *
  * Rejects on any transport/HTTP failure (including a 404 from a server that has
  * not shipped this endpoint yet). Callers MUST treat a rejection as "could not
- * verify" and confirm deliberately — never as "nothing would be deleted".
+ * verify" and confirm deliberately - never as "nothing would be deleted".
  *
  * @param {number} days - the candidate (lower) retention window.
  * @returns {Promise<{would_purge_count: number, first_purge_at: string|null}>}
@@ -124,7 +124,7 @@ export async function getViewsSettings() {
  * published tree and leaves the folder itself alone.
  *
  * Rejects with a 400 whose detail names the reason when the folder cannot hold
- * the tree — inside the library, inside a reference folder, cloud-synced, or on
+ * the tree - inside the library, inside a reference folder, cloud-synced, or on
  * a filesystem with no links. The settings are left untouched in that case, so
  * a refused folder never becomes the recorded one.
  *

@@ -1,5 +1,5 @@
 /* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue:
+/* Shared subtle scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue:
    nearly invisible at rest, fades in on hover/use. The transparent border +
    background-clip insets the thumb equally from both track edges so it floats
    as a centred pill with symmetric gutters (no flush-against-the-panel edge). */

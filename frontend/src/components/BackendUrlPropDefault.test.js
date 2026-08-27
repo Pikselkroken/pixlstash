@@ -2,7 +2,7 @@
 //
 // App.vue used to pass `:backend-url="BACKEND_URL"` down 40 bindings. Commit
 // a956343d deleted the pass-downs and gave the prop `default: () => API_BASE_URL`
-// in each component instead — except ImageGrid.vue, which kept a bare
+// in each component instead - except ImageGrid.vue, which kept a bare
 // `backendUrl: String`. A prop with no default is `undefined`, so every URL the
 // grid builds by hand became "undefined/pictures/thumbnails/<id>.webp" and every
 // thumbnail in the library rendered as a broken-image icon. The same `undefined`

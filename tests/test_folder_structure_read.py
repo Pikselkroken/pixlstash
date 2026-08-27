@@ -1,7 +1,7 @@
 """The v1.11 Phase 2 folder-structure read.
 
 Two halves, deliberately split by cost. The signal tests run the service
-directly over a temporary folder tree with a stubbed detector — no ``Server``,
+directly over a temporary folder tree with a stubbed detector - no ``Server``,
 no inference, milliseconds each. One module-scoped ``Server`` at the bottom
 covers the routes and the authz declaration in both directions.
 """
@@ -51,8 +51,8 @@ API = "/api/v1"
 # Fail any test in this file that asserts on the SPA catch-all's answer.
 #
 # `test_the_read_writes_nothing` shipped naming `/api/v1/picture-sets`, which
-# matches no route. It passed here — FastAPI's 404 is a JSON body identical
-# before and after, so the comparison held while checking nothing — and it failed
+# matches no route. It passed here - FastAPI's 404 is a JSON body identical
+# before and after, so the comparison held while checking nothing - and it failed
 # in CI, where `frontend/dist` exists, the catch-all answers with `index.html`,
 # and `.json()` raises. A green local run was the bug's cover.
 #
@@ -116,7 +116,7 @@ def _near(seed: int, cosine: float) -> np.ndarray:
     """A unit vector at (approximately) ``cosine`` from ``_unit(seed)``.
 
     Lets a test sit either side of ``SAME_IDENTITY_COSINE`` instead of only at
-    the 0.0/1.0 extremes a one-hot fixture can express — the threshold is what
+    the 0.0/1.0 extremes a one-hot fixture can express - the threshold is what
     decides whether a real folder reads as a Person, so it has to be pinned."""
     other = (seed + 1) % _EMBED_DIM
     vector = np.zeros(_EMBED_DIM, dtype=np.float32)
@@ -199,8 +199,8 @@ def test_the_walk_numbers_levels_from_the_root_and_counts_pictures_recursively()
 def test_the_count_is_what_the_import_will_actually_index():
     """Videos count. They are imported, and the total is a promise about that.
 
-    The read may only *sample* images — a video frame is not what the face pass
-    is built on — but the commit indexes every supported media file, so a
+    The read may only *sample* images - a video frame is not what the face pass
+    is built on - but the commit indexes every supported media file, so a
     holiday folder of clips used to finish with more pictures in the library
     than the dialog had said were there.
     """
@@ -314,7 +314,7 @@ def test_a_caption_beside_every_picture_reads_as_set():
 
 def test_a_caption_beside_most_pictures_says_nothing_at_all():
     """`every` picture, not `most`. A signal that cannot state its reason does
-    not propose — and 'a caption beside 2 of 3' is not the Set fact."""
+    not propose - and 'a caption beside 2 of 3' is not the Set fact."""
     with _tree(
         {
             "": [],
@@ -378,7 +378,7 @@ def test_a_dated_folder_is_never_read_as_a_person():
 
     proposal = _rows(result, 2)["2006-09-08"]["proposal"]
     assert proposal["kind"] is None, "a date is not a name anybody has"
-    # No kind left, so no reason to state — the signal's standing contract.
+    # No kind left, so no reason to state - the signal's standing contract.
     assert proposal["evidence"] == []
 
 
@@ -615,7 +615,7 @@ def owner_env():
         owner = TestClient(server.api, raise_server_exceptions=True)
         # The first POST /login on a fresh vault *registers* the owner with
         # whatever it is sent, so this value is invented here rather than known.
-        # It carries its marker in the value — the prefix travels with it when
+        # It carries its marker in the value - the prefix travels with it when
         # the fixture is copied, which a comment beside it would not.
         login = owner.post(
             f"{API}/login",
@@ -698,7 +698,7 @@ def test_the_read_writes_nothing(owner_env):
         for name in files
     }
     # `picture_sets`, with an underscore. The hyphen spelling matches no route,
-    # and naming a dead one here does not fail — it 404s to a JSON body that is
+    # and naming a dead one here does not fail - it 404s to a JSON body that is
     # identical before and after, so the assertion below passes while checking
     # nothing. In CI the SPA catch-all answers it with index.html instead and
     # `.json()` raises, which is how this was found. Hence the guard: a renamed
@@ -812,7 +812,7 @@ def test_a_path_outside_the_configured_roots_is_refused(owner_env):
         refused = owner.post(_READ, json={"path": outside})
         assert refused.status_code == 403, refused.text
         assert "filesystem root" in refused.text
-        # In-scope still works — over-blocking is its own regression.
+        # In-scope still works - over-blocking is its own regression.
         allowed = owner.post(_READ, json={"path": inside})
         assert allowed.status_code == 200, allowed.text
         _drain(owner, allowed.json()["task_id"])
@@ -963,8 +963,8 @@ def test_an_unknown_entity_type_is_skipped_and_does_not_kill_the_read():
 
 def test_a_split_level_is_not_decided_by_what_the_folders_are_called():
     """`Counter.most_common` breaks a tie by insertion order, which here is
-    folder sort order. The 60% share is what makes a tie unreachable — at 60%
-    two kinds would need 120% of the level — so this pins the property rather
+    folder sort order. The 60% share is what makes a tie unreachable - at 60%
+    two kinds would need 120% of the level - so this pins the property rather
     than the arithmetic: a 2-2 split answers the same either way round, and it
     does not answer with a kind."""
 
@@ -1013,7 +1013,7 @@ def test_the_identity_threshold_is_where_it_says_it_is():
     A fixture built from the constant slides with it: the first version of this
     test passed at ``SAME_IDENTITY_COSINE = 0.05`` while its docstring claimed it
     would go red, because both sides of the comparison moved together. These
-    numbers are fixed, so moving the constant off 0.35 turns one of them red —
+    numbers are fixed, so moving the constant off 0.35 turns one of them red -
     which is the whole point of pinning the value that decides whether a real
     folder reads as a Person."""
     assert SAME_IDENTITY_COSINE == 0.35, (
@@ -1044,8 +1044,8 @@ def test_the_face_majority_is_where_it_says_it_is():
 def test_the_tag_shape_needs_repetition_across_several_parents():
     """All three cardinality constants, each pinned by a tree one step short.
 
-    Without this the heuristic that proposes a whole level as Tag — the one
-    signal that speaks for 149 folders at once — has no test that constrains
+    Without this the heuristic that proposes a whole level as Tag - the one
+    signal that speaks for 149 folders at once - has no test that constrains
     when it fires."""
     assert (_TAG_MAX_DISTINCT_NAMES, _TAG_REPEAT_FACTOR, _TAG_MIN_PARENTS) == (
         12,
@@ -1083,7 +1083,7 @@ def test_a_sidecar_in_capitals_still_counts():
 
 def test_the_result_says_whether_the_face_signal_ran_at_all():
     """Without it, a library with nobody in it and a library read with no engine
-    are the same document — in a module whose docstring claims determinism."""
+    are the same document - in a module whose docstring claims determinism."""
     with _tree(_faces_spec(MIN_FACE_SAMPLE + 1)) as root:
         without = FolderStructureRead(root, detect_faces=None).run()
         with_engine = FolderStructureRead(
@@ -1099,7 +1099,7 @@ def test_the_read_stops_at_its_deadline_and_returns_what_it_found():
         out_of_time = read.run()
         complete = FolderStructureRead(root).run()
     assert read.cancelled is True, "an out-of-time read stops like a cancelled one"
-    # Not `"root" in result` — _build_result emits that key unconditionally, so
+    # Not `"root" in result` - _build_result emits that key unconditionally, so
     # that assertion could not fail for any implementation of anything.
     assert out_of_time["folder_count"] == 0, "it stopped before the first folder"
     assert complete["folder_count"] == 3, "and the same tree reads fine untimed"
@@ -1160,7 +1160,7 @@ def test_a_cancelled_read_still_counts_the_pictures_it_found():
     """The counts are summed in _build_result, not at the end of the walk.
 
     A cancel raises from inside the walk loop, so summing there left every row
-    at picture_count 0 beside a real direct_picture_count — a partial map saying
+    at picture_count 0 beside a real direct_picture_count - a partial map saying
     the library is empty, on the one path whose justification is that the
     partial map is showable."""
     box = {}
@@ -1232,7 +1232,7 @@ def test_the_two_name_normalisers_disagree_on_purpose():
     duplicated helper somebody should reconcile."""
     assert normalise_name("José") == normalise_name("Jose")
     assert _match_key("José") != _match_key("Jose"), (
-        "the layout must keep them apart — it decides moves, not proposals"
+        "the layout must keep them apart - it decides moves, not proposals"
     )
     # And the separator half, which is the other direction of the same split.
     assert normalise_name("2024_Shoots") == normalise_name("2024 Shoots")
@@ -1243,7 +1243,7 @@ def test_a_share_threshold_is_a_floor_and_never_rounds_down_to_below_itself():
     """Review comment on #1110, and the same defect the level vote had.
 
     `round(0.7 * 6) == 4`, so a float rule spelled `round(share * whole)` lets
-    4 of 6 — 66.7% — clear a seventy-percent threshold. `round(0.6 * 4) == 2`
+    4 of 6 - 66.7% - clear a seventy-percent threshold. `round(0.6 * 4) == 2`
     lets a 50% plurality clear a sixty-percent one. Both go through
     `_clears_share` now, so this pins the property for whichever threshold is
     written next."""

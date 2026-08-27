@@ -43,7 +43,7 @@ def is_pixlstash_thumbnail(name_or_path: str) -> bool:
     Managed pictures keep their thumbnail *beside* the original as
     ``<name>_thumb.webp``, so a walk of a library's own folder finds them, and
     ``.webp`` is a supported extension. Indexing one makes it a picture, which
-    earns it a thumbnail of its own — ``<name>_thumb_thumb.webp`` — which the
+    earns it a thumbnail of its own - ``<name>_thumb_thumb.webp`` - which the
     next walk indexes in turn. That is not a slow leak: it is a generation per
     pass, and it was found four deep in a real library.
     """
@@ -55,7 +55,7 @@ def is_supported_media_file(name_or_path: str) -> bool:
 
     The one chokepoint for that question, so the count a folder picker shows,
     the count a library card shows, and the files an import actually indexes
-    cannot disagree — including about our own thumbnails, which none of them
+    cannot disagree - including about our own thumbnails, which none of them
     should ever count as pictures.
     """
     if is_pixlstash_thumbnail(name_or_path):
@@ -89,7 +89,7 @@ def count_media_files(
 
     def _note(error: OSError) -> None:
         # os.walk's default is to swallow this, which would turn an unreadable
-        # subtree into a smaller number with nothing to say about it — and a
+        # subtree into a smaller number with nothing to say about it - and a
         # folder of pictures whose top level is unreadable into "Empty".
         logger.warning(
             "Skipping %s while counting under %s: %s", error.filename, root, error

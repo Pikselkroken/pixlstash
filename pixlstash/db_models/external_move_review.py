@@ -5,7 +5,7 @@ Phase 4b's move engine: PixlStash moves a file when an assignment change makes
 its folder stop being true; when the *owner* moves a file, PixlStash
 reconsiders the assignment instead. ``ReferenceFolderScanTask`` writes one row
 here per picture it found moved that the move journal (``PictureMove``) did not
-claim as PixlStash's own — see ``docs/backend_architecture.md`` §26, "The move
+claim as PixlStash's own - see ``docs/backend_architecture.md`` §26, "The move
 journal, and why it is Phase 4b's job".
 
 Nothing here is applied automatically. A row is the raw fact only; every read
@@ -14,7 +14,7 @@ in ``move_reconciliation_service`` classifies it live against the picture's
 memberships changed between the move and the review is judged on what is true
 now, not on a snapshot from the moment it moved. A row is deleted once it is
 acted on (applied or dismissed) or once a read finds nothing left to reconcile
-— there is no status column, the table holds exactly what is still pending.
+- there is no status column, the table holds exactly what is still pending.
 """
 
 from datetime import datetime

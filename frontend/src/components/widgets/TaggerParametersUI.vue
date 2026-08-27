@@ -3,12 +3,12 @@
  * Schema-driven parameter form for tagger plugins.
  *
  * Supported field types:
- *   number / integer — numeric input with optional min/max/step
- *   bool             — checkbox
- *   select           — dropdown (field.enum or field.options: {value, label} objects or plain strings)
- *   string           — single-line text input
- *   textarea         — multi-line text input
- *   csv-int          — comma-separated integers (stored as string, validated)
+ *   number / integer - numeric input with optional min/max/step
+ *   bool             - checkbox
+ *   select           - dropdown (field.enum or field.options: {value, label} objects or plain strings)
+ *   string           - single-line text input
+ *   textarea         - multi-line text input
+ *   csv-int          - comma-separated integers (stored as string, validated)
  */
 import { reactive, useId, watch } from "vue";
 

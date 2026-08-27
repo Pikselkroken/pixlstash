@@ -7,8 +7,8 @@
  * `utils/retention.js`), and owns the save.
  *
  * Why this exists: lowering the window schedules permanent, unrecoverable
- * deletion from a single dropdown pick — Never → 30 can destroy a long-lived
- * scrapheap — while the delete-forever dialog beside it demands a typed word to
+ * deletion from a single dropdown pick - Never → 30 can destroy a long-lived
+ * scrapheap - while the delete-forever dialog beside it demands a typed word to
  * destroy far less. No type-to-confirm here though: this schedules deletion a
  * grace period out rather than destroying immediately, so a normal confirm is
  * proportionate.
@@ -32,7 +32,7 @@ const props = defineProps({
    * implying a checked number.
    */
   unverified: { type: Boolean, default: false },
-  /** Save in flight — disables the actions. */
+  /** Save in flight - disables the actions. */
   busy: { type: Boolean, default: false },
 });
 
@@ -97,7 +97,7 @@ function requestConfirm() {
 </template>
 
 <style scoped>
-/* Same card as DeleteForeverDialog — standard dialog pattern, tokenized. */
+/* Same card as DeleteForeverDialog - standard dialog pattern, tokenized. */
 .confirm {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
@@ -125,7 +125,7 @@ function requestConfirm() {
   gap: var(--space-3);
 }
 
-/* Irreversibility panel — `error`-tinted, matching `.ref-warn` in
+/* Irreversibility panel - `error`-tinted, matching `.ref-warn` in
    DeleteForeverDialog: in both cases the user is about to lose files. */
 .purge-warn {
   display: flex;

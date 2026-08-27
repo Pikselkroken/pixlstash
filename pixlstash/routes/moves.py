@@ -37,7 +37,7 @@ class PendingMoveModel(BaseModel):
         description=(
             "Populated only in the ambiguous bucket: the picture's current "
             "names for each facet a removal is ambiguous about, e.g. "
-            "{'project': ['2024 Shoots', 'Client · Nordvik']} — why leaving "
+            "{'project': ['2024 Shoots', 'Client · Nordvik']} - why leaving "
             "one folder does not say which."
         ),
     )
@@ -70,8 +70,8 @@ class ApplyMovesResponse(BaseModel):
     skipped_review_ids: list[int] = Field(
         default_factory=list,
         description=(
-            "Rows that had a change to make but it could not be applied — most "
-            "commonly a set or person name that is no longer unique — and were "
+            "Rows that had a change to make but it could not be applied - most "
+            "commonly a set or person name that is no longer unique - and were "
             "cleared from the queue anyway, since they were explicitly acted on."
         ),
     )
@@ -92,7 +92,7 @@ def create_router(server) -> APIRouter:
         summary="Moves made outside PixlStash, awaiting reconciliation",
         description=(
             "Every row is classified live against current assignments and the "
-            "current layout — there is no cache to invalidate, and a row that "
+            "current layout - there is no cache to invalidate, and a row that "
             "no longer implies anything is quietly cleared on read rather than "
             "returned."
         ),
@@ -140,7 +140,7 @@ def create_router(server) -> APIRouter:
         description=(
             "'Keep both' on one ambiguous row, or 'Leave everything as it was' "
             "on the whole strip. The files stay exactly where the owner put "
-            "them either way — dismissing only clears the review queue."
+            "them either way - dismissing only clears the review queue."
         ),
         response_model=DismissMovesResponse,
     )

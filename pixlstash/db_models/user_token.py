@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 # Bytes of randomness behind a token's ``public_id``. 16 bytes rendered as 32
 # lowercase hex characters, which is exactly what the backfill in migration
-# 0090 produces with ``lower(hex(randomblob(16)))`` — the two must agree, so a
+# 0090 produces with ``lower(hex(randomblob(16)))`` - the two must agree, so a
 # row minted by the application and a row minted by the migration are
 # indistinguishable in shape.
 PUBLIC_ID_BYTES = 16
@@ -40,7 +40,7 @@ class UserToken(SQLModel, table=True):
 
     id: int = Field(default=None, primary_key=True)
     # Stable, opaque, never-reused identity for this token; see
-    # ``new_token_public_id``. Used by anything that can outlive the row — in
+    # ``new_token_public_id``. Used by anything that can outlive the row - in
     # particular the in-memory session-to-token maps in ``AuthService``, where
     # a recycled integer id would let a surviving session come to name a token
     # it was never issued for. Nullable in the schema because SQLite cannot add

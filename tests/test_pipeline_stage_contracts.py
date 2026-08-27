@@ -2,7 +2,7 @@
 
 Mechanical checks that the row-granular pipeline kept its invariants: one GPU
 worker, every CUDA ORT session bounded by the budget, the two maintenance
-finders still gated on a global barrier — plus what happens at a stage boundary
+finders still gated on a global barrier - plus what happens at a stage boundary
 when the upstream task raises or its rows have not landed yet. No Server, no
 GPU, no model: these run on a bare ``Vault`` and on the source tree.
 """
@@ -74,7 +74,7 @@ def test_task_runner_starts_exactly_one_gpu_worker(tmp_path):
 
 
 def test_no_task_module_reaches_cuda_outside_the_insightface_init():
-    """Only the InsightFace initialiser — documented to run on the GPU worker —
+    """Only the InsightFace initialiser - documented to run on the GPU worker -
     names CUDA in ``pixlstash/tasks``. Every other task reaches the device
     through the engine's workflows, which the single GPU worker serialises."""
     hits = {}
@@ -194,12 +194,12 @@ class _Engine:
 def test_a_face_task_that_raises_leaves_its_pictures_to_the_face_stage(
     tmp_path, monkeypatch
 ):
-    """The tag stage keys on a Face row — real or the ``face_index=-1``
-    sentinel — because that row is the only thing that means "face extraction
+    """The tag stage keys on a Face row - real or the ``face_index=-1``
+    sentinel - because that row is the only thing that means "face extraction
     has run". A task that raises writes neither, so its pictures are not tagged
     on an unknown face state; they are re-offered to the face stage (the claims
-    come back on the failure path), and — the part the old global barrier got
-    wrong — a sibling whose faces are known is tagged meanwhile."""
+    come back on the failure path), and - the part the old global barrier got
+    wrong - a sibling whose faces are known is tagged meanwhile."""
     with Vault(image_root=str(tmp_path)) as vault:
         broken_a, broken_b, sibling = _seed_pending(
             vault, tmp_path, ["a.png", "b.png", "c.png"]
@@ -285,7 +285,7 @@ def test_a_full_card_is_never_recorded_as_no_faces():
     """An ORT allocation failure must propagate to the runner's OOM retry.
 
     Swallowed, it returned "no faces" for the whole batch, and inside
-    FaceExtractionTask that is a sentinel row per picture — permanent, because
+    FaceExtractionTask that is a sentinel row per picture - permanent, because
     sentinels are never re-scanned. Seen 2026-08-27 with another process
     holding the card: 70 pictures in four batches, all reported faceless.
     """

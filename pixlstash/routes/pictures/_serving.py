@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 # Formats whose EXIF orientation the BROWSER applies for us, so the raw bytes can
 # be streamed through untouched. Everything else has to be transposed server-side
-# before it is served — see the measurement in `get_picture` below, and the
+# before it is served - see the measurement in `get_picture` below, and the
 # matching table in `utils/image_processing/orientation.py`.
 BROWSER_ORIENTED_FORMATS = {"jpg", "jpeg"}
 
@@ -130,7 +130,7 @@ def register_routes(router, server):
         # and undoable for the 5-in-6 of a ComfyUI library that is PNG.
         #
         # Re-encoding drops the EXIF block wholesale, so anything on the
-        # HEIC-transcode or watermark path has to be turned here too — including
+        # HEIC-transcode or watermark path has to be turned here too - including
         # JPEG, which would otherwise lose the tag on its way through PIL.
         orientation = int(getattr(pic, "orientation", None) or 1)
         reencoding = is_heic or apply_wm
@@ -180,7 +180,7 @@ def register_routes(router, server):
                     # ComfyUI provenance rides in the PNG's text chunks
                     # (`workflow` / `prompt`), and a PIL re-save drops every one
                     # of them. This response is what "Save image as" hands the
-                    # user, so they are carried across explicitly — the stored
+                    # user, so they are carried across explicitly - the stored
                     # file is untouched either way, but a downloaded copy that
                     # silently lost its graph would be a worse bug than the one
                     # this branch exists to fix.
@@ -267,7 +267,7 @@ def register_routes(router, server):
         if pic.original_file_name:
             # Suggest the original filename when using "Save image as" in the browser.
             # Using 'inline' keeps the image rendering in-page while still providing
-            # the filename hint — no URL change needed.
+            # the filename hint - no URL change needed.
             safe_name = pic.original_file_name.replace('"', "")
             response.headers["Content-Disposition"] = f'inline; filename="{safe_name}"'
         origin = request.headers.get("origin")

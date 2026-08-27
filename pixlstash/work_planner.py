@@ -732,7 +732,7 @@ class WorkPlanner:
         else:
             logger.debug(
                 "WorkPlanner dropped task id=%s from finder=%s (%s); its claims "
-                "were NOT released — see the warning above.",
+                "were NOT released - see the warning above.",
                 task_id,
                 finder_name,
                 reason,

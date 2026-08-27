@@ -261,8 +261,8 @@ class TestFreshInstall:
         """A fresh unregistered vault must be private under umask 002.
 
         Two creations under one umask: ``Vault.__init__`` makes the image_root
-        (0775 with the default makedirs mode), and — via the unguarded
-        no-hub branch — a ``VaultDatabase`` whose file SQLite would otherwise
+        (0775 with the default makedirs mode), and - via the unguarded
+        no-hub branch - a ``VaultDatabase`` whose file SQLite would otherwise
         create at 0664. Both must come out owner-only.
         """
         old_umask = os.umask(0o002)
@@ -325,7 +325,7 @@ class TestFreshInstall:
         """Creation only: the fix never chmods a directory the owner already had.
 
         The loose ancestor keeps its mode (owner's folder, owner's business),
-        and the guarded open goes on refusing the namespace — that refusal is
+        and the guarded open goes on refusing the namespace - that refusal is
         pre-existing behaviour, asserted here so the fix cannot drift into
         repairing directories it did not create.
 
@@ -366,7 +366,7 @@ class TestFreshInstall:
         parent = tmp_path / "loose"
         parent.mkdir()
         # chmod, not mkdir(mode=): the mode argument is masked by the process
-        # umask, so the mode lands short wherever the umask is 022 — which is
+        # umask, so the mode lands short wherever the umask is 022 - which is
         # the GitHub runner default. The directory then is not group-writable,
         # nothing is loose, and the test failed with "DID NOT RAISE" for the
         # one reason that is not a defect in the code under test.
@@ -646,8 +646,8 @@ class TestInteractiveLegacyPreparation:
 
     def test_a_concurrent_preparation_during_the_prompt_is_not_reattempted(self, paths):
         """The callback can block on a human for as long as it likes, so
-        another process — e.g. someone running the CLI command in a second
-        terminal while this prompt is still awaiting an answer — can record
+        another process - e.g. someone running the CLI command in a second
+        terminal while this prompt is still awaiting an answer - can record
         the same preparation first. The belated "yes" must not try to record
         it again, only pick up the state that is already there.
         """
@@ -1466,7 +1466,7 @@ class TestPortableIdentityScrub:
         """Windows refuses to fsync a read-only handle (EBADF).
 
         CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is
-        later fsynced works on Linux and fails on Windows — which is how the
+        later fsynced works on Linux and fails on Windows - which is how the
         read-only opens in this module took down every test in backend-windows
         shard 2, through ``finalize_library_connection`` on every registered
         vault open. Linux cannot reproduce the EBADF, but it can assert the

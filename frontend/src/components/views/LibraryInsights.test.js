@@ -1,10 +1,10 @@
-// "About your library" — the read-only findings screen.
+// "About your library" - the read-only findings screen.
 //
 // The screen is mostly prose the server writes, so the assertions worth having
 // are the three things the VIEW decides:
 //
 // 1. a check that came back clear still gets a row, and reads as settled
-//    rather than as a complaint — the whole reason the screen is not a nag;
+//    rather than as a complaint - the whole reason the screen is not a nag;
 // 2. a finding's button carries the server's action object out untouched, so
 //    the tool opens on the pictures the evidence counted;
 // 3. nothing on the screen offers a way to change anything.
@@ -64,7 +64,7 @@ beforeEach(() => {
   getInsights.mockReset();
 });
 
-describe("LibraryInsights — a clear check is still a row", () => {
+describe("LibraryInsights - a clear check is still a row", () => {
   it("renders the checks that found nothing, and says so", async () => {
     const wrapper = await mountScreen(payload([TODO, CLEAR]));
 
@@ -122,7 +122,7 @@ describe("LibraryInsights — a clear check is still a row", () => {
   });
 });
 
-describe("LibraryInsights — it says what it read", () => {
+describe("LibraryInsights - it says what it read", () => {
   it("names the split when part of the library has no folder names", async () => {
     const wrapper = await mountScreen(
       payload([CLEAR], {
@@ -144,7 +144,7 @@ describe("LibraryInsights — it says what it read", () => {
   });
 });
 
-describe("LibraryInsights — the button opens the tool the finding names", () => {
+describe("LibraryInsights - the button opens the tool the finding names", () => {
   it("emits the server's action object unchanged", async () => {
     const wrapper = await mountScreen(payload([TODO]));
 
@@ -167,7 +167,7 @@ describe("LibraryInsights — the button opens the tool the finding names", () =
   });
 });
 
-describe("LibraryInsights — it only ever reads", () => {
+describe("LibraryInsights - it only ever reads", () => {
   it("re-reads on Look again and asks for nothing else", async () => {
     const wrapper = await mountScreen(payload([TODO]));
     expect(getInsights).toHaveBeenCalledTimes(1);
@@ -210,7 +210,7 @@ describe("LibraryInsights — it only ever reads", () => {
   it("gives the screen a heading above its findings", async () => {
     // The findings are `h3`. Without an `h2` over them the screen has no
     // outline for a screen reader to move through, and the visual style is
-    // pinned separately by Toolbar.test.js — so this can only be an outline
+    // pinned separately by Toolbar.test.js - so this can only be an outline
     // change, never a look change.
     const wrapper = await mountScreen(payload([TODO, CLEAR]));
     expect(wrapper.find("h2.ins-title").text()).toBe("About your library");

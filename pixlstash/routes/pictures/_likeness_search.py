@@ -328,7 +328,7 @@ def register_routes(router, server):
         emb_matrix = np.stack([c[1] for c in candidates])  # (N, D)
         query_matrix = np.stack(query_embeddings)  # (Q, D)
 
-        # (N, Q) — one similarity per candidate per query
+        # (N, Q) - one similarity per candidate per query
         sim_matrix = emb_matrix @ query_matrix.T
 
         # Combine across Q queries → (N,)

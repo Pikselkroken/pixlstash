@@ -3,7 +3,7 @@
 //
 // Reported bug: "Empty Scrapheap" in the sidebar context menu did nothing except
 // open the Scrapheap. The sidebar switches the view and then App.vue calls
-// ImageGrid.confirmEmptyScrapheap() on the next tick — but the view switch runs
+// ImageGrid.confirmEmptyScrapheap() on the next tick - but the view switch runs
 // a PRE-FLUSH watcher that resets the grid (`allGridImages = []`) and sets
 // `imagesLoading = true` synchronously, and pre-flush watchers run before
 // nextTick callbacks. So the request always landed while `scrapheapEmptyDisabled`
@@ -11,7 +11,7 @@
 //
 // The fix is that the confirm gates only on a purge already running, and lets the
 // AUTHORITATIVE server preview (POST /pictures/scrapheap/delete-preview) decide
-// what is in the heap — the grid's loaded rows can undercount it.
+// what is in the heap - the grid's loaded rows can undercount it.
 //
 // This mounts the REAL ImageGrid.vue and reproduces the exact call ordering the
 // sidebar produces. Both directions are asserted: the preview is requested from
@@ -169,7 +169,7 @@ describe('sidebar "Empty Scrapheap" opens the delete-forever confirm', () => {
 
     await emptyScrapheapFromSidebar(wrapper);
 
-    // The grid really is mid-fetch at this point — the condition that used to
+    // The grid really is mid-fetch at this point - the condition that used to
     // swallow the request. If this ever stops holding, the test no longer covers
     // the reported bug.
     expect(wrapper.vm.imagesLoading).toBe(true);
@@ -202,7 +202,7 @@ describe('sidebar "Empty Scrapheap" opens the delete-forever confirm', () => {
     await emptyScrapheapFromSidebar(wrapper);
 
     expect(previewCalls()).toHaveLength(1);
-    // Authoritative "nothing to delete" — never open a destructive confirm on it.
+    // Authoritative "nothing to delete" - never open a destructive confirm on it.
     await vi.waitFor(() => expect(wrapper.vm.deleteForeverLoading).toBe(false));
     expect(wrapper.vm.deleteForeverOpen).toBe(false);
 

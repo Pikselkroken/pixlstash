@@ -5,7 +5,7 @@
 // grid moves, so the only thing separating that from a filter that silently did
 // nothing is the notice asserted here.
 //
-// Driven through `handlePluginRunRequest` — the handler behind `@run-plugin`,
+// Driven through `handlePluginRunRequest` - the handler behind `@run-plugin`,
 // which is what both the selection bar and the lightbox emit. Calling the inner
 // function directly would assert against an argument shape no caller produces.
 //
@@ -64,7 +64,7 @@ vi.mock("vue-router", () => ({
 
 import ImageGrid from "./ImageGrid.vue";
 
-/** Keyed by plugin name — what `POST /pictures/plugins/{name}` answers. */
+/** Keyed by plugin name - what `POST /pictures/plugins/{name}` answers. */
 let pluginResponses = {};
 
 function mountGrid() {
@@ -120,7 +120,7 @@ beforeEach(() => {
   pluginResponses = {};
 });
 
-describe("ImageGrid — plugin run whose output already exists", () => {
+describe("ImageGrid - plugin run whose output already exists", () => {
   it("says so, by the plugin's display name, when the output was a duplicate", async () => {
     pluginResponses.auto_crop = {
       status: "success",

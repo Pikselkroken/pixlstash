@@ -46,7 +46,7 @@ export function useAppEntityActions({
 
   async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
     const current = selectionStore.selectedCharacter;
-    // Unassigned view: assigned pictures leave the unassigned bucket — drop their
+    // Unassigned view: assigned pictures leave the unassigned bucket - drop their
     // tiles from the grid immediately.
     if (current === UNASSIGNED_PICTURES_ID && !selectionStore.selectedSet) {
       if (
@@ -59,7 +59,7 @@ export function useAppEntityActions({
     }
     // Viewing a specific character: reassigning pictures (and their whole stack)
     // to a DIFFERENT character moves them out of this view. Refetch so they
-    // disappear right away instead of lingering until the view changes — a plain
+    // disappear right away instead of lingering until the view changes - a plain
     // removeImagesById can't catch every stack member (a collapsed drag only
     // carries the leader id).
     const isSpecificCharacterView =

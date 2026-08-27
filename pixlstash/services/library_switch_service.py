@@ -77,8 +77,8 @@ def _bring_up(vault, label: str) -> None:
     """Build the inference engine, then start the vault's background workers.
 
     ``Vault.start()`` alone gets the WorkPlanner running, but every
-    engine-gated finder — tags, descriptions, face extraction, embeddings,
-    likeness — returns ``None`` for as long as ``Vault._engine`` is ``None``,
+    engine-gated finder - tags, descriptions, face extraction, embeddings,
+    likeness - returns ``None`` for as long as ``Vault._engine`` is ``None``,
     so a switched-to library would sit there with the planner sweeping and no
     AI work ever queued, until the next restart. ``app.main`` does this for the
     boot vault; a switch has to do it for its own.

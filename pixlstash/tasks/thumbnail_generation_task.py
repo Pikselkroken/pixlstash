@@ -2,7 +2,7 @@
 
 A thumbnail is ONE aspect-ratio-preserving bitmap of the whole frame (short edge
 ``THUMBNAIL_SHORT_EDGE`` px, long edge capped), plus the face-weighted square-crop
-rectangle within it. Generation is MODE-AGNOSTIC — the per-user
+rectangle within it. Generation is MODE-AGNOSTIC - the per-user
 ``thumbnail_mode`` is a display-only preference the frontend owns and is never
 read here.
 
@@ -16,7 +16,7 @@ set. Faces (when already present) weight the square-crop rectangle.
 
 **Completion is announced.** While a picture sits at NULL it has no stored aspect
 ratio, so its card lays out wrong, and its cache token is ``"0"``. Both are fixed
-here — but a client cannot know that without being told, and this task used to
+here - but a client cannot know that without being told, and this task used to
 tell no one, so the repair reached the disk and the database while the open grid
 kept showing the wrong picture until a full reload. See :meth:`_announce`.
 """
@@ -86,7 +86,7 @@ class ThumbnailGenerationTask(BaseTask):
         if img is None:
             # The file exists but cannot be decoded. Returning None leaves
             # thumbnail_width NULL, which is exactly what MissingThumbnailFinder
-            # selects on — without marking, the same corrupt picture is
+            # selects on - without marking, the same corrupt picture is
             # re-selected on every sweep forever (#585). The registry logs one
             # warning per file version and _filter_and_claim skips it.
             registry = getattr(self._db, "unprocessable_images", None)
@@ -172,14 +172,14 @@ class ThumbnailGenerationTask(BaseTask):
         Regeneration is the *completion* of a change something else started: an
         upgrade that reset these columns to NULL, a reference-folder source swap,
         or an in-place rotate and its undo. Until this ran, those pictures had no
-        stored dimensions at all — so a card had no aspect ratio to lay out with
+        stored dimensions at all - so a card had no aspect ratio to lay out with
         and rendered stretched, and the cache token was ``"0"``. Both are only
         repaired by re-reading the thumbnail endpoint, which nothing prompted:
         the whole task was silent, so the fix landed on disk and in the database
         and the open grid went on showing the wrong picture until a full reload.
 
         ``pixels`` is the field name because the picture's own bytes are what the
-        client must re-read — the same marker an in-place rotate raises, handled
+        client must re-read - the same marker an in-place rotate raises, handled
         by the same branch. Best-effort: a broken notifier must never fail a
         thumbnail batch that has already been persisted.
         """

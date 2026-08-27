@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   THE ROW SYSTEM — see docs/design/visual-language.md §5.1
+   THE ROW SYSTEM - see docs/design/visual-language.md §5.1
 
    Every list row in the sidebar starts at ONE left edge and moves only by whole
    indent steps. Before this rule there were six left edges (2, 5, 8, 11, 19px)
@@ -212,7 +212,7 @@
 }
 
 /* Non-scoped: webkit scrollbar pseudo-elements are suppressed by scoped data-v selectors */
-/* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
+/* Shared subtle scrollbar treatment - keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
 .sidebar-scroll::-webkit-scrollbar {
   width: 8px !important;
 }

@@ -131,12 +131,12 @@ class ReferenceFolderUpdateRequest(BaseModel):
     layout: Optional[str] = Field(
         default=None,
         description=(
-            "How this folder is laid out, as `project/person,set` — segments "
+            "How this folder is laid out, as `project/person,set` - segments "
             "separated by `/`, a segment's alternatives by `,`, first match "
             "wins (v1.11 Phase 4b). `null` turns the layout off, which is the "
             "default: without one PixlStash places nothing here and moves "
             "nothing here, whatever changes about the pictures. Setting one "
-            "does NOT reorganise the folder — every path already in it produced "
+            "does NOT reorganise the folder - every path already in it produced "
             "the assignments it holds, so every path is already true."
         ),
     )
@@ -258,7 +258,7 @@ def create_router(server) -> APIRouter:
     # Owner identity + locality for every reference-folder host operation
     # (LOCAL_OWNER_ONLY, and the LOOPBACK_OWNER_ONLY red-line routes /open and
     # /server/restart) are enforced by the centralised authz gate before the
-    # handler runs — no inline owner check lives here (backend refactor plan Step 5).
+    # handler runs - no inline owner check lives here (backend refactor plan Step 5).
 
     def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -323,8 +323,8 @@ def create_router(server) -> APIRouter:
         if os.path.isabs(raw_scope):
             # An absolute scope must already sit inside the root. Reduce it to
             # the relative remainder so the user-controlled value flows through
-            # resolve_path_within — the traversal sanitizer the rest of this
-            # module (and CodeQL's taint analysis) relies on — instead of a
+            # resolve_path_within - the traversal sanitizer the rest of this
+            # module (and CodeQL's taint analysis) relies on - instead of a
             # bespoke containment check the analyser cannot see. os.path.relpath
             # is called only after confirming the same root, so it cannot raise
             # on a cross-drive path.
@@ -630,7 +630,7 @@ def create_router(server) -> APIRouter:
         if error:
             raise HTTPException(status_code=400, detail=error)
         if not os.path.isdir(folder):
-            # Path not reachable yet (e.g. Docker pending mount) — no detection.
+            # Path not reachable yet (e.g. Docker pending mount) - no detection.
             return ReferenceFolderDetectResponse(
                 tags_suffix=None,
                 description_suffix=None,
@@ -1492,7 +1492,7 @@ def create_router(server) -> APIRouter:
             descriptions_count = 0
             skipped_count = 0
             # A sidecar import deletes+rewrites confirmed Tag rows and overwrites
-            # the description on EXISTING pictures — frozen for anything in a
+            # the description on EXISTING pictures - frozen for anything in a
             # locked set. Skip those (counted as skipped) instead of overwriting.
             locked = locked_picture_ids(
                 session, [pic.id for pic in pictures if pic.id is not None]

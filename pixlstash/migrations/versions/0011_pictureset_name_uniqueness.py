@@ -26,7 +26,7 @@ def upgrade() -> None:
     if "pictureset" not in set(inspector.get_table_names()):
         return
 
-    # Deduplicate names within the same project (project_id IS NOT NULL only —
+    # Deduplicate names within the same project (project_id IS NOT NULL only -
     # unscoped sets have no uniqueness constraint so no dedup needed).
     rows = bind.execute(
         sa.text(

@@ -117,7 +117,7 @@ describe("api/characters", () => {
     });
   });
 
-  // The ids ride in a DELETE body, which Axios only sends via config.data —
+  // The ids ride in a DELETE body, which Axios only sends via config.data -
   // passing them any other way silently unassigns nothing.
   it("removeCharacterFaces sends the ids as the DELETE body", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });

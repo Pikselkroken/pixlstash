@@ -105,7 +105,7 @@ def test_detect_folder_suffixes_empty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Sidecar suffix is a path component — it must not allow traversal (CWE-22)
+# Sidecar suffix is a path component - it must not allow traversal (CWE-22)
 # ---------------------------------------------------------------------------
 
 
@@ -162,7 +162,7 @@ def test_detect_folder_suffixes_ignores_cross_directory_match(tmp_path):
 
     ``detect_folder_suffixes`` walks subdirectories, so matching an image stem
     against a sidecar path by bare string prefix let ``/root/a.png`` claim
-    ``/root/ab/c.txt`` and derive the suffix ``"b/c.txt"`` — a separator-bearing
+    ``/root/ab/c.txt`` and derive the suffix ``"b/c.txt"`` - a separator-bearing
     value that would then be persisted as the folder's convention and appended
     to every image stem. Only same-directory stems may match.
     """
@@ -206,14 +206,14 @@ def test_is_safe_sidecar_suffix_accepts_conventions(good):
 
 def test_writeback_path_returns_none_for_unusable_configured_suffix():
     """A folder configured before the rule was enforced everywhere must not
-    raise through the caller and wedge a scan — it reports 'no path'."""
+    raise through the caller and wedge a scan - it reports 'no path'."""
     assert (
         writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", None)
         is None
     )
     # An already-resolved existing path is still honoured when it is the image
     # stem plus a safe suffix (the only shape a legitimately recorded sidecar
-    # path can have — see #776 for why anything else is refused).
+    # path can have - see #776 for why anything else is refused).
     assert (
         writeback_path(
             "/refs/f/photo.png",
@@ -548,7 +548,7 @@ def test_move_reference_picture_blocks_sidecar_escaping_destination(server, tmp_
     ``_sidecar_suffix_for_move`` compares ``normpath(dirname(...))`` on both
     sides, so a non-normalized ``tags_file`` yields a separator-bearing suffix
     that still passes the source-side check. That suffix is net-zero traversal,
-    so it stays contained on a plain destination — but if the destination holds
+    so it stays contained on a plain destination - but if the destination holds
     a symlink named after the incoming image stem, concatenating the suffix
     onto the stem resolves *through* the symlink and lands outside the folder.
     Joining via ``resolve_path_within`` resolves the symlink first and refuses.

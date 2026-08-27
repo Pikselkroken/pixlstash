@@ -74,7 +74,7 @@ def folder_name(name: str) -> str:
     """Return the folder name an entity name is written down as.
 
     Every character that cannot appear in a path component becomes ``_``. That
-    is a many-to-one map — ``A/B``, ``A:B`` and ``A_B`` all become ``A_B`` — so
+    is a many-to-one map - ``A/B``, ``A:B`` and ``A_B`` all become ``A_B`` - so
     two entities whose names differ only in punctuation share a folder, and a
     picture in either of them reads as true there. That is the same collision
     the filesystem would force anyway, and it errs towards not moving files.
@@ -106,7 +106,7 @@ class Layout:
     Attributes:
         segments: One tuple of facets per folder level. Within a segment the
             first facet the picture has a value for wins. A facet repeated
-            across segments is expressible and meaningless — that is still open
+            across segments is expressible and meaningless - that is still open
             in ``DECISIONS.md`` and is deliberately not resolved here.
         unfiled: The single folder a picture with nothing to file it by is
             written to. It has to be a real name rather than the library root,
@@ -151,7 +151,7 @@ def _match_key(name: str) -> str:
 def folder_match_key(name: str) -> str:
     """The key two entity names are the same folder under.
 
-    ``folder_name`` then the case/NFC fold, in that order — the same pair
+    ``folder_name`` then the case/NFC fold, in that order - the same pair
     :func:`is_true` compares a path component with, exposed because deciding
     *whether a rename may claim a directory* has to ask exactly the question the
     truth check will ask of the result. Two entities with the same key share a
@@ -166,7 +166,7 @@ def _names_of(facet: Facet, names: Mapping[Facet, Collection[str]]) -> Collectio
     if isinstance(values, str):
         raise TypeError(
             f"{facet} must map to a sequence of names, not the string "
-            f"{values!r} — a str would be read one character per name"
+            f"{values!r} - a str would be read one character per name"
         )
     return values
 
@@ -218,7 +218,7 @@ def _components(folder: str) -> tuple[str, ...]:
 
     A path carrying ``.`` or ``..`` is refused whole rather than tidied up.
     Dropping the ``..`` from ``2024 Shoots/../Mira`` would fabricate a project
-    level the path does not have and could return ``False`` — a move — for a
+    level the path does not have and could return ``False`` - a move - for a
     picture that is only ever in ``Mira``. An unnormalised path is a caller
     mistake, and the safe reading of one is the same as any path the layout
     cannot read: no components, and never false.
@@ -238,7 +238,7 @@ def is_true(
     """Return whether the folder a picture sits in still describes it.
 
     Components are read against the layout left to right, skipping segments the
-    path does not use — a picture filed by set alone under ``Project`` then
+    path does not use - a picture filed by set alone under ``Project`` then
     ``Person or Set`` sits one level deep, not two. Reading **stops** at the
     first component the layout's vocabulary cannot read: everything from there
     down is the owner's own, so ``2024 Shoots/Mira/2026-08`` is judged on its
@@ -249,7 +249,7 @@ def is_true(
 
     Args:
         folder: The folder the picture is in, relative to the library root, and
-            **not** including the file name — a caller holding a relative file
+            **not** including the file name - a caller holding a relative file
             path passes ``os.path.dirname`` of it. Guessing which trailing
             component was a file name would silently flip the answer for a path
             written with a trailing separator.
@@ -269,7 +269,7 @@ def is_true(
     components = _components(folder)
     if not components:
         # The library root, or a path this cannot read at all. It matches no
-        # segment, so it contradicts nothing — this is why an existing flat
+        # segment, so it contradicts nothing - this is why an existing flat
         # library needs no migration.
         return True
 
@@ -298,7 +298,7 @@ def _walk(
     never disagree about where the layout's part of the path ends.
 
     Returns:
-        ``(still_true, owned)`` — whether every component the layout could read
+        ``(still_true, owned)`` - whether every component the layout could read
         still describes the picture, and **how many leading components the
         layout owns**. Owning one is not the same as being right about it: a
         component that names a project the picture has left is the layout's to
@@ -368,7 +368,7 @@ def relocate(
 
     Returns:
         A ``/``-separated relative folder path, or ``None`` when the picture
-        must not move — which includes the case where the destination is where
+        must not move - which includes the case where the destination is where
         the picture already is.
     """
     components = _components(folder)
@@ -404,7 +404,7 @@ def match_destination(
     ``None`` when there is nothing to offer, which is three cases and each is
     the answer rather than a gap:
 
-    * The folder has stopped being true — that is :func:`relocate`'s move, and
+    * The folder has stopped being true - that is :func:`relocate`'s move, and
       it needs no offering.
     * The layout owns none of the path. A folder of the owner's own contradicts
       nothing and is a permanent override; offering to pull it into the layout
@@ -424,7 +424,7 @@ def match_destination(
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation — the mirror, for moves made outside PixlStash (v1.11 Phase 5)
+# Reconciliation - the mirror, for moves made outside PixlStash (v1.11 Phase 5)
 # ---------------------------------------------------------------------------
 
 
@@ -434,14 +434,14 @@ class MoveOutcome(str, Enum):
     The three the release plan names, plus the ordinary case a real library
     mostly produces:
 
-    * ``UNAMBIGUOUS`` — apply the removals and additions below.
-    * ``AMBIGUOUS`` — at least one removal cannot be told apart from a refile:
+    * ``UNAMBIGUOUS`` - apply the removals and additions below.
+    * ``AMBIGUOUS`` - at least one removal cannot be told apart from a refile:
       the picture has more than one of that facet, so leaving one folder does
       not say which. Listed, changed only when asked.
-    * ``OFF_LAYOUT`` — the new folder names nothing the layout's vocabulary
+    * ``OFF_LAYOUT`` - the new folder names nothing the layout's vocabulary
       knows. The path was already followed; no assignment is touched, and it
       is never moved back.
-    * ``NONE`` — nothing to reconcile at all, most commonly a subfolder of the
+    * ``NONE`` - nothing to reconcile at all, most commonly a subfolder of the
       owner's own changing below an unchanged layout prefix.
     """
 
@@ -460,7 +460,7 @@ class ReconciledMove:
         removals: Facet/name pairs the picture should leave. Non-empty only for
             ``UNAMBIGUOUS`` and ``AMBIGUOUS``.
         additions: Facet/name pairs the picture should gain. An addition is
-            never ambiguous by itself — it cannot make any folder untrue — so
+            never ambiguous by itself - it cannot make any folder untrue - so
             an ``AMBIGUOUS`` outcome is decided entirely by its removals; this
             function never holds an addition back because a removal next to
             it needs a human. What a *caller* does with that when the outcome
@@ -485,12 +485,12 @@ def read_named_components(
 
     The read :func:`is_true` and :func:`relocate` do not need, because they
     only ask whether a picture's OWN names still explain its folder.
-    :func:`reconcile_move` asks the opposite question — what does this path
-    say, regardless of who currently holds it — which is what a move made
+    :func:`reconcile_move` asks the opposite question - what does this path
+    say, regardless of who currently holds it - which is what a move made
     outside PixlStash has to be read against.
 
     Segments are consumed left to right and, within a segment, a facet's
-    listed order wins on a name two facets could both claim — the same
+    listed order wins on a name two facets could both claim - the same
     convention :func:`render` already uses to resolve it going forward, so a
     folder means the same entity read either direction. Stops at the first
     component that names nothing in *known_names*: everything from there is
@@ -501,7 +501,7 @@ def read_named_components(
     become ``Client_ Nordvik``) are read as **unreadable at that key**, not as
     one of the two arbitrarily. ``is_true`` accepts this same collision going
     forward because it only asks about membership, never about which specific
-    entity a component names — but this function's caller has to name one, so
+    entity a component names - but this function's caller has to name one, so
     picking whichever the vocabulary query happened to return last would
     silently add the picture to a different entity than the one on disk.
     Unreadable is the safe reading: it stops the walk here, same as a name
@@ -509,7 +509,7 @@ def read_named_components(
 
     Returns:
         One ``(facet, canonical name)`` pair per component consumed, in
-        layout order — the canonical name from *known_names*, not the raw
+        layout order - the canonical name from *known_names*, not the raw
         component text, so a folder-name-safe rendering of the entity (e.g.
         punctuation replaced by ``_``) still resolves to the real name.
     """
@@ -563,19 +563,19 @@ def reconcile_move(
     The mirror of :func:`relocate`: that function moves a file when an
     assignment change makes its folder untrue; this reads a file the owner
     already moved and says whether an assignment should change to match. Same
-    arguments, same reading of a path — a component the layout cannot read is
+    arguments, same reading of a path - a component the layout cannot read is
     the owner's own and never contradicts anything, in either direction.
 
     Args:
         old_folder: Where the picture's file was, relative to the root, not
             including the file name.
         new_folder: Where it is now, likewise.
-        facets: The picture's own, CURRENT names per facet — not a snapshot
+        facets: The picture's own, CURRENT names per facet - not a snapshot
             from when it moved. Reconciliation asks whether today's
             assignments explain today's path, so a picture that gained or
             lost a membership since the move is judged on what is true now.
         layout: The root's layout.
-        known_names: Every entity name the library currently has, per facet —
+        known_names: Every entity name the library currently has, per facet -
             also read live, for the same reason.
 
     Returns:
@@ -585,7 +585,7 @@ def reconcile_move(
     if not new_components:
         # The root itself, or a path this cannot split. Matches is_true's own
         # reading of the same shape: it contradicts nothing, so nothing here
-        # is touched at all — not even a removal on the old side.
+        # is touched at all - not even a removal on the old side.
         return ReconciledMove(MoveOutcome.OFF_LAYOUT)
 
     is_unfiled_arrival = len(new_components) == 1 and _match_key(
@@ -625,7 +625,7 @@ def reconcile_move(
 
     # Ambiguous exactly when a removal cannot be told apart from a refile: the
     # picture has more than one of that facet, so leaving one folder does not
-    # say which it left. An addition never carries this — gaining a facet
+    # say which it left. An addition never carries this - gaining a facet
     # value cannot make any existing folder untrue, so it is always safe.
     ambiguous = any(len(_names_of(facet, facets)) > 1 for facet, _ in removals)
     outcome = MoveOutcome.AMBIGUOUS if ambiguous else MoveOutcome.UNAMBIGUOUS
@@ -633,7 +633,7 @@ def reconcile_move(
 
 
 # ---------------------------------------------------------------------------
-# Serialisation — one column, readable in a database browser
+# Serialisation - one column, readable in a database browser
 # ---------------------------------------------------------------------------
 
 _SEGMENT_SEPARATOR = "/"

@@ -1,4 +1,4 @@
-// Pictures resource — /pictures.
+// Pictures resource - /pictures.
 //
 // The largest resource in the app. Seeded here with the reads whose call sites
 // have already migrated; the counts, scores, thumbnails, and export endpoints
@@ -39,7 +39,7 @@ export function pictureThumbnailUrl(id, { version } = {}) {
  * The one caller so far is the model shelf's thumbnail verb, and the shape of
  * that verb is why this exists: `POST /models/{id}/icon` takes bytes and stores
  * them content-addressed beside the hub, deliberately with no route that
- * resolves a picture id server-side — the icon is a COPY, so it cannot break
+ * resolves a picture id server-side - the icon is a COPY, so it cannot break
  * when the picture is deleted or the library is switched
  * (`services/model_icons.py`). So choosing a library picture means sending its
  * pixels, and the thumbnail is the right pixels to send: it is already WebP, it
@@ -48,7 +48,7 @@ export function pictureThumbnailUrl(id, { version } = {}) {
  * store's 2 MB ceiling.
  *
  * **It can still 404**, because "on demand" means generated FROM the file: the
- * route refuses when the source is missing, unreachable or undecodable — an
+ * route refuses when the source is missing, unreachable or undecodable - an
  * unplugged drive is a state this app models. The caller must have an answer
  * for that; it is not a read that always succeeds.
  *
@@ -364,13 +364,13 @@ export async function deletePictures(pictureIds) {
  *
  * The file's EXIF orientation tag is rewritten and the bitmap is left alone, so
  * this is not a new picture and nothing is stacked: the same id keeps the same
- * URL and only its bytes move. Owner-only — a share or otherwise scoped token
+ * URL and only its bytes move. Owner-only - a share or otherwise scoped token
  * cannot call it at all.
  *
  * The response splits what happened three ways and a caller must read all
  * three: `rotated_picture_ids` (done, thumbnails will regenerate),
  * `unsupported_picture_ids` (the format cannot carry a rotation every renderer
- * agrees on — Filters > Rotate still makes a copy), and `skipped_picture_ids`
+ * agrees on - Filters > Rotate still makes a copy), and `skipped_picture_ids`
  * (a locked set, or the file is missing). `batch_id` groups the whole call as
  * one undo step.
  *

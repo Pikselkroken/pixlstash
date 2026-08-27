@@ -1,8 +1,8 @@
-// OverlayDescriptionPanel — ending an edit returns the keyboard to the overlay.
+// OverlayDescriptionPanel - ending an edit returns the keyboard to the overlay.
 //
 // The regression this pins: after Enter saved the description (or Escape
-// cancelled the edit), the textarea kept DOM focus, so the overlay's Ctrl+Z —
-// which rightly defers to typing targets — stayed dead until a click. Ending
+// cancelled the edit), the textarea kept DOM focus, so the overlay's Ctrl+Z -
+// which rightly defers to typing targets - stayed dead until a click. Ending
 // an edit must blur the field and tell the parent, which refocuses its canvas.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -50,7 +50,7 @@ beforeEach(() => {
   listTaggers.mockResolvedValue([]);
 });
 
-describe("OverlayDescriptionPanel — ending an edit", () => {
+describe("OverlayDescriptionPanel - ending an edit", () => {
   it("saves on Enter, blurs the field and signals editing-finished", async () => {
     const w = mountPanel();
     const area = w.find("textarea");

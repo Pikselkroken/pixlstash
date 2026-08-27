@@ -13,7 +13,7 @@ computed under one of the two superseded weightings, so all of them are stale.
 
 Unlike ``0083`` this reset cannot be scoped: the weights are global, so every scored
 picture moves. ``MissingSmartScoreFinder`` picks the NULLed rows up on the next run.
-Schema-only otherwise — no columns are added or removed.
+Schema-only otherwise - no columns are added or removed.
 
 Revision ID: 0084_recompute_smart_score_rebalanced_weights
 Revises: 0083_recompute_smart_score_unapplied_anomaly_predictions

@@ -48,7 +48,7 @@ describe("ModelMark", () => {
 
   it("still marks a row with no name at all", () => {
     // `000002750.safetensors` strips to nothing, so the name chain falls back
-    // to the raw filename — the mark has to survive that too.
+    // to the raw filename - the mark has to survive that too.
     const wrapper = mountMark({
       display_name: null,
       filename: "000002750.safetensors",
@@ -116,8 +116,8 @@ describe("ModelMark", () => {
 
   // Two errors in ONE task, both from the icon's element. The DOM only catches
   // up on the next tick, so a handler that read the *computed* URL would take
-  // the second event as a verdict on Ada's face — a picture it had not yet
-  // asked the browser for — and skip straight to the initials.
+  // the second event as a verdict on Ada's face - a picture it had not yet
+  // asked the browser for - and skip straight to the initials.
   it("blames only the load that failed when two errors arrive at once", async () => {
     const wrapper = mount(ModelMark, {
       props: { row: row({ icon_sha256: "b".repeat(64) }), ring: RING },
@@ -152,7 +152,7 @@ describe("ModelMark", () => {
 
   // The other half of the reset: a recycled mark (the same instance handed a
   // different row) must forget the previous row's failures. The icon store is
-  // content-addressed, so rows genuinely share a hash — the URL that failed for
+  // content-addressed, so rows genuinely share a hash - the URL that failed for
   // one row is the URL the next row wants tried.
   it("tries a failed URL again once it is a different row's", async () => {
     const wrapper = mount(ModelMark, {
@@ -168,7 +168,7 @@ describe("ModelMark", () => {
   // Through a PARENT that re-renders, because that is the only way this bug is
   // visible: the shelf calls `ringFor(row)` inline in its `v-for`, so every
   // render hands the mark a new-but-identical ring object, and a reset keyed on
-  // object identity would put the mark straight back on the URL that 404ed —
+  // object identity would put the mark straight back on the URL that 404ed -
   // on every keystroke in the filter box. Mounting ModelMark alone with a
   // stable prop cannot see it.
   it("keeps the fallback when the parent re-renders with an equal ring", async () => {
@@ -208,7 +208,7 @@ describe("ModelMark", () => {
   };
   // `v-icon` only resolves under the Vuetify plugin, which these mounts do not
   // install. The stub is NAMED and carries its own class, so an assertion on it
-  // states "a Vuetify icon was rendered" — a plain span holding the string
+  // states "a Vuetify icon was rendered" - a plain span holding the string
   // `mdi-star` would satisfy a text-only assertion just as happily, and that is
   // the shape of the bug. It declares `color` so the binding is observable.
   const ICON_STUB = {

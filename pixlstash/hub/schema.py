@@ -7,7 +7,7 @@ can be copied or moved without carrying credentials with it.
 
 **Why this is not Alembic.** The vault has an Alembic lineage of its own, and a
 second lineage in the same process is a standing source of "which head am I
-on?" confusion — the two databases have unrelated lifetimes and are opened by
+on?" confusion - the two databases have unrelated lifetimes and are opened by
 unrelated code paths (the server opens both; the CLI opens only this one). The
 hub's schema is small and append-only, so a single ``schema_version`` row plus
 an ordered list of migration steps is the whole mechanism. Each step is applied
@@ -16,7 +16,7 @@ exactly once, in order, inside one transaction per step.
 **Why this is not SQLModel.** ``SQLModel.metadata`` is process-global, and the
 vault's baseline migration calls ``metadata.create_all()``: declaring hub tables
 as SQLModel tables would create them inside every vault. The hub therefore uses
-stdlib :mod:`sqlite3` and explicit DDL. It also keeps the CLI light — importing
+stdlib :mod:`sqlite3` and explicit DDL. It also keeps the CLI light - importing
 :mod:`pixlstash.database` pulls in numpy and the image stack, which a
 ``libraries list`` invocation has no use for.
 
@@ -49,7 +49,7 @@ CURRENT_SCHEMA_VERSION = 2
 # This is deliberately a second counter and not a schema version. The two answer
 # different questions and must not share one number:
 #
-# * ``schema_version`` is the SHAPE, and its steps are re-runnable by design —
+# * ``schema_version`` is the SHAPE, and its steps are re-runnable by design -
 #   ``_apply_v2`` is re-applied on every open so a developer hub picks up newly
 #   added v2 tables. A step that rewrites a user-correctable *value* cannot live
 #   there: re-running it would undo the correction, silently, on every restart.
@@ -58,7 +58,7 @@ CURRENT_SCHEMA_VERSION = 2
 #
 # It also cannot be a third schema version. A build shipped before this change
 # has ``CURRENT_SCHEMA_VERSION = 2`` and would refuse a v3 hub outright with
-# ``HubSchemaTooNewError``, locking that user out of a downgrade — the same
+# ``HubSchemaTooNewError``, locking that user out of a downgrade - the same
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS library (
 #
 # **A library uuid is never reused** (decided 2026-08-01). Tokens are stamped
 # with it, so a reissued uuid would silently hand a stale token access to a
-# library it was never minted for — the recycled-identifier hazard the uuid
+# library it was never minted for - the recycled-identifier hazard the uuid
 # exists to eliminate, reintroduced at a different layer. Uniqueness on
 # ``library.uuid`` only constrains rows that currently exist; this ledger keeps
 # the constraint after a row is gone, so no future verb (a ``forget``, a partial
@@ -329,7 +329,7 @@ CREATE TABLE IF NOT EXISTS model_folder (
 # checkpoint (integration plan §3, "File location needs its own row", ruled
 # 2026-08-08: *the same split applies to checkpoint*). Two content tables would
 # mean two location tables, or a location table with a discriminator column, and
-# every consumer branching on which one to read — for rows that differ in three
+# every consumer branching on which one to read - for rows that differ in three
 # columns.
 #
 # `base_model` is free text on purpose. It comes from whatever the trainer wrote
@@ -364,7 +364,7 @@ CREATE TABLE IF NOT EXISTS model (
     run_key               TEXT,
     -- The authored mark, content-addressed at <hub_dir>/icons/<sha256>.webp.
     -- A HASH, never a vault picture id: `model` is a hub table, no foreign key
-    -- spans hub and vault, and SQLite recycles deleted ids — so an
+    -- spans hub and vault, and SQLite recycles deleted ids - so an
     -- `icon_picture_id` would silently re-point at a different picture after a
     -- delete-plus-insert and break on every library switch. Picking a library
     -- picture therefore COPIES it into the icon store rather than referencing
@@ -381,7 +381,7 @@ CREATE TABLE IF NOT EXISTS model (
 """
 
 # One model, many paths. That is what a duplicate after an interrupted move is,
-# and what the same file copied into two registered folders is — for a 24 GB
+# and what the same file copied into two registered folders is - for a 24 GB
 # checkpoint exactly as much as for an adapter.
 #
 # This table is also the tombstone. Removing a folder drops its ``model_file``
@@ -414,7 +414,7 @@ CREATE TABLE IF NOT EXISTS model_file (
 )
 """
 
-# One model, many capabilities — the same idiom as ``model_file`` one table up,
+# One model, many capabilities - the same idiom as ``model_file`` one table up,
 # and for the same reason. A model that serves several features genuinely cannot
 # be filed under one heading: Florence-2 both captions and detects, and the CLIP
 # the embedder loads is both the search encoder and the aesthetic scorer's
@@ -424,7 +424,7 @@ CREATE TABLE IF NOT EXISTS model_file (
 # ``model.kind`` is not that place and is left alone: it is the adapter
 # algorithm, it carries a CHECK that says so, and it holds the *primary* label
 # for a declared engine so the Kind column and every existing reader keep
-# working. This table is additive — a row with no capabilities declared simply
+# working. This table is additive - a row with no capabilities declared simply
 # has none, which is what every scanned adapter and checkpoint is.
 #
 # No index on ``capability``: the shelf facets and filters client-side over the
@@ -487,7 +487,7 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # **These live in the hub and not in a vault, and that is the irreversible
 # decision in the release.** 70.2% of the owner's structural recipes appear in
 # more than one of his libraries, so a per-vault store would hold the same
-# workflow three times and could never answer "have I built this before" —
+# workflow three times and could never answer "have I built this before" -
 # which is the question the feature exists to answer. The backfill that fills
 # these tables is a one-time pass over every picture in every library: writing
 # the rows into a vault and moving them later means re-running it, and
@@ -501,10 +501,10 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # Two tiers, one row each, from ``services/workflow_hash.py``:
 #
-# * ``workflow_topology`` — the graph alone, node classes and named-input
+# * ``workflow_topology`` - the graph alone, node classes and named-input
 #   edges. The only tier computable from *either* ComfyUI serialisation, which
 #   is what lets a dropped ``workflow.json`` be filed with ComfyUI stopped.
-# * ``workflow_recipe`` — that graph bound to specific models. Parameters and
+# * ``workflow_recipe`` - that graph bound to specific models. Parameters and
 #   seeds are nulled before hashing, so a recipe is **prompt-free by
 #   construction** (library plan §5) and needs no purge to stay that way.
 #
@@ -516,7 +516,7 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # when they share it, which is the whole of what v1.11 asks of the tier. A
 # hub-side ``recipe_instance`` table is AI-toolkit Phase 2 and moved to v1.12
 # with the rest of it, so nothing in this release stores an instance ROW
-# anywhere. Its location is not in question — §4 puts the whole family here.
+# anywhere. Its location is not in question - §4 puts the whole family here.
 
 _V2_WORKFLOW_TOPOLOGY = """
 CREATE TABLE IF NOT EXISTS workflow_topology (
@@ -550,8 +550,8 @@ CREATE TABLE IF NOT EXISTS workflow_recipe (
 # **Named for what it holds.** This is the RECIPE's graph, not the file that
 # was imported: parameter and volatile widget values are already nulled and any
 # field named like a credential is dropped. That is what makes library plan §5's
-# deletion boundary real — "forget the pictures" purges instances and ghosts and
-# leaves the recipe standing, with no purge having to rewrite a stored graph —
+# deletion boundary real - "forget the pictures" purges instances and ghosts and
+# leaves the recipe standing, with no purge having to rewrite a stored graph -
 # and it is also why this row cannot be handed back to ComfyUI as a runnable
 # workflow. The verbatim import store (implementation plan §B5) is a different
 # thing that belongs beside the workflow file, and the name `workflow_document`
@@ -600,11 +600,11 @@ CREATE TABLE IF NOT EXISTS workflow_recipe_asset (
 """
 
 _V2_WORKFLOW_INDEXES = (
-    # "Which recipes are variants of this workflow" — the library view's expand
+    # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
     "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_topology "
     "ON workflow_recipe(topology_hash)",
-    # "Which recipes use this model" — the model-companions plan's Workflow
+    # "Which recipes use this model" - the model-companions plan's Workflow
     # sets, and the lookup a shelf row does to say what it is used by.
     "CREATE INDEX IF NOT EXISTS ix_workflow_recipe_asset_filename "
     "ON workflow_recipe_asset(normalized_filename)",
@@ -673,7 +673,7 @@ def _rebuild_model_with_kind_check(conn: sqlite3.Connection) -> None:
     not carried here, because it cannot exist yet when this runs: its
     ``CREATE TABLE`` is in the statement loop that follows the caller's rebuild
     guard, and that guard is false forever after the rebuild. **A third child
-    table would have to join the dance above** — the drop aborts otherwise.
+    table would have to join the dance above** - the drop aborts otherwise.
 
     Raises:
         sqlite3.IntegrityError: A stored adapter row has no ``kind`` and the new
@@ -780,7 +780,7 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # table, so a hub opened on an earlier unreleased develop would keep the
     # superseded `adapter`/`adapter_file`/`checkpoint` shape alongside the new
     # `model`/`model_file` one. Dropping rather than migrating is correct only
-    # because nothing has ever written these tables — the scan that fills them
+    # because nothing has ever written these tables - the scan that fills them
     # is unmerged, no route or UI reads them, and no released build shipped
     # them (v1.10.0-dev.1 was tagged 13 hours before they landed). `model_folder`
     # and `adapter_stack` are NOT dropped: a developer may have registered
@@ -857,14 +857,14 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
     CLIP fall below ``_CHECKPOINT_MIN_PARAMS`` and were stored as ``unknown``,
     while a T5-class encoder clears it and was stored as ``checkpoint``. The
     directory each file sits in says which it is, and the directory is already
-    in the hub — so this needs no rescan and reads no bytes.
+    in the hub - so this needs no rescan and reads no bytes.
 
     Only ``unknown`` and ``checkpoint`` rows are considered. An ``adapter`` was
     asserted from markers the file cannot strip, and an ``engine`` was declared
     by us rather than derived, so neither is a guess this can improve on.
 
     **A model with several copies must agree with itself.** Two locations that
-    name different roles — one under ``vae/``, one loose in a mixed folder —
+    name different roles - one under ``vae/``, one loose in a mixed folder -
     are not evidence, so the row is left alone rather than resolved by picking
     a side.
 
@@ -872,8 +872,8 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
     the tombstone: a copy deleted months ago leaves its row behind with
     ``state = 'missing'``, and a dead path in a differently-named folder would
     otherwise manufacture a disagreement and veto a re-filing that every live
-    copy agrees on. A model with *no* present copy — every location on a drive
-    that is not plugged in — still falls back to the paths it has, because this
+    copy agrees on. A model with *no* present copy - every location on a drive
+    that is not plugged in - still falls back to the paths it has, because this
     runs once and skipping it there would mislabel that drive permanently.
 
     Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`), because

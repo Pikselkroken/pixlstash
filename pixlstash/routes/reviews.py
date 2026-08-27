@@ -28,7 +28,7 @@ class CreateReviewRequest(BaseModel):
     project_id: Optional[int] = None
     set_id: Optional[int] = None
     character_id: Optional[str] = None
-    # Re-surface suspects already decided in earlier reviews (default off —
+    # Re-surface suspects already decided in earlier reviews (default off -
     # same protection as the old permanent suppression, now a visible choice).
     include_reviewed: bool = False
 
@@ -42,7 +42,7 @@ class ReviewStatsResponse(BaseModel):
     found: int
     prev_reviewed: int
     # Present on create/detail: how many PENDING rows bulk auto-resolve would
-    # apply at the default threshold (the "N obvious pairs — auto-resolve?" count).
+    # apply at the default threshold (the "N obvious pairs - auto-resolve?" count).
     auto_resolvable: Optional[int] = None
 
 
@@ -57,7 +57,7 @@ class ReviewProgressResponse(BaseModel):
     # served as cards and are excluded from ``pending``, so a review whose
     # pictures were locked mid-session still reaches ``pending == 0`` (complete)
     # instead of appearing stuck. Non-zero means "N suspects are frozen, not
-    # lost" — unlocking the set returns them to ``pending``. Defaults to 0 for
+    # lost" - unlocking the set returns them to ``pending``. Defaults to 0 for
     # reviews closed before this count existed.
     locked: int = 0
 
@@ -137,7 +137,7 @@ class ReviewSuggestionItemResponse(BaseModel):
     # when ``twin_locked`` is true: a frozen twin cannot be written, so the
     # pair-only corners (swap / fix-twin) would only 423.
     kind: str = "binary"
-    # Per-side lock state — deliberately NOT a single card-level flag, because
+    # Per-side lock state - deliberately NOT a single card-level flag, because
     # the two sides gate different actions. The twin's lock blocks fix-twin and
     # swap; accept and dismiss only ever write the suspect, so they stay valid.
     # ``locked`` is the suspect's: always false today (locked suspects are
@@ -236,7 +236,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Deletes every review in the given ``status`` and returns the "
             "``deleted`` count. ``status`` is **required** and must be "
-            "``ARCHIVED`` — the 'clear all archived' action; there is no "
+            "``ARCHIVED`` - the 'clear all archived' action; there is no "
             "delete-everything default. Suggestion rows are detached "
             "(``review_id`` cleared), never destroyed, so per-item decisions and "
             "the no-resurrection guarantee stand. Owner-only."
@@ -266,7 +266,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns how many pictures the given tag+scope would scan "
             "(``in_scope``) and how many of the tag's suspects were already "
-            "decided in earlier reviews (``prev_reviewed`` — the count the "
+            "decided in earlier reviews (``prev_reviewed`` - the count the "
             "'include previously reviewed' toggle re-surfaces)."
         ),
         response_model=ReviewPreviewResponse,
@@ -366,7 +366,7 @@ def create_router(server) -> APIRouter:
         "/reviews/{review_id}/archive",
         summary="Archive a review (completed)",
         description=(
-            "Marks the review ARCHIVED. Suggestion rows are untouched — "
+            "Marks the review ARCHIVED. Suggestion rows are untouched - "
             "decisions were written through per item. Idempotent."
         ),
         response_model=ReviewResponse,

@@ -52,7 +52,7 @@
           <option value="">Set: Any</option>
           <!-- A native <option> can carry neither an icon nor a title, so the
                lock state rides in the label text. Locked sets keep their natural
-               order — burying them makes them harder to find exactly when the
+               order - burying them makes them harder to find exactly when the
                user is asking why one is unavailable. -->
           <option v-for="s in store.sets" :key="s.id" :value="s.id">
             {{ `${s.name || `Set ${s.id}`}${s.locked ? " (locked)" : ""}` }}
@@ -106,7 +106,7 @@
       </div>
 
       <!-- Terminal state: the board is scoped to a LOCKED set. A locked set's
-           pictures are read-only, so no tag on them can be reviewed — showing
+           pictures are read-only, so no tag on them can be reviewed - showing
            rows with a live "Start review" would be an offer we can't honour
            (the backend 423s it). Replace the whole body with the explanation
            instead; the controls above stay mounted so the user can scope back
@@ -123,13 +123,13 @@
         <h3 class="rs-board-locked-title">{{ LOCKED_SET_HEADLINE }}</h3>
         <p class="rs-board-locked-sub">{{ lockedSetTitle(scopedSetName) }}</p>
         <p class="rs-board-locked-hint">
-          Pick another set — or “Set: Any” — to get the board back.
+          Pick another set - or “Set: Any” - to get the board back.
         </p>
       </div>
 
       <template v-else>
         <!-- Cache (re)build in progress, OR a board-scope refetch in flight: show
-           the bar, keep any stale rows below (undimmed — this is a refresh, not
+           the bar, keep any stale rows below (undimmed - this is a refresh, not
            an error state). Rebuild has real processed/total progress
            (determinate fill); a scope refetch does not, so it gets an
            indeterminate sliding fill instead (ProgressOverlay's technique). -->
@@ -292,7 +292,7 @@
                 Open <v-icon size="14">mdi-arrow-right</v-icon>
               </button>
               <!-- Disabled ONLY when this row's review is provably empty AND
-                   the board scope is the review's scope — see
+                   the board scope is the review's scope - see
                    startBlockedReason(). The reason names the cause and the
                    remedy, so the tooltip is the whole explanation. -->
               <button
@@ -329,14 +329,14 @@
 
         <p v-if="sorted.length" class="rs-board-legend">
           “Priority” = a fast ranking estimate (est. wrong + est. missing +
-          mismatches) for sorting tags — not the number of cards a review
+          mismatches) for sorting tags - not the number of cards a review
           session will contain, which comes from a separate, slower scan (bar
           colour:
           <span class="rs-legend-error">red</span> = worst tags,
           <span class="rs-legend-warning">amber</span> = notable,
           <span class="rs-legend-tertiary">teal</span> = minor) · “Est. wrong” =
           tagged pictures the model is ≤10% sure about · “Est. missing” =
-          untagged pictures it is ≥90% sure about — both discounted by the tag’s
+          untagged pictures it is ≥90% sure about - both discounted by the tag’s
           measured reliability, so the estimate reflects likely genuine fixes,
           not raw model flags (hover for the raw count) · “Mismatch” =
           near-identical shots with different labels · “Last review” = when a
@@ -355,15 +355,15 @@
 // "no model signal" chip.
 import { computed, nextTick, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
-// Same words as NewReviewDialog's locked set option/trigger tooltip — one
+// Same words as NewReviewDialog's locked set option/trigger tooltip - one
 // source so the two surfaces can't drift apart.
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
-// this helper was written for) — reuse it rather than re-deriving the same
+// this helper was written for) - reuse it rather than re-deriving the same
 // fix here.
 import { relativeDate } from "../../utils/snapshots";
-// Pure ranking/explanation logic, split out for direct-import unit testing —
+// Pure ranking/explanation logic, split out for direct-import unit testing -
 // see tagHealthBoardLogic.js's module doc for why.
 import {
   corrections,
@@ -389,7 +389,7 @@ const relativeComputedAt = computed(() => relativeDate(store.healthComputedAt));
 const rebuildTitle = computed(() => {
   if (store.healthBuilding) return "Rebuilding…";
   if (store.healthStale)
-    return "Tag health hasn't been recomputed since new activity — rebuild now, or it'll catch up automatically shortly.";
+    return "Tag health hasn't been recomputed since new activity - rebuild now, or it'll catch up automatically shortly.";
   return "Recompute tag health signals from the current data";
 });
 
@@ -415,12 +415,12 @@ const SORT_OPTS = [
 
 const SUBTITLE = {
   score:
-    "Sorted by how worth reviewing each tag looks — a fast estimate, not a review-session size.",
+    "Sorted by how worth reviewing each tag looks - a fast estimate, not a review-session size.",
   tag: "Sorted alphabetically by tag name.",
   wrong: "Sorted by how many pictures probably have this tag by mistake.",
   missing: "Sorted by how many pictures are probably missing this tag.",
   dups: "Sorted by how many near-identical shots disagree on this tag.",
-  last: "Sorted by when each tag was last reviewed — longest ago first.",
+  last: "Sorted by when each tag was last reviewed - longest ago first.",
 };
 
 const subtitle = computed(() => SUBTITLE[sort.value.key] || SUBTITLE.score);
@@ -430,7 +430,7 @@ const headers = [
   {
     label: "Priority",
     key: "score",
-    tip: "A fast ranking estimate (est. wrong + est. missing + mismatches), used to sort tags by how worth reviewing they look. Not a forecast of how many cards a review session will contain — Start review runs a separate, slower scan (nearest-neighbour comparison) that usually finds a smaller, different set of pictures.",
+    tip: "A fast ranking estimate (est. wrong + est. missing + mismatches), used to sort tags by how worth reviewing they look. Not a forecast of how many cards a review session will contain - Start review runs a separate, slower scan (nearest-neighbour comparison) that usually finds a smaller, different set of pictures.",
   },
   {
     label: "Est. wrong",
@@ -448,7 +448,7 @@ const headers = [
     label: "Mismatch",
     key: "dups",
     center: true,
-    tip: "Near-identical images (duplicates or burst shots) that disagree on this tag — one has it, the other doesn’t",
+    tip: "Near-identical images (duplicates or burst shots) that disagree on this tag - one has it, the other doesn’t",
   },
   {
     icon: "mdi-clock-outline",
@@ -464,7 +464,7 @@ function isAnomaly(r) {
   return store.isAnomalyTag(r.tag);
 }
 
-// `last_reviewed_at` is not in the /tag_health contract yet — treat a missing
+// `last_reviewed_at` is not in the /tag_health contract yet - treat a missing
 // value as "never" (sorts oldest).
 function lastValue(r) {
   const t = r.last_reviewed_at ? new Date(r.last_reviewed_at).getTime() : NaN;
@@ -518,7 +518,7 @@ const sorted = computed(() => {
   //
   // Two tags routinely round to the same corrections() value in a
   // lightly-reviewed vault, so a tag-name fallback here would decide the
-  // PRIMARY ranking, not just a rare genuine tie — that's the bug this
+  // PRIMARY ranking, not just a rare genuine tie - that's the bug this
   // tie-break closes. rawCorrections() (the un-rounded, un-discounted
   // est_wrong + est_missing + mismatch) breaks the tie with the same
   // underlying signal at full precision before falling back to tag name for
@@ -565,14 +565,14 @@ function pickSort(key, event) {
   event?.target?.blur();
 }
 
-// Board scope (project/set/character): server-side — every signal column is
+// Board scope (project/set/character): server-side - every signal column is
 // recomputed for the chosen pictures, and out-of-scope-only tags drop off.
 const scope = computed(() => store.healthScope);
 
 // The set the board is currently scoped to (if any), and whether it is locked.
 // `store.sets` carries `locked` straight from /picture_sets, the same source
 // NewReviewDialog's listbox reads. An unknown id (sets not fetched yet) reads
-// as "not locked" — the board then behaves exactly as it did before, and
+// as "not locked" - the board then behaves exactly as it did before, and
 // creation is still refused by the backend's 423.
 const scopedSet = computed(() =>
   scope.value.setId == null
@@ -634,7 +634,7 @@ function openSessionFor(tag) {
 // --- Provably-empty "Start review" gate --------------------------------------
 
 // The gate is only sound when the row's signals describe the review that the
-// button would actually create — i.e. when the board's scope IS the review's
+// button would actually create - i.e. when the board's scope IS the review's
 // scope. ReviewSessionsOverlay.vue's `openNewReview()` (~:205-213) inherits the
 // board scope into the dialog ONLY when `store.healthScoped` is true; on an
 // unscoped board it prefills from the app selection instead
@@ -663,7 +663,7 @@ const blockedStarts = computed(() => {
 });
 
 function startBlockedReason(r) {
-  // A row with an open session renders "Open", not "Start review" — that
+  // A row with an open session renders "Open", not "Start review" - that
   // session already exists and its cards are already there, so the
   // would-be-empty reason does not apply to it (and must not end up on the
   // wrapper's tooltip).
@@ -673,14 +673,14 @@ function startBlockedReason(r) {
 
 // --- Zero-Priority tail disclosure -------------------------------------------
 
-// The board renders EVERY tag (no threshold, no filter — a Priority-0 tag
+// The board renders EVERY tag (no threshold, no filter - a Priority-0 tag
 // routinely still has reviewable work, see zeroTailStart's note), which makes
 // a mature vault a very long list. The Priority-0 rows collapse behind a
 // disclosure instead, defaulting closed.
 //
 // Only the default Priority-descending ordering actually groups those rows into
 // a contiguous tail. Under any other sort they are interleaved with scored
-// rows, and hiding them would be a filter dressed up as a disclosure — so the
+// rows, and hiding them would be a filter dressed up as a disclosure - so the
 // control only appears when the ordering guarantees a genuine tail. Everything
 // below derives from `sorted`, so re-sorting can never strand the disclosure in
 // a state that disagrees with what is on screen.
@@ -693,7 +693,7 @@ const tailStart = computed(() => {
   const start = zeroTailStart(sorted.value, corrections);
   // Every row is Priority 0 (a fresh or fully-reviewed vault): collapsing them
   // all would leave a header row over an empty table, which reads as "no tags"
-  // — strictly worse than the density it would save. Keep them visible.
+  // - strictly worse than the density it would save. Keep them visible.
   return start === 0 ? sorted.value.length : start;
 });
 
@@ -712,7 +712,7 @@ const tailToggleLabel = computed(() => {
 });
 
 const TAIL_TOGGLE_TITLE =
-  "These tags scored 0 on the fast Priority estimate — nothing flagged. A review can still find work on them: it runs a separate nearest-neighbour scan that looks at different evidence.";
+  "These tags scored 0 on the fast Priority estimate - nothing flagged. A review can still find work on them: it runs a separate nearest-neighbour scan that looks at different evidence.";
 </script>
 
 <style scoped>
@@ -723,7 +723,7 @@ const TAIL_TOGGLE_TITLE =
   padding: 20px 24px;
 }
 .rs-board-inner {
-  /* Fills the frame (sidebar excluded — that's `.rs-board`'s sibling), with
+  /* Fills the frame (sidebar excluded - that's `.rs-board`'s sibling), with
      the surrounding margin coming from `.rs-board`'s own padding. */
   width: 100%;
 }
@@ -746,7 +746,7 @@ const TAIL_TOGGLE_TITLE =
   flex: 1;
   min-width: var(--space-3);
 }
-/* Always rendered (row count 0, 1, or many) — the escape hatch stays visible
+/* Always rendered (row count 0, 1, or many) - the escape hatch stays visible
    even after the board has been built once, unlike the empty-state's
    one-time-only .rs-board-rebuild button below. Quieter, ambient copy since
    it's on screen at all times. */
@@ -770,7 +770,7 @@ const TAIL_TOGGLE_TITLE =
   cursor: default;
   opacity: 0.7;
 }
-/* stale = new activity landed since the cache's computed_at — same icon as
+/* stale = new activity landed since the cache's computed_at - same icon as
    the review-session staleness chip (mdi-clock-alert-outline) for visual
    consistency across the two features. */
 .rs-board-rebuild-persistent--stale {
@@ -891,7 +891,7 @@ const TAIL_TOGGLE_TITLE =
   transition: width 0.4s;
 }
 /* A board-scope refetch has no processed/total to report, so it gets an
-   indeterminate sliding fill instead of the rebuild bar's determinate width —
+   indeterminate sliding fill instead of the rebuild bar's determinate width -
    same technique as ProgressOverlay.vue's `.progress-overlay__fill--indeterminate`. */
 .rs-board-building-fill--indeterminate {
   width: 38% !important;
@@ -911,7 +911,7 @@ const TAIL_TOGGLE_TITLE =
 }
 
 /* Locked-scope terminal state. Mirrors ReviewSessionView.vue's `.rs-state`
-   (centred column, display-size icon, headline, sub-line) — this board sits on
+   (centred column, display-size icon, headline, sub-line) - this board sits on
    the overlay's `.rs-shell`, which is dark-surface/on-dark-surface, so it uses
    the same token pair as the rest of this file. */
 .rs-board-locked {
@@ -929,7 +929,7 @@ const TAIL_TOGGLE_TITLE =
   outline: none;
 }
 /* The disabled/unavailable treatment, identical to
-   `.rs-listbox-option--locked` in NewReviewDialog — this is a blocked scope,
+   `.rs-listbox-option--locked` in NewReviewDialog - this is a blocked scope,
    not an informational note. */
 .rs-board-locked-icon {
   color: rgba(var(--v-theme-on-dark-surface), 0.38);
@@ -976,7 +976,7 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-row {
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
-     last · why · action (Verified column cut — see Spec E) */
+     last · why · action (Verified column cut - see Spec E) */
   grid-template-columns: 172px 116px 98px 106px 84px 56px 1fr 116px;
   gap: 10px;
   padding: 7px 14px;
@@ -1044,7 +1044,7 @@ button.rs-board-hdr {
   text-overflow: ellipsis;
   white-space: nowrap;
   /* Flex items default to min-width: auto (their content's natural width),
-     which blocks shrinking and defeats the ellipsis above — without this,
+     which blocks shrinking and defeats the ellipsis above - without this,
      a long tag name pushes past the column and crowds out sibling badges
      like the "no model signal" chip instead of truncating. */
   min-width: 0;
@@ -1135,7 +1135,7 @@ button.rs-board-hdr {
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 /* Blocked "Start review": the SAME treatment as `.rs-listbox-option--locked` in
-   NewReviewDialog (38% on-dark-surface + not-allowed) — this board sits on the
+   NewReviewDialog (38% on-dark-surface + not-allowed) - this board sits on the
    overlay's `.rs-shell`, which is the dark-surface/on-dark-surface pair, so the
    idiom transfers verbatim. It is a blocked action, not an informational note,
    and 38% is the system's disabled step (visual-language.md §11). */
@@ -1151,7 +1151,7 @@ button.rs-board-hdr {
 
 /* Zero-Priority tail disclosure. Quiet, full-width and directly under the
    table so it reads as the continuation of the list rather than a new
-   control — it is an extension of the rows above, not an action on them. */
+   control - it is an extension of the rows above, not an action on them. */
 .rs-board-more {
   display: flex;
   align-items: center;

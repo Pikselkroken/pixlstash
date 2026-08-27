@@ -193,7 +193,7 @@
   <!-- The shipped host-path picker, reused whole, by both verbs that need a
        host path: Add takes the folder as it is, Move empties one into it.
        `registeredPaths` is what stops the 409 rather than reporting it, and it
-       is right for Move too — moving into a folder the owner already registered
+       is right for Move too - moving into a folder the owner already registered
        would swallow their association into PixlStash's. -->
   <FolderBrowser
     :open="browseOpen"
@@ -254,7 +254,7 @@ const DOCKER_REASON =
   "Adding a folder needs its path on the host, which PixlStash cannot ask for from inside Docker. Add it from the command line for now.";
 
 // One folder family, so the column reads as "which kind of folder" rather than
-// as four unrelated marks — and ONE copy of it, shared with the shelf's folder
+// as four unrelated marks - and ONE copy of it, shared with the shelf's folder
 // headers (#899), which state the same tier about the same registry. `managed`
 // is not locked: it holds no association to dissolve, but it is scannable and
 // relocatable, which is why it keeps the home glyph rather than the lock.
@@ -354,7 +354,7 @@ function rowReason(folder) {
     reasons.push("This folder is being scanned right now.");
   }
   // `canForget` as well as `relocatable`: a running move blocks both verbs now,
-  // and an ordinary `user` folder is forgettable without being relocatable —
+  // and an ordinary `user` folder is forgettable without being relocatable -
   // gating this on `relocatable` alone left exactly those rows with a blocked
   // Forget and no note saying why.
   if (

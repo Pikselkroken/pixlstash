@@ -435,8 +435,8 @@ export const useDedupStore = defineStore("dedup", () => {
   const separatedCount = ref(0);
 
   // --- The decided page's verdict gate -------------------------------------
-  // The tier gate says nothing on the decided page — a decision was made under
-  // whatever policy was live then, and the server ignores the gate there — so
+  // The tier gate says nothing on the decided page - a decision was made under
+  // whatever policy was live then, and the server ignores the gate there - so
   // the filter menu offers the two VERDICTS instead (owner call, 2026-07-30).
   // Held as the verdicts switched OFF rather than on, so a verdict the server
   // adds later is included by default instead of silently filtered out.
@@ -455,7 +455,7 @@ export const useDedupStore = defineStore("dedup", () => {
   // True once openQueue has adopted the URL's (and the remembered) filter
   // selection. Until then the gate above still holds pristine DEFAULTS, and
   // the view's URL mirror must not read that transient state as "the user
-  // chose the defaults" — doing so is exactly the bug that stripped the
+  // chose the defaults" - doing so is exactly the bug that stripped the
   // filter params off the URL on every full reload (see openQueue).
   const filtersRestored = ref(false);
 
@@ -492,10 +492,10 @@ export const useDedupStore = defineStore("dedup", () => {
   const isScanning = computed(() => RUNNING_STATUSES.has(scan.value.status));
 
   /**
-   * Whether ANY duplicates exist, across every tier — the sidebar's presence
+   * Whether ANY duplicates exist, across every tier - the sidebar's presence
    * indicator. Deliberately not the policy-filtered count: that number moves
    * with the tier gate and the threshold, so it kept reading as churn rather
-   * than information (owner call, 2026-07-29 — the badge became a dot).
+   * than information (owner call, 2026-07-29 - the badge became a dot).
    */
   const hasDuplicates = computed(() => {
     if (openCount.value > 0) return true;
@@ -575,7 +575,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * The `verdicts` argument every decided-page request travels with.
    *
    * Empty when nothing is filtered out, so "no filter" is expressed by absence
-   * rather than by re-listing the whole vocabulary — the server treats a full
+   * rather than by re-listing the whole vocabulary - the server treats a full
    * list as no filter too, but only absence also keeps the verdict-less tail
    * (a resolved group whose live verdict row is gone) reachable.
    */
@@ -1017,7 +1017,7 @@ export const useDedupStore = defineStore("dedup", () => {
     if (Array.isArray(filters.verdicts)) {
       // The URL names what to SHOW; the store holds what to hide. An id the
       // server does not publish is ignored rather than trusted, and a selection
-      // that would leave nothing on screen falls back to showing everything —
+      // that would leave nothing on screen falls back to showing everything -
       // a link must not open onto a page that can only be empty.
       const shown = filters.verdicts.filter((id) =>
         verdictIds.value.includes(id),
@@ -1099,7 +1099,7 @@ export const useDedupStore = defineStore("dedup", () => {
     // Only NOW may the URL mirror trust the gate: between the policy landing
     // and this line the store held plain defaults, and a mirror that ran in
     // that window concluded "default selection" and replaced the URL without
-    // its filter params — while the real navigation from the params was still
+    // its filter params - while the real navigation from the params was still
     // in flight, so the params were dropped for good.
     filtersRestored.value = true;
     // A poll belongs to the old scope/policy. Stop it before adopting this
@@ -1241,12 +1241,12 @@ export const useDedupStore = defineStore("dedup", () => {
     error.value = null;
     // The window is being rebuilt (scope change, tier change, rescan, Home
     // after an End jump), so a selection over the old rows would silently
-    // point at different groups — and so would a jump-to-end still chasing
+    // point at different groups - and so would a jump-to-end still chasing
     // the old list's tail, or a page request still in flight from it.
     windowEpoch += 1;
     // This rebuild's own claim on the window. Two first-page loads CAN be in
-    // flight at once — the scan poll reloads an empty list on its own clock,
-    // and the user can flip to Decided (or change scope/tier) meanwhile —
+    // flight at once - the scan poll reloads an empty list on its own clock,
+    // and the user can flip to Decided (or change scope/tier) meanwhile -
     // and only the NEWEST rebuild may write. Without this check the poll's
     // stale open-queue response landed after the Decided flip's rows and
     // wrote its empty page over them: "Still scanning…", then nothing.
@@ -1278,7 +1278,7 @@ export const useDedupStore = defineStore("dedup", () => {
       focusIndex.value = groups.value.length ? 0 : -1;
     } catch (err) {
       // A stale rebuild's failure must not blank the fresh rebuild's rows
-      // either — logged (never swallowed), then discarded like its success.
+      // either - logged (never swallowed), then discarded like its success.
       if (epoch !== windowEpoch) {
         console.warn(
           "[dedup] discarding a superseded first-page load's failure",
@@ -1437,7 +1437,7 @@ export const useDedupStore = defineStore("dedup", () => {
     return pageInFlight;
   }
 
-  /** The page request itself. Never called directly — go through `loadMore`. */
+  /** The page request itself. Never called directly - go through `loadMore`. */
   async function fetchNextPage({ limit } = {}) {
     loadingMore.value = true;
     const epoch = windowEpoch;
@@ -1496,7 +1496,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * Only meaningful after an End jump has rebased the window off the top
    * (`windowStart > 0`): scrolling or stepping up from the jumped tail
    * backfills the rows above it, one offset page at a time, until the window
-   * reaches the top. Always offset-paged and never sends a cursor — the
+   * reaches the top. Always offset-paged and never sends a cursor - the
    * cursor chain names positions in a forward walk and is broken the moment
    * an offset jump happens; the two must never travel in one request.
    *
@@ -1513,7 +1513,7 @@ export const useDedupStore = defineStore("dedup", () => {
     return prevInFlight;
   }
 
-  /** The upward page itself. Never called directly — go through loadPrevious. */
+  /** The upward page itself. Never called directly - go through loadPrevious. */
   async function fetchPreviousPage({ limit } = {}) {
     const epoch = windowEpoch;
     try {
@@ -1543,7 +1543,7 @@ export const useDedupStore = defineStore("dedup", () => {
       groups.value = [...kept, ...groups.value];
       windowStart.value = prevOffset;
       // Under a running scan the page can be short, or overlap the window
-      // (offset drift re-serving a row the client already holds — the same
+      // (offset drift re-serving a row the client already holds - the same
       // hazard the downward fallback de-dupes). The pre-existing rows'
       // absolute indices then shift; keep the focused GROUP under the cursor.
       const shift = prevOffset + kept.length - before;
@@ -1587,7 +1587,7 @@ export const useDedupStore = defineStore("dedup", () => {
    *
    * On a top-anchored window this is just a focus move. After an End jump the
    * window no longer contains the top, so Home is a reset to the normal
-   * cursor-paged first page — the exact inverse of the jump that left it.
+   * cursor-paged first page - the exact inverse of the jump that left it.
    *
    * @returns {Promise<void>}
    */
@@ -1623,7 +1623,7 @@ export const useDedupStore = defineStore("dedup", () => {
     endChaseActive.value = false;
   }
 
-  /** The tail request: ALWAYS offset-paged, never a cursor — the server
+  /** The tail request: ALWAYS offset-paged, never a cursor - the server
    * rejects the two together, and a jump is precisely the operation the
    * forward cursor chain cannot express. */
   function requestTailPage(offset) {
@@ -1690,11 +1690,11 @@ export const useDedupStore = defineStore("dedup", () => {
    *
    * Everything loaded: focus the last row, synchronously, exactly as before.
    * A small gap: chase the missing pages in sequence (rebasing for a page or
-   * two is churn). A large gap: {@link jumpToTail} — one offset request for
+   * two is churn). A large gap: {@link jumpToTail} - one offset request for
    * the last page, window rebased onto it, no walk through the middle. All
    * paths land the focus on the last row actually received and terminate
    * under a running scan; and all die silently the moment the user moves the
-   * focus or the view cancels the jump — a stale jump that yanks the scroll
+   * focus or the view cancels the jump - a stale jump that yanks the scroll
    * later is worse than the bug it fixes.
    *
    * @returns {Promise<void>}
@@ -1743,7 +1743,7 @@ export const useDedupStore = defineStore("dedup", () => {
 
   // ── The decided page ─────────────────────────────────────────────────────
   // The queue's flip side: resolved groups with their live verdict, so a
-  // decision can be reviewed and cleared (owner request, 2026-07-29 — this
+  // decision can be reviewed and cleared (owner request, 2026-07-29 - this
   // replaces the sticky "Kept N pictures separate" notice as the way back).
 
   const showingDecided = ref(false);
@@ -1761,7 +1761,7 @@ export const useDedupStore = defineStore("dedup", () => {
   // ── Multi-select ─────────────────────────────────────────────────────────
   // Ctrl+click toggles a group in and out; Shift+click selects the range from
   // the anchor (the last toggled or focused row). A verdict given to any
-  // selected group applies to the whole selection — the row buttons say so.
+  // selected group applies to the whole selection - the row buttons say so.
 
   const selectedSignatures = ref(new Set());
   let selectionAnchor = null;
@@ -1786,7 +1786,7 @@ export const useDedupStore = defineStore("dedup", () => {
     const next = new Set(selectedSignatures.value);
     // Grid parity: the FIRST Ctrl+click starts a multi-selection from the row
     // the user is on, so it must not trade the focused row for the clicked
-    // one — both end up selected. (Ctrl+clicking the focused row itself still
+    // one - both end up selected. (Ctrl+clicking the focused row itself still
     // just toggles it.)
     if (!next.size && focusIndex.value >= 0 && focusIndex.value !== index) {
       const focusedSig =
@@ -1804,7 +1804,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * Ctrl+A: every group in the queue, not just the pages already fetched.
    *
    * Selecting "what happens to be loaded" made the gesture mean a different
-   * thing depending on how far the user had scrolled — 40 groups out of 300,
+   * thing depending on how far the user had scrolled - 40 groups out of 300,
    * with nothing on screen saying so. So this pages the rest in first, at the
    * server's maximum page size rather than the queue's browsing page size.
    *
@@ -2095,13 +2095,13 @@ export const useDedupStore = defineStore("dedup", () => {
    * verdict produced no pill. The verdict RESPONSE is the trigger instead:
    * the same `refresh({ narrate: true })` → `narrateNewest` → receipt path,
    * just started by the response that proves the operation exists. The
-   * operation store's own guards keep it honest — it narrates only an
+   * operation store's own guards keep it honest - it narrates only an
    * own-origin operation above its high-water mark, so a WS echo arriving
    * later cannot double-narrate.
    *
    * Called only when the response carries a `batch_id`: that is the marker
    * that an operation-log row was recorded (a stack always mints one; a
-   * keep-separate does only on a backend that has made it undoable — older
+   * keep-separate does only on a backend that has made it undoable - older
    * backends return null there and this degrades silently to no receipt).
    */
   function narrateVerdictOperation() {
@@ -2448,7 +2448,7 @@ export const useDedupStore = defineStore("dedup", () => {
   /**
    * Clear several decisions in one gesture (the Decided page's bulk path).
    *
-   * One reload at the end rather than per group — reopen() reloads per call,
+   * One reload at the end rather than per group - reopen() reloads per call,
    * which is right for one and quadratic for fifty. Every clear shares one
    * client gesture id, so the clears that recorded an operation (the ones
    * that unstacked pictures) reverse as ONE undo step; a single receipt
@@ -2654,7 +2654,7 @@ export const useDedupStore = defineStore("dedup", () => {
   // The banner and the counts are only honest while someone re-reads them:
   // tier-2 groups commit after every bucket, but nothing pushes that to the
   // client. The poll runs only while a scan is pending/running, and reloads
-  // the group list only while the queue is still EMPTY — so the first finds
+  // the group list only while the queue is still EMPTY - so the first finds
   // surface on their own, and a triage already in progress is never yanked
   // back to the top.
   let scanPollTimer = null;
@@ -3167,7 +3167,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * Drop every trace of the previous credential's dedup state (issue #655).
    *
    * Dedup is an owner-only surface, so this is hygiene rather than a
-   * cross-scope leak — but the queue holds picture ids, thumbnails and group
+   * cross-scope leak - but the queue holds picture ids, thumbnails and group
    * signatures read under one credential, and none of it survived a logout by
    * design. It survived only because nothing cleared it.
    *

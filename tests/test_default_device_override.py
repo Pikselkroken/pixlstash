@@ -1,8 +1,8 @@
 """``PIXLSTASH_DEFAULT_DEVICE`` overrides the config's ``default_device``.
 
 The Electron desktop launcher passes this so the backend uses whatever the
-*active runtime* actually provides — the bundled env ships CPU-only torch, GPU
-wheels are added on demand as overlays — regardless of the config value (which
+*active runtime* actually provides - the bundled env ships CPU-only torch, GPU
+wheels are added on demand as overlays - regardless of the config value (which
 can't tell the CPU build from a GPU overlay). It's a general env override, so a
 Docker deploy can use it too.
 """
@@ -68,7 +68,7 @@ class TestDefaultDeviceOverride:
 
         Previously ``PIXLSTASH_DEFAULT_DEVICE=banana`` was written straight into
         the config and silently fell back to CPU with no explanation. It must be
-        validated against the known set, warned about, and ignored — leaving the
+        validated against the known set, warned about, and ignored - leaving the
         configured value in place.
         """
         path = tmp_path / "server-config.json"

@@ -2,7 +2,7 @@
 
 One row per tag with the board's aggregate signals (est_wrong, est_missing,
 mismatch, verified_pct, boundary_pct, overturn_rate, model_disputes,
-has_model), rebuilt on demand by the tag-health service. Pure cache — rows are
+has_model), rebuilt on demand by the tag-health service. Pure cache - rows are
 wholesale replaced on rebuild.
 
 Revision ID: 0066_add_tag_health

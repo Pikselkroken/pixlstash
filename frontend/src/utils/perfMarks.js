@@ -3,7 +3,7 @@
  * API (`performance.mark` / `performance.measure`). Marks show up in
  * devtools' Performance panel; `markEnd` also logs the duration to the
  * console. Dev-only (a no-op in a production build) and never sent
- * anywhere — this is a diagnostic aid, not the consent-gated telemetry
+ * anywhere - this is a diagnostic aid, not the consent-gated telemetry
  * pipeline in `./telemetryPayload.js`. Whether any of this ships as opt-in
  * aggregate telemetry is a separate product decision.
  */
@@ -18,7 +18,7 @@ export function markStart(name) {
 /** Finish timing `name` and log its duration. No-op if `markStart` wasn't called. */
 export function markEnd(name) {
   if (!DEV || typeof performance === "undefined") return;
-  // The start mark can be missing (e.g. a hot-reload landed mid-flight) —
+  // The start mark can be missing (e.g. a hot-reload landed mid-flight) -
   // check explicitly rather than relying on measure() to throw, so a real
   // User Timing error isn't silently swallowed alongside it.
   if (performance.getEntriesByName(`${name}-start`, "mark").length === 0) {

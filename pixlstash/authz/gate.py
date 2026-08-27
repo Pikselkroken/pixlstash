@@ -1,4 +1,4 @@
-"""The centralised authorization gate — one router-level dependency.
+"""The centralised authorization gate - one router-level dependency.
 
 Phase 1 of the backend authorization refactor (``docs/backend_architecture.md``
 §16.2, backend refactor plan §3.3 / §3.4 / §3.5 step 1). :class:`AuthzGate` is
@@ -9,8 +9,8 @@ denies by default.
 
 **Route-identity keying (CSO-required).** The gate keys its policy map by the
 persistent ``original_route`` object captured from
-:func:`pixlstash.route_inventory.iter_api_route_contexts` — the *same* walk the CI
-coverage matrix uses — NOT by ``request.scope["route"].path``. That request-time
+:func:`pixlstash.route_inventory.iter_api_route_contexts` - the *same* walk the CI
+coverage matrix uses - NOT by ``request.scope["route"].path``. That request-time
 path is prefix-stripped (``/pictures/{id}/metadata``) and diverges from the
 enumerated effective path (``/api/v1/pictures/{id}/metadata``) on the vast
 majority of routes, so string keying would fail to match ~93% of routes and
@@ -23,8 +23,8 @@ route object not present in the map resolves to **deny**, never allow.
 2026-07-21).** The gate is the sole object-authorization chokepoint: an undeclared
 route is denied at runtime, the startup enumeration fails closed on the backlog,
 and the redundant inline handler checks were removed in Step 5. The single boolean
-is the per-release rollback switch of plan §6 — a code constant, not runtime
-config — held ``False`` through Steps 3-5 (report-only) and flipped fail-closed at
+is the per-release rollback switch of plan §6 - a code constant, not runtime
+config - held ``False`` through Steps 3-5 (report-only) and flipped fail-closed at
 Step 6 under the adversarial sign-off; set it back to ``False`` to revert both
 object-enforcement and unknown-route fail-closed in one line.
 
@@ -36,11 +36,11 @@ with the scoped ``is_local_or_tailscale_ip`` / strict ``is_loopback_ip``
 predicates), and a
 startup ``PUBLIC``-consistency check reconciles ``PUBLIC`` declarations against
 the middleware's ``AUTH_EXCLUDED_*``. Per-policy-class staging is carried by
-*which branches are implemented* — there is deliberately no second toggle. It is
+*which branches are implemented* - there is deliberately no second toggle. It is
 proven now by ``AuthzGate(enforcing=True)`` tests; the id-resolving classes
 (``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch) stay pass-through until
 Step 4. Because the shipped default stays report-only, none of this changes
-runtime behaviour until the Step-6 flip — no window is weaker *or* stronger than
+runtime behaviour until the Step-6 flip - no window is weaker *or* stronger than
 today (the inline checks still run).
 """
 
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 # blocking DB read via ``server.vault.db.run_immediate_read_task``; the gate runs
 # them on a threadpool worker (:func:`run_in_threadpool`) so the event loop is
 # never blocked (principal ruling 2026-07-21 D1). ``token_scope is None`` (owner)
-# is handled inside each function — it returns immediately.
+# is handled inside each function - it returns immediately.
 _MEMBERSHIP_BY_POLICY = {
     AccessPolicy.PICTURE_SCOPED: enforce_picture_scope,
     AccessPolicy.SET_SCOPED: enforce_set_scope,
@@ -101,7 +101,7 @@ def _is_resource_scoped(request: Request) -> bool:
     object check can narrow).
 
     An owner (``token_scope is None``) and an unscoped-READ token
-    (``resource_type is None``) both have unrestricted object access today — the
+    (``resource_type is None``) both have unrestricted object access today - the
     membership ladder returns "no restriction" for both (``filter_helpers`` and
     the ``enforce_*`` functions). The gate's object enforcement therefore only
     engages a token that names a specific resource; anything looser passes exactly
@@ -116,7 +116,7 @@ def _is_resource_scoped(request: Request) -> bool:
 # PUBLIC-consistency startup check); the id-resolving classes
 # (``SCOPED_POLICIES`` + ``SCOPED_LIST`` + ``body_ids`` batch) stay pass-through
 # until Step 4. Enforcement of an owner class delegates to the existing
-# ``AuthService`` helpers (plan §3.3 item 4 — the ``token_scope`` ladder is NOT
+# ``AuthService`` helpers (plan §3.3 item 4 - the ``token_scope`` ladder is NOT
 # reimplemented here), so a route declaring one of these needs the ``auth``
 # service injected; a missing service while enforcing is a boot failure, never a
 # silently-skipped check.
@@ -129,7 +129,7 @@ OWNER_CLASS_POLICIES = frozenset(
 )
 
 # The SPA catch-all can never be a static ``AUTH_EXCLUDED_*`` entry (it is a
-# path-template, not a literal path/prefix), yet it is legitimately PUBLIC — it
+# path-template, not a literal path/prefix), yet it is legitimately PUBLIC - it
 # serves the static shell/assets and returns no owner data (matrix §N1). Exempt
 # it from the PUBLIC-consistency check so a correct declaration does not boot-fail.
 _PUBLIC_CONSISTENCY_EXEMPT_PATHS = frozenset({"/{full_path:path}"})
@@ -141,7 +141,7 @@ _PUBLIC_CONSISTENCY_EXEMPT_PATHS = frozenset({"/{full_path:path}"})
 # request time and a boot failure at startup. Phase 1 Step 1 ships FALSE; the
 # enforcing steps (3-6) flip it on.
 #
-# STEP 6 (2026-07-21): flipped to True. Enforcement is LIVE — the gate is now the
+# STEP 6 (2026-07-21): flipped to True. Enforcement is LIVE - the gate is now the
 # sole object-authorization chokepoint; the redundant inline handler checks were
 # removed in Step 5. Flip this single constant back to False to revert the entire
 # object-enforcement + fail-closed behaviour in one line (the plan §6 rollback).
@@ -198,7 +198,7 @@ class AuthzGate:
                 via ``server.vault.db.run_immediate_read_task`` (Step 4). May be
                 ``None`` when the gate is report-only or declares no DB-scoped
                 route (e.g. owner/list/PUBLIC-only decoy tests); an enforcing gate
-                with a DB-scoped route but no ``server`` is a boot failure — the
+                with a DB-scoped route but no ``server`` is a boot failure - the
                 object check must never be silently skipped.
         """
         self._registry = registry if registry is not None else ROUTE_POLICIES
@@ -224,8 +224,8 @@ class AuthzGate:
     ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         """Build the ``id(route) -> RoutePolicy`` map from the shared route walk.
 
-        Consumes :func:`iter_api_route_contexts` — the same enumeration the CI
-        coverage matrix uses — so the gate's map and the matrix can never disagree
+        Consumes :func:`iter_api_route_contexts` - the same enumeration the CI
+        coverage matrix uses - so the gate's map and the matrix can never disagree
         about which endpoints exist. Building the map does not deny or raise; it is
         safe to call even when ``enforcing`` is True (the enforcing boot check is
         in :meth:`enforce_startup`).
@@ -250,7 +250,7 @@ class AuthzGate:
         undeclared = sorted(key for key in live if key not in self._registry)
         # A conditionally-mounted route (see CONDITIONALLY_MOUNTED_ROUTES) is
         # absent in the normal configuration by design, so its declaration is not
-        # rot. Absence is waived; coverage is not — when the route IS mounted it
+        # rot. Absence is waived; coverage is not - when the route IS mounted it
         # is resolved and enforced exactly like any other, and an undeclared
         # route is still denied and still aborts boot.
         dead = sorted(
@@ -264,8 +264,8 @@ class AuthzGate:
         """Build the route map, report the backlog, and fail-close when enforcing.
 
         Always fatal (independent of the report-only flag): registry-authoring
-        errors — a ``PUBLIC``/``LOCAL_OWNER_ONLY`` entry missing its justification,
-        or a ``*_SCOPED`` ``id_param`` absent from its template — abort boot,
+        errors - a ``PUBLIC``/``LOCAL_OWNER_ONLY`` entry missing its justification,
+        or a ``*_SCOPED`` ``id_param`` absent from its template - abort boot,
         because they are mistakes in the declaration table itself.
 
         Report-only vs. enforcing: an *undeclared route* (or a *dead declaration*)
@@ -290,14 +290,14 @@ class AuthzGate:
         if dead:
             logger.warning(
                 "[authz-gate] %d authz registry declaration(s) match no mounted "
-                "route (dead declarations — prune or fix the path):\n%s",
+                "route (dead declarations - prune or fix the path):\n%s",
                 len(dead),
                 "\n".join(f"  {method} {path}" for method, path in dead),
             )
         if public_drift:
             logger.warning(
                 "[authz-gate] %d PUBLIC declaration(s) are NOT auth-excluded in "
-                "the middleware (AUTH_EXCLUDED_*) — the two lists have drifted; a "
+                "the middleware (AUTH_EXCLUDED_*) - the two lists have drifted; a "
                 "PUBLIC route the middleware still authenticates is a "
                 "mis-declaration (boot-fails when enforcing):\n%s",
                 len(public_drift),
@@ -309,13 +309,13 @@ class AuthzGate:
         # provable without runtime config.
         if authoring_problems:
             raise RuntimeError(
-                "authz registry declaration error(s) — fix the declaration "
+                "authz registry declaration error(s) - fix the declaration "
                 "table:\n" + "\n".join(f"  {problem}" for problem in authoring_problems)
             )
 
         if self._enforcing:
             # Construction gap: enforcing an owner-class policy requires the auth
-            # service (enforcement delegates to it). Missing it is a wiring bug —
+            # service (enforcement delegates to it). Missing it is a wiring bug -
             # fail loud, never silently skip the owner check.
             owner_routes = [
                 key
@@ -335,7 +335,7 @@ class AuthzGate:
             # Construction gap (Step 4): an object-scoped route whose id the gate
             # resolves needs server.vault.db for the membership read. A
             # ``resolved_inline`` route is exempt (its inline handler check is the
-            # enforcement, not the gate). Missing server is a wiring bug — fail
+            # enforcement, not the gate). Missing server is a wiring bug - fail
             # loud, never silently skip the object check.
             db_scoped_routes = [
                 key
@@ -391,12 +391,12 @@ class AuthzGate:
         mounted router-wide (``dependencies=[Depends(self.authz)]`` on every
         ``include_router``), so FastAPI also attaches it to any ``@router.websocket``
         route in those routers. WebSocket routes are deliberately OUT of the HTTP
-        gate — their chokepoint is ``authenticate_websocket`` +
+        gate - their chokepoint is ``authenticate_websocket`` +
         ``is_websocket_origin_allowed`` inside each handler (plan §6; see the
         ``# WS routes: see authn/websocket.py`` sentinel). The parameter is typed
         ``HTTPConnection`` (not ``Request``) because FastAPI fills an
         ``HTTPConnection`` param for BOTH http and websocket scopes, whereas a
-        ``Request`` param is left unset on a WS handshake — which crashed the
+        ``Request`` param is left unset on a WS handshake - which crashed the
         dependency (``TypeError: missing 'request'``) *before* the handler's own
         auth could run. A non-``Request`` connection is a WebSocket: return
         immediately so the gate resolves harmlessly and enforces nothing on it.
@@ -464,7 +464,7 @@ class AuthzGate:
         about the *project space*, not about the object the route is named after,
         so which ``AccessPolicy`` the route carries says nothing about whether the
         filter is allowed. Placing it here rather than in each handler is what
-        makes it inherited — a new route that accepts ``project_id`` is covered
+        makes it inherited - a new route that accepts ``project_id`` is covered
         the day it is mounted, with no declaration to remember (the omission class
         of §16.2). It resolves project ids against the server, so it must run
         *after* the library checks have settled which vault is being read.
@@ -515,17 +515,17 @@ class AuthzGate:
 
         The check engages only a **resource-scoped** token (:func:`_is_resource_scoped`);
         an owner or unscoped-READ token has unrestricted object access and passes
-        immediately — no body read, no DB — exactly as today's inline ladders do.
+        immediately - no body read, no DB - exactly as today's inline ladders do.
 
-        * ``SCOPED_LIST`` — no single id to check. An audited ``scope_aware`` list
+        * ``SCOPED_LIST`` - no single id to check. An audited ``scope_aware`` list
           filters its own results (its inline ``fetch_scope_allowed_*`` remains the
           enforcement); the gate stamps the declared-intent signal and passes. An
           unaudited list fails **closed** (403): a new list route added without
           scope-aware filtering leaks nothing to a scoped token (§3.6 / D4).
-        * ``resolved_inline`` ``*_SCOPED`` — the id is name-derived (§N3); the gate
+        * ``resolved_inline`` ``*_SCOPED`` - the id is name-derived (§N3); the gate
           cannot resolve it without duplicating handler logic, so the inline
           ``_require_scope_allows_*`` check is the enforcement and the gate passes.
-        * ``*_SCOPED`` single / ``body_ids`` batch — resolve the id(s) and run the
+        * ``*_SCOPED`` single / ``body_ids`` batch - resolve the id(s) and run the
           per-object membership check for every one on a threadpool worker.
         """
         if not _is_resource_scoped(request):
@@ -561,7 +561,7 @@ class AuthzGate:
 
         Returns raw (unparsed) ids; :meth:`_check_one_id` parses/resolves each.
         Returns an empty list when there is nothing to check (absent path param,
-        absent/empty body field) — a resource-scoped token that supplies no id
+        absent/empty body field) - a resource-scoped token that supplies no id
         gets no data anyway (the handler rejects a malformed request).
         """
         if route_policy.body_ids:
@@ -584,7 +584,7 @@ class AuthzGate:
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             logger.warning(
                 "[authz-gate] could not parse JSON body to extract %r for object "
-                "scoping on %s %s (%s); no ids to check — the handler will reject a "
+                "scoping on %s %s (%s); no ids to check - the handler will reject a "
                 "malformed body",
                 field,
                 request.method,
@@ -609,7 +609,7 @@ class AuthzGate:
 
         Raises ``HTTPException(403)`` when the scoped token may not reach the
         object. A malformed id or an id_resolver that returns ``None`` fails
-        closed — a resource-scoped token must not act on an id whose membership
+        closed - a resource-scoped token must not act on an id whose membership
         cannot be established.
         """
         if route_policy.id_resolver:
@@ -768,7 +768,7 @@ class AuthzGate:
         if self._auth is None:
             logger.error(
                 "[authz-gate] owner-class route reached with no AuthService while "
-                "enforcing (%s) — failing closed. This is a wiring bug.",
+                "enforcing (%s) - failing closed. This is a wiring bug.",
                 request.url.path,
             )
             raise HTTPException(status_code=403, detail="Authorization unavailable")
@@ -779,7 +779,7 @@ class AuthzGate:
         explicitly enabled (the ``LOCAL_OWNER_ONLY`` locality half, §16.3).
 
         Locality uses ``AuthService.real_client_ip`` (trusted-proxy aware) +
-        :func:`is_local_or_tailscale_ip` — the scoped predicate that counts a
+        :func:`is_local_or_tailscale_ip` - the scoped predicate that counts a
         Tailscale-over-IPv4 owner (CGNAT ``100.64.0.0/10``) as local, fixing the
         false-deny without widening the shared ``is_local_ip`` (and its unrelated
         LAN callers). A genuinely remote owner is admitted ONLY when the dedicated
@@ -810,7 +810,7 @@ class AuthzGate:
 
         The ``LOOPBACK_OWNER_ONLY`` red line (§16.3): the highest-privilege
         host-shell routes (server restart, open-folder / open-file-location in the
-        host file manager) must be unreachable from any non-loopback host —
+        host file manager) must be unreachable from any non-loopback host -
         RFC1918 LAN and Tailscale are NOT accepted, and ``allow_remote_host_ops``
         deliberately does NOT appear here, so the flag can never loosen this tier.
         Assumes ``_enforce_unscoped_owner`` ran first; ``auth`` is non-None.
@@ -873,7 +873,7 @@ class AuthzGate:
         registry says "no auth" while the middleware still demands it. This
         reconciles the declaration table with the live auth surface (plan §3.3
         item 3). Unlike the pure authoring checks this is not unconditionally
-        fatal — it compares against the middleware's exclusion surface, so it is
+        fatal - it compares against the middleware's exclusion surface, so it is
         report-only until the gate is enforcing (then it boot-fails). The SPA
         catch-all (:data:`_PUBLIC_CONSISTENCY_EXEMPT_PATHS`) is exempt: it is a
         path-template that can never be a static ``AUTH_EXCLUDED_*`` entry yet is

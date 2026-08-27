@@ -146,7 +146,7 @@ def reset_vault(server):
     server.auth.username = None
     server.auth.user = None
     server.auth.active_session_ids = {}
-    # Go through the flush helper so the revocation epoch is bumped too — a
+    # Go through the flush helper so the revocation epoch is bumped too - a
     # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
     server.auth.ensure_user()
@@ -317,7 +317,7 @@ def test_scrapheap_purge_logs_deleted_files(server):
     assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
     assert not os.path.isfile(abs_path)
 
-    # ...and a deleted_file_log row records the deletion as opaque hashes —
+    # ...and a deleted_file_log row records the deletion as opaque hashes -
     # the raw path is never stored (privacy), only its SHA-256.
     expected_path_sha = DeletedFileLog.hash_path(file_path)
 
@@ -397,7 +397,7 @@ def _make_reference_folder_picture(server, folder_dir, file_name, *, allow_delet
             allow_delete_file=allow_delete,
             status="active",
             # pending_reimport defaults to False, so this folder never triggers
-            # the explicit-re-import ledger override — a routine scan of it
+            # the explicit-re-import ledger override - a routine scan of it
             # simply skips ledger paths, which is what these tests assert.
         )
         session.add(folder)
@@ -441,12 +441,12 @@ def test_scrapheap_delete_forever_destroys_protected_reference_original(
 
     Rev-4 maintainer decision + Round-3 escape hatch: the "delete all" confirm
     sends include_protected=true, which removes the on-disk source file for EVERY
-    selected picture — deliberately overriding the routine reference-folder file
-    protection for a protected original — deletes the Picture row, and logs
+    selected picture - deliberately overriding the routine reference-folder file
+    protection for a protected original - deletes the Picture row, and logs
     file_removed=True so a subsequent restore drops the row and never resurrects
     it. (The routine protection still applies to soft-delete-to-scrapheap and the
     reference-folder scan; and include_protected=false skips protected originals
-    entirely — see the routine-protection and escape-hatch tests below.)
+    entirely - see the routine-protection and escape-hatch tests below.)
     """
     client = TestClient(server.api)
     login_resp = client.post(
@@ -491,7 +491,7 @@ def test_scrapheap_delete_forever_destroys_protected_reference_original(
         f"file_removed=True, got {ledger_entries[0]!r}"
     )
 
-    # A scan of the folder finds nothing to re-import — the file no longer exists.
+    # A scan of the folder finds nothing to re-import - the file no longer exists.
     result = _run_reference_folder_scan(server, folder_id, folder_dir)
     assert result["new_count"] == 0, (
         f"Destroyed file must not be re-imported by scan: {result}"
@@ -544,7 +544,7 @@ def _seed_scrapheap_mixed(server, client, tmp_path):
 
     Each picture gets its OWN directory. ``_make_reference_folder_picture``
     creates a fresh ``ReferenceFolder`` row per call, so pointing two calls at
-    one directory registered that directory TWICE — a state the API rejects with
+    one directory registered that directory TWICE - a state the API rejects with
     409, and one that made the background reference-folder scanner treat each
     folder's file as an unindexed file of the other and re-import it. The
     re-imported row then recycled the rowid SQLite had just freed by purging,
@@ -620,7 +620,7 @@ def test_scrapheap_delete_include_protected_false_skips_protected(server, tmp_pa
     assert not os.path.isfile(unprot_path)
     assert _ledger_flags_for(server, unprot_path) == [True]
 
-    # Protected: fully intact — row kept & still deleted, file on disk, no ledger.
+    # Protected: fully intact - row kept & still deleted, file on disk, no ledger.
     for pid, path in zip(prot_ids, sorted(prot_paths)):
         pic = server.vault.db.run_task(lambda s, i=pid: s.get(Picture, i))
         assert pic is not None and pic.deleted is True, (
@@ -746,7 +746,7 @@ def _ledger_flags_for(server, file_path):
 def test_missing_file_purge_upgrades_kept_flag_to_removed(server, tmp_path):
     """Change 1: a path first logged file_removed=False (removed-but-kept) that
     is later genuinely purged must have its existing row UPGRADED to
-    file_removed=True — one row, updated not duplicated — so the ledger is
+    file_removed=True - one row, updated not duplicated - so the ledger is
     truthful rather than relying only on restore's missing-file net."""
     from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
 
@@ -792,7 +792,7 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
     before the rev-4 delete-forever behaviour change, or a missing-file-kept
     state) that is later hit by an explicit delete-forever of the SAME path must
     have its existing row UPGRADED to file_removed=True instead of a duplicate
-    being inserted — still exactly one row. (Under rev-4 the scrapheap writer
+    being inserted - still exactly one row. (Under rev-4 the scrapheap writer
     itself only ever writes True, so the False row is seeded to represent a
     pre-existing kept entry.)
     """

@@ -3,7 +3,7 @@
 ``Dockerfile.demo`` reduces the baked ``hub.db`` to the one library the demo
 serves and re-points it at the in-container path. That step is a single
 ``python3 -c`` line inside a ``RUN``, so nothing but a full ``docker build``
-exercises it — and the build machine's own hub is the only input it ever sees.
+exercises it - and the build machine's own hub is the only input it ever sees.
 This test lifts the payload straight out of the Dockerfile (so its shell
 quoting is covered too) and runs it against a hub built from the real schema.
 

@@ -5,12 +5,12 @@ face-weighted square-crop rectangle within it; the frontend crops that bitmap fo
 square mode and lays the whole frame out for justified mode. This migration adds
 the schema for that:
 
-* ``picture.thumbnail_width`` / ``thumbnail_height`` — the stored bitmap's pixel
+* ``picture.thumbnail_width`` / ``thumbnail_height`` - the stored bitmap's pixel
   dimensions. The frontend needs them to size each cell, and the batch-thumbnail
   endpoint needs them to map face/detection overlays onto non-square thumbnails.
-* ``picture.square_crop_x`` / ``square_crop_y`` / ``square_crop_side`` — the square
+* ``picture.square_crop_x`` / ``square_crop_y`` / ``square_crop_side`` - the square
   crop's top-left and side, in the bitmap's own pixel space.
-* ``user.thumbnail_mode`` — the per-user grid shape preference
+* ``user.thumbnail_mode`` - the per-user grid shape preference
   (``"square"`` | ``"justified"``, default ``"square"``).
 
 It also drops the superseded original-space ``picture.thumbnail_left`` /
@@ -23,7 +23,7 @@ Existing thumbnails are not regenerated here as a matter of course: the
 dimension columns start NULL and ``MissingThumbnailFinder`` (keyed on
 ``thumbnail_width IS NULL``) fills them in lazily. The one exception is a
 database that already had ``thumbnail_width`` before this migration ran, which
-can only hold square crops that cannot serve the justified layout — those rows
+can only hold square crops that cannot serve the justified layout - those rows
 are NULLed so the finder regenerates the whole-frame bitmap exactly once.
 
 Revision ID: 0080_add_thumbnail_dimensions
@@ -60,7 +60,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current model columns via SQLModel.metadata.create_all(), so the
         # square_crop_* columns are already present and there is nothing to do.
         return

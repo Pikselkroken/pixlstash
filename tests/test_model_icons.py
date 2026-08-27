@@ -3,7 +3,7 @@
 The assertions worth having are the ones about what the store REFUSES. It is
 the one place on the shelf where caller-supplied bytes are written to disk and
 handed back from our own origin, so "it is an image" has to be a fact about the
-payload rather than a claim about it — and the hash in a URL must not be able
+payload rather than a claim about it - and the hash in a URL must not be able
 to become a path.
 """
 
@@ -53,7 +53,7 @@ def test_different_bytes_store_separately(hub_path):
 
 def test_every_accepted_format_is_accepted(hub_path):
     """The positive control. Over-blocking is its own regression, and WebP is
-    the one whose magic is not a prefix — RIFF, four size bytes, then WEBP."""
+    the one whose magic is not a prefix - RIFF, four size bytes, then WEBP."""
     for data in (PNG, JPEG, WEBP):
         assert store_icon(hub_path, data)
 
@@ -89,7 +89,7 @@ def test_an_empty_or_oversized_payload_is_refused(hub_path):
 
 def test_a_segment_that_is_not_a_digest_never_becomes_a_path(hub_path):
     """The hash reaches this from a URL segment, so it is validated as a digest
-    BEFORE it is joined — a traversal is refused as "not a digest" rather than
+    BEFORE it is joined - a traversal is refused as "not a digest" rather than
     surfacing as a containment error, and never as a read."""
     for bad in (
         "../../../etc/passwd",

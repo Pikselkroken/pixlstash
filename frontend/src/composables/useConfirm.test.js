@@ -7,7 +7,7 @@ import {
   resolveConfirm,
 } from "./useConfirm";
 
-// Module-level singleton state — reset the host registration between tests so
+// Module-level singleton state - reset the host registration between tests so
 // the native-fallback and host paths don't leak into each other.
 beforeEach(() => {
   unregisterConfirmHost();
@@ -19,7 +19,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("useConfirm — native fallback (no host mounted)", () => {
+describe("useConfirm - native fallback (no host mounted)", () => {
   it("resolves true when window.confirm accepts", async () => {
     window.confirm.mockReturnValue(true);
     const { confirm } = useConfirm();
@@ -34,7 +34,7 @@ describe("useConfirm — native fallback (no host mounted)", () => {
   });
 });
 
-describe("useConfirm — host mounted", () => {
+describe("useConfirm - host mounted", () => {
   it("does NOT call window.confirm and waits for the host to resolve", async () => {
     registerConfirmHost();
     const { confirm } = useConfirm();

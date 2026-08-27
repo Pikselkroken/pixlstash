@@ -2,9 +2,9 @@
 
 Two invariants, both regression-prone as new endpoints are added:
 
-* Every 2xx JSON response declares a schema — otherwise Scalar shows a bare
+* Every 2xx JSON response declares a schema - otherwise Scalar shows a bare
   ``null`` for the response body.
-* No query parameter carries a ``default`` in its schema — otherwise Scalar
+* No query parameter carries a ``default`` in its schema - otherwise Scalar
   pre-fills the "try it" example URL with redundant default values
   (``?limit=<MAXINT>&offset=0&...``).
 """
@@ -49,7 +49,7 @@ def test_no_endpoint_has_null_success_response():
             responses = operation.get("responses", {})
             success_codes = [c for c in responses if c.startswith("2")]
             for code in success_codes:
-                if code == "204":  # No Content — legitimately empty.
+                if code == "204":  # No Content - legitimately empty.
                     continue
                 content = responses[code].get("content")
                 if not content:

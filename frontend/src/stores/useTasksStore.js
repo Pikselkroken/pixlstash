@@ -145,19 +145,19 @@ export const useTasksStore = defineStore("tasks", () => {
       .filter(([key, snapshot]) => {
         if (!snapshot) return false;
         if (suppressImportWorker && key === IMPORT_WORKER_KEY) return false;
-        // `active: true` is decisive. `active: false` is NOT — it only means
+        // `active: true` is decisive. `active: false` is NOT - it only means
         // nothing is in flight *this instant*, and a worker chewing through a
         // library is idle between every batch: the planner submits, the batch
         // runs, inflight drops to 0, and the next batch arrives up to a
         // backoff later. This used to `return snapshot.active` for either
-        // value, which made the grace window below unreachable — the backend
-        // always sends the field — and the row vanished in every gap. Watching
+        // value, which made the grace window below unreachable - the backend
+        // always sends the field - and the row vanished in every gap. Watching
         // a face pass grind through twelve thousand pictures, the Tasks tab
         // read "nothing running" most of the time.
         if (snapshot.active === true) return true;
         // The grace below exists for a worker between batches of a pass. A
         // worker whose whole job is zero rows ("File cleanup 0, 0.00/s") has
-        // no batches to be between — it ran, found nothing, and lingering for
+        // no batches to be between - it ran, found nothing, and lingering for
         // ten seconds only reads as a row that never does anything.
         if (!(Number(snapshot.total) > 0)) return false;
         const lastActiveAt = Number(lastActiveAtByWorker.get(key) || 0);

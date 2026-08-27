@@ -1,4 +1,4 @@
-// useOperationStore.js — the undo/redo stack, mirrored from the backend's
+// useOperationStore.js - the undo/redo stack, mirrored from the backend's
 // append-only operation log (backend_architecture.md §21).
 //
 // The server owns the history. This store is a read model over it plus the
@@ -7,7 +7,7 @@
 //   • `operations`  the newest 50 rows of GET /operations, newest FIRST.
 //   • `canUndo` / `canRedo` / `nextUndo` / `nextRedo` from GET /operations/undo-state,
 //     which is what enables and labels the toolbar control.
-//   • `receipt`     at most one live receipt. Never two — the newest replaces
+//   • `receipt`     at most one live receipt. Never two - the newest replaces
 //     the current one in place (design rule), which is why this is a single ref
 //     and not a queue like `useNoticeStore`.
 //
@@ -16,7 +16,7 @@
 // receipt narrates THIS client's actions only: an operation that arrives from
 // another tab or from a background job updates the stack silently, because a
 // pill offering "Undo" for something the user did not just do is a trap. The id
-// is used for echo-matching and nothing else — it is attacker-controllable and
+// is used for echo-matching and nothing else - it is attacker-controllable and
 // never an access decision.
 //
 // Undo is OWNER_ONLY on the server, so a share/read-only session never calls
@@ -48,7 +48,7 @@ export const DESTRUCTIVE_RECEIPT_MS = 8000;
 export const WS_REFRESH_DEBOUNCE_MS = 400;
 
 /**
- * Ghost tiles — the design's `none → pending → committed` machine.
+ * Ghost tiles - the design's `none → pending → committed` machine.
  *
  * A move to the Scrapheap does not take its thumbnails away immediately. The
  * tiles stay exactly where they are, ghosted, for as long as the undo is still
@@ -61,7 +61,7 @@ export const WS_REFRESH_DEBOUNCE_MS = 400;
  * `receiptRemaining` would drift out of that agreement within one hover.
  *
  * `pending` and `committed` are the only two the grid ever sees: `none` is the
- * absence of a set. `committed` is delivered as `collapsingPictureIds` — a
+ * absence of a set. `committed` is delivered as `collapsingPictureIds` - a
  * hand-off, because collapsing is an imperative grid op (`removeImagesById`)
  * and the store must not reach into the grid.
  */
@@ -74,8 +74,8 @@ const GHOST_COMMITTED = "committed";
  *
  * Ghosting starts optimistically, at the moment of the move, because the
  * receipt cannot arrive before the WS trailing edge plus the `/operations`
- * round trip. If none arrives — the socket dropped, the operation was not
- * recorded, another tab's action took the newest slot — the set would stay
+ * round trip. If none arrives - the socket dropped, the operation was not
+ * recorded, another tab's action took the newest slot - the set would stay
  * ghosted forever with nothing left to un-ghost it. This is the liveness bound
  * on that gap, not a second dwell timer: it is cleared the moment a receipt
  * adopts the set, and a set that hits it collapses exactly as it would have.
@@ -182,7 +182,7 @@ export function isDestructiveOpType(opType) {
 /**
  * Human label for an operation. The server's `summary` is the single source of
  * truth for the wording; the target count is appended so one glance answers
- * "how much would this undo?" — the design's `Add tag "portrait" · 12` shape.
+ * "how much would this undo?" - the design's `Add tag "portrait" · 12` shape.
  *
  * Falls back to the dotted `op_type`, de-dotted, when a lane records a row
  * without a summary: an unlabelled step is still better than a blank row.
@@ -233,7 +233,7 @@ export const useOperationStore = defineStore("operation", () => {
   const canRedo = ref(false);
   const nextUndo = ref(null);
   const nextRedo = ref(null);
-  /** True while an undo/redo round-trip is in flight — the control disables. */
+  /** True while an undo/redo round-trip is in flight - the control disables. */
   const busy = ref(false);
   /** True once the first successful refresh has landed. */
   const loaded = ref(false);
@@ -266,7 +266,7 @@ export const useOperationStore = defineStore("operation", () => {
   let pendingReceiptNote = null;
 
   // Highest operation id seen by a completed refresh. Used to tell a genuinely
-  // new operation from a re-read of the same history — an id we have already
+  // new operation from a re-read of the same history - an id we have already
   // seen must never raise a second receipt.
   let highWaterMark = null;
 
@@ -306,7 +306,7 @@ export const useOperationStore = defineStore("operation", () => {
   // ── Ghost state ──────────────────────────────────────────────────────────
   /** Picture ids whose tiles are ghosted in place, awaiting their undo window. */
   const ghostPictureIds = ref([]);
-  /** `none` | `pending` | `committed` — see the constants above. */
+  /** `none` | `pending` | `committed` - see the constants above. */
   const ghostState = ref(GHOST_NONE);
   /**
    * Ids whose window has closed and which the grid must now drop. A hand-off
@@ -331,7 +331,7 @@ export const useOperationStore = defineStore("operation", () => {
   );
 
   /**
-   * Steps that have been undone and can still be redone — the struck-through
+   * Steps that have been undone and can still be redone - the struck-through
    * rows at the top of the History popover. `superseded` rows are excluded:
    * a new action cleared them, which is exactly when the design says they go.
    */
@@ -359,7 +359,7 @@ export const useOperationStore = defineStore("operation", () => {
   const nextUndoIsExternal = computed(() => {
     if (!nextUndo.value) return false;
     const origin = nextUndo.value.origin_client_id;
-    // No origin at all means a background job — also not this tab.
+    // No origin at all means a background job - also not this tab.
     if (!origin) return true;
     return origin !== myClientId();
   });
@@ -478,8 +478,8 @@ export const useOperationStore = defineStore("operation", () => {
    *
    * This is the single place the ghost window ends on time: the dwell timer
    * fires here, `resumeReceipt` funnels a drained countdown here, and an
-   * explicit dismissal lands here too. Binding the ghosts to it — rather than
-   * to a clock of their own — is what makes the hover freeze, the focus freeze
+   * explicit dismissal lands here too. Binding the ghosts to it - rather than
+   * to a clock of their own - is what makes the hover freeze, the focus freeze
    * and the hidden-tab pause apply to the tiles for free.
    */
   function dismissReceipt() {
@@ -491,7 +491,7 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   /**
-   * Freeze the countdown (hover / focus-within). WCAG 2.2.1 — the user must be
+   * Freeze the countdown (hover / focus-within). WCAG 2.2.1 - the user must be
    * able to read and reach an Undo button without it disappearing.
    */
   function pauseReceipt() {
@@ -552,7 +552,7 @@ export const useOperationStore = defineStore("operation", () => {
    * Ghost a set of pictures that just went to the Scrapheap: their tiles stay
    * mounted, greyed, until the undo window closes.
    *
-   * Any set already live is committed first — the design never stacks two
+   * Any set already live is committed first - the design never stacks two
    * receipts, so the older set's one-click undo is gone the moment the newer
    * action raises its own pill, and a ghost with no live undo behind it is a
    * lie about what a click can still do.
@@ -589,7 +589,7 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   /**
-   * Take pictures back out of the ghost set — an undo landed and the tiles stay
+   * Take pictures back out of the ghost set - an undo landed and the tiles stay
    * where they are, at full strength, with no refetch flash.
    * @param {Array<number|string>} ids
    */
@@ -609,7 +609,7 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   /**
-   * Forget the ghost set WITHOUT collapsing it — the grid was rebuilt from a
+   * Forget the ghost set WITHOUT collapsing it - the grid was rebuilt from a
    * fresh fetch, so the scrapheaped pictures are already absent and there is
    * nothing left to grey out. The receipt is deliberately untouched: undo stays
    * offered, it just has no tiles to un-ghost any more.
@@ -692,7 +692,7 @@ export const useOperationStore = defineStore("operation", () => {
     } catch (e) {
       if (!requestIsCurrent(request)) return;
       // The stack is an affordance over a server that stays correct either
-      // way, so a failed read must never break the toolbar — log and keep the
+      // way, so a failed read must never break the toolbar - log and keep the
       // last known state rather than clearing it into a dead control.
       console.warn(
         "useOperationStore: failed to refresh the operation log; keeping last state",
@@ -765,12 +765,12 @@ export const useOperationStore = defineStore("operation", () => {
   /**
    * Surface a failed undo/redo. Three shapes, because they mean three things:
    *
-   *   409 — the stack moved under you (another tab got there first, or a new
+   *   409 - the stack moved under you (another tab got there first, or a new
    *         action superseded the redo stack). Ordinary, not a defect.
-   *   423 — a locked picture set froze one of the targets. A state, not a
+   *   423 - a locked picture set froze one of the targets. A state, not a
    *         failure: the user has to unlock the set, and the server's detail
    *         names it.
-   *   else — a real error, which stays until dismissed.
+   *   else - a real error, which stays until dismissed.
    */
   function reportFailure(action, error) {
     const detail = error?.response?.data?.detail;
@@ -891,7 +891,7 @@ export const useOperationStore = defineStore("operation", () => {
       if (!requestIsCurrent(request)) return null;
       // Redoing a move puts the pictures back in the Scrapheap. Their tiles are
       // on screen again (the undo reinstated them), so they ghost again for the
-      // new receipt's window rather than vanishing — the same offer, both ways.
+      // new receipt's window rather than vanishing - the same offer, both ways.
       const rescrapheaped = result?.scrapheaped_picture_ids;
       if (Array.isArray(rescrapheaped) && rescrapheaped.length) {
         markGhosted(rescrapheaped);
@@ -911,7 +911,7 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   /**
-   * Undo every step from the newest down to, and including, `operationId` —
+   * Undo every step from the newest down to, and including, `operationId` -
    * the History popover's "click a step to undo back to it".
    *
    * The server has no multi-step call: `POST /operations/{id}/undo` reverts
@@ -997,8 +997,8 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   /**
-   * Undo one whole bulk action by its batch id — the single-call revert behind
-   * a bulk report ("Collapsed 2,700 groups — Undo").
+   * Undo one whole bulk action by its batch id - the single-call revert behind
+   * a bulk report ("Collapsed 2,700 groups - Undo").
    * @param {string} batchId
    * @returns {Promise<Object|null>} the API result, or null when it failed.
    */
@@ -1060,7 +1060,7 @@ export const useOperationStore = defineStore("operation", () => {
     highWaterMark = null;
   }
 
-  // The undo stack is the previous credential's history — it goes with the rest
+  // The undo stack is the previous credential's history - it goes with the rest
   // of the session state, through the one chokepoint in apiClient.
   const unsubscribeSessionReset = onSessionReset(reset);
   onScopeDispose(() => unsubscribeSessionReset());

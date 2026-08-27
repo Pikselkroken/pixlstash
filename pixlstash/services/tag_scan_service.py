@@ -1,4 +1,4 @@
-"""On-demand near-neighbour tag scan — find one tag's suspects and append them.
+"""On-demand near-neighbour tag scan - find one tag's suspects and append them.
 
 The in-app equivalent of ``scripts/near_neighbor_label_disagreement.py``: it reuses the
 shared :func:`pixlstash.utils.near_neighbor.knn_disagreement_with_neighbors` kernel so
@@ -12,32 +12,32 @@ rows. When a ``review_id`` is given the scan writes into that review session
 
 * new suspects are inserted with ``review_id`` and their neighbourhood evidence
   captured into ``TagSuggestion.neighbors``;
-* still-**undecided** rows (``PENDING`` *or* ``SKIPPED`` — a skip records no
+* still-**undecided** rows (``PENDING`` *or* ``SKIPPED`` - a skip records no
   decision) from the legacy queue or a closed review are adopted into the
   review with fresh evidence and counted as ``new`` (a re-parented ``SKIPPED``
   row is re-pended so it re-appears in the queue); they were never decided, so
   this resurrects nothing;
 * rows already **decided** in an earlier review are skipped and counted as
-  ``prev_reviewed`` — unless ``include_reviewed=True``, which re-parents them
+  ``prev_reviewed`` - unless ``include_reviewed=True``, which re-parents them
   into the new review with ``status`` back to ``PENDING`` (the row is kept, so
   UNIQUE(picture_id, tag, source) and the audit trail both survive; the
   overwritten decision is snapshotted into ``prior_*`` so undo can restore it);
-* rows already belonging to *this* review are never touched — a refresh cannot
+* rows already belonging to *this* review are never touched - a refresh cannot
   resurrect the review's own decided rows nor re-pend its own skips.
 
 Without a ``review_id`` (the legacy ``POST /tag_suggestions/scan`` path) a
-re-scan refreshes the evidence on existing ``PENDING`` rows **in place** — it is
+re-scan refreshes the evidence on existing ``PENDING`` rows **in place** - it is
 deliberately a diff/refresh, **not** a delete-and-rebuild purge, so the row's
 identity and history survive a re-scan.
 
 Suppression of previously-reviewed suspects is therefore **per-review** (the
 explicit ``include_reviewed`` toggle), not the old permanent ``reviewed_pids``
-skip. Runs synchronously — fast enough for an interactive click on a typical
+skip. Runs synchronously - fast enough for an interactive click on a typical
 vault.
 
 Suggestion *kind* ("pair" for true versions of one shot vs "binary") is derived
 at read time (see :func:`pixlstash.services.review_service.derive_kind`) from
-the pictures' ``stack_id`` and dhash — not stored — so legacy rows and
+the pictures' ``stack_id`` and dhash - not stored - so legacy rows and
 re-parented rows get it uniformly.
 """
 
@@ -86,7 +86,7 @@ DEFAULT_MAX_TWIN_HAMMING = 8
 # 64-bit hash collisions between visually unrelated pictures happen, and
 # without this floor the UI could label a ~55%-similar pair "versions of the
 # same shot", which reads as contradictory nonsense to the user.
-# Tuning: 0.9 proved too strict — genuinely near-identical altered copies
+# Tuning: 0.9 proved too strict - genuinely near-identical altered copies
 # (recolour, watermark, heavy filter) can land in the 0.8–0.9 CLIP band, while
 # the collisions this floor exists to kill sit far lower (~0.5–0.6).
 MIN_DISPLAY_TWIN_SIM = 0.85
@@ -97,13 +97,13 @@ MIN_DISPLAY_TWIN_SIM = 0.85
 # vote is statistically vacuous, not just weak: knn_disagreement_with_neighbors
 # votes each picture's k nearest neighbours against `has_concept`, so if that
 # mask has ZERO True entries, pos_frac is identically 0.0 for every picture
-# regardless of true prevalence — add_threshold can then mathematically never
+# regardless of true prevalence - add_threshold can then mathematically never
 # be met. Confirmed empirically against the real vault: a brand-new tag
 # ("compression artifacts", 0 Tag rows, 36,318 embeddings) produced pos_frac
 # == 0.0 vault-wide.
 #
 # The floor is 1 (i.e. the fallback fires only at exactly zero ground truth),
-# not the investigation's suggested "<5" — deliberately more conservative.
+# not the investigation's suggested "<5" - deliberately more conservative.
 # Zero is the only count that is *provably* vacuous for every picture
 # unconditionally; at n_ground_truth >= 1 the vote is no longer guaranteed
 # meaningless (a picture whose neighbourhood happens to include that one
@@ -112,7 +112,7 @@ MIN_DISPLAY_TWIN_SIM = 0.85
 # doesn't generalise: scan_tag is used both vault-wide (thousands of
 # pictures, where "few" ground truth really is thin) and scoped to a small
 # review picture set (picture_ids) or project, where 1-4 tagged pictures out
-# of a small pool is completely normal and the vote is still well-founded —
+# of a small pool is completely normal and the vote is still well-founded -
 # an absolute floor can't tell those apart, and this repo's own test suite
 # exercises exactly that small-scope, few-ground-truth case. Raise this only
 # alongside evidence that a specific higher floor doesn't break legitimate
@@ -126,7 +126,7 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 # quality tags run 5-25%), E[pos_frac] tracks the tag's own base rate for any
 # picture uncorrelated with neighbour structure, so a threshold centered on
 # 50% instead of the tag's own p skews eligibility hard toward whichever
-# direction is on the base rate's side of 0.5 — confirmed via a permutation
+# direction is on the base rate's side of 0.5 - confirmed via a permutation
 # experiment (real embeddings, shuffled labels to isolate the pure base-rate
 # effect): up to 58x remove:add skew at a 20% base rate with zero real
 # signal, vs. effectively unreachable add-eligibility at low base rates
@@ -139,7 +139,7 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 # embeddings, isolates the pure base-rate effect): across base rates 5%-48%
 # it brings the remove:add ratio from up to 58x / undefined down to 0.2-1.3x.
 # Real tags with strong genuine embedding separation (this vault's
-# "malformed hand", "waxy skin") still land off of 1.0 after this fix — a
+# "malformed hand", "waxy skin") still land off of 1.0 after this fix - a
 # single symmetric margin around p cannot fully cancel a real-signal-driven
 # population-size asymmetry between the (minority) tagged and (majority)
 # untagged groups; see the PR/session notes for the full measurement. The
@@ -150,11 +150,11 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 # `p ± margin` shifts *every* tag uniformly by its own base rate, regardless
 # of whether the legacy fixed defaults were already serving that tag well.
 # The permutation experiment above that justified margin=0.15 only measured
-# minority base rates (5%-48%) — it never validated the formula for p > 0.5.
+# minority base rates (5%-48%) - it never validated the formula for p > 0.5.
 # Reproduced against the vault.db e2e fixture (111 pictures) for "man"
 # (p=68/111=0.6126): the legacy 0.55/0.45 pair finds 1 add suspect; the
-# uncapped symmetric formula computes add_threshold=p+0.15=0.7626 — *stricter*
-# than the legacy 0.55 — and finds 0. This was never the population the fix
+# uncapped symmetric formula computes add_threshold=p+0.15=0.7626 - *stricter*
+# than the legacy 0.55 - and finds 0. This was never the population the fix
 # targeted (see the "minority defect/quality tags" framing above); a majority
 # tag being shifted stricter than the legacy default is a pure regression,
 # not a base-rate correction.
@@ -163,8 +163,8 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 # legacy fixed default in whichever direction is *stricter* for its role, so
 # the shift can only make a threshold at least as reachable as the legacy
 # behaviour, never less. Note the two thresholds are stricter in opposite
-# directions — add_threshold is stricter the *higher* it is (harder to add),
-# remove_threshold is stricter the *lower* it is (harder to remove) — so the
+# directions - add_threshold is stricter the *higher* it is (harder to add),
+# remove_threshold is stricter the *lower* it is (harder to remove) - so the
 # cap is `min()` for add against the legacy add ceiling (0.55), and `min()`
 # for remove against the legacy remove ceiling (0.45) applied to the raw
 # `p - margin` value (which itself is floored, not capped, at the absolute
@@ -174,13 +174,13 @@ MIN_GROUND_TRUTH_FOR_VOTE = 1
 #
 # This preserves the minority-tag win intact: for p < 0.60 the caps never
 # engage (`p + margin < 0.55` and `p - margin < 0.45` hold automatically), so
-# minority tags see exactly the pre-existing centered thresholds — including
+# minority tags see exactly the pre-existing centered thresholds - including
 # the deliberate remove-threshold *tightening* below 0.45 that produced the
 # measured skew reduction (that tightening is not a "regression" needing a
 # floor at 0.45; it is Fix 2's actual contribution and a `max(0.45, ...)`
 # floor would silently erase it for essentially every minority tag). For
 # p >= 0.60 both caps engage and clamp the pair back to exactly the legacy
-# 0.55/0.45 defaults, matching "man" and — by the same mechanism — preventing
+# 0.55/0.45 defaults, matching "man" and - by the same mechanism - preventing
 # an unverified, symmetric-but-opposite regression at the other extreme (an
 # uncapped remove_threshold at p=0.95 would be 0.80, a huge and untested
 # expansion of remove-eligibility for majority tags; the cap keeps it at the
@@ -190,7 +190,7 @@ _BASE_RATE_CLAMP_LOW = 0.05
 _BASE_RATE_CLAMP_HIGH = 0.95
 
 # Legacy fixed-threshold pair (see CLI default in
-# scripts/near_neighbor_label_disagreement.py) — the ceiling each base-rate-
+# scripts/near_neighbor_label_disagreement.py) - the ceiling each base-rate-
 # relative default is capped against so the shift can only relax eligibility
 # relative to old behaviour, never tighten it. See the "CORRECTED" note above.
 _LEGACY_ADD_THRESHOLD = 0.55
@@ -220,12 +220,12 @@ def scan_tag(
         project: Scope to this project name (default ``"PixlTagger"``); ``None`` = whole
             vault. Unknown names fall back to the whole vault. Ignored when
             ``picture_ids`` is provided (the review path resolves scope itself).
-        picture_ids: Optional explicit scope — only these picture ids are scanned.
+        picture_ids: Optional explicit scope - only these picture ids are scanned.
             An empty set scans nothing. ``None`` = no explicit scope (use ``project``).
         k: neighbours per image for the kNN vote.
         add_threshold, remove_threshold: explicit override knobs. ``None`` (the
             default) computes both relative to the tag's own base rate
-            ``p = has_concept.sum() / len(ids)`` — ``p + BASE_RATE_THRESHOLD_MARGIN``
+            ``p = has_concept.sum() / len(ids)`` - ``p + BASE_RATE_THRESHOLD_MARGIN``
             / ``p - BASE_RATE_THRESHOLD_MARGIN``, clamped to
             ``[_BASE_RATE_CLAMP_LOW, _BASE_RATE_CLAMP_HIGH]`` and then each capped
             at its own legacy default (``_LEGACY_ADD_THRESHOLD`` /
@@ -239,7 +239,7 @@ def scan_tag(
         min_twin_sim: scan knob (CLI default 0.85) gating eligibility on the CLIP
             twin's similarity; unaffected by the perceptual-hash twin override
             below. Not applied to the near-zero-ground-truth confidence fallback
-            (see ``MIN_GROUND_TRUTH_FOR_VOTE``) — that path has no neighbour vote
+            (see ``MIN_GROUND_TRUTH_FOR_VOTE``) - that path has no neighbour vote
             to corroborate against, so it demands direct model confidence instead
             of neighbour corroboration.
         max_twin_hamming: max 64-bit dhash Hamming distance for the *displayed* twin
@@ -248,9 +248,9 @@ def scan_tag(
             near-duplicate is shown as the twin instead of the CLIP-nearest one. This
             changes only which comparison is displayed, never which pictures are flagged.
         min_display_twin_sim: floor on the candidate override twin's actual CLIP cosine
-            similarity to the suspect. dhash proximity alone is a noisy signal — a
+            similarity to the suspect. dhash proximity alone is a noisy signal - a
             close Hamming distance can still be a hash collision between unrelated
-            pictures — so the override is only applied when it's also corroborated by
+            pictures - so the override is only applied when it's also corroborated by
             embedding similarity. Below this floor, the CLIP-nearest twin (and its
             similarity) from ``min_twin_sim`` above is kept instead.
         review_id: When set, write the suspects into this review session (see the
@@ -266,7 +266,7 @@ def scan_tag(
         is how many detected suspects were already decided in earlier reviews.
     """
     # Child tags that PixlTagger merges into this one count as "has the tag" for voting
-    # and the "missing" direction (but not for "remove" — see has_literal vs has_concept).
+    # and the "missing" direction (but not for "remove" - see has_literal vs has_concept).
     equiv = {tag} | {
         child for child, parent in DEFAULT_TAG_MERGES.items() if parent == tag
     }
@@ -294,7 +294,7 @@ def scan_tag(
             session.exec(select(Tag.picture_id).where(Tag.tag.in_(sorted(equiv)))).all()
         )
         # Pictures frozen by a locked set are excluded from being SUSPECTS (the
-        # editable item) below — but stay in the pool so they can still serve as
+        # editable item) below - but stay in the pool so they can still serve as
         # twins/neighbour guides (which write nothing). See the suspect loops.
         #
         # Uses the set_lock_service predicate rather than a local
@@ -312,7 +312,7 @@ def scan_tag(
         """Fix 1's bootstrap candidates: literal-tag ``TagPrediction`` rows at or
         above ``EST_MISSING_MIN_CONF``, pinned to the current (non-``manual``)
         model version, for *un-reviewed* pictures with no existing literal ``Tag``
-        row (``label_state == "UNKNOWN"`` — no human POS/NEG on the ledger).
+        row (``label_state == "UNKNOWN"`` - no human POS/NEG on the ledger).
 
         Mirrors ``tag_health_service.compute_tag_health_rows``'s ``est_missing``
         query one-for-one (same threshold constant, same model-version pin, same
@@ -322,7 +322,7 @@ def scan_tag(
         path re-proposing a tag a human already REJECTED via the tag-prediction
         reject endpoint: that reject writes a ledger NEG (keeping the tagger's high
         confidence) but no ``TagSuggestion`` row, so ``_write``'s suggestion-level
-        dedup can't see it — only this ledger filter can. (A human ACCEPT adds a
+        dedup can't see it - only this ledger filter can. (A human ACCEPT adds a
         ``Tag`` row, so those are already dropped by ``Tag.picture_id IS NULL``; an
         un-reviewed confident prediction is ``label_state == "UNKNOWN"`` and is
         still proposed.) Deliberately literal (not ``equiv``-merged like the vote
@@ -358,13 +358,13 @@ def scan_tag(
                 TagPrediction.confidence >= EST_MISSING_MIN_CONF,
                 TagPrediction.model_version == current_version,
                 Tag.picture_id.is_(None),
-                # Un-reviewed only — mirrors est_missing so a human-REJECTED tag
+                # Un-reviewed only - mirrors est_missing so a human-REJECTED tag
                 # (ledger NEG, no Tag row) is never re-proposed as a cold-start add.
                 TagPrediction.label_state == "UNKNOWN",
             )
         )
         if picture_ids is not None:
-            # Temp-table subquery, not one bound parameter per id — a large
+            # Temp-table subquery, not one bound parameter per id - a large
             # scope would otherwise exceed SQLite's bound-parameter ceiling.
             # Result-identical to ``.in_(picture_ids)``.
             q = q.where(
@@ -433,7 +433,7 @@ def scan_tag(
     suspects: list[dict] = []
     if n_ground_truth < MIN_GROUND_TRUTH_FOR_VOTE:
         # Fix 1: the kNN vote below would be statistically vacuous with this
-        # little ground truth — has_concept is all/near-all False, so pos_frac
+        # little ground truth - has_concept is all/near-all False, so pos_frac
         # is ~0.0 for every picture and add_threshold could never be met (the
         # confirmed "compression artifacts" bug). Bootstrap from direct model
         # confidence instead (mirrors tag_health_service's est_missing query;
@@ -477,8 +477,8 @@ def scan_tag(
     else:
         # Fix 2: default thresholds relative to the tag's own base rate rather
         # than the fixed 0.55/0.45 pair (see BASE_RATE_THRESHOLD_MARGIN above)
-        # — only when the caller didn't explicitly override. Each is also
-        # capped at its own legacy default (min() for both — see the
+        # - only when the caller didn't explicitly override. Each is also
+        # capped at its own legacy default (min() for both - see the
         # "CORRECTED" comment above for why add and remove need the same
         # min() shape despite being stricter in opposite directions) so the
         # base-rate shift can only relax eligibility relative to the legacy
@@ -550,7 +550,7 @@ def scan_tag(
                     )
 
             # The neighbourhood evidence the vote used, most-similar first, with
-            # each neighbour's merged-concept "has the tag" flag — frozen at scan
+            # each neighbour's merged-concept "has the tag" flag - frozen at scan
             # time.
             neighbors = [
                 {"picture_id": int(ids[m]), "has": bool(has_concept[m])}
@@ -572,7 +572,7 @@ def scan_tag(
             )
 
     # A mutually-disagreeing pair yields both a remove and an add suspect that are the
-    # same review — keep one per pair so the queue doesn't show it twice.
+    # same review - keep one per pair so the queue doesn't show it twice.
     suspects = dedupe_by_pair(suspects)
 
     def _write(session: Session) -> dict:
@@ -621,12 +621,12 @@ def scan_tag(
                 new_count += 1
                 continue
             if review_id is not None and row.review_id == review_id:
-                # Already part of this review — pending, skipped, or decided.
+                # Already part of this review - pending, skipped, or decided.
                 # Never touch it: a refresh must not resurrect this review's own
                 # decisions, nor re-pend a row it deliberately skipped.
                 continue
             if row.status in ("PENDING", "SKIPPED"):
-                # Undecided (PENDING or SKIPPED — no decision was ever made) row
+                # Undecided (PENDING or SKIPPED - no decision was ever made) row
                 # from the legacy global queue or a closed/legacy review. SKIPPED
                 # adopts exactly like PENDING and is NOT prev_reviewed; only
                 # genuinely decided rows are (see the branch below).
@@ -642,7 +642,7 @@ def scan_tag(
                 elif row.status == "PENDING":
                     # Legacy scan (review_id=None): no review to adopt into, so
                     # refresh the stale evidence in place on the existing PENDING
-                    # row. DELIBERATE no-purge decision — this is what replaces
+                    # row. DELIBERATE no-purge decision - this is what replaces
                     # the old delete-and-rebuild "rebuild" path: a re-scan
                     # UPDATES direction/score/reason/twin/neighbours and never
                     # deletes or recreates the row, so UNIQUE(picture_id, tag,
@@ -658,9 +658,9 @@ def scan_tag(
             if include_reviewed and review_id is not None:
                 # Explicit re-surfacing: re-parent the decided row into this
                 # review and reopen it. The row (and its history in the ledger)
-                # is kept — UNIQUE(picture_id, tag, source) stays intact. Capture
+                # is kept - UNIQUE(picture_id, tag, source) stays intact. Capture
                 # the decision being overwritten (its review_id/status/
-                # reviewed_at) into prior_* FIRST, so undo can restore it —
+                # reviewed_at) into prior_* FIRST, so undo can restore it -
                 # re-exposing the original decision for a normal reversal
                 # instead of silently erasing it.
                 row.prior_review_id = row.review_id

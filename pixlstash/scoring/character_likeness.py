@@ -451,7 +451,7 @@ def _scoped_stack_leader_clause(character_id, candidate_ids: list[int] | None):
 
     The sibling scope is: not deleted, has a Face row satisfying the same
     character filter the outer query applies, and (when ``candidate_ids`` is
-    given) is itself in the candidate set — the candidate list carries
+    given) is itself in the candidate set - the candidate list carries
     token-scope narrowing, so omitting it would let a share-scoped stack be
     represented by an out-of-scope sibling. Tie-break is identical to
     ``Picture.find``: ``coalesce(stack_position, 999999)`` ascending, then
@@ -658,7 +658,7 @@ def count_pictures_by_character_likeness(
 ) -> int:
     """Count pictures that would be returned by a CHARACTER_LIKENESS sort query.
 
-    Does not require the reference character or likeness scoring — it simply counts
+    Does not require the reference character or likeness scoring - it simply counts
     distinct picture_ids matching the character and candidate filters.
 
     Args:

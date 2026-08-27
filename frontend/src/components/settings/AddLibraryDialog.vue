@@ -13,18 +13,18 @@
  * folder is written once, where the rule lives. This component branches on
  * `can_add` and nothing else.
  *
- * Browsing reuses `FolderBrowser`, including its `New folder` — the add route
+ * Browsing reuses `FolderBrowser`, including its `New folder` - the add route
  * deliberately creates no directory, so making one is the picker's job and it
  * already had a button for it.
  *
  * The "pictures" verdict promises the folder-mapping wizard ("Bring them in
  * and name what your folders mean"), but that library is empty until it is
- * ACTIVE — switching is what makes its own pictures visible to scan. So this
+ * ACTIVE - switching is what makes its own pictures visible to scan. So this
  * dialog creates the library as usual and then, for "pictures" only, starts
  * the same switch-and-reload `LibrariesSection.switchTo()` uses
  * (`useLibrarySwitchStore`), first saving a `useFolderMappingStore` entry
  * pointed at the new library's own root with `mode: "local_import"` and an
- * empty `taskId` — that entry survives the reload (it is `localStorage`
+ * empty `taskId` - that entry survives the reload (it is `localStorage`
  * backed) and is what `SideBar` auto-opens `FolderMappingWizard` from on the
  * other side, already at the "scan" step, in `local_import` mode.
  */
@@ -58,7 +58,7 @@ const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
 
-// What each addable verdict calls its button. Pure labels — every word that
+// What each addable verdict calls its button. Pure labels - every word that
 // carries a fact about this folder comes from the server.
 const ACTION_LABELS = {
   vault: "Add it",
@@ -110,7 +110,7 @@ watch(
     inspectError.value = "";
     addError.value = "";
     // Bumping the epoch above orphans any request still on the wire, and its
-    // `finally` is epoch-guarded — so without this the reopened dialog shows
+    // `finally` is epoch-guarded - so without this the reopened dialog shows
     // "Reading that folder…" over an empty field until the next inspect lands.
     inspecting.value = false;
     await nextTick();
@@ -144,7 +144,7 @@ async function inspect() {
     verdict.value = body;
     inspectedPath.value = body.path;
     // The server derives the same default from the folder, so this only ever
-    // shows the owner what they are about to get — until they change it.
+    // shows the owner what they are about to get - until they change it.
     if (!nameEdited.value) name.value = body.suggested_name ?? "";
   } catch (error) {
     if (startedAt !== inspectEpoch) return;
@@ -169,10 +169,10 @@ async function add() {
   try {
     const library = await addLibrary(inspectedPath.value, name.value.trim());
     if (verdict.value?.verdict === "pictures") {
-      // The library exists but is empty until it is active — save the intent
+      // The library exists but is empty until it is active - save the intent
       // to organise its own root before switching, so it survives the reload
       // switching does. No task has been started yet, hence the empty
-      // taskId — see the header comment and useFolderMappingStore's own.
+      // taskId - see the header comment and useFolderMappingStore's own.
       mappingStore.save({
         taskId: "",
         path: inspectedPath.value,
@@ -273,7 +273,7 @@ async function add() {
                folder's own name, which is what the server would pick anyway. It
                is here because library names must be unique: two folders both
                called `2024` would otherwise be unaddable from this dialog, and
-               the owner sent to the command line — the thing this removes. -->
+               the owner sent to the command line - the thing this removes. -->
           <AppInput
             v-if="verdict.can_add"
             v-model="name"

@@ -76,7 +76,7 @@ def test_florence_caption_generation(tagger, image_files):
     """Florence-2 captions the dataset, and the captions are well-formed.
 
     Merged from two tests that each captioned the SAME ``image_files``
-    slice — one asserting the success rate, one asserting the shape of the
+    slice - one asserting the success rate, one asserting the shape of the
     text. Captioning is the whole cost here (~66 s per pass on a CPU runner),
     so running the model twice over identical inputs bought a second copy of
     the expensive half and none of the coverage: every assertion from both is
@@ -118,7 +118,7 @@ def test_florence_caption_generation(tagger, image_files):
     reason=(
         "Throughput assertions are only meaningful on a real GPU. On a shared "
         "CPU CI runner this test cost ~60 s to assert `time_per_image < 40.0` "
-        "— a wall-clock bound on contended hardware, which is a flake "
+        " - a wall-clock bound on contended hardware, which is a flake "
         "generator rather than a signal. Its GPU-specific value (catching a "
         "silent CUDA->CPU fallback via _reload_on_cpu, and the <2.5 s/image "
         "bound) is preserved wherever a GPU is actually present; the caption "

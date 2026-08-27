@@ -2,7 +2,7 @@
 // folder button reach anything?
 //
 // The component's own suite mounts it in isolation, so every one of its
-// assertions passed with the state disconnected from the app entirely — proved
+// assertions passed with the state disconnected from the app entirely - proved
 // by disabling `showLibraryEmptyState`, the `@choose-folder` binding and the
 // `defineExpose` entry all at once and watching 606 tests stay green. These are
 // the two things that were not covered, plus the three conditions under which
@@ -172,7 +172,7 @@ describe("an install with nothing in it", () => {
   });
 
   it("drops what PixlStash cannot read, and says so", async () => {
-    // An OS picker's `accept` is advisory — "All Files" is always on offer — so
+    // An OS picker's `accept` is advisory - "All Files" is always on offer - so
     // this is the same filter and the same notice key the two drop paths use.
     // Without it this was the one import route that took anything silently.
     const wrapper = await settleEmpty(mountGrid());
@@ -225,7 +225,7 @@ describe("an install with nothing in it", () => {
 describe("when the library is not known to be empty", () => {
   it("says nothing at all when the count never answered", async () => {
     // The count starts at 0 and its fetch swallows failures, so an unanswered
-    // request is indistinguishable from an empty library — except by this flag.
+    // request is indistinguishable from an empty library - except by this flag.
     // Claiming "This library is empty" over a backend that did not reply, with
     // three buttons under it, is the worst version of being wrong.
     apiGet.mockImplementation((url) => {
@@ -244,7 +244,7 @@ describe("when the library is not known to be empty", () => {
 
   it("says nothing to a share recipient", async () => {
     // Every route out leads somewhere a read-only token cannot go, and the zero
-    // it was given is the count the summary route refused it — not a fact about
+    // it was given is the count the summary route refused it - not a fact about
     // anybody's library.
     apiClient.__readOnly.value = true;
 

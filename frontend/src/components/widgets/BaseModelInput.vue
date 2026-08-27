@@ -62,7 +62,7 @@
 /**
  * The base-model field, completing against what this machine knows.
  *
- * `base_model` is free text and stays that way — this constrains nothing, it
+ * `base_model` is free text and stays that way - this constrains nothing, it
  * only offers. The list comes from `GET /models/base-models`: the labels
  * `known_base_models` ships, so the field is useful on a fresh install where
  * nothing has been recorded yet, plus every distinct string already recorded
@@ -70,8 +70,8 @@
  * places this appears (the bulk dialog and the inline editor on a row) are
  * opened and closed constantly and the list changes only when somebody saves.
  *
- * Keys follow the tag field as far as the tag field goes — Arrow highlights,
- * Tab fills, and the highlighted row wears the same TAB hint — and then add the
+ * Keys follow the tag field as far as the tag field goes - Arrow highlights,
+ * Tab fills, and the highlighted row wears the same TAB hint - and then add the
  * two it has no answer for. `OverlayTagsPanel`'s list has no open state at all:
  * it is simply visible whenever the input holds a prefix that matches, inside a
  * panel that is itself a mode. This field lives on a row and inside a dialog
@@ -90,7 +90,7 @@
  * **Not a `<datalist>`**, which would have been free. Three things it cannot
  * do: match on the folded spelling (`sdxl` has to find `SDXL 1.0`, and a
  * datalist matches literally), render in the app's own theme rather than the
- * browser's chrome, and honour the key contract the tag field already taught —
+ * browser's chrome, and honour the key contract the tag field already taught -
  * Tab fills, Enter commits, Escape steps back one level. The first is the whole
  * point of the feature.
  *
@@ -121,7 +121,7 @@ const emit = defineEmits(["update:modelValue", "confirm", "cancel"]);
 
 const store = useModelShelfStore();
 
-/** Case, spacing and punctuation folded away — the server's `_norm`. */
+/** Case, spacing and punctuation folded away - the server's `_norm`. */
 function norm(value) {
   return String(value || "")
     .toLowerCase()
@@ -179,7 +179,7 @@ watch(
  * It is positioned `fixed` from one measurement, and the shelf's row list
  * scrolls under it: without this the menu stays parked over whichever rows
  * scrolled into its place, still clickable, still writing to a row that is no
- * longer there. Closing beats re-measuring — the field the menu belongs to has
+ * longer there. Closing beats re-measuring - the field the menu belongs to has
  * moved too, and following it is animation nobody asked for.
  */
 function onOutsideScroll() {

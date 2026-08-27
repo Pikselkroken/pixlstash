@@ -1,4 +1,4 @@
-// useSnapshotsStore.js — the vault's snapshot list and the live restore job.
+// useSnapshotsStore.js - the vault's snapshot list and the live restore job.
 //
 // ── Security (issue #655 item 3) ────────────────────────────────────────────
 // Snapshots are an owner-only surface, so the realistic exposure is "the

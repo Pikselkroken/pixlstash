@@ -69,7 +69,7 @@ class Face(SQLModel, table=True):
         # (``character_id = ?`` / ``IN (...)``) is a coin flip against
         # ``ix_face_character_id``: this database never runs ``ANALYZE``, so with
         # no ``sqlite_stat1`` the two indexes tie on cost, and the tie is
-        # broken by index-creation order — which ``metadata.create_all()``
+        # broken by index-creation order - which ``metadata.create_all()``
         # iterates from a set, so it varies per process. Making the per-character
         # probe deterministic would mean adding ``features`` itself as a second
         # index column, i.e. duplicating every face embedding into the index.
@@ -129,12 +129,12 @@ class Face(SQLModel, table=True):
         replaced serving the ``faces`` relationship through the generic by-name
         readers (issue #721). Two columns are deliberately **omitted**:
 
-        * ``features`` — the ArcFace embedding. It is biometric data, and the
+        * ``features`` - the ArcFace embedding. It is biometric data, and the
           generic reader used to hand it out base64-encoded to any token that
           could reach the picture. Nothing on the wire has ever read it: the
           SPA's face-box overlay uses ``frame_index``, ``bbox`` and
           ``character_id`` only.
-        * ``model_pack`` — names the InsightFace pack that produced the
+        * ``model_pack`` - names the InsightFace pack that produced the
           embedding (``buffalo_l`` / ``auraface``). Not biometric in itself, but
           it tells a caller how embeddings obtained elsewhere could be compared
           against these, and no caller reads it (verified across

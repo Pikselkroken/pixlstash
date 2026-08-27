@@ -16,7 +16,7 @@ def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None
     """Recompute and persist ``anomaly_tag_uncertainty`` on a Picture.
 
     The score is computed dynamically from the model's raw confidence scores and
-    the *current* ``Tag`` rows — it does not rely on ``TagPrediction.status`` so
+    the *current* ``Tag`` rows - it does not rely on ``TagPrediction.status`` so
     it stays correct whether tags were changed via the prediction workflow or
     edited directly.
 

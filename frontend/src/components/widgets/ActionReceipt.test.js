@@ -1,4 +1,4 @@
-// The action receipt pill — the transient half of undo/redo.
+// The action receipt pill - the transient half of undo/redo.
 //
 // The store owns the timers and the API (covered in useOperationStore.test.js);
 // these tests pin the contracts the PILL is responsible for: which state it
@@ -65,7 +65,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("ActionReceipt — states", () => {
+describe("ActionReceipt - states", () => {
   it("renders nothing while there is no receipt", () => {
     mount(ActionReceipt, globalOpts);
     expect(document.querySelector(".receipt")).toBeNull();
@@ -221,7 +221,7 @@ describe("ActionReceipt — states", () => {
   });
 });
 
-describe("ActionReceipt — the drain window", () => {
+describe("ActionReceipt - the drain window", () => {
   it("hands CSS the same window the store's timer uses", async () => {
     const { wrapper } = mountWith(op());
     await wrapper.vm.$nextTick();
@@ -239,7 +239,7 @@ describe("ActionReceipt — the drain window", () => {
   });
 });
 
-describe("ActionReceipt — pause on hover and focus (WCAG 2.2.1)", () => {
+describe("ActionReceipt - pause on hover and focus (WCAG 2.2.1)", () => {
   it("freezes the countdown while the pointer is on the pill", async () => {
     const { store, wrapper } = mountWith(op());
     await wrapper.vm.$nextTick();
@@ -280,7 +280,7 @@ describe("ActionReceipt — pause on hover and focus (WCAG 2.2.1)", () => {
   });
 });
 
-describe("ActionReceipt — the action button", () => {
+describe("ActionReceipt - the action button", () => {
   it("keeps the keyboard on the button when the pill flips to Redo", async () => {
     // Attached to the document: `document.activeElement` only tracks a focus()
     // call on an element that is actually in the page.
@@ -345,7 +345,7 @@ describe("ActionReceipt — the action button", () => {
   });
 });
 
-describe("ActionReceipt — placement", () => {
+describe("ActionReceipt - placement", () => {
   it("lifts clear of the selection pill by the measured height it is given", async () => {
     const store = useOperationStore();
     const wrapper = mount(ActionReceipt, {
@@ -357,7 +357,7 @@ describe("ActionReceipt — placement", () => {
 
     // The lift is padding on the pointer-transparent wrapper, so the wrapper's
     // measured box is the FULL height this component occupies on the bottom
-    // edge — which is what the anchor registry reports to the notice stack.
+    // edge - which is what the anchor registry reports to the notice stack.
     expect(
       wrapper.find('[data-testid="action-receipt-slot"]').attributes("style"),
     ).toContain("padding-bottom: 62px");

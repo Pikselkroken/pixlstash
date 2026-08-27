@@ -1,8 +1,8 @@
 """Simple global rate limiter for unauthenticated routes.
 
-Applied only to paths that don't require a session — the same set defined in
+Applied only to paths that don't require a session - the same set defined in
 ``pixlstash.auth.is_auth_excluded_path``.
-Uses a sliding window — no per-IP tracking, no external dependencies.
+Uses a sliding window - no per-IP tracking, no external dependencies.
 
 The limit/window are configurable via server-config, and the whole limiter can
 be disabled (``disable_rate_limit``) for trusted environments such as the
@@ -29,7 +29,7 @@ _WINDOW = 60  # per this many seconds
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Global sliding-window rate limiter for unauthenticated routes.
 
-    Authenticated routes are left unrestricted — the session requirement
+    Authenticated routes are left unrestricted - the session requirement
     already gates them. Only public (auth-excluded) paths are counted.
     """
 

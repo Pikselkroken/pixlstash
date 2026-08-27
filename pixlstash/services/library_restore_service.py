@@ -2,7 +2,7 @@
 
 The counterpart to :mod:`pixlstash.services.library_backup_service`. Reading a
 backup back used to be documented as "unpack the tar yourself", which is fine
-advice about the tar and wrong about everything else — unpacking is not the hard
+advice about the tar and wrong about everything else - unpacking is not the hard
 part:
 
 **The library files are archived under ``images/``, but a library wants them
@@ -12,7 +12,7 @@ that ``attach`` refuses, and the fix is not guessable from the error.
 **The hub, not ``server-config.json``, decides which library opens** (see
 ``Server._create_vault``'s note: "From then on the registry's active row wins").
 So restoring the pictures and pointing ``image_root`` at them does nothing at
-all. The archived ``hub.db`` has to become the installation's hub — which is
+all. The archived ``hub.db`` has to become the installation's hub - which is
 also what brings the owner's password and that library's API tokens back, the
 thing a restore is actually for.
 
@@ -64,7 +64,7 @@ def progress_disabled() -> bool:
     wraps ``file`` in ``DisableOnWriteError`` *before* testing ``isatty``, so
     what it actually does depends on that wrapper forwarding the call. Deciding
     it from ``sys.stderr`` directly is one line, says what it means, and is
-    testable — which matters because the failure mode is silent either way: a
+    testable - which matters because the failure mode is silent either way: a
     bar that never draws, or a cron log full of redrawn ones.
     """
     return not (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
@@ -80,7 +80,7 @@ SERVER_CONFIG_FILENAME = "server-config.json"
 # contract (``hub/db.py``) and snapshot archives are chmodded 0600 on the way in
 # (``snapshot_service``), so an extract at 0644 would silently *undo* that
 # hardening for the exact files that carry credentials. Applied to pictures too
-# rather than classifying members — the restored folder is 0700 either way, so
+# rather than classifying members - the restored folder is 0700 either way, so
 # uniform owner-only costs nothing and leaves no member to get wrong.
 RESTORED_FILE_MODE = 0o600
 
@@ -224,7 +224,7 @@ def _contained(target: str, root: str, member: tarfile.TarInfo) -> str:
     The name checks above reason about the string; this reasons about the path
     that was actually built, and the two can disagree. On Windows a component
     carrying a drive letter makes ``os.path.join`` discard everything to its
-    left — ``join(r"\\scratch\\library", "C:evil")`` is ``"C:evil"`` — so a
+    left - ``join(r"\\scratch\\library", "C:evil")`` is ``"C:evil"`` - so a
     member named ``images/C:evil`` passes every check above and lands outside
     the staging directory. One containment test closes that and any sibling of
     it, and costs nothing per member.
@@ -320,8 +320,8 @@ def _require_extracted_members(scratch: str, archive: str) -> None:
     """Check the databases a full extraction must have produced.
 
     Separate from :func:`_read_manifest` because the plan reads the manifest out
-    of a *partial* extraction — the peek deliberately stops before ``vault.db``
-    — and folding the two together made planning demand a file it had chosen not
+    of a *partial* extraction - the peek deliberately stops before ``vault.db``
+    - and folding the two together made planning demand a file it had chosen not
     to unpack.
     """
     for required in (VAULT_FILENAME, _HUB_NAME):
@@ -381,7 +381,7 @@ def _estimated_extracted_bytes(archive: str) -> tuple[int, bool]:
 
     zstd records the uncompressed size in the frame header only when the writer
     knew it up front. Backups are written with ``stream_writer``, which does not,
-    so this is usually a guess — and it says which it is rather than quietly
+    so this is usually a guess - and it says which it is rather than quietly
     presenting one as the other.
 
     The fallback multiplier is deliberately mild. A library is mostly JPEG and
@@ -421,8 +421,8 @@ def _peek(archive: str) -> tuple[dict, str, str]:
 
     This is what lets the confirmation come *before* the copy. A backup writes
     ``manifest.json``, ``vault.db`` and ``hub.db`` before any picture, so the
-    few members needed to describe a restore — its name, its picture count, the
-    other registrations its hub carries — are at the front of the stream and
+    few members needed to describe a restore - its name, its picture count, the
+    other registrations its hub carries - are at the front of the stream and
     reading them costs nothing on a 60 GB archive. Extracting the whole thing
     first and asking afterwards, which is what this used to do, made the user
     wait through the entire restore to be asked whether they wanted it.
@@ -661,7 +661,7 @@ def perform_restore(plan: RestorePlan, scratch: str) -> RestoreResult:
     Ordering is deliberate, and the library folder has to come first even though
     it is the bigger step: ``relocate`` validates that the folder it is pointed
     at holds a vault, so the hub cannot be retargeted at a path that is not
-    there yet. Publishing it first is safe because that path was proved empty —
+    there yet. Publishing it first is safe because that path was proved empty -
     creating it destroys nothing, and it is removed again if the hub step fails.
 
     The live installation is therefore untouched until the last two renames,
@@ -749,7 +749,7 @@ def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
 
     Returns the temporary path, which is on the config directory's own
     filesystem so the final publication is an atomic same-directory rename.
-    The hub is a few megabytes at most, so copying it is cheap — unlike the
+    The hub is a few megabytes at most, so copying it is cheap - unlike the
     library, which is why that one is staged next to its destination instead.
 
     Raises:

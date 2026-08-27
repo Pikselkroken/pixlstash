@@ -7,7 +7,7 @@ method already accepts a list of aligned crops.
 
 ``BatchedFaceRunner`` exploits this by:
 
-1. Running the detector once per image (unavoidable — ONNX batch=1).
+1. Running the detector once per image (unavoidable - ONNX batch=1).
 2. Collecting *all* aligned face crops from *all* images into a single list.
 3. Calling the recogniser exactly **once** for the entire crop list.
 4. Skipping the landmark (3D/2D) and genderage models that ``FaceAnalysis.get()``
@@ -81,11 +81,11 @@ class BatchedFaceRunner:
         """
         # Local import: insightface drags in onnxruntime and costs seconds to
         # import. This module sits on the server's import path, and a caller
-        # only reaches here with an already-prepared FaceAnalysis app — so
+        # only reaches here with an already-prepared FaceAnalysis app - so
         # insightface is resident by then anyway.
         from insightface.utils import face_align
 
-        # ── Phase 1: detection — one image at a time (ONNX batch dim = 1) ──
+        # ── Phase 1: detection - one image at a time (ONNX batch dim = 1) ──
         detections: list[tuple[np.ndarray | None, np.ndarray, np.ndarray | None]] = []
         for img in images:
             if img is None:

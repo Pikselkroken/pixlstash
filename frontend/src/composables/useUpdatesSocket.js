@@ -51,14 +51,14 @@ export const VRAM_OOM_NOTICE_KEY = "vram-oom";
 
 // How long a "retrying" card stays up. Stated explicitly rather than left to
 // the level default (6 s), which is shorter than the backend's pause between
-// attempts — the card would expire and the next frame would open a NEW one, so
+// attempts - the card would expire and the next frame would open a NEW one, so
 // the key would coalesce nothing and the user would get a flicker of three
 // separate warnings. This has to outlive `TaskRunner.VRAM_OOM_RETRY_PAUSE_S`.
 const VRAM_OOM_RETRY_NOTICE_MS = 15000;
 
 // Why the card names another program: the app's own models are sized against
 // the configured budget, so the usual reason there is suddenly no room is
-// something else on the card — a ComfyUI run, a game, another app's model. That
+// something else on the card - a ComfyUI run, a game, another app's model. That
 // is also the one thing the person reading the toast can act on.
 const VRAM_CULPRIT = "another program is probably holding the card";
 
@@ -92,23 +92,23 @@ export function vramOomNotice({
   if (recovered) {
     return {
       level: "success",
-      text: `GPU memory freed up — the work finished on attempt ${used} of ${total}.`,
+      text: `GPU memory freed up - the work finished on attempt ${used} of ${total}.`,
       timeout: undefined,
     };
   }
   if (gave_up) {
     // Only an exhausted sequence can promise the two things below. A sequence
-    // that ended early — the task died of something else, or the app is
-    // shutting down — says what happened and promises nothing.
+    // that ended early - the task died of something else, or the app is
+    // shutting down - says what happened and promises nothing.
     const text =
       used >= total
-        ? `Ran out of GPU memory after ${total} attempts — ${culprit}. Nothing was changed; this work will be tried again later.`
+        ? `Ran out of GPU memory after ${total} attempts - ${culprit}. Nothing was changed; this work will be tried again later.`
         : `Ran out of GPU memory, and the work stopped on attempt ${used} of ${total}.`;
     return { level: "warning", text, timeout: undefined };
   }
   return {
     level: "warning",
-    text: `Ran out of GPU memory — ${culprit}. Retrying — attempt ${used} of ${total} used.`,
+    text: `Ran out of GPU memory - ${culprit}. Retrying - attempt ${used} of ${total} used.`,
     timeout: VRAM_OOM_RETRY_NOTICE_MS,
   };
 }
@@ -192,12 +192,12 @@ export function useUpdatesSocket({
       );
     }
     // Detections are an opt-in overlay layer, never a sort/filter field, so a
-    // detection change never affects grid membership or order — don't reload or
+    // detection change never affects grid membership or order - don't reload or
     // raise the "view changed" pill for it.
     if (field === "detections") return false;
     // Neither does a rotate: `pixels` means the file's own bytes changed (an
     // in-place rotate, or an undo/redo of one). The card renders differently but
-    // does not move — no sort reads orientation, and no filter selects on it —
+    // does not move - no sort reads orientation, and no filter selects on it -
     // so reloading the grid or raising the "view changed" pill would both be
     // wrong for what is really a repaint of one tile.
     if (field === "pixels") return false;
@@ -342,7 +342,7 @@ export function useUpdatesSocket({
         payload?.type === "picture_imported";
       if (isPictureChange) {
         // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
-        // can't reconcile it — keep the existing wsTagUpdate signal that lets the
+        // can't reconcile it - keep the existing wsTagUpdate signal that lets the
         // grid re-rank in place. (Imports still flow through the normal path.)
         const pictureIds = Array.isArray(payload.picture_ids)
           ? payload.picture_ids
@@ -350,7 +350,7 @@ export function useUpdatesSocket({
         // Signal the open lightbox to re-fetch its card's smart_score. The overlay
         // always displays the score (independent of grid sort), so this fires for
         // any smart_score change regardless of the current sort and regardless of
-        // origin — matching on picture id + field, not origin, so it covers both
+        // origin - matching on picture id + field, not origin, so it covers both
         // origin-stamped interactive tag edits and the origin-less bulk drain that
         // rides a penalised-tag settings change. `fields` absent = full change.
         if (payload?.type === "pictures_changed" && pictureIds.length > 0) {
@@ -405,7 +405,7 @@ export function useUpdatesSocket({
           : [];
         // Origin-aware: only this tab's own tag edits may refresh a tag-filtered
         // grid in place. A tag change from outside (background tagging, another
-        // tab) must not reshuffle the user's filtered view — the grid raises a
+        // tab) must not reshuffle the user's filtered view - the grid raises a
         // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
         // The flag rides on wsTagUpdate; the overlay still refreshes its open
         // card's tags for any origin.
@@ -440,7 +440,7 @@ export function useUpdatesSocket({
         !isReadOnly.value
       ) {
         // No count on the wire (server.py's broadcaster deliberately sends
-        // none — the queue is reclassified live, so any number sent here
+        // none - the queue is reclassified live, so any number sent here
         // could already be wrong by the time it renders). Debounced re-fetch
         // is the whole reaction.
         if (externalMovesPendingTimer) clearTimeout(externalMovesPendingTimer);
@@ -567,7 +567,7 @@ export function useUpdatesSocket({
   }
 
   function loadSortChangedExternal() {
-    // The user opted in to the reshuffle — reconcile by refetching + re-sorting.
+    // The user opted in to the reshuffle - reconcile by refetching + re-sorting.
     wsStore.clearSortChangedExternalIds();
     fullGridReload();
   }

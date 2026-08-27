@@ -4,7 +4,7 @@ v1.11 Phase 5, reconciling moves made outside PixlStash
 (``docs/plans/v1.11.0-existing-library.md`` §4). The mirror of Phase 4b's move
 engine: ``external_move_review`` holds one row per file the reference-folder
 scan found moved that the move journal (``picture_move``, 0108) did not claim
-as PixlStash's own. Empty on every existing database — nothing is reconciled
+as PixlStash's own. Empty on every existing database - nothing is reconciled
 until the next scan runs.
 
 Revision ID: 0109_add_external_move_review

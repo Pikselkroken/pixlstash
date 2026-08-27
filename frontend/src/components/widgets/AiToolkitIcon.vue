@@ -24,7 +24,7 @@
 <script setup>
 // The ai-toolkit mark, traced as a path rather than shipped as their asset.
 //
-// Ostris publishes it only as raster — `ui/src/app/icon.png` is 96x96, and
+// Ostris publishes it only as raster - `ui/src/app/icon.png` is 96x96, and
 // `ui/src/app/icon.svg` is a 110 KB base64 PNG in an SVG wrapper, not a vector.
 // Either would go soft at the 16px these menus use and neither can take
 // `currentColor`, so a raster would stay black on the dark theme. The mark is a
@@ -33,7 +33,7 @@
 // semicircle of r6.435 centred at 12,9; the eye a true circle of r2.906 on the
 // same centre; four even legs 1.83 wide) and agrees with it to 97.4% of pixels.
 //
-// Referential use — it labels "the folder ai-toolkit writes to" and never
+// Referential use - it labels "the folder ai-toolkit writes to" and never
 // claims their endorsement. ai-toolkit is MIT (Ostris, LLC).
 //
 // It is the one solid mark in a row of `-outline` mdi glyphs, which is

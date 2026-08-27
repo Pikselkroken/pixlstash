@@ -170,7 +170,7 @@ class TaggingWorkflow:
                 written into this dict during the same GPU pass.
 
         Returns:
-            ``{key: [quality_tag, ...]}`` — keys with no matching whitelist
+            ``{key: [quality_tag, ...]}`` - keys with no matching whitelist
             tags are omitted.
         """
         if not items:

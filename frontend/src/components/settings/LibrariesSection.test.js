@@ -548,7 +548,7 @@ describe("renaming", () => {
 
   it("stays open on the refused name with the server's reason", async () => {
     // The reason names the library already holding it, which is the only thing
-    // that tells the owner what to type instead — so the field keeps the text.
+    // that tells the owner what to type instead - so the field keeps the text.
     renameLibrary.mockRejectedValue({
       response: { data: { detail: 'Another library is already named "Archive".' } },
     });
@@ -717,7 +717,7 @@ describe("teaching the CLI", () => {
     expect(notice.text).toContain("Command-C");
   });
 
-  // A failure landing late must not wipe a copy that has since succeeded — the
+  // A failure landing late must not wipe a copy that has since succeeded - the
   // same lie as the reported bug, pointing the other way.
   it("leaves a later successful copy alone when an earlier one fails", async () => {
     let failSlowCopy;

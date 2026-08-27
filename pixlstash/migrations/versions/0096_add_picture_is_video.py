@@ -11,8 +11,8 @@ tests ``file_path`` against five extension patterns, one per frame:
 
 This is non-sargable (defeats LIMIT 1), so every call materialises and sorts
 all pictures of the character including on cache revalidation. This migration
-adds a persistent ``is_video`` boolean column — False for still images, True
-for video — to replace the CASE at query time.
+adds a persistent ``is_video`` boolean column - False for still images, True
+for video - to replace the CASE at query time.
 
 The backfill is extension-based (inlined literal from ``VIDEO_EXTENSIONS``,
 ``pixlstash/utils/image_processing/video_utils.py``). At runtime the flag
@@ -47,7 +47,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current model columns via SQLModel.metadata.create_all(), so the
         # is_video column is already present and there is nothing to do.
         return

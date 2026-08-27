@@ -4,8 +4,8 @@ The point of these tests is that a rotate must be *lossless and complete*: the
 compressed pixel data comes through byte for byte, every sidecar the file
 carried is still there afterwards, and rotating back restores the original
 exactly. Each of those has a specific way of going wrong that a casual
-implementation hits — a Pillow round-trip re-encodes the JPEG, drops the PNG
-text chunks, and loses the camera EXIF — so each gets its own assertion rather
+implementation hits - a Pillow round-trip re-encodes the JPEG, drops the PNG
+text chunks, and loses the camera EXIF - so each gets its own assertion rather
 than being folded into "the file still opens".
 
 Browser support was measured out-of-band on 2026-08-15 (Chromium 148, Firefox
@@ -123,7 +123,7 @@ def test_rotation_table_matches_pillow(tmp_path, direction):
     permutes them in two 4-cycles: the unmirrored 1-6-3-8 and the mirrored
     2-7-4-5. The mirrored cycle is the one that is easy to write backwards from
     memory, and a backwards entry would flip mirrored photos the wrong way while
-    every ordinary photo kept working — invisible in casual testing.
+    every ordinary photo kept working - invisible in casual testing.
 
     So the expected value is *derived*: tag the tile with each orientation,
     render what a viewer would show, rotate that rendering with Pillow, then ask
@@ -197,7 +197,7 @@ def test_unknown_direction_is_refused():
 
 
 def test_jpeg_rotate_does_not_re_encode_the_pixels(jpeg_with_camera_exif):
-    """The scan data must come through untouched — a re-encode loses quality.
+    """The scan data must come through untouched - a re-encode loses quality.
 
     Every rotate would otherwise cost one JPEG generation, and a user correcting
     a batch of sideways photos would silently degrade all of them.
@@ -305,7 +305,7 @@ def test_png_rotated_twice_has_exactly_one_exif_chunk(png_with_comfy_metadata):
 
 
 # ---------------------------------------------------------------------------
-# Reversibility — this is what lets undo replace a backup copy
+# Reversibility - this is what lets undo replace a backup copy
 # ---------------------------------------------------------------------------
 
 
@@ -346,7 +346,7 @@ def test_rotating_back_is_byte_identical_once_the_file_carries_an_orientation(
 
     The *first* write is necessarily not byte-identical: a file with no
     orientation block gains one, some tens of bytes. Writing 1 does not delete
-    the block again — for a JPEG that block also holds the camera fields and
+    the block again - for a JPEG that block also holds the camera fields and
     the capture date, and for any file an explicit "orientation 1" is a legal
     thing to have meant. So byte-identity is the contract from the second write
     onward, which is every undo, since an undo always follows a rotate.
@@ -364,7 +364,7 @@ def test_rotating_back_is_byte_identical_once_the_file_carries_an_orientation(
 
 
 # ---------------------------------------------------------------------------
-# Hostile inputs — from the pre-merge security review
+# Hostile inputs - from the pre-merge security review
 # ---------------------------------------------------------------------------
 
 
@@ -374,7 +374,7 @@ def test_a_planted_symlink_temp_file_cannot_hijack_the_write(tmp_path):
     With `<photo>.rotate.tmp` as the fixed name and a plain `open(..., "wb")`,
     anyone able to write to the pictures directory could pre-plant that name as
     a symlink: the write lands on the link's target, and `os.replace` then moves
-    the *symlink* over the photo — clobbering an unrelated file and destroying
+    the *symlink* over the photo - clobbering an unrelated file and destroying
     the original in one go. Vaults commonly sit on synced or network folders, so
     "they can already write there" is not the same as "this is safe".
     """
@@ -397,7 +397,7 @@ def test_the_file_permissions_survive_a_rotate(tmp_path):
     """mkstemp creates 0600 and os.replace keeps the replacement's mode.
 
     Without an explicit copy, every rotate would quietly tighten the photo's
-    permissions — a rotate must not change who can read the picture.
+    permissions - a rotate must not change who can read the picture.
     """
     photo = tmp_path / "photo.jpg"
     _tile().save(photo, "JPEG", quality=95)
@@ -432,7 +432,7 @@ def test_the_modification_time_is_bumped_not_preserved(tmp_path):
 
     `ImageUtils._extract_embedded_metadata_cached` is an lru_cache keyed on
     `(path, mtime)`. Restoring the old stamp would serve the pre-rotate EXIF out
-    of that cache for as long as the entry lived — and the bytes really did
+    of that cache for as long as the entry lived - and the bytes really did
     change, so a fresh stamp is also just true.
     """
     photo = tmp_path / "photo.jpg"
@@ -448,7 +448,7 @@ def test_contents_that_do_not_match_the_extension_are_refused_cleanly(tmp_path):
     """The refusal must not carry the file's bytes into the exception.
 
     piexif reads a non-JPEG argument as a *filename*, so it raises
-    ``OSError: File name too long: b'<the entire file>'`` — which a caller then
+    ``OSError: File name too long: b'<the entire file>'`` - which a caller then
     logs, writing the file's contents into the application log. Sniff the magic
     bytes instead of trusting the name.
     """
@@ -523,7 +523,7 @@ def test_supports_in_place_rotation(name, expected):
 
 
 def test_webp_is_not_offered_in_place(tmp_path):
-    """WebP writes cleanly but no browser reads it back — verified 2026-08-15.
+    """WebP writes cleanly but no browser reads it back - verified 2026-08-15.
 
     piexif handles WebP and the backend's ``exif_transpose`` honours the result,
     so this looks like an oversight from inside Python. It is not: Chromium 148
@@ -559,14 +559,14 @@ def test_import_records_the_orientation_up_front(tmp_path, stored, expected):
 
     ``MissingOrientationFinder`` exists to fill rows that predate the column, not
     to finish importing a new one. Left to the finder, the value is a race for
-    anything reading it just after import — and because orientation is an
+    anything reading it just after import - and because orientation is an
     operation-log facet, a rotate landing in that window would snapshot ``None``
     as the prior state and its undo would have nothing to write back.
 
     Asserted against ``create_picture_from_bytes`` directly, NOT through an
     upload: with a server running, the backfill finder fills the column either
     way, so an end-to-end assertion passes whether or not the import does its
-    job. That version of this test was written first and proved to be vacuous —
+    job. That version of this test was written first and proved to be vacuous -
     removing the import-time write left it green.
     """
     from pixlstash.utils.image_processing.image_utils import ImageUtils

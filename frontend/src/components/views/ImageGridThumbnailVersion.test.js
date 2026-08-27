@@ -178,9 +178,9 @@ beforeEach(() => {
   });
 });
 
-describe("ImageGrid — the server owns the thumbnail URL", () => {
+describe("ImageGrid - the server owns the thumbnail URL", () => {
   it("takes the server's URL even though the pre-fill already painted one", async () => {
-    // THE BUG. `imported_at` is present, so the pre-fill runs — and before the
+    // THE BUG. `imported_at` is present, so the pre-fill runs - and before the
     // fix that alone was enough to keep the server's answer out of the card for
     // the rest of its life.
     const wrapper = mountGrid();

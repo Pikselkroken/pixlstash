@@ -1,15 +1,15 @@
 <template>
   <!-- One shared, right-anchored decision bar for BOTH card types. Constant
        button slots per kind, Undo ALWAYS rendered (disabled when the history
-       is empty), no wrapping — the buttons never move mid-loop. -->
+       is empty), no wrapping - the buttons never move mid-loop. -->
   <div class="rs-decide" role="toolbar" aria-label="Decision">
     <!-- Lock note. A card can be frozen on EITHER side (the suspect's set, or
-         the twin's), and the two block different corners — so the note names the
+         the twin's), and the two block different corners - so the note names the
          set and the buttons that cannot succeed point at it via
          aria-describedby. It is marked `aria-disabled`, never `disabled`: a
          `disabled` button leaves the tab order, so a keyboard user could never
          reach the control to discover why it does nothing. Skip stays fully
-         live — it is the way past a locked card. -->
+         live - it is the way past a locked card. -->
     <span
       v-if="lockNote"
       :id="chipId"
@@ -102,7 +102,7 @@
     <button
       class="rs-decide-btn"
       type="button"
-      title="Can't decide — the card leaves the queue with no change made. Undo brings it back."
+      title="Can't decide - the card leaves the queue with no change made. Undo brings it back."
       @click="emit('skip')"
     >
       <kbd>S</kbd>
@@ -110,7 +110,7 @@
     </button>
     <!-- Undo. `disabled` when there is simply nothing to undo (no reason to
          explain), but `aria-disabled` + the lock reason when a decision EXISTS
-         and cannot be reopened — reopen guards both sides of the card, so a
+         and cannot be reopened - reopen guards both sides of the card, so a
          decision on a locked-twin card is final until the set is unlocked. -->
     <button
       class="rs-decide-btn"
@@ -159,7 +159,7 @@ const props = defineProps({
   gamify: { type: Boolean, default: false },
   // Key-slip guard: right after the card TYPE changes, decisions are briefly
   // disabled so a rapid-keyed N can't fire "Neither" unseen. This is the ONLY
-  // real `disabled` on a decision button — it lasts 300ms and has nothing to
+  // real `disabled` on a decision button - it lasts 300ms and has nothing to
   // explain, so losing tab order for that moment costs nothing.
   hold: { type: Boolean, default: false },
   // Per-decision block reasons: { yes|no|both|neither|left|right|undo: reason }.
@@ -172,7 +172,7 @@ const props = defineProps({
   // `lockDetail` its tooltip. Copy comes from lockedSetCopy.js.
   lockNote: { type: String, default: "" },
   lockDetail: { type: String, default: "" },
-  // Bumped by the parent when a blocked control is pressed — flashes the chip so
+  // Bumped by the parent when a blocked control is pressed - flashes the chip so
   // the (usually sighted) keyboard user gets a visible answer as well as the
   // announced one.
   flashTick: { type: Number, default: 0 },
@@ -286,7 +286,7 @@ onUnmounted(() => {
 .rs-decide-lock .v-icon {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
-/* Visible answer to a blocked press — the announcement's sighted counterpart. */
+/* Visible answer to a blocked press - the announcement's sighted counterpart. */
 .rs-decide-lock--flash {
   animation: rs-lock-flash var(--dur-2) var(--ease-standard);
 }

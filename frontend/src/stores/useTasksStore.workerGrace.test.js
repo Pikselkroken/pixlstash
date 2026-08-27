@@ -50,7 +50,7 @@ afterEach(() => {
 // A worker grinding a whole library is idle between every batch: the planner
 // submits, the batch runs, inflight drops to zero, the next batch arrives up to
 // a backoff later. The store has always carried a grace window for exactly that
-// — and it was unreachable, because the filter returned `snapshot.active` for
+// - and it was unreachable, because the filter returned `snapshot.active` for
 // both values and the backend always sends the field.
 describe("a worker row between batches", () => {
   it("stays in the active list across the gap", async () => {

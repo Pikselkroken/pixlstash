@@ -9,7 +9,7 @@ so when it is selected we download it from HuggingFace into the expected
 directory before ``FaceAnalysis`` is constructed.
 
 **The root is a recorded location** rather than a constant, so the packs can be
-moved off the system drive — see :func:`insightface_root` and
+moved off the system drive - see :func:`insightface_root` and
 ``POST /model-folders/{id}/relocate``. It is recorded exactly as #905 records the
 download folder's, and for the same reason: this path is machine-global, so it
 does not belong to one deployment's config file.
@@ -17,7 +17,7 @@ does not belong to one deployment's config file.
 License note (the provenance decision is the user's; this module only makes the
 switch available):
 
-- ``buffalo_l`` (default): trained on WebFace600K — **non-commercial research
+- ``buffalo_l`` (default): trained on WebFace600K - **non-commercial research
   use only**.
 - ``auraface``: ``fal/AuraFace-v1`` weights are **Apache-2.0** licensed, suitable
   for users who need commercial use.
@@ -46,7 +46,7 @@ KNOWN_MODEL_PACKS: frozenset[str] = frozenset({"buffalo_l", "auraface"})
 # that need a sane fallback do not have to import the server module.
 DEFAULT_MODEL_PACK = "buffalo_l"
 
-# fal/AuraFace-v1 — Apache-2.0 weights. Pinned to a specific commit SHA for
+# fal/AuraFace-v1 - Apache-2.0 weights. Pinned to a specific commit SHA for
 # supply-chain integrity; do NOT track ``main``. SHA verified 2026-06-09 as the
 # repo head; the pack bundles scrfd_10g_bnkps.onnx (the same SCRFD-10G detector
 # as buffalo_l) plus glintr100.onnx for recognition.
@@ -66,9 +66,9 @@ DEFAULT_INSIGHTFACE_ROOT = os.path.expanduser(os.path.join("~", ".insightface"))
 
 # Where a relocation records the packs' new home. A FILE beside the download
 # folder's own pointer, for the reason `BUILTIN_MODEL_DIR_POINTER` gives and that
-# applies here word for word: this path is machine-global — one set of packs
+# applies here word for word: this path is machine-global - one set of packs
 # serves every library and every server instance on the host, and InsightFace
-# itself has exactly one root per machine — while `server-config.json` and the
+# itself has exactly one root per machine - while `server-config.json` and the
 # hub both belong to one deployment. Recording it per deployment would mean a
 # second PixlStash on the same machine kept downloading packs to the old place,
 # which is the divergence the single accessor below exists to remove.
@@ -87,7 +87,7 @@ def _pointer_path() -> str:
 
     Deliberately the *same* directory ``builtin_models`` records its own folder
     in, resolved by calling that module's seam rather than rebuilding
-    ``user_data_dir("pixlstash")`` here — a second expression for one directory
+    ``user_data_dir("pixlstash")`` here - a second expression for one directory
     is the drift #905 spent a PR removing, and a test that redirects one pointer
     must redirect both. The import is function-local so ``utils`` does not gain
     a module-level dependency on ``services``, and so the monkeypatched
@@ -137,9 +137,9 @@ def recorded_insightface_root() -> tuple[Optional[str], str]:
 
     Both, because the one caller outside this module needs both and neither is
     worth reaching into the privates for: the shelf's declaration asks whether
-    the directory it failed to read is the *recorded* one — which is what tells
+    the directory it failed to read is the *recorded* one - which is what tells
     a relocated root that has gone apart from a machine that has simply never
-    run face detection — and then names the file to delete.
+    run face detection - and then names the file to delete.
 
     Quiet on purpose, unlike :func:`_configured_root`, which reports its own
     failures and is called on every resolution: a second caller that only wants
@@ -164,7 +164,7 @@ def insightface_root() -> str:
     it**: this module's ``auraface`` download, the shelf's declaration
     (:mod:`pixlstash.services.builtin_caches`) and the ``FaceAnalysis(root=…)``
     the face pipeline constructs. That single-accessor property is what makes
-    the root relocatable at all — a location only half the callers read would
+    the root relocatable at all - a location only half the callers read would
     move the shelf's row while the packs kept loading from the old directory,
     which is precisely the failure #905 had to remove from the download folder
     before it could be moved.
@@ -183,7 +183,7 @@ def set_insightface_root(path: str) -> None:
 
     Written after the packs have landed at *path* and before the hub is told the
     folder moved, so an interruption between the two leaves the pointer naming
-    the place the packs really are — the ordering
+    the place the packs really are - the ordering
     :func:`~pixlstash.services.builtin_models.set_builtin_model_dir` uses, for
     the same reason.
 
@@ -191,7 +191,7 @@ def set_insightface_root(path: str) -> None:
         path: The InsightFace root the packs now live under.
 
     Raises:
-        OSError: if the pointer could not be written. The caller decides — the
+        OSError: if the pointer could not be written. The caller decides - the
             packs have already moved by then, so this is news to report rather
             than a reason to undo anything.
     """
@@ -254,7 +254,7 @@ def ensure_model_pack_available(model_pack: str) -> None:
     """Make sure *model_pack* is on disk where FaceAnalysis can find it.
 
     Validates the pack name first (fail-closed). For packs that InsightFace
-    auto-downloads (e.g. ``buffalo_l``) this is a no-op — ``FaceAnalysis`` fetches
+    auto-downloads (e.g. ``buffalo_l``) this is a no-op - ``FaceAnalysis`` fetches
     them itself. For packs PixlStash provisions (e.g. ``auraface``), the pack is
     downloaded from a pinned HuggingFace revision into
     ``<insightface_root()>/models/<pack>/`` if it is not already present.

@@ -80,8 +80,8 @@ def _load_input_images(
 def _source_png_text(source_path: str | None) -> PngImagePlugin.PngInfo | None:
     """Rebuild the source PNG's text chunks so provenance follows the output.
 
-    ``metadata["png"]["workflow"]`` / ``["prompt"]`` — the ComfyUI graph this
-    product recovers in :mod:`pixlstash.utils.comfyui_utilities` — live in those
+    ``metadata["png"]["workflow"]`` / ``["prompt"]`` - the ComfyUI graph this
+    product recovers in :mod:`pixlstash.utils.comfyui_utilities` - live in those
     chunks and nowhere else, so a plugin run that dropped them destroyed them.
     Returns ``None`` when the source has no text chunks; never fabricates.
     """
@@ -266,7 +266,7 @@ def _import_output_images(
                 output_dir=out_dir,
                 reference_folder_id=ref_id,
                 # Placement on write (v1.11 Phase 4b). `None` whenever
-                # ``out_dir`` is set — an edit written beside its original in a
+                # ``out_dir`` is set - an edit written beside its original in a
                 # reference folder is already where the owner put it. Otherwise
                 # the unfiled folder, and the memberships this service copies
                 # from the source picture file it one debounce later.
@@ -412,7 +412,7 @@ def _propagate_output_picture_sets(
 
         # A locked set's membership cannot change. An upscale/edit run is a
         # propagation path, not an explicit set edit, so locked target sets are
-        # dropped (and logged) while the unlocked ones still propagate — failing
+        # dropped (and logged) while the unlocked ones still propagate - failing
         # the run would discard outputs the user did ask for.
         allowed_set_ids = set(
             drop_locked_set_ids(
@@ -691,7 +691,7 @@ def apply_plugin_to_pictures(
     if stack:
         # Ensure each source picture has a stack (creating one if needed) and
         # collect the stack_id for each source.  Deduplicating so
-        # get_or_create_stack is only called once per unique source id — multiple
+        # get_or_create_stack is only called once per unique source id - multiple
         # inputs from the same stack are handled by the grouping below.
         unique_source_ids = list(dict.fromkeys(source_picture_ids))
         stack_by_source: dict[int, int | None] = {}

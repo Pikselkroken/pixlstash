@@ -87,7 +87,7 @@ def confirm_tag_prediction_in_session(
     Raises:
         KeyError: If no prediction with the given tag exists for the picture.
     """
-    # Confirming promotes a prediction to a Tag and writes a human POS — label
+    # Confirming promotes a prediction to a Tag and writes a human POS - label
     # data frozen when the picture is in a locked set.
     enforce_pictures_not_locked(session, [pic_id], "confirm a tag on a locked picture")
     prediction = session.exec(
@@ -142,7 +142,7 @@ def confirm_tag_prediction(
         origin_client_id: The originating tab's ``X-Client-Id``. When confirming an
             anomaly tag moves the scorer's inputs, the invalidated id is recorded in the
             vault's interactive rescore registry so the background recompute emits an
-            immediate, origin-stamped ``smart_score`` grid refresh for that card — the
+            immediate, origin-stamped ``smart_score`` grid refresh for that card - the
             user's primary "confirm-driven" workflow, where the visible score must drop in
             place rather than routing to the deferred "view changed" pill.
 
@@ -183,7 +183,7 @@ def reject_tag_prediction_in_session(
         commit: Commit before returning. The operation-log wrapper passes
             ``False`` so it owns the mutation and receipt transaction.
     """
-    # Rejecting writes a human NEG onto the picture — label data frozen when
+    # Rejecting writes a human NEG onto the picture - label data frozen when
     # the picture is in a locked set.
     enforce_pictures_not_locked(session, [pic_id], "reject a tag on a locked picture")
     # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
@@ -247,7 +247,7 @@ def delete_tag_predictions(
     ``TagPrediction`` rows in the anomaly vocabulary), so the cached ``Picture.smart_score``
     goes stale and must be NULLed for the background ``SmartScoreTask`` to recompute it.
     Wrapping the delete in :func:`invalidate_on_anomaly_change` mirrors the sibling
-    :func:`reset_picture_tags` path — without it, deleting a ``malformed nipples`` /
+    :func:`reset_picture_tags` path - without it, deleting a ``malformed nipples`` /
     ``watermark`` prediction leaves the stored score frozen with the old penalty baked in.
 
     Args:
@@ -305,7 +305,7 @@ def reset_picture_tags(
     """
 
     def _reset(session: Session) -> None:
-        # Reset deletes ALL confirmed Tag rows and drops a retag sentinel — a
+        # Reset deletes ALL confirmed Tag rows and drops a retag sentinel - a
         # destructive rewrite of frozen label data. Refuse on a locked picture.
         enforce_pictures_not_locked(session, [pic_id], "reset tags on a locked picture")
         # Dropping the model's prediction rows removes their anomaly probabilities

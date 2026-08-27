@@ -1,7 +1,7 @@
 """The folder-structure read: propose what each level of a folder tree is.
 
 v1.11 Phase 2 (``docs/plans/v1.11.0-existing-library.md`` §4). Four signals, all
-deterministic and local — a folder name is a string, so no LLM and no language
+deterministic and local - a folder name is a string, so no LLM and no language
 reading of names:
 
 ``cardinality``
@@ -22,7 +22,7 @@ Every proposal carries the evidence that produced it; a signal that cannot state
 its reason proposes nothing. Where the signals only narrow the answer the
 remaining ``candidates`` are returned rather than one of them being picked.
 
-**This module reads. It never writes** — no row is created and no file is opened
+**This module reads. It never writes** - no row is created and no file is opened
 for writing, moved or renamed. The wire contract is
 ``docs/integration_architecture.md`` §20.
 """
@@ -67,7 +67,7 @@ SAMPLED_PER_FOLDER = 20
 MIN_FACE_SAMPLE = 5
 
 #: Below this many pictures the sidecar signal stays silent. One `a.jpg` beside
-#: one `a.txt` is a caption pair, not a Set — and "a caption file beside all 1
+#: one `a.txt` is a caption pair, not a Set - and "a caption file beside all 1
 #: picture" is the same weak evidence `MIN_FACE_SAMPLE` exists to refuse. It
 #: matters at level scope too: a level of one-picture folders would otherwise
 #: clear the 60% vote and be proposed as Set entire.
@@ -78,13 +78,13 @@ MIN_SIDECAR_PICTURES = 3
 #: arithmetic, for the reason `_LEVEL_VOTE_SHARE_PCT` is: `round(0.7 * 6)` is
 #: `4`, so a float rule written as seventy percent passes at **66.7%** on a
 #: six-picture sample. Rounding decides in the wrong direction for a threshold
-#: — the whole job of one is to be a floor.
+#: - the whole job of one is to be a floor.
 FACE_MAJORITY_PCT = 70
 
 # ponytail: one cosine threshold and a medoid vote, not a clustering library.
 # InsightFace ArcFace embeddings are L2-normalised, so this is a plain dot
 # product; 0.35 is the conventional same-identity floor for ArcFace and is
-# deliberately on the strict side — a missed Person row costs the owner one
+# deliberately on the strict side - a missed Person row costs the owner one
 # dropdown, a wrong one costs them trust in every other row on the screen.
 # Upgrade path if it proves noisy: agglomerative clustering over the folder.
 SAME_IDENTITY_COSINE = 0.35
@@ -93,7 +93,7 @@ SAME_IDENTITY_COSINE = 0.35
 #: timeout, but a per-batch timeout multiplied by 20,000 folders is weeks, so
 #: the bound that actually holds has to be on the read: 180 s per batch over
 #: 20,000 folders is 41 days. Past it the read stops
-#: and returns what it found — the same shape a cancel produces.
+#: and returns what it found - the same shape a cancel produces.
 DEFAULT_DEADLINE_S = 30 * 60.0
 
 #: Hard bound on the walk. An arbitrary caller-supplied path can be ``/``, and
@@ -109,11 +109,11 @@ _TAG_REPEAT_FACTOR = 3
 _TAG_MIN_PARENTS = 3
 
 #: Share of a level's folders that must agree before the level takes their
-#: answer as its own. Compared with integer arithmetic — ``round(0.6 * 4)`` is
+#: answer as its own. Compared with integer arithmetic - ``round(0.6 * 4)`` is
 #: 2, which would quietly make this a fifty-percent rule on a level of four.
 _LEVEL_VOTE_SHARE_PCT = 60
 
-#: "Just a folder" — the owner's answer on the mapping screen, meaning the name
+#: "Just a folder" - the owner's answer on the mapping screen, meaning the name
 #: is not telling us anything. Deliberately NOT a `Facet`: it is the *absence*
 #: of one, which is why it cannot come out of that enum. No signal proposes it.
 JUST_A_FOLDER = "folder"
@@ -127,15 +127,15 @@ KINDS = tuple(f.value for f in Facet) + (JUST_A_FOLDER,)
 #: Kinds a level can narrow to once cardinality has ruled Tag out.
 _NON_TAG_KINDS = (Facet.PROJECT.value, Facet.SET.value, Facet.PERSON.value)
 
-#: What the face pass may SAMPLE. Videos are deliberately excluded — this
+#: What the face pass may SAMPLE. Videos are deliberately excluded - this
 #: signal decodes what it samples and a video frame is not what the face pass is
-#: built on — so the image half is imported rather than `is_supported_media_file`.
+#: built on - so the image half is imported rather than `is_supported_media_file`.
 #:
 #: **This is not what the read COUNTS.** Those were the same list until a real
 #: import reported a total that matched nothing: the commit indexes every
 #: supported media file, videos included, so a library of holiday clips came out
 #: with more pictures than the dialog had promised. Counting is
-#: `is_supported_media_file`, sampling is this — see `_Folder.direct_media`.
+#: `is_supported_media_file`, sampling is this - see `_Folder.direct_media`.
 _IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 #: Lower-cased and compared lower-cased: a `.TXT` beside every picture is a
 #: caption file, and a dataset exported on Windows is the obvious victim of
@@ -143,7 +143,7 @@ _IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 _SIDECAR_EXTS = (".txt", ".caption")
 
 #: Max side the sampled pictures are decoded at for detection. Mirrors
-#: FaceExtractionTask.INFERENCE_MAX_SIDE — 2× InsightFace's det_size.
+#: FaceExtractionTask.INFERENCE_MAX_SIDE - 2× InsightFace's det_size.
 _INFERENCE_MAX_SIDE = 512
 
 #: I/O + decode threads feeding the (sequential) detection batch.
@@ -176,7 +176,7 @@ def normalise_name(name: str) -> str:
 
     Case, separators and runs of punctuation are noise here: ``2024_Shoots``,
     ``2024 shoots`` and ``2024-Shoots`` are the same name to an owner. So are
-    ``Jose`` and ``José`` — accents are folded, which is why the decomposition
+    ``Jose`` and ``José`` - accents are folded, which is why the decomposition
     runs before the substitution.
 
     **Unicode-aware on purpose.** An ASCII-only class here does not merely miss
@@ -228,7 +228,7 @@ class _Folder:
     abs_path: str
     rel_path: str
     parent_index: Optional[int]
-    #: Images only, thumbnails excluded — the face pass's sample source, and
+    #: Images only, thumbnails excluded - the face pass's sample source, and
     #: what the sidecar signal counts caption files against.
     direct_pictures: list[str] = field(default_factory=list)
     #: Everything in this folder the commit will index: images AND videos, our
@@ -250,7 +250,7 @@ class FolderStructureRead:
 
     Args:
         root: Absolute path to the folder to read. Already validated and
-            contained by the caller — this class does no authorization.
+            contained by the caller - this class does no authorization.
         detect_faces: ``(list[np.ndarray]) -> list[list[FaceResult]]``, or
             ``None`` to skip the face signal entirely (no inference engine).
         existing_entities: ``[(entity_type, id, name), …]`` the vault already
@@ -296,7 +296,7 @@ class FolderStructureRead:
             )
         # Two rows of the SAME type sharing a name (PictureSet.name is not
         # unique, and a real vault has duplicates on day one) means the name
-        # does not address one entity. Keep the kind — that much IS known — and
+        # does not address one entity. Keep the kind - that much IS known - and
         # drop the id rather than hand back whichever row the query returned
         # first for §20's "that row's real primary key".
         self._by_name: dict[str, list[tuple[str, Optional[int], str]]] = {}
@@ -319,7 +319,7 @@ class FolderStructureRead:
         """Walk, run the four signals, and return the §20 result document.
 
         A cancel between stages stops the run and returns whatever the stages
-        that did complete found — a partial read is still worth showing.
+        that did complete found - a partial read is still worth showing.
         """
         try:
             self._walk()
@@ -337,7 +337,7 @@ class FolderStructureRead:
             raise ReadCancelled()
         if time.monotonic() > self._deadline:
             logger.warning(
-                "Folder-structure read: out of time after %d folders — returning "
+                "Folder-structure read: out of time after %d folders - returning "
                 "what was found rather than running on",
                 len(self._folders),
             )
@@ -361,12 +361,12 @@ class FolderStructureRead:
 
             A folder the process cannot read is dropped from the tree with no
             exception and no return value, so the read would otherwise report a
-            *complete* map of a library it only partly saw — and the owner would
+            *complete* map of a library it only partly saw - and the owner would
             accept a mapping that silently omits whatever was unreadable.
             """
             self._unreadable += 1
             logger.warning(
-                "Folder-structure read: skipping %r (%s: %s) — it will be absent "
+                "Folder-structure read: skipping %r (%s: %s) - it will be absent "
                 "from the map and is counted in unreadable_folders",
                 getattr(exc, "filename", "?"),
                 type(exc).__name__,
@@ -391,7 +391,7 @@ class FolderStructureRead:
                 child = os.path.join(dirpath, name)
                 if os.path.realpath(child) in self._exclude:
                     # The library's own snapshots/ tree. Not the owner's
-                    # pictures, so it is not theirs to map — and creating it
+                    # pictures, so it is not theirs to map - and creating it
                     # later instead would only move the problem: a GFS or
                     # safety snapshot can land at any time, including before a
                     # second run of the wizard on the same root.
@@ -433,7 +433,7 @@ class FolderStructureRead:
             # `is_supported_media_file` drops our own `_thumb.webp` files, which
             # a library that has been indexed before is full of, sitting beside
             # every original. Counting them made the total grow on every re-read
-            # of the same folder — the "different number each time" — and
+            # of the same folder - the "different number each time" - and
             # sampling them spent the face pass on 96px thumbnails.
             folder.direct_media = sum(
                 1
@@ -466,7 +466,7 @@ class FolderStructureRead:
         Called from ``_build_result`` and **not** from the end of ``_walk``: a
         cancel or a deadline raises ``ReadCancelled`` from inside the walk loop,
         so a version that summed here left every row at ``picture_count: 0``
-        while still reporting a real ``direct_picture_count`` — a partial result
+        while still reporting a real ``direct_picture_count`` - a partial result
         that says the library is empty, on the one path whose whole
         justification is that the partial result is showable.
         """
@@ -481,7 +481,7 @@ class FolderStructureRead:
         if self._detect_faces is None:
             logger.info(
                 "Folder-structure read: no inference engine, skipping the face "
-                "signal — no folder will be proposed as a Person"
+                "signal - no folder will be proposed as a Person"
             )
             return
         candidates = [
@@ -506,9 +506,9 @@ class FolderStructureRead:
         images = list(pool.map(_load_bgr, paths))
         try:
             per_image = self._detect_faces(images)
-        except Exception as exc:  # noqa: BLE001 — one folder must not kill the read
+        except Exception as exc:  # noqa: BLE001 - one folder must not kill the read
             logger.warning(
-                "Folder-structure read: face detection failed for %r (%s: %s) — "
+                "Folder-structure read: face detection failed for %r (%s: %s) - "
                 "the folder gets no face evidence and the read continues",
                 folder.rel_path or ".",
                 type(exc).__name__,
@@ -574,7 +574,7 @@ class FolderStructureRead:
             "unreadable_folders": self._unreadable,
             # Folders deliberately not walked, as opposed to ones that failed:
             # dot-folders (a vault's own caches) and anything the blocklist
-            # names. Reported for the same reason `unreadable_folders` is — a
+            # names. Reported for the same reason `unreadable_folders` is - a
             # map that omits a subtree must not read as a complete one.
             "skipped_folders": {
                 "hidden": self._skipped_hidden,
@@ -610,8 +610,8 @@ class FolderStructureRead:
     def _folder_proposal(self, folder: _Folder) -> dict[str, Any]:
         """Combine the per-folder signals into one proposal for this row.
 
-        Name match wins when it is unambiguous — it is a lookup and the other two
-        are inferences — but every signal that fired still contributes its
+        Name match wins when it is unambiguous - it is a lookup and the other two
+        are inferences - but every signal that fired still contributes its
         evidence, so a folder read as a person *and* named after a person says
         both. Two signals that disagree produce ``candidates``, never a pick.
         """
@@ -681,11 +681,11 @@ class FolderStructureRead:
             )
             # The face signal alone never makes a dated folder a Person. One
             # day of one holiday is mostly one person, so "one face, 34 of 40"
-            # fires on `2006-09-08` exactly as it does on `Anna` — and a level
+            # fires on `2006-09-08` exactly as it does on `Anna` - and a level
             # of date folders then clears the 60% vote and proposes People
             # entire. The name is the stronger evidence: a date is not a name
             # anybody has. The row then proposes nothing at all rather than
-            # something else — the owner still picks Person if they meant it.
+            # something else - the owner still picks Person if they meant it.
             if "person" not in kinds and not reads_as_a_date(folder.name):
                 kinds.append("person")
 
@@ -776,7 +776,7 @@ class FolderStructureRead:
                     # `assert` cannot do under `python -O`.
                     logger.warning(
                         "Folder-structure read: %d-way tie at %d%% of a level of "
-                        "%d — returning the candidates rather than picking",
+                        "%d - returning the candidates rather than picking",
                         len(leaders),
                         _LEVEL_VOTE_SHARE_PCT,
                         len(folders),
@@ -816,7 +816,7 @@ class FolderStructureRead:
                 }
 
         if distinct == len(folders):
-            # Every name used once, so they are not labels — which rules Tag out
+            # Every name used once, so they are not labels - which rules Tag out
             # and rules nothing in.
             return {
                 "kind": None,
@@ -880,8 +880,8 @@ def load_existing_entities(db) -> list[tuple[str, Optional[int], str]]:
 def _display_name(path: str) -> str:
     r"""A non-empty name for a folder row.
 
-    ``os.path.basename`` is empty for a filesystem root — ``/`` on POSIX, ``C:\``
-    on Windows — so the root row of a read rooted there would reach the mapping
+    ``os.path.basename`` is empty for a filesystem root - ``/`` on POSIX, ``C:\``
+    on Windows - so the root row of a read rooted there would reach the mapping
     screen with a blank name and no way to refer to it. Fall back to the path,
     which is the only name such a folder has.
     """
@@ -926,9 +926,9 @@ def _load_bgr(path: str):
                     (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
                 )
             return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    except Exception as exc:  # noqa: BLE001 — a corrupt file is not a failed read
+    except Exception as exc:  # noqa: BLE001 - a corrupt file is not a failed read
         logger.warning(
-            "Folder-structure read: could not decode %s (%s: %s) — sampled as no-face",
+            "Folder-structure read: could not decode %s (%s: %s) - sampled as no-face",
             os.path.basename(path),
             type(exc).__name__,
             exc,

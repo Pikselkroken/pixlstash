@@ -1,7 +1,7 @@
 """Read-only findings about a library that was organised before PixlStash saw it.
 
 The "About your library" screen (v1.11 Phase 6). Every finding here is computed
-from data that already ships — the exact-duplicate key the duplicate queue's
+from data that already ships - the exact-duplicate key the duplicate queue's
 tier 1 groups on, the description sentinel the captioner's finder tests, face
 rows and their character assignment, and the app's own definition of an
 *unassigned* picture. Nothing in this module writes, queues work, or reads a
@@ -15,7 +15,7 @@ Two properties the screen depends on and this module owns:
   that says "nothing to fix here" is the one that reads as someone who looked.
 * **A finding counts what its own button can show.** Each ``action`` names a
   destination that already exists, and the check is defined as the set that
-  destination holds — not as the set that would read best. The unnamed-faces
+  destination holds - not as the set that would read best. The unnamed-faces
   check intersects with unassigned for exactly this reason, and the overlap
   check scopes the duplicate queue to the pair's common ancestor rather than to
   one of the two folders. A number the owner cannot reach is worse than no
@@ -32,8 +32,8 @@ Two properties the screen depends on and this module owns:
   whose owner has chosen a layout stores ``<Project>/<Person>/<uuid>.png``, so
   the directory-component test now admits folders PixlStash wrote from the
   layout as well as folders the owner made by hand. That is deliberate and not a
-  hole in the rule above: under a layout those folders *are* the organisation —
-  they are named after the projects, people and sets these findings are about —
+  hole in the rule above: under a layout those folders *are* the organisation -
+  they are named after the projects, people and sets these findings are about -
   so a check that skipped them would be blind to exactly the libraries this
   release is for. What it does mean is that a folder-shaped finding in a
   laid-out library may be restating a membership the owner can already see, and
@@ -120,7 +120,7 @@ def _finding(
         state: ``"todo"`` (there is something to look at) or ``"clear"`` (the
             check ran and found nothing wrong).
         title: The finding, with its number in it.
-        evidence: Why the finding is true — the counts it was read off.
+        evidence: Why the finding is true - the counts it was read off.
         action: ``{"label", "note", "kind", ...}`` naming the tool that answers
             it, or ``None`` when there is nothing to open.
     """
@@ -160,7 +160,7 @@ class _LibraryFacts:
         self.total = len(rows)
         # Every count on this screen is over live pictures. Scrapheap rows are
         # excluded from the picture query above, so the membership tables below
-        # — which have no `deleted` column of their own — are intersected with
+        # - which have no `deleted` column of their own - are intersected with
         # this set rather than trusted.
         self.live_ids: set[int] = {row[0] for row in rows}
         # id -> folder, for the pictures that have one. os.path.dirname on a
@@ -191,9 +191,9 @@ class _LibraryFacts:
         # "Unassigned" in the app's own sense, and taken from the app's own
         # predicate rather than restated here: a named face or a set membership
         # counts as assigned, and either counts for every picture in the same
-        # stack. Restating it in Python drifted immediately — the first version
+        # stack. Restating it in Python drifted immediately - the first version
         # added project membership (which the app does not treat as assignment)
-        # and dropped the stack arm — so the pile this screen counts was not the
+        # and dropped the stack arm - so the pile this screen counts was not the
         # pile the view its button opens shows.
         self.unassigned: set[int] = set(
             session.exec(
@@ -208,7 +208,7 @@ class _LibraryFacts:
         # writes for a picture where it found NO face
         # (``FaceExtractionTask``), and its ``character_id`` is NULL like any
         # unnamed face. Counting it says "this picture holds a face nobody has
-        # named" about a picture holding no face at all — and on a scanned
+        # named" about a picture holding no face at all - and on a scanned
         # library most pictures carry one, so the finding fired on nearly
         # everything and its button opened an empty grid. Every other reader of
         # this table excludes it (``Face.find``, ``_NO_REAL_FACE_SQL``, and the
@@ -269,7 +269,7 @@ class _LibraryFacts:
         )
 
     def label(self, folder: str) -> str:
-        """The last component of a folder path — what the owner calls it.
+        """The last component of a folder path - what the owner calls it.
 
         For the PROSE only. The absolute path still travels in ``action.path``,
         because the tool the button opens needs it, and the client puts it in
@@ -289,7 +289,7 @@ def _no_folders(facts: "_LibraryFacts", finding_id: str) -> Optional[dict]:
     """The folder-shaped checks' shared "there is no folder tree here" answer.
 
     A library made entirely of pictures copied into the vault has no folder
-    names to read, so both folder checks are vacuously clear — and saying
+    names to read, so both folder checks are vacuously clear - and saying
     "none of your 0 folders" instead would be a number nobody can act on. An
     EMPTY library has neither, so it gets its own wording: "all 0 pictures live
     in the vault" is true and reads as a bug.
@@ -303,7 +303,7 @@ def _no_folders(facts: "_LibraryFacts", finding_id: str) -> Optional[dict]:
             title="There is nothing here to read yet",
             evidence=(
                 "The library is empty. Add the folder you already organised as a "
-                "reference folder and PixlStash will read it where it sits — "
+                "reference folder and PixlStash will read it where it sits - "
                 "nothing moves and nothing is renamed."
             ),
         )
@@ -324,7 +324,7 @@ def _check_unsorted_pile(facts: _LibraryFacts) -> dict:
     """The largest folder whose pictures carry no set and nobody's name.
 
     "Assigned" is `Picture.build_unassigned_conditions`' definition, not one of
-    this module's own — see `_LibraryFacts`.
+    this module's own - see `_LibraryFacts`.
     """
     vacuous = _no_folders(facts, "unsorted_pile")
     if vacuous is not None:
@@ -392,7 +392,7 @@ def _duplicate_scope(facts: "_LibraryFacts", left: str, right: str) -> Optional[
     predicate applied *inside* the aggregate
     (:func:`~pixlstash.services.dedup_tier_service.find_exact_groups_in_session`),
     so a scope holding one copy of each shared file sees count 1 and finds
-    nothing. Scoping to `left` — which this did first — sent the owner to an
+    nothing. Scoping to `left` - which this did first - sent the owner to an
     empty queue for a finding that had just told them 90 of 100 pictures were
     duplicated, on exactly the un-swept library the finding is designed for.
 
@@ -402,14 +402,14 @@ def _duplicate_scope(facts: "_LibraryFacts", left: str, right: str) -> Optional[
     Returns ``None`` when there is no ancestor worth naming, and the caller
     opens the queue unscoped and says so. Three ways that happens:
 
-    * **No common path at all** — different Windows drives, or one relative and
+    * **No common path at all** - different Windows drives, or one relative and
       one absolute.
     * **A filesystem root.** ``/`` is a whole-vault scan wearing a folder's
       name.
     * **An ancestor that narrows nothing.** Two unrelated trees under one home
       directory (``~/Pictures`` and ``~/Downloads``) are *siblings*, structurally
       identical to ``library/selects`` and ``library/final``, so no rule about
-      path shape can tell them apart — the first version of this tried, and
+      path shape can tell them apart - the first version of this tried, and
       admitted ``/home/<user>`` behind a scope pill reading the login name.
 
       What does tell them apart is measurable: how much of the library the
@@ -449,7 +449,7 @@ def _check_overlapping_folders(facts: _LibraryFacts) -> dict:
     """Two folders holding mostly the same pictures, byte for byte.
 
     Grouped on the tier-1 key rather than on a scan's results, so the finding
-    is true on a library nobody has swept yet — and it is the same identity the
+    is true on a library nobody has swept yet - and it is the same identity the
     duplicate queue would find, so the button opens onto the same pictures.
     """
     vacuous = _no_folders(facts, "overlapping_folders")
@@ -537,7 +537,7 @@ def _check_overlapping_folders(facts: _LibraryFacts) -> dict:
         evidence=(
             f"{_n(count)} of the {_n(smaller)} pictures in {small_name} are the same "
             f"file in {big_name}, byte for byte. Most likely a copy you made once and "
-            "both folders then grew. Stacking them keeps both paths working — nothing "
+            "both folders then grew. Stacking them keeps both paths working - nothing "
             "is deleted and nothing moves."
         ),
         action=action,
@@ -593,7 +593,7 @@ def _check_unnamed_faces(facts: _LibraryFacts) -> dict:
     UNASSIGNED?face=with_face` is exactly this set: unassigned means no face on
     it is named, and `with_face` means there is one. Counting every picture
     holding an unnamed face would have included ones already in a set, which
-    that view excludes — a number the button could not show.
+    that view excludes - a number the button could not show.
     """
     unnamed = facts.unnamed_face_pictures & facts.unassigned
     if not unnamed:
@@ -618,7 +618,7 @@ def _check_unnamed_faces(facts: _LibraryFacts) -> dict:
         top_folder, _ = by_size.most_common(1)[0]
         spread = (
             f" They are spread over {_n(len(folders))} folders, the largest being "
-            f"{facts.label(top_folder)} — and a folder name is no way to find someone "
+            f"{facts.label(top_folder)} - and a folder name is no way to find someone "
             f"who also turns up in the other {_n(len(folders) - 1)}."
         )
     return _finding(
@@ -721,9 +721,9 @@ def build_insights(vault: "Vault") -> dict:
     ``run_immediate_read_task`` rather than a queued one because the screen is
     a page load: the owner is looking at a spinner while this runs.
 
-    **This is a full pass over the library, not a handful of indexed lookups** —
+    **This is a full pass over the library, not a handful of indexed lookups** -
     every live picture's id, path, digest, size and stack, plus four more
-    whole-table selects — and it holds the engine read lock for its duration.
+    whole-table selects - and it holds the engine read lock for its duration.
     That is affordable at the scale this release is sized for (a 12k-picture
     library measures well under a second) and it is why the screen has one
     button that repeats it rather than a poll. If a library ever makes this the

@@ -1,4 +1,4 @@
-"""Tests for scripts/find_orphaned_files.py — the disk→DB orphan scanner.
+"""Tests for scripts/find_orphaned_files.py - the disk→DB orphan scanner.
 
 Builds a minimal image_root (a sqlite ``picture`` table plus files on disk)
 without booting a full Vault, so these stay fast and stdlib-only.

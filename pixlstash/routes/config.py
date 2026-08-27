@@ -135,7 +135,7 @@ def create_router(server) -> APIRouter:
                 "Grid thumbnail shape preference: 'square' renders a square cell "
                 "cropped to the stored face-weighted rectangle; 'justified' lays "
                 "out the full aspect-ratio-preserving thumbnail. This is a "
-                "DISPLAY-ONLY preference — the frontend applies it instantly from "
+                "DISPLAY-ONLY preference - the frontend applies it instantly from "
                 "the single stored bitmap; the backend never regenerates "
                 "thumbnails when it changes."
             ),
@@ -361,7 +361,7 @@ def create_router(server) -> APIRouter:
             default=None,
             description=(
                 "Days an UNPROTECTED (managed) picture stays in the scrapheap "
-                "before it is permanently purged. `null` means Never — "
+                "before it is permanently purged. `null` means Never - "
                 "auto-purge is disabled entirely, and that is the **default**: "
                 "a server on which nobody has saved a window reports `null` and "
                 "never deletes anything on a timer. Protected reference-folder "
@@ -424,7 +424,7 @@ def create_router(server) -> APIRouter:
                 "originals and locked-set members, which the sweep never "
                 "destroys. `0` when the candidate window is not a REDUCTION "
                 "(raising it, setting it for the first time, or re-saving the "
-                "same value destroys nothing new) — show no confirmation then."
+                "same value destroys nothing new) - show no confirmation then."
             ),
             examples=[412],
         )
@@ -1031,7 +1031,7 @@ def create_router(server) -> APIRouter:
         scrapheap_retention_days: Optional[int] = Field(
             default=None,
             description=(
-                "New retention window in days — one of 30, 60, 90, 120 — or "
+                "New retention window in days - one of 30, 60, 90, 120 - or "
                 "`null` for Never (disables auto-purge). Any other value is a "
                 "422. Saving NEVER purges anything: the change takes effect on "
                 "the next scheduled sweep."
@@ -1049,11 +1049,11 @@ def create_router(server) -> APIRouter:
             "the only thing that ever enables the auto-purge**: until it is "
             "called with a finite window the server stays on the Never default "
             "and the timer deletes nothing. Saving does NOT purge anything "
-            "synchronously — the background retention task is the only thing "
+            "synchronously - the background retention task is the only thing "
             "that ever deletes, and it never touches protected reference-folder "
             "originals. Lowering the window, INCLUDING turning it on "
             "(Never -> 30), stamps `scrapheap_retention_reduced_at`, which puts "
-            "a floor of one grace day under EVERY picture's deadline — so even "
+            "a floor of one grace day under EVERY picture's deadline - so even "
             "a 400-day-old scrapheap item survives at least a day after the "
             "change. Raising it, switching to Never, or saving the same value "
             "leaves that stamp untouched."
@@ -1109,8 +1109,8 @@ def create_router(server) -> APIRouter:
             "itself uses, so it cannot drift from reality, and excludes the "
             "pictures the sweep never touches (protected reference-folder "
             "originals and locked-set members). It is evaluated at "
-            "`first_purge_at` — the instant the reduction's grace floor "
-            "elapses — rather than at now, so pictures that expire during the "
+            "`first_purge_at` - the instant the reduction's grace floor "
+            "elapses - rather than at now, so pictures that expire during the "
             "grace day are counted rather than omitted.\n\n"
             "Returns `{would_purge_count: 0, first_purge_at: null}` when `days` "
             "is not lower than the current window."
@@ -1124,7 +1124,7 @@ def create_router(server) -> APIRouter:
         days: int = Query(
             ...,
             description=(
-                "Candidate retention window in days — one of 30, 60, 90, 120. "
+                "Candidate retention window in days - one of 30, 60, 90, 120. "
                 "Any other value is a 422. ('Never' is never a reduction, so "
                 "there is nothing to preview for it.)"
             ),
@@ -1188,8 +1188,8 @@ def create_router(server) -> APIRouter:
         "/server-config/views",
         summary="Get the PixlStash Views configuration",
         description=(
-            "Returns where this library publishes its Views tree — sets, people "
-            "and projects as folders of LINKS to the real files — and which "
+            "Returns where this library publishes its Views tree - sets, people "
+            "and projects as folders of LINKS to the real files - and which "
             "kinds it publishes. `views_root` is `null` when views are off, "
             "which is the default: nothing is written until a folder is named."
         ),
@@ -1215,7 +1215,7 @@ def create_router(server) -> APIRouter:
             "refuse a symlinked payload), inside a reference folder (the scan "
             "would index every link as a second copy), in a cloud-sync folder "
             "(the client uploads the file the link points at), or on a "
-            "filesystem with no links at all — exFAT and FAT have neither, and "
+            "filesystem with no links at all - exFAT and FAT have neither, and "
             "on Windows symbolic links need administrator rights or Developer "
             "Mode. Sending `views_root: null` removes the published tree and "
             "leaves the folder itself alone."
@@ -1228,7 +1228,7 @@ def create_router(server) -> APIRouter:
         previous_root, _ = library_settings_service.get_views_config(server.vault.db)
 
         # `null` turns views off; ANY other value goes through the location
-        # checks. An empty or whitespace string is not "off" — treating it as
+        # checks. An empty or whitespace string is not "off" - treating it as
         # off made a malformed body remove the published tree without a single
         # check having run, which is the one shape of this route that can
         # destroy a tree by accident.

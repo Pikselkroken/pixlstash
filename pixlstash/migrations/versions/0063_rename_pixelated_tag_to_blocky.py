@@ -2,8 +2,8 @@
 
 The anomaly tagger's quality label was renamed from ``pixelated`` to ``blocky`` (a clearer
 name for blocky/compression-style degradation). Existing ``tag`` and ``tag_prediction``
-rows still carry the old value, so this migration renames them in place — preserving any
-human POS/NEG supervision attached to the prediction rows — and NULL-resets the smart score
+rows still carry the old value, so this migration renames them in place - preserving any
+human POS/NEG supervision attached to the prediction rows - and NULL-resets the smart score
 of affected pictures so it recomputes under the tag's (changed) penalty weight.
 
 Data-only: no schema changes. The rename is collision-safe against the (picture_id, tag)

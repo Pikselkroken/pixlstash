@@ -1,4 +1,4 @@
-// useMovesStore — the moves-made-outside-PixlStash reconciliation queue
+// useMovesStore - the moves-made-outside-PixlStash reconciliation queue
 // (v1.11 Phase 5). What the store owns: holding the last classification,
 // re-fetching after every apply/dismiss (the backend recomputes fresh, this
 // store never corrects a verdict itself), and the actionable-vs-informational
@@ -28,7 +28,7 @@ beforeEach(() => {
   dismissMoves.mockReset();
 });
 
-describe("useMovesStore — fetching", () => {
+describe("useMovesStore - fetching", () => {
   it("holds the three buckets from the last fetch", async () => {
     getPendingMoves.mockResolvedValue(
       summary({
@@ -47,7 +47,7 @@ describe("useMovesStore — fetching", () => {
     expect(store.error).toBeNull();
   });
 
-  it("off_layout does not count toward hasPending — nothing there needs a decision", async () => {
+  it("off_layout does not count toward hasPending - nothing there needs a decision", async () => {
     getPendingMoves.mockResolvedValue(
       summary({ off_layout: [{ review_id: 3, picture_id: 13 }] }),
     );
@@ -56,7 +56,7 @@ describe("useMovesStore — fetching", () => {
 
     expect(store.hasPending).toBe(false);
     expect(store.pendingCount).toBe(0);
-    // But it must still be REACHABLE — hasAnyPending is what the sidebar row
+    // But it must still be REACHABLE - hasAnyPending is what the sidebar row
     // gates, or an off_layout-only backlog would be invisible until its
     // backend retention window quietly expired it unseen.
     expect(store.hasAnyPending).toBe(true);
@@ -85,13 +85,13 @@ describe("useMovesStore — fetching", () => {
     await store.fetchPending();
 
     expect(store.error).toBe("network down");
-    // The last GOOD list survives a failed re-fetch — a transient error must
+    // The last GOOD list survives a failed re-fetch - a transient error must
     // not empty a queue that was genuinely there a second ago.
     expect(store.unambiguous).toHaveLength(1);
   });
 });
 
-describe("useMovesStore — applying and dismissing", () => {
+describe("useMovesStore - applying and dismissing", () => {
   it("applies every unambiguous review_id and refreshes", async () => {
     getPendingMoves
       .mockResolvedValueOnce(
@@ -112,7 +112,7 @@ describe("useMovesStore — applying and dismissing", () => {
     expect(store.unambiguous).toEqual([]);
   });
 
-  it("resolves one ambiguous row by its review_id — 'Only X now'", async () => {
+  it("resolves one ambiguous row by its review_id - 'Only X now'", async () => {
     getPendingMoves
       .mockResolvedValueOnce(summary({ ambiguous: [{ review_id: 7 }] }))
       .mockResolvedValueOnce(summary());
@@ -125,7 +125,7 @@ describe("useMovesStore — applying and dismissing", () => {
     expect(applyMoves).toHaveBeenCalledWith([7]);
   });
 
-  it("dismisses without ever calling apply — 'Keep both'", async () => {
+  it("dismisses without ever calling apply - 'Keep both'", async () => {
     getPendingMoves
       .mockResolvedValueOnce(summary({ ambiguous: [{ review_id: 7 }] }))
       .mockResolvedValueOnce(summary());
@@ -167,7 +167,7 @@ describe("useMovesStore — applying and dismissing", () => {
   });
 });
 
-describe("useMovesStore — session reset (issue #655)", () => {
+describe("useMovesStore - session reset (issue #655)", () => {
   it("drops every row on a credential change", async () => {
     getPendingMoves.mockResolvedValue(
       summary({ unambiguous: [{ review_id: 1 }] }),

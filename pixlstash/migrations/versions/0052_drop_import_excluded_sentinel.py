@@ -100,7 +100,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — baseline create_all() builds the table from the
+        # Fresh install - baseline create_all() builds the table from the
         # current model (no import_excluded). Nothing to convert or drop.
         return
 

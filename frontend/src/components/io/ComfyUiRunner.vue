@@ -768,7 +768,7 @@ async function abortComfyui() {
   try {
     await abortRun({ baseUrl: props.backendUrl });
   } catch (err) {
-    // Best-effort abort — ignore errors and still reset local state
+    // Best-effort abort - ignore errors and still reset local state
     logComfyuiDebug("abort-error", { error: err?.message || String(err) });
   } finally {
     isAborting.value = false;

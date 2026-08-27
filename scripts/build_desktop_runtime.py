@@ -4,7 +4,7 @@
 Unlike the old hosted "compute backend" tarballs, this runtime is **bundled into
 the installer** (electron-builder ``extraResources``) and ships a fully-working
 CPU env on Windows/Linux, or a Metal env on macOS (the default PyPI macOS torch
-includes MPS). GPU acceleration (CUDA/ROCm) is *not* baked in — the desktop app
+includes MPS). GPU acceleration (CUDA/ROCm) is *not* baked in - the desktop app
 adds it on first use as a PYTHONPATH overlay by pip-installing the heavy wheels
 straight from PyPI / PyTorch. So we host nothing.
 
@@ -171,7 +171,7 @@ def fetch_standalone_python(triple: str, dest_dir: Path, cache_dir: Path) -> Pat
 
     log("extracting standalone CPython")
     with tarfile.open(archive) as tf:
-        tf.extractall(dest_dir)  # noqa: S202 — trusted upstream artifact
+        tf.extractall(dest_dir)  # noqa: S202 - trusted upstream artifact
     python_dir = dest_dir / "python"
     if not python_dir.is_dir():
         raise SystemExit(f"expected {python_dir} after extraction")
@@ -291,7 +291,7 @@ def compile_bytecode(py: Path, python_dir: Path, target_os: str) -> None:
 # NSIS nor electron-builder's installer/uninstaller are long-path aware. The
 # worst prefix the runtime gets moved under is the OLD UNINSTALLER's atomic
 # rename during an update: %TEMP%\ns?????.tmp\old-install\resources\python\...
-# — about 90 characters with a 20-character Windows user name. 259 - 90, with
+# - about 90 characters with a 20-character Windows user name. 259 - 90, with
 # margin, gives the 150 budget. torch blows this today: its dist-info ships
 # vendored license texts nested ~190 characters deep
 # (…\kineto\…\dynolog\…\prometheus-cpp\…\civetweb\…\duktape-1.5.2\LICENSE.txt),
@@ -305,12 +305,12 @@ def flatten_deep_license_trees(python_dir: Path) -> None:
 
     Files whose path relative to ``python_dir`` exceeds ``MAX_RELATIVE_PATH``
     are only tolerated inside a ``*.dist-info/licenses`` tree (vendored license
-    texts — torch is the known offender). Each offending top-level subtree under
+    texts - torch is the known offender). Each offending top-level subtree under
     ``licenses/`` is concatenated into a single ``<subtree>-CONSOLIDATED.txt``
     beside it (every text is kept, with its original relative path as a header,
     so license compliance is preserved) and the deep tree is removed. This makes
     the package's pip RECORD stale for those entries, which pip only notices as
-    a warning on uninstall/upgrade of that dist — never at runtime. Any over-long
+    a warning on uninstall/upgrade of that dist - never at runtime. Any over-long
     file OUTSIDE a licenses tree fails the build so a new offender is caught
     here, at build time, instead of aborting user updates in the field.
     """
@@ -432,7 +432,7 @@ def main() -> int:
         pip_install(py, ["--force-reinstall", "--no-deps", str(args.wheel)], cache_dir)
     else:
         if args.reuse_env:
-            log("reuse-env requested but no existing env — doing a full build")
+            log("reuse-env requested but no existing env - doing a full build")
         # Start clean so a rebuild never layers onto a stale interpreter.
         if python_dir.exists():
             shutil.rmtree(python_dir)
@@ -449,7 +449,7 @@ def main() -> int:
     compile_bytecode(py, python_dir, args.os)
 
     # Both branches, Windows only: a runtime must never ship over-long paths
-    # (MAX_PATH breaks installs/updates — see flatten_deep_license_trees).
+    # (MAX_PATH breaks installs/updates - see flatten_deep_license_trees).
     # macOS/Linux have no such limit and their torch builds legitimately ship
     # deep non-license paths (e.g. ARM64 KleidiAI headers under
     # torch/include/kai/ukernels/), so the check would only false-positive there.

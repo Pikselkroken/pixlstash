@@ -72,7 +72,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("OverlayActionReceipt — states", () => {
+describe("OverlayActionReceipt - states", () => {
   it("renders nothing while there is no receipt", () => {
     const wrapper = mount(OverlayActionReceipt, globalOpts);
     expect(wrapper.find(".overlay-receipt").exists()).toBe(false);
@@ -114,7 +114,7 @@ describe("OverlayActionReceipt — states", () => {
   });
 });
 
-describe("OverlayActionReceipt — the scope clause", () => {
+describe("OverlayActionReceipt - the scope clause", () => {
   // The lightbox shows one picture while Ctrl+Z can revert an action across
   // thousands. The clause is derived from the COUNT only, so navigating to the
   // next picture cannot falsify it.
@@ -150,7 +150,7 @@ describe("OverlayActionReceipt — the scope clause", () => {
   });
 });
 
-describe("OverlayActionReceipt — the receipt contract", () => {
+describe("OverlayActionReceipt - the receipt contract", () => {
   it("hands CSS the same window the store's timer uses", async () => {
     const { wrapper } = mountWith(op());
     await wrapper.vm.$nextTick();

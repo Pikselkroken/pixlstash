@@ -12,15 +12,15 @@
       <span class="rs-bin-banner-text">
         <!-- With neighbours, state the neighbour vote. With none (the zero-
              ground-truth fallback the backend flags with an empty `neighbors`
-             list), a "0 of 0 similar images" sentence would be fabricated —
+             list), a "0 of 0 similar images" sentence would be fabricated -
              show the backend's free-text `reason` instead. -->
         <template v-if="hasNeighbors">
           <template v-if="isRemove"
-            >Tagged “{{ item.tag }}” — but only {{ nHas }} of
+            >Tagged “{{ item.tag }}” - but only {{ nHas }} of
             {{ nTot }} similar images have it.</template
           >
           <template v-else
-            >Not tagged “{{ item.tag }}” — but {{ nHas }} of
+            >Not tagged “{{ item.tag }}” - but {{ nHas }} of
             {{ nTot }} similar images have it.</template
           >
           <span class="rs-bin-banner-conf"> · {{ taggerText }}</span>
@@ -48,7 +48,7 @@
         <v-icon size="15">mdi-image-filter-center-focus</v-icon>
         Tag location
       </button>
-      <span v-if="item._isNew" class="rs-bin-new">NEW — from refresh</span>
+      <span v-if="item._isNew" class="rs-bin-new">NEW - from refresh</span>
     </div>
 
     <!-- Picture + collapsible similar column -->
@@ -100,7 +100,7 @@
       </figure>
 
       <!-- Collapsible neighbour column: the scan's evidence, made visible.
-           Thumbs are zoomable context only — they never demand a verdict. -->
+           Thumbs are zoomable context only - they never demand a verdict. -->
       <button
         v-if="hasNeighbors && !similarOpen"
         class="rs-similar-closed"
@@ -127,7 +127,7 @@
           </button>
         </div>
         <div class="rs-similar-why">
-          {{ nHas }} of {{ nTot }} have “{{ item.tag }}” — why this was flagged
+          {{ nHas }} of {{ nTot }} have “{{ item.tag }}” - why this was flagged
         </div>
         <div class="rs-similar-grid">
           <button
@@ -138,8 +138,8 @@
             type="button"
             :title="
               n.has
-                ? `#${n.picture_id} — has “${item.tag}”`
-                : `#${n.picture_id} — no “${item.tag}”`
+                ? `#${n.picture_id} - has “${item.tag}”`
+                : `#${n.picture_id} - no “${item.tag}”`
             "
             @click="openZoom(n.picture_id)"
           >
@@ -254,7 +254,7 @@ function thumbSrc(id) {
 }
 
 function onImgError(event, id) {
-  // Full-res failed (e.g. unusual extension) — fall back to the thumbnail once.
+  // Full-res failed (e.g. unusual extension) - fall back to the thumbnail once.
   const el = event?.target;
   if (!el || el.dataset.fellBack) return;
   el.dataset.fellBack = "1";
@@ -638,7 +638,7 @@ function zoomToRegion(box) {
   object-fit: cover;
   display: block;
 }
-/* Reference-only lock on a neighbour that lives in a locked set — small corner
+/* Reference-only lock on a neighbour that lives in a locked set - small corner
    chip using the shared `--scrim-photo` token, matching this card's tag chips. */
 .rs-thumb-lock {
   position: absolute;

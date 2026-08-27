@@ -674,7 +674,7 @@ def register_routes(router, server):
             "against (the score is then `null`); otherwise `true`.\n\n"
             "Intended for quality gates (e.g. the ComfyUI Face Likeness Gate) "
             "that score generated frames against a character without polluting "
-            "the vault — no tagging, captioning, embedding, or vault-wide "
+            "the vault - no tagging, captioning, embedding, or vault-wide "
             "likeness work is triggered."
         ),
         response_model=ScoreCharacterLikenessResponse,
@@ -813,7 +813,7 @@ def register_routes(router, server):
                 if fr.embedding is not None
             ]
             if not candidate_faces:
-                # No detectable face — nothing to score, so the frame is
+                # No detectable face - nothing to score, so the frame is
                 # ineligible and a gate rejects it regardless of threshold.
                 results.append(
                     {"index": idx, "character_likeness": None, "eligible": False}

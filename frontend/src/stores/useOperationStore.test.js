@@ -214,7 +214,7 @@ describe("formatOperationTime", () => {
   });
 });
 
-describe("useOperationStore — refresh and the history split", () => {
+describe("useOperationStore - refresh and the history split", () => {
   it("splits applied rows into past and undone rows into future", async () => {
     const store = useOperationStore();
     serve([
@@ -248,7 +248,7 @@ describe("useOperationStore — refresh and the history split", () => {
   });
 });
 
-describe("useOperationStore — receipts narrate this client only", () => {
+describe("useOperationStore - receipts narrate this client only", () => {
   it("raises no receipt on the first load", async () => {
     const store = useOperationStore();
     serve([op({ id: 9 })]);
@@ -297,7 +297,7 @@ describe("useOperationStore — receipts narrate this client only", () => {
     await store.refresh();
 
     expect(store.receipt).toBeNull();
-    // The stack still moved — silently is not the same as not at all.
+    // The stack still moved - silently is not the same as not at all.
     expect(store.past.map((o) => o.id)).toEqual([10, 9]);
   });
 
@@ -357,7 +357,7 @@ describe("useOperationStore — receipts narrate this client only", () => {
     expect(store.receipt.mergedCount).toBe(0);
   });
 
-  it("never stacks two receipts — the newest replaces the current one", async () => {
+  it("never stacks two receipts - the newest replaces the current one", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10 }), op({ id: 9 })]);
     await store.refresh();
@@ -386,7 +386,7 @@ describe("useOperationStore — receipts narrate this client only", () => {
   });
 });
 
-describe("useOperationStore — the receipt countdown", () => {
+describe("useOperationStore - the receipt countdown", () => {
   async function withLiveReceipt() {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10 }), op({ id: 9 })]);
@@ -423,7 +423,7 @@ describe("useOperationStore — the receipt countdown", () => {
   });
 });
 
-describe("useOperationStore — undo and redo", () => {
+describe("useOperationStore - undo and redo", () => {
   it("undoes, then flips the receipt to the undone state with Redo offered", async () => {
     const store = await primed([op({ id: 10, summary: "Moved to Scrapheap" })]);
     undoLastOperation.mockResolvedValue({ operations: [op({ id: 10 })] });
@@ -499,7 +499,7 @@ describe("useOperationStore — undo and redo", () => {
   });
 });
 
-describe("useOperationStore — undoTo walks the stack", () => {
+describe("useOperationStore - undoTo walks the stack", () => {
   it("undoes every step from the newest down to the clicked one", async () => {
     const store = await primed([
       op({ id: 13 }),
@@ -550,7 +550,7 @@ describe("useOperationStore — undoTo walks the stack", () => {
   });
 });
 
-describe("useOperationStore — WebSocket reconciliation", () => {
+describe("useOperationStore - WebSocket reconciliation", () => {
   /** Fire an event and let the trailing-edge debounce elapse. */
   async function fire(store, payload) {
     const settled = store.onPictureEvent(payload);
@@ -623,7 +623,7 @@ describe("useOperationStore — WebSocket reconciliation", () => {
   });
 });
 
-describe("useOperationStore — a shortcut never does nothing silently", () => {
+describe("useOperationStore - a shortcut never does nothing silently", () => {
   it("says so when there is nothing to undo", async () => {
     const store = useOperationStore();
     serve([]);
@@ -667,7 +667,7 @@ describe("useOperationStore — a shortcut never does nothing silently", () => {
   });
 });
 
-describe("useOperationStore — failure shapes", () => {
+describe("useOperationStore - failure shapes", () => {
   it("reports a locked picture set as a state, not as an error", async () => {
     const store = await primed([op({ id: 10 })]);
     undoLastOperation.mockRejectedValue({
@@ -695,7 +695,7 @@ describe("useOperationStore — failure shapes", () => {
   });
 });
 
-describe("useOperationStore — nextUndoIsExternal", () => {
+describe("useOperationStore - nextUndoIsExternal", () => {
   it("is false for this client's own step", async () => {
     const store = await primed([op({ id: 10 })]);
     expect(store.nextUndoIsExternal).toBe(false);
@@ -719,7 +719,7 @@ describe("useOperationStore — nextUndoIsExternal", () => {
   });
 });
 
-describe("useOperationStore — reset", () => {
+describe("useOperationStore - reset", () => {
   it("drops the history, the receipt and the enablement flags", async () => {
     const store = await primed([op({ id: 10 })]);
     store.showReceipt(store.buildReceipt(op({ id: 10 }), "did"));
@@ -786,12 +786,12 @@ describe("useOperationStore — reset", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ghost tiles — the `none → pending → committed` machine
+// Ghost tiles - the `none → pending → committed` machine
 // ---------------------------------------------------------------------------
 //
 // A move to the Scrapheap leaves its tiles on screen, ghosted, for as long as
 // the undo is one click away. The window is the RECEIPT's, never a clock of its
-// own, so every test below drives the ghosts by driving the receipt — that is
+// own, so every test below drives the ghosts by driving the receipt - that is
 // the only way the two can be shown not to drift.
 
 const MOVE = "pictures.scrapheap.move";
@@ -810,7 +810,7 @@ function raiseMoveReceipt(store, overrides = {}) {
   return row;
 }
 
-describe("useOperationStore — ghost tiles", () => {
+describe("useOperationStore - ghost tiles", () => {
   it("ghosts a moved set and holds it for the receipt's destructive dwell", () => {
     const store = useOperationStore();
     expect(store.markGhosted([1, 2])).toBe(true);
@@ -939,7 +939,7 @@ describe("useOperationStore — ghost tiles", () => {
     expect(store.ghostState).toBe("none");
     // No collapse: the pictures are already absent from the refetched grid.
     expect(store.collapsingPictureIds).toEqual([]);
-    // …and the receipt is untouched — undo is still on offer.
+    // …and the receipt is untouched - undo is still on offer.
     expect(store.receipt).not.toBeNull();
   });
 

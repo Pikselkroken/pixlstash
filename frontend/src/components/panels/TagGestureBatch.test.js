@@ -79,7 +79,7 @@ describe("the lightbox chip delete", () => {
     wrapper.unmount();
   });
 
-  it("gives a second chip delete its own id — two gestures, two undo steps", async () => {
+  it("gives a second chip delete its own id - two gestures, two undo steps", async () => {
     const wrapper = mount(OverlayTagsPanel, {
       props: {
         image: {

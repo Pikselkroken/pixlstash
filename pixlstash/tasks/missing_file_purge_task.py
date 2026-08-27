@@ -59,8 +59,8 @@ class MissingFilePurgeTask(BaseTask):
                 if os.path.isfile(resolved):
                     continue
                 if file_location_is_unreachable(resolved):
-                    # The file is absent because its LOCATION is absent — an
-                    # unmounted reference folder or a dropped network share —
+                    # The file is absent because its LOCATION is absent - an
+                    # unmounted reference folder or a dropped network share -
                     # not because it was deleted. Purging here would delete a
                     # live picture's row AND write file_removed=True, so a later
                     # restore would refuse to bring it back: permanent loss of a
@@ -68,7 +68,7 @@ class MissingFilePurgeTask(BaseTask):
                     # back; the next pass will re-examine it.
                     unreachable += 1
                     logger.warning(
-                        "MissingFilePurgeTask: SKIPPING picture %s — its "
+                        "MissingFilePurgeTask: SKIPPING picture %s - its "
                         "location is unreachable (parent directory missing at "
                         "%s; unmounted reference folder or network vault?). Not "
                         "purging, because the file may still exist.",
@@ -95,7 +95,7 @@ class MissingFilePurgeTask(BaseTask):
             return {"purged": 0}
 
         logger.info(
-            "MissingFilePurgeTask: found %s missing file(s) in batch of %s — purging.",
+            "MissingFilePurgeTask: found %s missing file(s) in batch of %s - purging.",
             len(missing),
             len(self._pictures),
         )
@@ -134,7 +134,7 @@ class MissingFilePurgeTask(BaseTask):
                     # The path was first logged as file_removed=False (removed
                     # from the library but the file was deliberately kept). The
                     # file has now genuinely vanished, so upgrade the stale flag
-                    # to True instead of skipping — the ledger must be truthful,
+                    # to True instead of skipping - the ledger must be truthful,
                     # not merely rely on restore's separate missing-file net.
                     # Only ever raise False -> True; never downgrade.
                     already_logged.file_removed = True

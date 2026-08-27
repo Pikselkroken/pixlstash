@@ -16,7 +16,7 @@
           v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
-          title="Regenerate description — deletes the current description and requeues it for captioning"
+          title="Regenerate description - deletes the current description and requeues it for captioning"
           :disabled="isDescriptionRefreshing"
           @click.stop="refreshDescription()"
         >
@@ -90,7 +90,7 @@
     <template v-if="!descriptionCollapsed">
       <div v-if="locked && lockNote" class="overlay-lock-note" :title="lockNote">
         <v-icon size="12">mdi-lock-outline</v-icon>
-        <span>Locked — read-only. Unlock the set to edit.</span>
+        <span>Locked - read-only. Unlock the set to edit.</span>
       </div>
       <div
         class="description-editor"

@@ -140,7 +140,7 @@
   gap: var(--space-3);
 }
 
-/* Persistent translucent lock chip — signals the picture is frozen by a locked
+/* Persistent translucent lock chip - signals the picture is frozen by a locked
    set. Same warm-shadow translucency the overlay chrome uses elsewhere. */
 .overlay-lock-chip {
   display: inline-flex;
@@ -355,7 +355,7 @@
 }
 
 /* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
-   `on-warning` / `on-error` are the wrong tokens here — they are authored for a
+   `on-warning` / `on-error` are the wrong tokens here - they are authored for a
    solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
    The right foreground is the surface's own, matching `.overlay-comfy-note` and
    `.overlay-comfy-status` directly above; the hue comes from the dark-surface

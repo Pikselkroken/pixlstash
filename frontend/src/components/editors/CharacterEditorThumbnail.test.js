@@ -2,7 +2,7 @@
 //
 // The three assertions that matter are about what reaches the PATCH: the key is
 // only sent when the user actually picked, `null` is a real value meaning "back
-// to the automatic choice", and it is NOT sent when nothing was touched — an
+// to the automatic choice", and it is NOT sent when nothing was touched - an
 // absent key is what tells the backend to leave an existing pin alone.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -71,7 +71,7 @@ function pickButtons(wrapper) {
   return wrapper.findAll(".ref-picture-pick");
 }
 
-describe("CharacterEditor — thumbnail pin", () => {
+describe("CharacterEditor - thumbnail pin", () => {
   it("marks the pinned reference image and nothing else", async () => {
     const wrapper = await openEditor({
       id: 99,

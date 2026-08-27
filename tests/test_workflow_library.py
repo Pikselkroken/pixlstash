@@ -6,7 +6,7 @@ because a rule shipped without them was found broken by measurement:
 
 * **§Node identity's six invariants.** The superseded canonicalization
   relabelled nodes by topological sort and tie-broke on ``(class_type, input
-  signature)`` — which does not break the tie two twin ``CLIPTextEncode`` nodes
+  signature)`` - which does not break the tie two twin ``CLIPTextEncode`` nodes
   produce, so the "canonical" id fell through to JSON serialisation order. 12
   of 40 real workflows changed their structural hash when only the key order
   moved. :func:`test_reshuffled_key_order_keys_the_same` is that case.
@@ -250,7 +250,7 @@ def edited(spec, node_id, **widgets):
 
 
 # ---------------------------------------------------------------------------
-# §Node identity — the six invariants
+# §Node identity - the six invariants
 # ---------------------------------------------------------------------------
 
 
@@ -316,7 +316,7 @@ def test_rewiring_forks_the_key_with_the_nodes_left_alone():
     """The **edges** half of "node classes and named-input edges".
 
     Every other fork fixture forks by removing a node or changing a widget, so
-    all of them would still pass with the edges deleted from the key entirely —
+    all of them would still pass with the edges deleted from the key entirely -
     at which point topology degenerates into the class multiset the library
     plan retired. This one holds the node multiset and every widget constant
     and moves one connection: VAEDecode takes the raw latent instead of the
@@ -334,7 +334,7 @@ def test_refinement_separates_graphs_that_agree_one_hop_out():
     Both graphs hold the same nodes with the same widgets, and every node sees
     the same neighbour *classes*. They differ only in that one shares a loader
     between both text encoders while the other gives each its own. Nothing a
-    single hop can see tells them apart, so without refinement they collide —
+    single hop can see tells them apart, so without refinement they collide -
     which is the whole failure mode the corrected rule exists to answer, one
     tier down from the twin-node case.
     """
@@ -360,8 +360,8 @@ def test_a_two_number_widget_is_not_read_as_a_connection():
     """A resolution pair is bucket P, not an edge.
 
     Reading ``[1024, 1024]`` as ``[node_id, slot]`` puts a parameter into the
-    topology, which the spec calls the unrecoverable direction — it shatters
-    grouping into near-duplicate recipes — and writes a link to a node that
+    topology, which the spec calls the unrecoverable direction - it shatters
+    grouping into near-duplicate recipes - and writes a link to a node that
     does not exist into the stored graph. All 501,128 links measured across the
     owner's libraries carry a string node id, so the class is closed on that.
     """
@@ -388,7 +388,7 @@ def test_pixlstash_loader_keys_on_the_digest_not_the_pointer():
     """``lora_sha256`` is the identity; ``pixlstash_lora_id`` is install-local.
 
     Named rather than extension-shaped, so without an explicit rule a LoRA swap
-    on a PixlStash node would leave the recipe unchanged — the one direction
+    on a PixlStash node would leave the recipe unchanged - the one direction
     the spec calls unrecoverable.
     """
     spec = TXT2IMG + [
@@ -528,7 +528,7 @@ def test_a_reroute_is_stepped_through():
 
 
 # ---------------------------------------------------------------------------
-# §Subgraphs — the five fixtures that section names
+# §Subgraphs - the five fixtures that section names
 # ---------------------------------------------------------------------------
 
 
@@ -575,7 +575,7 @@ def test_a_bypassed_subgraph_takes_its_whole_contents_with_it():
     """ComfyUI does not execute a bypassed instance, so neither do we.
 
     Expanding it anyway leaves its inner nodes standing while every edge
-    through it disappears — a key for a graph that has never run. A bypassed
+    through it disappears - a key for a graph that has never run. A bypassed
     *ordinary* node already drops correctly, and this is the same rule applied
     one level down.
     """
@@ -599,7 +599,7 @@ def test_a_definition_that_serialises_its_own_io_nodes_keys_the_same():
 
     Installed before it, they would be overwritten by any definition that
     serialises ``inputNode``/``outputNode`` into ``nodes``, and both boundaries
-    would key as ordinary graph nodes — nine emitted for a seven-node graph.
+    would key as ordinary graph nodes - nine emitted for a seven-node graph.
     """
     workflow = subgraph_ui_workflow()
     definition = workflow["definitions"]["subgraphs"][0]
@@ -629,7 +629,7 @@ def test_a_link_to_a_node_that_does_not_exist_is_refused():
     """Dropping it would key the same as the graph with that edge deleted.
 
     Worse, the API-side reduction keeps its dangling edges, so silently
-    dropping this one lets the two serialisations of one workflow disagree —
+    dropping this one lets the two serialisations of one workflow disagree -
     which is the portability claim the topology tier exists to make.
     """
     workflow = ui_workflow(TXT2IMG)
@@ -646,7 +646,7 @@ def test_the_ui_topology_of_a_subgraph_workflow_matches_its_api_graph():
 
 
 # ---------------------------------------------------------------------------
-# B1 — the hub tables
+# B1 - the hub tables
 # ---------------------------------------------------------------------------
 
 WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_graph")
@@ -823,7 +823,7 @@ def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
     These tables were amended into schema v2 rather than shipped as a v3, which
     only works because `apply_migrations` re-runs `_apply_v2` for a hub already
     at 2. A hub created by this build has them from its first open, so nothing
-    else in this file touches that path — and a regression that stopped
+    else in this file touches that path - and a regression that stopped
     creating them for an existing hub would leave the whole suite green.
     """
     path = str(tmp_path / "hub.db")
@@ -888,7 +888,7 @@ def test_a_recipe_cannot_name_a_topology_that_does_not_exist(hub):
 
 
 # ---------------------------------------------------------------------------
-# The instance tier — a picture column, never a hub table
+# The instance tier - a picture column, never a hub table
 # ---------------------------------------------------------------------------
 
 
@@ -960,7 +960,7 @@ def test_no_hub_table_stores_an_instance(hub):
 
 
 # ---------------------------------------------------------------------------
-# B3 — ingest writes to the hub, and the rows outlive their pictures
+# B3 - ingest writes to the hub, and the rows outlive their pictures
 # ---------------------------------------------------------------------------
 
 

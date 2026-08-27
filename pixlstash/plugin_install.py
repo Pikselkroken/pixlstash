@@ -220,8 +220,8 @@ def _class_kinds(
 ) -> tuple[dict[str, set[str]], set[str]]:
     """Resolve each class to the plugin kind(s) it derives from.
 
-    Also returns the classes with a base we could not resolve at all — an
-    imported mixin, say — for which the method checks are unreliable.
+    Also returns the classes with a base we could not resolve at all - an
+    imported mixin, say - for which the method checks are unreliable.
     """
     kinds: dict[str, set[str]] = {name: set() for name in classes}
     opaque: set[str] = set()
@@ -387,7 +387,7 @@ def _analyse(source: str, path: Path, *, strict: bool) -> list[PluginClass]:
     if len(image_classes) > 1:
         # _find_plugin_class returns the first *concrete* ImagePlugin subclass
         # the module itself defines (#968), so an abstract base or an imported
-        # class no longer wins — but between two concrete ones it is still a
+        # class no longer wins - but between two concrete ones it is still a
         # dict-ordering accident. Nothing downstream reports this.
         image_classes[0].warnings.append(
             f"{path.name} defines {len(image_classes)} ImagePlugin subclasses "
@@ -407,7 +407,7 @@ def read_source(path: Path) -> str:
 
     ``UnicodeDecodeError`` is a ``ValueError``, not an ``OSError``, so a single
     non-UTF-8 file in a plugin directory would otherwise escape every caller's
-    handler and take `plugins list` down with it — including the entries that
+    handler and take `plugins list` down with it - including the entries that
     are perfectly fine, in the one command whose job is to say what is wrong.
     """
     try:
@@ -480,7 +480,7 @@ def _download_repository(ref: str, workdir: Path) -> Path:
     # sending: an unchecked `--ref ../../../someone-else/evil/zip/main` walks
     # straight out of PLUGINS_REPO and installs code that this CLI then runs
     # unsandboxed in the server process. The repository source is deliberately
-    # narrow — a named plugin from one repository — and this is what keeps it
+    # narrow - a named plugin from one repository - and this is what keeps it
     # narrow.
     if not _REF_RE.match(ref) or ".." in ref.split("/"):
         raise PluginError(
@@ -518,7 +518,7 @@ def _published_dirs(root: Path) -> list[Path]:
 def _declared_name(folder: Path) -> str | None:
     """Return the name a published plugin folder declares, or None if unreadable.
 
-    The same ast-only read the catalogue and the installer do — nothing here
+    The same ast-only read the catalogue and the installer do - nothing here
     imports code that has just come off the network. A folder that will not
     parse, or declares no plugin, is not an error at this point: it is one entry
     the reader cannot be offered, and the others still have to work.
@@ -536,9 +536,9 @@ def _declared_name(folder: Path) -> str | None:
 def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
     """Download the plugin called *name* and return its folder.
 
-    Matched on the plugin's **declared** name first — that is what ``plugins
+    Matched on the plugin's **declared** name first - that is what ``plugins
     available`` prints, what it lands under once installed, what ``plugins
-    list`` shows and what ``plugins remove`` takes — and on the repository's
+    list`` shows and what ``plugins remove`` takes - and on the repository's
     directory name second, because that is a real name too and was the only one
     accepted before. Accepting only the directory name meant the catalogue
     advertised `moondream2` and installing it failed.
@@ -546,7 +546,7 @@ def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
     Both passes look at the **whole** set before choosing, so a declared name
     always beats a directory name rather than merely beating the ones that
     happen to sort after it, and two folders answering to the same name are
-    refused rather than resolved alphabetically — the shape `resolve_removal`
+    refused rather than resolved alphabetically - the shape `resolve_removal`
     already uses for an ambiguous name. Silently picking one would mean the
     plugin a reader installs is decided by a string inside downloaded code that
     nothing in the listing shows them.
@@ -650,7 +650,7 @@ def plan_install(root: Path, *, strict: bool = False) -> InstallPlan:
         source = root
         destination = destination_dir / primary.name
     else:
-        # Everything else installs as the single module that declares it —
+        # Everything else installs as the single module that declares it -
         # always, for image plugins, which the registry only ever reads as one
         # file.
         source = primary.file
@@ -663,7 +663,7 @@ def plan_install(root: Path, *, strict: bool = False) -> InstallPlan:
             ]
             if siblings:
                 # Only the one module travels, so a helper it imports is left
-                # behind and the plugin fails at import — where, for image
+                # behind and the plugin fails at import - where, for image
                 # plugins, nothing reports it. Say so here or nowhere.
                 warnings.append(
                     f"only {source.name} is installed; "
@@ -716,9 +716,9 @@ def install(plan: InstallPlan, *, force: bool = False) -> None:
     if existing and not force:
         raise PluginError(f"{existing[0]} already exists. Pass --force to replace it.")
 
-    # Reinstalling a plugin over itself is a plausible gesture — you edited the
+    # Reinstalling a plugin over itself is a plausible gesture - you edited the
     # installed file, or you tab-completed the path out of the plugin directory
-    # — and without this it deletes the only copy and then fails to find its
+    # - and without this it deletes the only copy and then fails to find its
     # source. --force makes it worse, not better.
     source = plan.source.resolve()
     if any(
@@ -974,7 +974,7 @@ def _summary(folder: Path) -> str:
     saying what the plugin does. That paragraph is *hard-wrapped*, so the first
     line of it is a fragment ("...so it runs") rather than a sentence: the lines
     are joined back up before the first sentence is taken. A plugin without a
-    README, or with a shape this does not fit, simply has no summary — guessing
+    README, or with a shape this does not fit, simply has no summary - guessing
     harder would put the wrong sentence in a listing people read to choose what
     to install.
     """
@@ -1009,7 +1009,7 @@ def _catalogue_entry(folder: Path, installed: set[str]) -> CataloguePlugin:
 
     One unparseable plugin in the repository must not empty the whole listing:
     the reader is choosing between the others, and a refusal that names none of
-    them is useless. Nothing here imports the plugin — this is the same ast-only
+    them is useless. Nothing here imports the plugin - this is the same ast-only
     read the installer does, on code that has just come off the network.
     """
     kind = CAPTIONING if folder.parent.name == "captioning" else IMAGE
@@ -1049,7 +1049,7 @@ def catalogue(ref: str = DEFAULT_REF) -> list[CataloguePlugin]:
     """Return every plugin published in the repository at *ref*.
 
     One download of the same archive ``plugins install <name>`` uses, so
-    listing needs no API token, no second host and no rate-limited endpoint —
+    listing needs no API token, no second host and no rate-limited endpoint -
     and shows exactly the set that installing can reach.
     """
     installed = {
@@ -1063,8 +1063,8 @@ def catalogue(ref: str = DEFAULT_REF) -> list[CataloguePlugin]:
 def matches(entry: CataloguePlugin, query: str) -> bool:
     """Return whether *entry* matches a case-insensitive *query*.
 
-    Searched across everything the listing shows — name, display name, summary,
-    author and licence — because a reader who can see a word in the output will
+    Searched across everything the listing shows - name, display name, summary,
+    author and licence - because a reader who can see a word in the output will
     expect to be able to search for it. An empty query matches everything.
     """
     needle = query.strip().lower()
@@ -1083,7 +1083,7 @@ def resolve_removal(name: str, kind: str | None = None) -> tuple[str, Path]:
     tidiness. Two things enforce it, and both are needed: the name may not carry
     a path separator (so it cannot name anything but a direct child), and the
     entry may not be a symlink (so following it cannot reach outside either).
-    The symlink is refused rather than followed on purpose — resolving it would
+    The symlink is refused rather than followed on purpose - resolving it would
     stay inside the letter of "delete only plugin files" while deleting a file
     the user did not name.
     """
