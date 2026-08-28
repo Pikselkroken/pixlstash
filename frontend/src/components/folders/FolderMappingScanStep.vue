@@ -219,6 +219,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .scan-step__stat {
