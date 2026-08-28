@@ -27,7 +27,15 @@ defineProps({
 </template>
 
 <style scoped>
+/* A flex column with a reserved height and the actions pinned to the bottom,
+   so the button row sits at the same y whether the body is the verdict's
+   name field or the read's progress bar: the swap between them must not move
+   anything. 216px (on the 4px grid) fits the taller of those two; a longer
+   body (the finished read's list) grows the card from there. */
 .mapping-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 216px;
   padding: var(--space-5);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -55,6 +63,7 @@ defineProps({
 .mapping-card__actions {
   display: flex;
   gap: var(--space-3);
-  margin-top: var(--space-6);
+  margin-top: auto;
+  padding-top: var(--space-6);
 }
 </style>

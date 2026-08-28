@@ -126,21 +126,6 @@ onUnmounted(() => {
   <div class="scan-step">
     <p v-if="loadError" class="scan-step__error" role="alert">{{ loadError }}</p>
 
-    <div v-else-if="result" class="scan-step__stats">
-      <div class="scan-step__stat">
-        <div class="scan-step__stat-value">{{ result.picture_count.toLocaleString() }}</div>
-        <div class="scan-step__stat-label">pictures, in {{ result.folder_count.toLocaleString() }} folders</div>
-      </div>
-      <div v-if="result.truncated" class="scan-step__stat scan-step__stat--warn">
-        <div class="scan-step__stat-value">stopped early</div>
-        <div class="scan-step__stat-label">the tree was bigger than this pass covers</div>
-      </div>
-      <div v-if="result.unreadable_folders" class="scan-step__stat scan-step__stat--warn">
-        <div class="scan-step__stat-value">{{ result.unreadable_folders }}</div>
-        <div class="scan-step__stat-label">folder(s) could not be read</div>
-      </div>
-    </div>
-
     <FolderMappingCard
       :title="isDone ? 'What it found' : 'Working out what your folders mean'"
       :lead="
@@ -168,7 +153,22 @@ onUnmounted(() => {
         </div>
       </template>
 
-      <ul v-else-if="summary" class="scan-step__summary">
+      <template v-else>
+        <div v-if="result" class="scan-step__stats">
+          <div class="scan-step__stat">
+            <div class="scan-step__stat-value">{{ result.picture_count.toLocaleString() }}</div>
+            <div class="scan-step__stat-label">pictures, in {{ result.folder_count.toLocaleString() }} folders</div>
+          </div>
+          <div v-if="result.truncated" class="scan-step__stat scan-step__stat--warn">
+            <div class="scan-step__stat-value">stopped early</div>
+            <div class="scan-step__stat-label">the tree was bigger than this pass covers</div>
+          </div>
+          <div v-if="result.unreadable_folders" class="scan-step__stat scan-step__stat--warn">
+            <div class="scan-step__stat-value">{{ result.unreadable_folders }}</div>
+            <div class="scan-step__stat-label">folder(s) could not be read</div>
+          </div>
+        </div>
+        <ul v-if="summary" class="scan-step__summary">
         <li v-if="summary.tallies.person">✓ {{ summary.tallies.person }} folder(s) read as Person</li>
         <li v-if="summary.tallies.set">✓ {{ summary.tallies.set }} folder(s) read as Set</li>
         <li v-if="summary.tallies.project">✓ {{ summary.tallies.project }} folder(s) read as Project</li>
@@ -176,10 +176,11 @@ onUnmounted(() => {
         <li v-if="summary.narrowed" class="scan-step__summary-muted">
           - {{ summary.narrowed }} narrowed to a choice - you'll pick
         </li>
-        <li v-if="summary.silent" class="scan-step__summary-muted">
-          - {{ summary.silent }} with nothing to say
-        </li>
-      </ul>
+          <li v-if="summary.silent" class="scan-step__summary-muted">
+            - {{ summary.silent }} with nothing to say
+          </li>
+        </ul>
+      </template>
 
       <template #actions>
         <AppButton
