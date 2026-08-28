@@ -432,7 +432,9 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     assert len(new_thumbs) == 3, "each imported image should get its own thumbnail"
 
 
-def test_local_import_wakes_the_planner_as_each_chunk_lands(owner_env, monkeypatch):
+def test_local_import_wakes_the_planner_as_each_chunk_lands(
+    owner_env, monkeypatch, caplog
+):
     """Workers must start on the first indexed chunk, not on the commit's end.
 
     The planner sweeps only on a wake or when its backoff expires, and an idle
@@ -449,10 +451,17 @@ def test_local_import_wakes_the_planner_as_each_chunk_lands(owner_env, monkeypat
 
     wakes = []
     monkeypatch.setattr(server.vault, "wake", lambda: wakes.append(1))
-    ids = commit_service.local_import_pictures(server, root, expected_pictures=2)
+    with caplog.at_level("INFO", logger=commit_service.logger.name):
+        ids = commit_service.local_import_pictures(server, root, expected_pictures=2)
 
     assert len(ids) == 2
     assert wakes, "the chunk landed without waking the WorkPlanner"
+    # The pass summary that says where an import's time went, read next to
+    # the planner's [PIPELINE_PASS] line.
+    summary = [
+        r.getMessage() for r in caplog.records if "[IMPORT_PASS]" in r.getMessage()
+    ]
+    assert summary and "pictures=2 reused=0" in summary[-1], summary
 
 
 def test_local_import_skips_dot_folders(owner_env):
