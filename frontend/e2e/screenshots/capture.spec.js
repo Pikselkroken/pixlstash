@@ -84,6 +84,11 @@ test.describe('reproduce website screenshots', () => {
 
   for (const scene of scenes) {
     test(`${scene.id} → ${scene.assets.join(', ')}`, async ({ page, apiContext }) => {
+      // A scene that waits on real backend work (the v1.11 folder read runs
+      // face detection over the fixture on CPU) declares how long it needs.
+      // Its own expect timeout is not enough on its own — the test timeout
+      // fires first and the wait never gets to finish.
+      if (scene.timeout) test.setTimeout(scene.timeout)
       // Render as the desktop app (custom title bar + window controls) unless
       // the scene opts out (e.g. a recipient browser view). A scene may supply
       // `bridge` overrides (e.g. a CUDA/ROCm accelerator list) for the capture.
