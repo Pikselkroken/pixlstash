@@ -522,8 +522,6 @@ const pendingForThisLibrary = computed(() => {
   if (entry.mode !== "local_import") return entry;
   return _samePath(entry.path, librariesStore.activeLibrary?.path) ? entry : null;
 });
-const folderMappingWizardOpen = ref(false);
-const folderMappingWizardResume = ref(null);
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
@@ -554,7 +552,7 @@ function openReferenceFolderEditor(rf = null) {
     // the library's own storage. This used to open the mapping wizard in
     // reference mode, which, pointed at the library root, registered the
     // whole library as one reference folder.
-    openSettingsDialog("libraries");
+    openFolderMappingWizard();
     return;
   }
   referenceFolderEditorFolder.value = rf;
@@ -566,27 +564,24 @@ function closeReferenceFolderEditor() {
   referenceFolderEditorFolder.value = null;
 }
 
+// The wizard's open state is the store's, so Settings › Libraries and the
+// empty library's "Choose a folder…" open this same mounted instance.
 function openFolderMappingWizard(resume = null) {
-  folderMappingWizardResume.value = resume;
-  folderMappingWizardOpen.value = true;
-}
-
-function closeFolderMappingWizard() {
-  folderMappingWizardOpen.value = false;
+  mappingStore.openWizard(resume);
 }
 
 async function folderMappingWizardCommitted() {
-  folderMappingWizardOpen.value = false;
+  mappingStore.closeWizard();
   await fetchReferenceFolders();
   // A newly added folder may be active-but-unscanned, same as a plain add.
   _startFolderStatusPoll();
 }
 
-// "Add a library"'s "pictures" verdict saves a `local_import` entry and
-// switches the active library before this component even exists - reopening
-// this same wizard is therefore this session's ONLY chance to pick up that
-// intent, unlike the ordinary reference-folder "Finish organising…" row below,
-// which only ever needs a click because its scan is already running
+// "Add a library"'s "Yes, build this library" saves a `local_import` entry
+// with `autoCommit` and switches the active library before this component
+// even exists - reopening this same wizard is therefore this session's ONLY
+// chance to run that commit, unlike the ordinary "Finish organising…" row
+// below, which only ever needs a click because its read is already kept
 // server-side either way. `mappingStore.pending` is left untouched by this
 // auto-open, so if the owner cancels, the row still offers it again.
 // Watched rather than checked once on mount: the library list that says
@@ -4170,10 +4165,9 @@ defineExpose({
     @relocate="openReferenceFolderRelocateDialog"
   />
   <FolderMappingWizard
-    :open="folderMappingWizardOpen"
-    :registered-paths="registeredFolderPaths"
-    :resume="folderMappingWizardResume"
-    @close="closeFolderMappingWizard"
+    :open="mappingStore.wizardOpen"
+    :resume="mappingStore.wizardResume"
+    @close="mappingStore.closeWizard()"
     @committed="folderMappingWizardCommitted"
   />
   <FolderEditor

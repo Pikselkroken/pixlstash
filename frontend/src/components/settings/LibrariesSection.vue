@@ -35,10 +35,10 @@ import {
   useLibrariesStore,
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
 import { errorDetail } from "../../utils/apiError";
-import AddLibraryDialog from "./AddLibraryDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -54,6 +54,7 @@ const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
 const noticeStore = useNoticeStore();
+const mappingStore = useFolderMappingStore();
 const {
   libraries,
   canManage,
@@ -73,7 +74,6 @@ let copyResetTimer = 0;
 // behind a button.
 const commandsOpen = ref(false);
 const expandedPaths = ref(new Set());
-const addOpen = ref(false);
 const openMenuUuid = ref("");
 /** The library being renamed, or null. Held rather than looked up by uuid so a
     refresh mid-edit cannot swap the dialog's subject under the typing. */
@@ -83,10 +83,6 @@ const renameError = ref("");
 const renameBusy = ref(false);
 const renameInput = ref(null);
 const busyUuid = ref("");
-
-const registeredPaths = computed(() =>
-  libraries.value.map((library) => library.path).filter(Boolean),
-);
 
 const showOneLibraryPrimer = computed(
   () => hasLoadedSuccessfully.value && libraries.value.length === 1,
@@ -169,14 +165,6 @@ async function switchTo(library, event) {
     library,
     activeLibrary.value,
     trigger,
-  );
-}
-
-function libraryAdded(library) {
-  librariesStore.refresh();
-  noticeStore.success(
-    `Added "${library.name}". Nothing in that folder was moved.`,
-    { key: "libraries-added" },
   );
 }
 
@@ -295,7 +283,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
     >
       <div v-if="canManage" class="libraries-toolbar">
-        <AppButton size="sm" variant="primary" @click="addOpen = true">
+        <AppButton size="sm" variant="primary" @click="mappingStore.openWizard()">
           + Add a library…
         </AppButton>
       </div>
@@ -535,14 +523,6 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         </div>
       </v-card>
     </v-dialog>
-
-    <AddLibraryDialog
-      :open="addOpen"
-      :registered-paths="registeredPaths"
-      :in-docker="inDocker"
-      @added="libraryAdded"
-      @close="addOpen = false"
-    />
 
     <AppDialog
       :open="Boolean(renaming)"

@@ -1,10 +1,10 @@
-// "Add a library"'s "pictures" verdict saves a `useFolderMappingStore` entry
-// with `mode: "local_import"` and switches the active library, which ends in
-// a full page reload (AddLibraryDialog.vue). This is the other side of that
-// reload: SideBar has to notice the saved entry and reopen FolderMappingWizard
-// on its own, because there is no click left to hang the wizard off of - the
-// component that would have received one does not exist yet when the entry
-// was saved.
+// "Add a library"'s "Yes, build this library" saves a `useFolderMappingStore`
+// entry with `mode: "local_import"` and switches the active library, which
+// ends in a full page reload (FolderMappingWizard.vue). This is the other side
+// of that reload: SideBar has to notice the saved entry and reopen
+// FolderMappingWizard on its own, because there is no click left to hang the
+// wizard off of - the component that would have received one does not exist
+// yet when the entry was saved.
 //
 // An ordinary reference-folder pending entry must NOT auto-open - that one
 // only ever gets the "Finish organising…" row, unchanged, because its scan is

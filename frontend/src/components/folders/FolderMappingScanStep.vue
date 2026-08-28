@@ -1,25 +1,31 @@
 <script setup>
 /**
- * Wizard step 1 ("Main") - runs the Phase 2 folder-structure read and shows
- * what it found. Nothing is written here; see integration_architecture.md
- * §20. Starts the read on mount and polls it to completion.
+ * The folder-structure read (Phase 2), shown in the same card the folder's
+ * verdict was: "Working out what your folders mean", then what it found.
+ * Nothing is written here; see integration_architecture.md §20. Starts the
+ * read on mount (or reattaches to `resumeTaskId`) and polls it to
+ * completion. Cancelling the read is the wizard's job - it is the one that
+ * knows whether there is anything else to undo.
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { VProgressCircular } from "vuetify/components";
 
 import {
-  cancelFolderStructureRead,
   getFolderStructureReadStatus,
   startFolderStructureRead,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import FolderMappingCard from "./FolderMappingCard.vue";
 
 const props = defineProps({
   path: { type: String, required: true },
   // Resume an already-started (or already-settled) read instead of starting
   // a new one - the sidebar's "finish organising" re-enters here.
   resumeTaskId: { type: String, default: "" },
+  // Passed through to the read as `match_existing`. False before the library
+  // exists - see api/folderStructure.js.
+  matchExisting: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["task", "ready", "cancel"]);
@@ -31,7 +37,6 @@ const processed = ref(0);
 const total = ref(0);
 const result = ref(null);
 const loadError = ref("");
-const cancelling = ref(false);
 
 let pollTimer = null;
 let disposed = false;
@@ -93,29 +98,15 @@ async function begin() {
     if (props.resumeTaskId) {
       taskId.value = props.resumeTaskId;
     } else {
-      const started = await startFolderStructureRead(props.path);
+      const started = await startFolderStructureRead(props.path, {
+        matchExisting: props.matchExisting,
+      });
       taskId.value = started.task_id;
     }
     emit("task", taskId.value);
     poll();
   } catch (error) {
     loadError.value = errorDetail(error) || "Could not start scanning that folder.";
-  }
-}
-
-async function cancel() {
-  if (!taskId.value || cancelling.value) {
-    emit("cancel");
-    return;
-  }
-  cancelling.value = true;
-  try {
-    await cancelFolderStructureRead(taskId.value);
-  } catch {
-    // The read may have already settled; either way the wizard is closing.
-  } finally {
-    cancelling.value = false;
-    emit("cancel");
   }
 }
 
@@ -133,14 +124,6 @@ onUnmounted(() => {
 
 <template>
   <div class="scan-step">
-    <div class="scan-step__intro">
-      <p class="scan-step__lead">
-        Nothing has been imported, moved, renamed or written yet, and nothing
-        will be until you say so.
-      </p>
-      <span class="scan-step__path mono">{{ path }}</span>
-    </div>
-
     <p v-if="loadError" class="scan-step__error" role="alert">{{ loadError }}</p>
 
     <div v-else-if="result" class="scan-step__stats">
@@ -158,13 +141,15 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="scan-step__card">
+    <FolderMappingCard
+      :title="isDone ? 'What it found' : 'Working out what your folders mean'"
+      :lead="
+        isDone
+          ? ''
+          : 'Reading up to 20 pictures from each folder: who is in them, which have caption files beside them, which names repeat.'
+      "
+    >
       <template v-if="!isDone">
-        <div class="scan-step__card-title">Working out what your folders mean</div>
-        <p class="scan-step__card-lead">
-          Reading up to 20 pictures from each folder: who is in them, which
-          have caption files beside them, which names repeat.
-        </p>
         <div class="scan-step__bar">
           <VProgressCircular
             v-if="isIndeterminate"
@@ -183,23 +168,20 @@ onUnmounted(() => {
         </div>
       </template>
 
-      <template v-else-if="summary">
-        <div class="scan-step__card-title">What it found</div>
-        <ul class="scan-step__summary">
-          <li v-if="summary.tallies.person">✓ {{ summary.tallies.person }} folder(s) read as Person</li>
-          <li v-if="summary.tallies.set">✓ {{ summary.tallies.set }} folder(s) read as Set</li>
-          <li v-if="summary.tallies.project">✓ {{ summary.tallies.project }} folder(s) read as Project</li>
-          <li v-if="summary.tallies.tag">✓ {{ summary.tallies.tag }} folder(s) read as Tag</li>
-          <li v-if="summary.narrowed" class="scan-step__summary-muted">
-            - {{ summary.narrowed }} narrowed to a choice - you'll pick
-          </li>
-          <li v-if="summary.silent" class="scan-step__summary-muted">
-            - {{ summary.silent }} with nothing to say
-          </li>
-        </ul>
-      </template>
+      <ul v-else-if="summary" class="scan-step__summary">
+        <li v-if="summary.tallies.person">✓ {{ summary.tallies.person }} folder(s) read as Person</li>
+        <li v-if="summary.tallies.set">✓ {{ summary.tallies.set }} folder(s) read as Set</li>
+        <li v-if="summary.tallies.project">✓ {{ summary.tallies.project }} folder(s) read as Project</li>
+        <li v-if="summary.tallies.tag">✓ {{ summary.tallies.tag }} folder(s) read as Tag</li>
+        <li v-if="summary.narrowed" class="scan-step__summary-muted">
+          - {{ summary.narrowed }} narrowed to a choice - you'll pick
+        </li>
+        <li v-if="summary.silent" class="scan-step__summary-muted">
+          - {{ summary.silent }} with nothing to say
+        </li>
+      </ul>
 
-      <div class="scan-step__actions">
+      <template #actions>
         <AppButton
           variant="primary"
           :loading="!isDone && !loadError"
@@ -208,11 +190,11 @@ onUnmounted(() => {
         >
           Set up my library
         </AppButton>
-        <AppButton variant="secondary" :loading="cancelling" @click="cancel">
+        <AppButton variant="secondary" @click="emit('cancel')">
           Cancel
         </AppButton>
-      </div>
-    </div>
+      </template>
+    </FolderMappingCard>
   </div>
 </template>
 
@@ -220,28 +202,7 @@ onUnmounted(() => {
 .scan-step {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
-}
-
-.scan-step__intro {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.scan-step__lead {
-  margin: 0;
-  max-width: 60ch;
-  color: rgba(var(--v-theme-on-background), 0.72);
-  font-size: var(--text-sm);
-}
-
-.scan-step__path {
-  align-self: flex-start;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-panel));
-  font-size: var(--text-xs);
+  gap: var(--space-4);
 }
 
 .scan-step__error {
@@ -283,23 +244,6 @@ onUnmounted(() => {
   color: rgba(var(--v-theme-on-background), 0.65);
 }
 
-.scan-step__card {
-  padding: var(--space-5);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-}
-
-.scan-step__card-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
-
-.scan-step__card-lead {
-  margin: var(--space-2) 0 var(--space-5);
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-background), 0.72);
-}
-
 .scan-step__bar {
   display: flex;
   align-items: center;
@@ -337,11 +281,5 @@ onUnmounted(() => {
 
 .scan-step__summary-muted {
   color: rgba(var(--v-theme-on-background), 0.65);
-}
-
-.scan-step__actions {
-  display: flex;
-  gap: var(--space-3);
-  margin-top: var(--space-6);
 }
 </style>

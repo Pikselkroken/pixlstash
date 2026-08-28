@@ -714,16 +714,38 @@ Renaming stays open on a name the server refused, with the server's reason — i
 names the library already holding that name, which is the one thing that tells
 the owner what to type instead.
 
-`AddLibraryDialog.vue` is the picker: one path field, `Browse…` (reusing
+`+ Add a library…` opens **`FolderMappingWizard.vue`**, the one dialog the whole
+add flow lives in (mounted once, in `SideBar`; opened through
+`useFolderMappingStore.openWizard()` from Settings, the empty library's
+`Choose a folder…` and the sidebar's add-folder alike). Its first pane is
+`folders/FolderMappingChooseStep.vue`: one path field, `Browse…` (reusing
 `FolderBrowser`, including its `New folder`, since `POST /libraries` creates no
-directory), and one card rendering the `GET /libraries/inspect` verdict. Every
-word in that card is the server's `headline` and `detail`; the component decides
-only the icon, the border and whether there is a button, branching on `can_add`
-and nothing else. It adds the path the **server resolved**, not the one typed,
-and an inspection still on the wire when the path changes is discarded by epoch.
-A refusal from `POST /libraries` — the server re-inspects, so a folder that
-became covered since the verdict is refused there — re-asks and then shows the
-message, so the card and the error agree.
+directory), and one `FolderMappingCard` rendering the `GET /libraries/inspect`
+verdict. Every word in that card is the server's `headline` and `detail`; the
+component decides only the border and whether there is a button, branching on
+`can_add` and nothing else. `vault` and `empty` are added and switched to on
+the spot (`addLibrary`, then `useLibrarySwitchStore.begin`); it adds the path
+the **server resolved**, not the one typed, and an inspection still on the wire
+when the path changes is discarded by epoch. A refusal from `POST /libraries` —
+the server re-inspects, so a folder that became covered since the verdict is
+refused there — re-asks and then shows the message, so the card and the error
+agree.
+
+**`pictures` creates nothing yet.** `Bring them in` swaps the verdict card for
+`FolderMappingScanStep` in the same `FolderMappingCard` frame, under the same
+(now fixed) path field, in the same dialog at the same width — the owner's
+requirement was that the box changes and the dialog does not. The read runs
+with `match_existing: false`, because the library it would match against does
+not exist and some other one is active. Then the mapping and preview steps as
+before; only `Yes, build this library` (or `Organise later`, with no
+assignments) does `addLibrary`, saves a store entry with `autoCommit: true`,
+the accepted `assignments` and `pictureCount`, and starts the switch. After the
+reload `SideBar` auto-opens the wizard on that entry, straight into the preview
+step, which commits on mount (`commitOnMount`) and immediately re-saves the
+entry without `autoCommit`, so a deferred or interrupted commit resumes as a
+plain "Finish organising…" and never commits twice. Cancel or the header close
+anywhere before the build cancels a running read, clears the entry and leaves
+nothing behind; a resumed entry is left alone, as its read is real.
 
 A `Call it` field sits inside the addable card, prefilled from the verdict's
 `suggested_name` and left alone once the owner edits it. It is not decoration:
@@ -735,10 +757,10 @@ command line — the thing the feature removes.
 button work.** A browser orders `mousedown → blur → click`; `@blur` re-inspects,
 and without the guard it cleared the verdict synchronously, so the click that
 followed found `canAdd` false and did nothing at all — a button that silently
-failed on its first press, every time. `AddLibraryDialog.test.js` reproduces it
-with a *slow* inspect mock on purpose: with one that settles inside the blur's
-own `nextTick` the test passes either way, which is how such a bug survives
-being "covered".
+failed on its first press, every time. `FolderMappingChooseStep.test.js`
+reproduces it with a *slow* inspect mock on purpose: with one that settles
+inside the blur's own `nextTick` the test passes either way, which is how such a
+bug survives being "covered".
 
 The switch confirmation is the global
 `ConfirmDialog.vue` host for `useConfirm`: it focuses the primary action, handles

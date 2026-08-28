@@ -20,13 +20,19 @@ import { onSessionReset } from "../utils/apiClient";
  * being waited on is abandoned with it - the server thread carries on, but
  * this session no longer has standing to poll for it.
  *
- * `taskId` can be the empty string: "Add a library" saves an entry here
- * *before* any read has started, for a "pictures" verdict's switch-then-reload
- * - `mode: "local_import"` and an empty `taskId` mean "start scanning this
- * known path fresh", which `FolderMappingWizard`'s `resume` handling already
- * treats correctly (an empty `resumeTaskId` is falsy, so the scan step starts
- * a new read rather than reattaching to one). `mode` defaults to `"reference"`
- * when absent, for entries saved before this field existed.
+ * "Add a library" saves an entry here at "Yes, build this library", with
+ * `autoCommit: true`, the accepted `assignments` and `pictureCount`, right
+ * before creating the library and switching to it - the switch reloads the
+ * page, and the entry is what lets `FolderMappingWizard` come back on the
+ * other side straight into the commit (SideBar auto-opens it). The wizard
+ * re-saves the entry without `autoCommit` the moment that commit has started,
+ * so a deferred or interrupted commit resumes as a plain "Finish organising…"
+ * and never commits twice. `mode` defaults to `"reference"` when absent, for
+ * entries saved before this field existed.
+ *
+ * The wizard's open state lives here too (`wizardOpen`, `wizardResume`), so
+ * the one mounted instance (in SideBar) can be opened from Settings, the empty
+ * library's "Choose a folder…" and the sidebar alike.
  */
 const STORAGE_KEY = "pixlstash.pendingFolderMapping";
 
@@ -47,8 +53,20 @@ function readStorage() {
 
 export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
+  const wizardOpen = ref(false);
+  const wizardResume = ref(null);
 
-  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import"}} entry */
+  /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
+  function openWizard(resume = null) {
+    wizardResume.value = resume;
+    wizardOpen.value = true;
+  }
+
+  function closeWizard() {
+    wizardOpen.value = false;
+  }
+
+  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import", autoCommit?: boolean, assignments?: Array, pictureCount?: number}} entry */
   function save(entry) {
     pending.value = entry;
     try {
@@ -71,5 +89,5 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   const unsubscribeSessionReset = onSessionReset(clear);
   onScopeDispose(unsubscribeSessionReset);
 
-  return { pending, save, clear };
+  return { pending, save, clear, wizardOpen, wizardResume, openWizard, closeWizard };
 });

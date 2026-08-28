@@ -1,73 +1,79 @@
 <script setup>
 /**
- * v1.11 Phase 3 - the import and mapping wizard: choose a folder, scan it
- * (Phase 2), name what its levels are, and review before anything commits.
+ * v1.11 Phase 3 - "Add a library", start to finish, in one dialog: point at
+ * a folder, hear what it is, and for a folder of pictures with no library
+ * yet, read it (Phase 2), name what its levels are, review, and only then
+ * build the library.
  *
- * **"Cancel" and "Organise later" are different offers, and used to be one
- * button.** "Cancel and organise later" closed the dialog having imported
- * nothing, which on the "Add a library" path left the owner looking at a
- * library that had just been created and was completely empty - the outcome
- * people expect from *Cancel*, under a label promising the opposite. So:
- * Cancel brings nothing in, and Organise later (on the Preview step, and
- * again while the import runs) indexes everything and leaves only the folder
- * mapping for another day.
+ * **Nothing exists until "Yes, build this library".** The read runs against a
+ * plain folder while some other library is active, so Cancel or the header
+ * close anywhere before that point cancels the read, clears any saved entry
+ * and creates nothing - the outcome people expect from *Cancel*. "Organise
+ * later" is a different offer: it builds the library and indexes everything,
+ * leaving only the folder mapping for another day.
  *
- * Either way the read survives. Once a read has started, its task id is saved
- * to `useFolderMappingStore` - the server keeps the read's result in memory
- * for the process's lifetime (integration_architecture.md §20) - so closing
- * this dialog before committing does not lose the scan; the sidebar's "Finish
- * organising…" entry reopens this same wizard with `resume` set and picks up
- * where it left off. Only a completed commit clears that saved entry, because
- * only then is there nothing left to resume.
+ * Building is three things in a row: `addLibrary`, then a `useFolderMappingStore`
+ * entry with `autoCommit: true` and the accepted assignments, then the same
+ * switch-and-reload `LibrariesSection.switchTo()` uses. The switch reloads the
+ * page, and the saved entry (it is `localStorage` backed) is what brings this
+ * wizard back on the other side: `SideBar` auto-opens it with `resume` set,
+ * straight into the Preview step, which commits on mount. The entry is
+ * re-saved without `autoCommit` as soon as that commit has started, so a
+ * deferred or interrupted commit resumes through the sidebar's "Finish
+ * organising…" row at the scan card, as any saved read does, and never
+ * commits twice. Only a completed commit clears the entry.
  *
- * `mode` ("reference" default, or "local_import") decides what the Preview
- * step's commit does with the scanned pictures - see integration_architecture.md
- * §22. "Add a library"'s "pictures" verdict drives `local_import`: it saves a
- * `resume` entry with an empty `taskId` and `mode: "local_import"` *before*
- * switching the active library and reloading, so the sidebar's own resume
- * mechanism reopens this wizard already pointed at the new library's root -
- * an empty `taskId` in `resume` is not "reattach", it is "start scanning this
- * known path fresh" (`FolderMappingScanStep` already treats a falsy
- * `resumeTaskId` that way).
+ * The dialog itself never changes shape between the verdict and the scan:
+ * both are drawn in `FolderMappingCard` under the same path field, and the
+ * width is one number for every step.
  */
 import { computed, ref, watch } from "vue";
 
+import { addLibrary } from "../../api/libraries";
+import {
+  cancelFolderStructureRead,
+  getFolderStructureReadStatus,
+} from "../../api/folderStructure";
+import { errorDetail } from "../../utils/apiError";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "../../stores/useLibrariesStore";
 import AppDialog from "../widgets/AppDialog.vue";
-import AppButton from "../widgets/AppButton.vue";
-import AppInput from "../widgets/AppInput.vue";
-import FolderBrowser from "../editors/FolderBrowser.vue";
-import FolderMappingScanStep from "./FolderMappingScanStep.vue";
+import FolderMappingChooseStep from "./FolderMappingChooseStep.vue";
 import FolderMappingTreeStep from "./FolderMappingTreeStep.vue";
 import FolderMappingPreviewStep from "./FolderMappingPreviewStep.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  registeredPaths: { type: Array, default: () => [] },
-  // Resume a previously started, not-yet-committed read.
+  // Resume a saved entry: a read to reattach to, or an `autoCommit` entry
+  // saved right before the switch that built the library.
   resume: { type: Object, default: null },
-  // What the Preview step's commit does with the scan - ignored (in favour of
-  // `resume.mode`) when resuming, since the mode was fixed the moment the
-  // saved entry was created.
-  mode: { type: String, default: "local_import" },
 });
 
 const emit = defineEmits(["close", "committed"]);
 
 const mappingStore = useFolderMappingStore();
+const librariesStore = useLibrariesStore();
+const switchStore = useLibrarySwitchStore();
 
 const step = ref("choose");
 const path = ref("");
 const label = ref("");
-const browserOpen = ref(false);
 const readTaskId = ref("");
-const resumeTaskId = ref("");
 const readResult = ref(null);
 const assignments = ref([]);
-// "Drop this, organise later" from the mapping step: the Preview step's own
-// Organise later (a commit with no assignments), started the moment it mounts.
-const autoLater = ref(false);
-const currentMode = ref(props.mode);
+const pictureCount = ref(0);
+// The library exists (a resumed entry) - the Preview step commits directly.
+// Before that, the Preview step's "build" is this component's `build()`.
+const libraryExists = ref(false);
+const autoCommit = ref(false);
+const building = ref(false);
+const buildError = ref("");
+// Bumped on every open, so the step components mount fresh each time rather
+// than showing the previous open's answer.
+const session = ref(0);
 // Mirrors FolderMappingPreviewStep's own `committing`. A commit, once
 // started, runs to completion server-side and cannot be un-started, so while
 // this is true the dialog must not be dismissable by Escape or a backdrop
@@ -78,83 +84,122 @@ watch(
   () => props.open,
   (isOpen) => {
     if (!isOpen) return;
-    if (props.resume) {
-      path.value = props.resume.path;
-      label.value = props.resume.label || "";
-      resumeTaskId.value = props.resume.taskId;
-      readTaskId.value = props.resume.taskId;
-      // Absent on entries saved before `mode` existed. Those were reference
-      // reads, which this wizard no longer starts: libraries indexed in
-      // place replaced reference folders, and the commit route refuses a
-      // reference commit against the library's own storage anyway.
-      currentMode.value = props.resume.mode || "local_import";
-      step.value = "scan";
-    } else {
-      path.value = "";
-      label.value = "";
-      resumeTaskId.value = "";
-      readTaskId.value = "";
-      currentMode.value = props.mode;
-      step.value = "choose";
-      browserOpen.value = true;
-    }
+    session.value += 1;
+    const entry = props.resume;
+    path.value = entry?.path ?? "";
+    label.value = entry?.label ?? "";
+    readTaskId.value = entry?.taskId ?? "";
     readResult.value = null;
-    assignments.value = [];
-    autoLater.value = false;
+    assignments.value = entry?.assignments ?? [];
+    pictureCount.value = entry?.pictureCount ?? 0;
+    libraryExists.value = Boolean(entry);
+    autoCommit.value = Boolean(entry?.autoCommit);
+    building.value = false;
+    buildError.value = "";
     committing.value = false;
+    step.value = autoCommit.value ? "preview" : "choose";
+    if (!entry) librariesStore.refresh();
+    // The read's result did not survive the reload; "Back to the mapping"
+    // after a failed commit needs it, and one poll brings it back.
+    if (autoCommit.value && entry.taskId) {
+      getFolderStructureReadStatus(entry.taskId)
+        .then((body) => {
+          if (body.result) readResult.value = body.result;
+        })
+        .catch((error) => {
+          console.warn("Could not reload the folder-structure read", {
+            taskId: entry.taskId,
+            error,
+          });
+        });
+    }
   },
   { immediate: true },
 );
 
 const title = computed(() => {
   switch (step.value) {
-    case "scan":
-      return "Here is what is in that folder";
     case "mapping":
       return "Name what your folders are";
     case "preview":
       return "Before anything is written";
     default:
-      return "Where should your pictures live?";
+      return "Add a library";
   }
 });
 
-function chooseFolder(selected) {
-  browserOpen.value = false;
-  path.value = selected;
-  label.value = selected.split(/[\\/]/).filter(Boolean).pop() || selected;
-  step.value = "scan";
+function onScanStarted({ path: chosen, label: chosenLabel }) {
+  path.value = chosen;
+  label.value = chosenLabel;
 }
 
 function onTaskStarted(taskId) {
   readTaskId.value = taskId;
+  if (!libraryExists.value) return;
+  // A resumed read whose entry predates task ids, or was saved without one.
   mappingStore.save({
     taskId,
     path: path.value,
     label: label.value,
-    mode: currentMode.value,
+    mode: "local_import",
   });
 }
 
 function onScanReady({ taskId, result }) {
   readTaskId.value = taskId;
   readResult.value = result;
+  pictureCount.value = result.picture_count || 0;
   step.value = "mapping";
 }
 
 function onMappingNext(built) {
   assignments.value = built;
-  autoLater.value = false;
   step.value = "preview";
 }
 
-function onMappingLater() {
-  assignments.value = [];
-  autoLater.value = true;
-  step.value = "preview";
+/**
+ * The library does not exist yet: create it, remember what to commit, and
+ * switch to it. The commit itself runs after the reload - see the header.
+ */
+async function build(accepted) {
+  if (building.value) return;
+  building.value = true;
+  buildError.value = "";
+  try {
+    const library = await addLibrary(path.value, label.value);
+    assignments.value = accepted;
+    mappingStore.save({
+      taskId: readTaskId.value,
+      path: path.value,
+      label: label.value,
+      mode: "local_import",
+      assignments: accepted,
+      pictureCount: pictureCount.value,
+      autoCommit: true,
+    });
+    emit("close");
+    await switchStore.begin(library, librariesStore.activeLibrary, null);
+  } catch (error) {
+    buildError.value = errorDetail(error) || "Could not add that folder.";
+  } finally {
+    building.value = false;
+  }
 }
 
-function organiseLater() {
+function onCommitStarted() {
+  // Started is as good as done for the entry's purposes: from here on a
+  // reopen must reattach to the read, not commit it again.
+  const entry = mappingStore.pending;
+  if (!entry?.autoCommit) return;
+  mappingStore.save({
+    taskId: entry.taskId,
+    path: entry.path,
+    label: entry.label,
+    mode: entry.mode,
+  });
+}
+
+function close() {
   // A commit that has started cannot be cancelled (§22) and keeps running
   // server-side either way, so this must be a no-op while `committing` is
   // true. The dialog is `:persistent` for its whole life: Escape belongs to
@@ -162,8 +207,21 @@ function organiseLater() {
   // never mean "organise later" by accident. AppDialog's header close button
   // still calls this unconditionally, so the guard lives here.
   if (committing.value) return;
-  // The store entry is left alone on purpose - see the header comment. There
-  // is nothing to keep only when the owner never got past picking a folder.
+  if (!libraryExists.value) {
+    // Nothing was built: leave nothing behind, and stop the read if it is
+    // still running - a settled read is kept server-side either way.
+    if (readTaskId.value && !readResult.value) {
+      cancelFolderStructureRead(readTaskId.value).catch((error) => {
+        console.warn("Could not cancel the folder-structure read", {
+          taskId: readTaskId.value,
+          error,
+        });
+      });
+    }
+    mappingStore.clear();
+  }
+  // A resumed entry is left alone on purpose: its read (or its library) is
+  // real, and the sidebar's row must still offer it.
   emit("close");
 }
 
@@ -177,53 +235,36 @@ function onCommitted(result) {
   <AppDialog
     :open="open"
     :title="title"
-    :width="step === 'choose' ? 560 : 840"
+    :subtitle="
+      step === 'choose'
+        ? 'Point PixlStash at a folder. Nothing inside it is moved.'
+        : ''
+    "
+    :width="840"
     :pad-body="step !== 'mapping'"
     :persistent="true"
-    @close="organiseLater"
+    @close="close"
   >
-    <div v-if="step === 'choose'" class="mapping-wizard__choose">
-      <p class="mapping-wizard__choose-lead">
-        Point PixlStash at a folder you already have. Every file stays
-        exactly where it is, and the folder names you already use become the
-        organisation.
-      </p>
-      <div class="mapping-wizard__choose-path">
-        <AppInput
-          v-model="path"
-          class="mapping-wizard__choose-field"
-          label="Folder"
-          placeholder="/home/me/Pictures"
-          @enter="path && chooseFolder(path)"
-        />
-        <AppButton size="sm" variant="secondary" @click="browserOpen = true">
-          Browse…
-        </AppButton>
-      </div>
-      <div class="mapping-wizard__choose-actions">
-        <AppButton variant="primary" :disabled="!path" @click="chooseFolder(path)">
-          Continue
-        </AppButton>
-        <AppButton variant="secondary" @click="organiseLater">
-          Cancel
-        </AppButton>
-      </div>
-    </div>
+    <p v-if="buildError" class="mapping-wizard__error" role="alert">
+      {{ buildError }}
+    </p>
 
-    <FolderMappingScanStep
-      v-else-if="step === 'scan'"
-      :path="path"
-      :resume-task-id="resumeTaskId"
+    <FolderMappingChooseStep
+      v-if="step === 'choose'"
+      :key="session"
+      :resume="resume"
+      @scan="onScanStarted"
       @task="onTaskStarted"
       @ready="onScanReady"
-      @cancel="organiseLater"
+      @cancel="close"
+      @close="emit('close')"
     />
 
     <FolderMappingTreeStep
       v-else-if="step === 'mapping' && readResult"
       :result="readResult"
       @next="onMappingNext"
-      @later="onMappingLater"
+      @later="build([])"
     />
 
     <FolderMappingPreviewStep
@@ -232,53 +273,29 @@ function onCommitted(result) {
       :read-task-id="readTaskId"
       :assignments="assignments"
       :label="label"
-      :mode="currentMode"
-      :picture-count="readResult?.picture_count || 0"
-      :organise-later-on-mount="autoLater"
+      mode="local_import"
+      :picture-count="pictureCount"
+      :library-exists="libraryExists"
+      :commit-on-mount="autoCommit"
       @back="step = 'mapping'"
-      @cancel="organiseLater"
+      @build="build"
+      @commit-started="onCommitStarted"
+      @cancel="close"
       @committed="onCommitted"
       @update:committing="committing = $event"
     />
   </AppDialog>
-
-  <FolderBrowser
-    :open="browserOpen && step === 'choose'"
-    allow-create-folder
-    :registered-paths="registeredPaths"
-    already-registered-label="Already a reference folder"
-    :initial-path="path || null"
-    @select="chooseFolder"
-    @close="browserOpen = false"
-  />
 </template>
 
 <style scoped>
-.mapping-wizard__choose {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.mapping-wizard__choose-lead {
-  margin: 0;
+.mapping-wizard__error {
+  /* The mapping step's body is flush; the padding is the dialog's own. */
+  margin: 0 0 var(--space-4);
+  flex-shrink: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
   font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-background), 0.72);
-}
-
-.mapping-wizard__choose-path {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-3);
-}
-
-.mapping-wizard__choose-field {
-  flex: 1;
-  min-width: 0;
-}
-
-.mapping-wizard__choose-actions {
-  display: flex;
-  gap: var(--space-3);
 }
 </style>
