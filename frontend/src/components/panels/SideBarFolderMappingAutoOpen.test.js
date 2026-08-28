@@ -72,6 +72,8 @@ vi.mock("vue-router", async () => {
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import SideBar from "./SideBar.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
 const STORAGE_KEY = "pixlstash.pendingFolderMapping";
 
@@ -107,6 +109,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function activeLibraryAt(path) {
+  useLibrariesStore().libraries = [
+    { id: 1, name: "lib", path, is_active: true },
+  ];
+}
+
 describe("a pending local_import entry", () => {
   const entry = {
     taskId: "",
@@ -117,6 +125,7 @@ describe("a pending local_import entry", () => {
 
   it("auto-opens the wizard, pointed at that entry", async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(entry.path);
     const wrapper = await mountSidebar();
 
     const wizard = wrapper.findComponent(FolderMappingWizard);
@@ -127,8 +136,52 @@ describe("a pending local_import entry", () => {
     wrapper.unmount();
   });
 
+  it("does not auto-open against a different library", async () => {
+    // A stale entry from a folder added and cancelled earlier met a
+    // re-attached vault and offered to "set up" a library already set up.
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt("/home/me/Pictures/existing-vault");
+    const wrapper = await mountSidebar();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+    expect(useFolderMappingStore().pending).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("does not auto-open while the library list has no path to compare", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const wrapper = await mountSidebar();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+
+    wrapper.unmount();
+  });
+
+  it("auto-opens once the matching library loads after mount", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const wrapper = await mountSidebar();
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+
+    activeLibraryAt(entry.path + "/");
+    await flushPromises();
+
+    const wizard = wrapper.findComponent(FolderMappingWizard);
+    expect(wizard.props("open")).toBe(true);
+    expect(wizard.props("resume")).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open for a read-only session", async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(entry.path);
     isReadOnly.value = true;
     const wrapper = await mountSidebar();
 
