@@ -22,10 +22,15 @@ const COMMIT_STATUS_URL = "/folder-structure/commit/status";
  * real library, so the caller polls `getFolderStructureReadStatus`.
  *
  * @param {string} path - absolute folder path on the server's machine.
+ * @param {{matchExisting?: boolean}} [options] - `matchExisting: false` skips
+ *   matching folder names against the active library's projects, people and
+ *   sets. "Add a library" reads the folder BEFORE the library exists, while
+ *   some other library is active, so matching there would name the wrong
+ *   library's entities.
  * @returns {Promise<Object>} `{ task_id }`.
  */
-export async function startFolderStructureRead(path) {
-  return unwrap(apiClient.post(READ_URL, { path }));
+export async function startFolderStructureRead(path, { matchExisting = true } = {}) {
+  return unwrap(apiClient.post(READ_URL, { path, match_existing: matchExisting }));
 }
 
 /**
