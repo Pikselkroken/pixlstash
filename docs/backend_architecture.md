@@ -5873,10 +5873,10 @@ shape signals add kinds as anywhere else.
 are priors about the folder, and a person's folder is a leaf of pictures by
 construction. When `faces` has proposed Person, the shape signals still append
 their evidence lines but propose no kind, so the folder reads as a Person with
-"pictures and no folders below" under it rather than as "Person or Set". The
-one shape signal that can still contest a face folder is none; `sidecars` (a
-caption file beside every picture) is a filesystem fact rather than a prior and
-keeps its existing standing against `faces`.
+"pictures and no folders below" under it rather than as "Person or Set".
+`sidecars` is not a shape signal: a caption file beside every picture is a
+filesystem fact rather than a prior, and it keeps its existing standing
+against `faces` (the two still narrow to candidates).
 
 ### Why cardinality is level-scoped and nothing else is
 
