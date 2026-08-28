@@ -919,6 +919,37 @@ def test_load_existing_entities_reads_the_vault(owner_env):
             assert entity_id is not None
 
 
+def test_match_existing_false_reads_without_the_active_librarys_entities(owner_env):
+    """A read for a library that does not exist yet (the Add-library dialog)
+    must not propose the ACTIVE library's entities or hand out their ids."""
+    owner = owner_env["owner"]
+    created = owner.post(f"{API}/projects", json={"name": "example-preexisting"})
+    assert created.status_code in (200, 201), created.text
+    root = os.path.join(owner_env["tmp"], "not-yet-a-library")
+    _make_tree(root, {"": [], "example-preexisting": ["a.jpg"]})
+
+    def _read(match_existing):
+        started = owner.post(
+            _READ, json={"path": root, "match_existing": match_existing}
+        )
+        assert started.status_code == 200, started.text
+        body = _drain(owner, started.json()["task_id"])
+        assert body["status"] == "completed", body
+        return _rows(body["result"], 2)["example-preexisting"]["proposal"]
+
+    off = _read(False)
+    assert off["match"] is None
+    assert "name_match" not in {e["signal"] for e in off["evidence"]}
+
+    on = _read(True)
+    assert on["match"] == {
+        "entity_type": "project",
+        "id": created.json()["id"],
+        "name": "example-preexisting",
+    }
+    assert "name_match" in {e["signal"] for e in on["evidence"]}
+
+
 # ===========================================================================
 # Signals: the branches the first pass left unpinned
 # ===========================================================================

@@ -52,6 +52,11 @@ _SAFE_RESOLVED_PATH_RE = re.compile(r"[^\x00\n]+")
 
 class FolderStructureReadRequest(BaseModel):
     path: str
+    match_existing: bool = True
+    """``False`` skips the ``name_match`` signal. The "Add a library" flow reads
+    the chosen folder BEFORE the library it will become exists, and matching
+    against the *active* library's entities there would propose the old
+    library's People and Sets and hand out their ids as ``match``."""
 
 
 class FolderStructureReadStartResponse(BaseModel):
@@ -260,7 +265,15 @@ def create_router(server) -> APIRouter:
 
         # Read the entity names before taking the lock: four queries have no
         # business inside the mutex that decides who owns the one read slot.
-        entities = load_existing_entities(server.vault.db)
+        if payload.match_existing:
+            entities = load_existing_entities(server.vault.db)
+        else:
+            entities = []
+            logger.debug(
+                "Folder-structure read of %s: name matching is off, the active "
+                "library's entities are not consulted",
+                root,
+            )
 
         with server.folder_structure_lock:
             current = server.folder_structure_read

@@ -653,6 +653,71 @@ def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
 # ===========================================================================
 
 
+def test_a_read_survives_a_library_switch_and_commits_into_the_new_library(
+    owner_env,
+):
+    """The Add-library flow: read the folder BEFORE it is a library, then add
+    it, switch to it, and commit the pre-switch read as `local_import`. The
+    read lives on the Server, not the vault, so the switch must not lose it."""
+    from sqlmodel import select
+
+    from pixlstash.db_models.picture import Picture
+
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    original = server.library_registry.active_library()
+    root = os.path.join(owner_env["tmp"], "future-library")
+    _make_tree(root, {"2028/vega": ["a.jpg", "b.jpg"], "2028/raw": ["c.jpg"]})
+
+    started = owner.post(_READ, json={"path": root, "match_existing": False})
+    assert started.status_code == 200, started.text
+    read_task_id = started.json()["task_id"]
+    assert _drain_read(owner, read_task_id)["status"] == "completed"
+
+    try:
+        added = owner.post(f"{API}/libraries", json={"path": root, "name": "Future"})
+        assert added.status_code == 201, added.text
+        switched = owner.post(
+            f"{API}/libraries/active", json={"uuid": added.json()["uuid"]}
+        )
+        assert switched.status_code == 200, switched.text
+        assert os.path.realpath(server.vault.image_root) == os.path.realpath(root)
+
+        commit_started = owner.post(
+            _COMMIT,
+            json={
+                "task_id": read_task_id,
+                "mode": "local_import",
+                "assignments": [
+                    {"relative_path": "2028", "kind": "project"},
+                    {"relative_path": "2028/vega", "kind": "person"},
+                ],
+            },
+        )
+        assert commit_started.status_code == 200, commit_started.text
+        body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+        assert body["status"] == "completed", body
+        assert body["result"]["pictures_indexed"] == 3
+        assert body["result"]["reference_folder_id"] is None
+
+        rows = server.vault.db.run_immediate_read_task(
+            lambda session: session.exec(
+                select(Picture.file_path, Picture.reference_folder_id)
+            ).all()
+        )
+        assert len(rows) == 3, rows
+        assert all(not os.path.isabs(fp) and ref is None for fp, ref in rows), rows
+        assert any(c["name"] == "vega" for c in owner.get(f"{API}/characters").json())
+
+        again = owner.post(
+            _COMMIT, json={"task_id": read_task_id, "mode": "local_import"}
+        )
+        assert again.status_code == 409, again.text
+        assert "already been committed" in again.json()["detail"]
+    finally:
+        server.library_switch.switch_to(original.uuid)
+
+
 def _records(server):
     from sqlmodel import select
 
