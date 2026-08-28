@@ -19,6 +19,7 @@ import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -502,6 +503,25 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 // The editor is unchanged for *editing* an already-registered one (sync
 // toggles, sidecar suffixes), which the wizard has no opinion about.
 const mappingStore = useFolderMappingStore();
+const librariesStore = useLibrariesStore();
+
+function _samePath(a, b) {
+  const norm = (p) => String(p || "").replace(/[\\/]+$/, "");
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
+// The pending mapping this library can act on. A `local_import` entry names
+// the library root it was saved for; shown or auto-opened against any OTHER
+// library it would offer to "set up" a library that is already set up - which
+// is exactly what happened when a stale entry met a re-attached vault. The
+// listing may not carry paths (a remote session), and then there is no way
+// to be sure, so nothing is offered.
+const pendingForThisLibrary = computed(() => {
+  const entry = mappingStore.pending;
+  if (!entry) return null;
+  if (entry.mode !== "local_import") return entry;
+  return _samePath(entry.path, librariesStore.activeLibrary?.path) ? entry : null;
+});
 const folderMappingWizardOpen = ref(false);
 const folderMappingWizardResume = ref(null);
 const importFolderEditorOpen = ref(false);
@@ -569,11 +589,19 @@ async function folderMappingWizardCommitted() {
 // which only ever needs a click because its scan is already running
 // server-side either way. `mappingStore.pending` is left untouched by this
 // auto-open, so if the owner cancels, the row still offers it again.
-onMounted(() => {
-  if (!isReadOnly.value && mappingStore.pending?.mode === "local_import") {
-    openFolderMappingWizard(mappingStore.pending);
-  }
-});
+// Watched rather than checked once on mount: the library list that says
+// which root is active loads after this component does.
+let autoOpenedPendingMapping = false;
+watch(
+  () => pendingForThisLibrary.value,
+  (entry) => {
+    if (autoOpenedPendingMapping || isReadOnly.value) return;
+    if (entry?.mode !== "local_import") return;
+    autoOpenedPendingMapping = true;
+    openFolderMappingWizard(entry);
+  },
+  { immediate: true },
+);
 
 function pathParent(path) {
   const raw = String(path || "");
@@ -5448,21 +5476,21 @@ defineExpose({
               >
             </div>
             <div
-              v-if="mappingStore.pending"
+              v-if="pendingForThisLibrary"
               class="sidebar-folder-row sidebar-mapping-resume-row"
               :title="
-                mappingStore.pending.taskId
+                pendingForThisLibrary.taskId
                   ? 'The scan is kept - reopening this does not re-scan'
                   : 'Reopening this starts scanning that folder'
               "
-              @click="openFolderMappingWizard(mappingStore.pending)"
+              @click="openFolderMappingWizard(pendingForThisLibrary)"
             >
               <v-icon size="15" class="sidebar-mapping-resume-icon"
                 >mdi-map-marker-path</v-icon
               >
               <span class="sidebar-mapping-resume-label">
                 Finish organising
-                {{ mappingStore.pending.label || mappingStore.pending.path }}…
+                {{ pendingForThisLibrary.label || pendingForThisLibrary.path }}…
               </span>
             </div>
             <div
