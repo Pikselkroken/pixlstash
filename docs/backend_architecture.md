@@ -5868,6 +5868,16 @@ named after an existing Person is `kind: person` with its `match` intact and
 when absent). A name that matched two kinds is already narrowed, and there the
 shape signals add kinds as anywhere else.
 
+**`faces` outranks the shape signals too.** It is evidence about the pictures
+(one identity across the sample); `leaf`, `capture_day` and `batch_numbering`
+are priors about the folder, and a person's folder is a leaf of pictures by
+construction. When `faces` has proposed Person, the shape signals still append
+their evidence lines but propose no kind, so the folder reads as a Person with
+"pictures and no folders below" under it rather than as "Person or Set". The
+one shape signal that can still contest a face folder is none; `sidecars` (a
+caption file beside every picture) is a filesystem fact rather than a prior and
+keeps its existing standing against `faces`.
+
 ### Why cardinality is level-scoped and nothing else is
 
 Cardinality is a property of a *level* — "four names under 118 parents" cannot

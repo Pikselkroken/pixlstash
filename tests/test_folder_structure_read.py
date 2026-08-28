@@ -369,9 +369,11 @@ def test_one_identity_across_a_folder_reads_as_person_and_says_the_count():
         ).run()
 
     proposal = _rows(result, 2)["mira"]["proposal"]
-    # A leaf of pictures also reads as a Set, and the two disagree: candidates.
-    assert proposal["kind"] is None
-    assert sorted(proposal["candidates"]) == ["person", "set"]
+    # A leaf of pictures would read as a Set, but faces outrank the shape
+    # signals: the leaf stays as evidence and the folder is a Person.
+    assert proposal["kind"] == "person"
+    assert proposal["candidates"] == []
+    assert "leaf" in _signals(proposal)
     assert proposal["evidence"][0]["signal"] == "faces", "strongest first"
     evidence = _signal(proposal, "faces")
     assert evidence["sampled"] == SAMPLED_PER_FOLDER
@@ -1549,7 +1551,9 @@ def test_nothing_proposes_at_the_root():
     assert _rows(nested, 2)["a"]["proposal"]["kind"] == "set", "…but its children do"
 
 
-def test_a_leaf_with_one_face_and_one_capture_day_narrows_to_person_or_set():
+def test_a_leaf_with_one_face_and_one_capture_day_is_a_person():
+    """One person, one day, one folder: a shoot of that person. The shape
+    signals say Set and stay as evidence; the faces say who, and win."""
     with _tree({"": [], "ClientA": []}) as root:
         _write_dated(os.path.join(root, "ClientA", "shoot1"), _NINE, ["2024:03:01"])
         result = FolderStructureRead(
@@ -1557,8 +1561,8 @@ def test_a_leaf_with_one_face_and_one_capture_day_narrows_to_person_or_set():
         ).run()
 
     proposal = _rows(result, 3)["shoot1"]["proposal"]
-    assert proposal["kind"] is None
-    assert sorted(proposal["candidates"]) == ["person", "set"]
+    assert proposal["kind"] == "person"
+    assert proposal["candidates"] == []
     assert _signals(proposal) == {"faces", "leaf", "capture_day"}
     assert _signal(proposal, "capture_day") == {
         "signal": "capture_day",

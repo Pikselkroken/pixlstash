@@ -862,10 +862,16 @@ class FolderStructureRead:
         appends its kind too, and kinds that disagree become ``candidates`` in
         the caller, exactly as the older signals do; without it - the name
         matched exactly one entity - the evidence stands and the match holds.
+
+        ``faces`` outranks all four as well: it is evidence about the pictures,
+        these are priors about the folder, and a person's folder is a leaf by
+        construction. Letting a leaf contest a one-face folder turned every
+        Person the read used to find into "Person or Set".
         """
+        faces_spoke = "person" in kinds
 
         def propose(kind: str) -> None:
-            if may_propose and kind not in kinds:
+            if may_propose and not faces_spoke and kind not in kinds:
                 kinds.append(kind)
 
         pictures = len(folder.direct_pictures)
