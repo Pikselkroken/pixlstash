@@ -647,6 +647,9 @@ def local_import_pictures(
             )
             return None
 
+    pass_started = time.monotonic()
+    build_s = 0.0
+    insert_s = 0.0
     for start in range(0, len(to_build), _BUILD_CHUNK_SIZE):
         stopped = should_stop() if should_stop is not None else None
         if stopped:
@@ -660,11 +663,13 @@ def local_import_pictures(
             raise CommitStopped(stopped)
         chunk = to_build[start : start + _BUILD_CHUNK_SIZE]
         max_workers = min(_MAX_BUILD_WORKERS, max(1, len(chunk)))
+        chunk_started = time.monotonic()
         if max_workers <= 1:
             built = [pic for pic in (_build(path) for path in chunk) if pic is not None]
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
                 built = [pic for pic in ex.map(_build, chunk) if pic is not None]
+        build_s += time.monotonic() - chunk_started
 
         def insert(session: Session, built=built) -> list[int]:
             session.add_all(built)
@@ -677,9 +682,11 @@ def local_import_pictures(
             session.commit()
             return [pic.id for pic in built]
 
+        insert_started = time.monotonic()
         picture_ids.extend(
             server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
         )
+        insert_s += time.monotonic() - insert_started
         # The rows are visible to every finder now, but the WorkPlanner only
         # sweeps on a wake or when its backoff (up to MAX_INTERVAL_S) expires,
         # and an idle library has it parked at the maximum. Poke it per chunk
@@ -689,6 +696,24 @@ def local_import_pictures(
         processed += len(chunk)
         if on_progress is not None:
             on_progress(processed, total)
+
+    # The split that says where an import's time went: `build_s` is decode +
+    # thumbnail + hash on the build pool (CPU and disk, contended by the
+    # workers' preload pools), `insert_s` is the wait for the single DB writer
+    # (contended by the workers' own write transactions). Same spirit as the
+    # planner's [PIPELINE_PASS] line, and meant to be read next to it.
+    wall_s = time.monotonic() - pass_started
+    built_count = len(to_build)
+    logger.info(
+        "[IMPORT_PASS] pictures=%d reused=%d wall_s=%.1f img_per_s=%.1f "
+        "build_s=%.1f insert_s=%.1f",
+        built_count,
+        len(file_paths) - built_count,
+        wall_s,
+        built_count / wall_s if wall_s > 0 else 0.0,
+        build_s,
+        insert_s,
+    )
 
     return picture_ids
 
