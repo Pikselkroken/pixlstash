@@ -1579,7 +1579,10 @@ means the level took its rows' answer as its own, and its `text` says the count
 ### `POST /api/v1/folder-structure/read`
 
 Body `{"path": "/absolute/path/to/library"}`. Returns `{"task_id": "…"}` and
-starts the read in the background.
+starts the read in the background. An optional `"match_existing": false`
+turns the `name_match` signal off, for a read taken before the library it is
+for exists (the Add-library dialog): otherwise the *active* library's People
+and Sets would be proposed and their ids handed out as `match`.
 
 `local_owner_only`: it takes a caller-supplied host path (§16.3 host-capability
 tier). The blocklist (`validate_reference_folder_path`) runs on the
