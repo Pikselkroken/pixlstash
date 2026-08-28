@@ -58,6 +58,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.character import Character
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.folder_mapping_commit import (
     FolderMappingCommit,
     STATE_DONE,
@@ -925,6 +926,8 @@ def apply_mapping(
     """
     image_root = os.path.normpath(server.vault.image_root)
 
+    linked_ids: list[int] = []
+
     def commit(session: Session) -> CommitResult:
         pictures = session.exec(
             select(Picture).where(Picture.reference_folder_id == reference_folder_id)
@@ -933,12 +936,15 @@ def apply_mapping(
             reference_folder_id=reference_folder_id, pictures_indexed=len(pictures)
         )
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
+        linked_ids.extend(int(pic.id) for pic in pictures)
         if task_id:
             _settle_in_session(session, task_id, STATE_DONE)
         session.commit()
         return result
 
-    return server.vault.db.run_task(commit, priority=DBPriority.IMMEDIATE)
+    result = server.vault.db.run_task(commit, priority=DBPriority.IMMEDIATE)
+    resolve_pending_people_with_faces(server, linked_ids)
+    return result
 
 
 def apply_local_mapping(
@@ -971,4 +977,53 @@ def apply_local_mapping(
         session.commit()
         return result
 
-    return server.vault.db.run_task(commit, priority=DBPriority.IMMEDIATE)
+    result = server.vault.db.run_task(commit, priority=DBPriority.IMMEDIATE)
+    resolve_pending_people_with_faces(server, picture_ids)
+    return result
+
+
+def resolve_pending_people_with_faces(server, picture_ids: list[int]) -> int:
+    """Attach the folder-derived person to pictures whose faces already exist.
+
+    `_link_pictures` defers a person assignment into
+    `Picture.pending_character_id`, which `FaceExtractionTask`'s completion
+    hook resolves - but only for the pictures it just extracted. Since the
+    workers start while the import is still indexing, extraction routinely
+    finishes BEFORE the mapping runs, and a picture in that order was never
+    revisited: pending set, faces present, nobody to join them. This runs the
+    same resolver now for exactly those pictures. Pictures whose extraction
+    has not run are left alone on purpose: the resolver treats "no face rows"
+    as "extraction found nothing" and would discard the pending id.
+
+    Returns:
+        How many pictures were handed to the resolver.
+    """
+    if not picture_ids:
+        return 0
+
+    def fetch(session: Session) -> list[int]:
+        found: list[int] = []
+        # Chunked: SQLite bounds the number of bound parameters per statement.
+        for start in range(0, len(picture_ids), 500):
+            chunk = picture_ids[start : start + 500]
+            extracted = select(Face.id).where(Face.picture_id == Picture.id).exists()
+            found.extend(
+                session.exec(
+                    select(Picture.id).where(
+                        Picture.id.in_(chunk),
+                        Picture.pending_character_id.is_not(None),
+                        extracted,
+                    )
+                ).all()
+            )
+        return found
+
+    ready = server.vault.db.run_task(fetch)
+    if ready:
+        logger.info(
+            "Folder mapping: %d picture(s) had faces before their person was "
+            "assigned; assigning now",
+            len(ready),
+        )
+        server.vault._process_pending_character_assignments(ready)
+    return len(ready)

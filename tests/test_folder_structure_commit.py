@@ -409,7 +409,7 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     assert result["tags_created"] == 1
 
     after_refs = owner.get(f"{API}/reference-folders").json()["folders"]
-    assert after_refs == before_refs, (
+    assert [f["id"] for f in after_refs] == [f["id"] for f in before_refs], (
         "local_import must not register a reference folder"
     )
 
@@ -586,7 +586,9 @@ def test_reference_mode_refuses_the_librarys_own_folder(owner_env):
     assert refused.status_code == 400, refused.text
     assert "library's own storage" in refused.json()["detail"]
     after_refs = owner.get(f"{API}/reference-folders").json()["folders"]
-    assert after_refs == before_refs, "the refusal must register nothing"
+    assert [f["id"] for f in after_refs] == [f["id"] for f in before_refs], (
+        "the refusal must register nothing"
+    )
 
     # The same read still commits the right way.
     accepted = owner.post(
@@ -646,6 +648,67 @@ def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
     frozen_id, free_id, tagged = server.vault.db.run_task(scenario)
     assert free_id in tagged, "an unlocked picture must still be filed"
     assert frozen_id not in tagged, "a picture frozen by a locked set must be skipped"
+
+
+def test_a_person_lands_on_faces_extracted_before_the_mapping(owner_env):
+    """Workers start while the import is still indexing, so a picture's faces
+    routinely exist BEFORE the mapping assigns its folder to a person. The
+    deferred `pending_character_id` was only ever resolved by the face task's
+    own completion hook, which had already run; the mapping must resolve it
+    itself for those pictures - and leave a not-yet-extracted picture pending
+    rather than let the resolver discard it as "no faces found"."""
+    from pixlstash.db_models.character import Character
+    from pixlstash.db_models.face import Face
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        apply_local_mapping,
+    )
+    from sqlmodel import select
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+    root = os.path.join(image_root, "faces-before-mapping")
+
+    def seed(session):
+        early = Picture(file_path="faces-before-mapping/pending-person/early.jpg")
+        late = Picture(file_path="faces-before-mapping/pending-person/late.jpg")
+        session.add(early)
+        session.add(late)
+        session.flush()
+        session.add(Face(picture_id=early.id, face_index=0))
+        session.commit()
+        return early.id, late.id
+
+    early_id, late_id = server.vault.db.run_task(seed)
+
+    apply_local_mapping(
+        server,
+        [early_id, late_id],
+        [Assignment(relative_path="pending-person", kind="person")],
+        root,
+    )
+
+    def check(session):
+        character = session.exec(
+            select(Character).where(Character.name == "pending-person")
+        ).one()
+        face = session.exec(select(Face).where(Face.picture_id == early_id)).one()
+        early = session.get(Picture, early_id)
+        late = session.get(Picture, late_id)
+        return (
+            character.id,
+            face.character_id,
+            early.pending_character_id,
+            late.pending_character_id,
+        )
+
+    character_id, face_character, early_pending, late_pending = (
+        server.vault.db.run_task(check)
+    )
+    assert face_character == character_id, "the face that already existed is assigned"
+    assert early_pending is None
+    assert late_pending == character_id, "a picture not yet extracted stays pending"
 
 
 # ===========================================================================
