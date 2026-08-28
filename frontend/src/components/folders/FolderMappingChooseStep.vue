@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Settings › Libraries › Add a library.
+ * "Add a library" - the wizard's first pane.
  *
  * One picker, and the folder answers. The owner names a folder; the server says
  * which of five things it is and, for the three that can be added, what adding
@@ -17,44 +17,35 @@
  * deliberately creates no directory, so making one is the picker's job and it
  * already had a button for it.
  *
- * The "pictures" verdict promises the folder-mapping wizard ("Bring them in
- * and name what your folders mean"), but that library is empty until it is
- * ACTIVE - switching is what makes its own pictures visible to scan. So this
- * dialog creates the library as usual and then, for "pictures" only, starts
- * the same switch-and-reload `LibrariesSection.switchTo()` uses
- * (`useLibrarySwitchStore`), first saving a `useFolderMappingStore` entry
- * pointed at the new library's own root with `mode: "local_import"` and an
- * empty `taskId` - that entry survives the reload (it is `localStorage`
- * backed) and is what `SideBar` auto-opens `FolderMappingWizard` from on the
- * other side, already at the "scan" step, in `local_import` mode.
+ * "vault" and "empty" are added and switched to here, through the same
+ * switch-and-reload `LibrariesSection.switchTo()` uses. "pictures" creates
+ * nothing yet: "Bring them in" swaps the verdict card for the scan card in
+ * place (`FolderMappingScanStep`, in the same `FolderMappingCard` frame) and
+ * the read runs against a folder that is not a library - the library is only
+ * built once the owner has said what the folders mean. A `resume` entry
+ * re-enters the same pane with the path fixed and the read reattaching.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { addLibrary, inspectLibraryPath } from "../../api/libraries";
 import { errorDetail } from "../../utils/apiError";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
 import AppButton from "../widgets/AppButton.vue";
-import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import FolderMappingCard from "./FolderMappingCard.vue";
+import FolderMappingScanStep from "./FolderMappingScanStep.vue";
 
 const props = defineProps({
-  open: { type: Boolean, default: false },
-  // Paths already registered, so the browser can grey them out before the
-  // owner walks into one and is told no.
-  registeredPaths: { type: Array, default: () => [] },
-  // Docker serves container paths and has no host filesystem to browse, so the
-  // dialog degrades to a typed path rather than offering a picker that lies.
-  inDocker: { type: Boolean, default: false },
+  // A saved read to pick up: the path is fixed and the scan card reattaches.
+  resume: { type: Object, default: null },
 });
 
-const emit = defineEmits(["close", "added"]);
+const emit = defineEmits(["scan", "task", "ready", "cancel", "close"]);
 
-const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
 
@@ -63,11 +54,11 @@ const switchStore = useLibrarySwitchStore();
 const ACTION_LABELS = {
   vault: "Add it",
   pictures: "Bring them in",
-  empty: "Start it",
+  empty: "Start here",
 };
 
-const path = ref("");
-const name = ref("");
+const path = ref(props.resume?.path ?? "");
+const name = ref(props.resume?.label ?? "");
 /** True once the owner edits the name, so a new verdict stops overwriting it. */
 const nameEdited = ref(false);
 const verdict = ref(null);
@@ -77,6 +68,8 @@ const adding = ref(false);
 const addError = ref("");
 const browserOpen = ref(false);
 const pathInput = ref(null);
+/** The scan card has replaced the verdict card; the path is now fixed. */
+const scanning = ref(Boolean(props.resume));
 
 /** The path the current verdict describes, so a stale answer is never acted on.
     A ref, not a plain `let`: `canAdd` reads it. */
@@ -86,6 +79,14 @@ let inspectEpoch = 0;
 /** The last path asked about, so `@blur` on an unchanged field is a no-op. */
 let lastAsked = "";
 
+// Paths already registered, so the browser can grey them out before the
+// owner walks into one and is told no. Docker serves container paths and has
+// no host filesystem to browse, so the picker degrades to a typed path.
+const registeredPaths = computed(() =>
+  librariesStore.libraries.map((library) => library.path).filter(Boolean),
+);
+const inDocker = computed(() => librariesStore.inDocker);
+
 const actionLabel = computed(
   () => ACTION_LABELS[verdict.value?.verdict] ?? "Add",
 );
@@ -94,29 +95,6 @@ const canAdd = computed(
   () =>
     Boolean(verdict.value?.can_add) &&
     verdict.value?.path === inspectedPath.value,
-);
-
-watch(
-  () => props.open,
-  async (isOpen) => {
-    if (!isOpen) return;
-    inspectEpoch += 1;
-    lastAsked = "";
-    path.value = "";
-    name.value = "";
-    nameEdited.value = false;
-    verdict.value = null;
-    inspectedPath.value = "";
-    inspectError.value = "";
-    addError.value = "";
-    // Bumping the epoch above orphans any request still on the wire, and its
-    // `finally` is epoch-guarded - so without this the reopened dialog shows
-    // "Reading that folder…" over an empty field until the next inspect lands.
-    inspecting.value = false;
-    await nextTick();
-    pathInput.value?.focus();
-  },
-  { immediate: true },
 );
 
 async function inspect() {
@@ -164,31 +142,23 @@ function chooseFolder(selected) {
 
 async function add() {
   if (!canAdd.value || adding.value) return;
+  if (verdict.value.verdict === "pictures") {
+    // No library yet. The verdict card becomes the scan card, in the same
+    // frame; the wizard builds the library once the mapping is accepted.
+    path.value = inspectedPath.value;
+    scanning.value = true;
+    emit("scan", { path: path.value, label: name.value.trim() });
+    return;
+  }
   addError.value = "";
   adding.value = true;
   try {
     const library = await addLibrary(inspectedPath.value, name.value.trim());
-    if (verdict.value?.verdict === "pictures") {
-      // The library exists but is empty until it is active - save the intent
-      // to organise its own root before switching, so it survives the reload
-      // switching does. No task has been started yet, hence the empty
-      // taskId - see the header comment and useFolderMappingStore's own.
-      mappingStore.save({
-        taskId: "",
-        path: inspectedPath.value,
-        label: name.value.trim() || library.name || "",
-        mode: "local_import",
-      });
-      emit("close");
-      // Reuses the same switch-then-reload flow LibrariesSection's own
-      // "Switch" button starts. No confirmation prompt: pressing "Bring them
-      // in" already said what the owner wants, unlike an ordinary switch away
-      // from a library already in use.
-      await switchStore.begin(library, librariesStore.activeLibrary, null);
-      return;
-    }
-    emit("added", library);
     emit("close");
+    // The same switch-then-reload flow LibrariesSection's own "Switch" button
+    // starts. No confirmation prompt: pressing the button already said what
+    // the owner wants, unlike an ordinary switch away from a library in use.
+    await switchStore.begin(library, librariesStore.activeLibrary, null);
   } catch (error) {
     // The server re-inspects, so a folder that became covered since the
     // verdict is refused here rather than in the card above. Re-ask so the card
@@ -205,106 +175,102 @@ async function add() {
     adding.value = false;
   }
 }
+
+onMounted(() => {
+  if (!scanning.value) pathInput.value?.focus();
+});
 </script>
 
 <template>
-  <AppDialog
-    :open="open"
-    title="Add a library"
-    subtitle="Point PixlStash at a folder. Nothing inside it is moved."
-    :width="820"
-    @close="emit('close')"
-  >
-    <div class="add-library">
-      <div class="add-library__path">
-        <AppInput
-          ref="pathInput"
-          v-model="path"
-          class="add-library__field"
-          label="Folder"
-          placeholder="/home/me/Pictures"
-          icon="folder-outline"
-          @enter="inspect"
-          @blur="inspect"
-        />
-        <AppButton
-          v-if="!inDocker"
-          class="add-library__browse"
-          size="sm"
-          variant="secondary"
-          @click="browserOpen = true"
-        >
-          Browse…
-        </AppButton>
-      </div>
-
-      <p v-if="inDocker" class="add-library__note">
-        PixlStash is running in a container, so this is a path inside it.
-      </p>
-
-      <p
-        v-if="inspecting"
-        class="add-library__note"
-        role="status"
-        aria-live="polite"
+  <div class="choose-step">
+    <div class="choose-step__path">
+      <AppInput
+        ref="pathInput"
+        v-model="path"
+        class="choose-step__field"
+        label="Folder"
+        placeholder="/home/me/Pictures"
+        icon="folder-outline"
+        :disabled="scanning"
+        @enter="inspect"
+        @blur="inspect"
+      />
+      <AppButton
+        v-if="!inDocker"
+        class="choose-step__browse"
+        size="sm"
+        variant="secondary"
+        :disabled="scanning"
+        @click="browserOpen = true"
       >
-        Reading that folder…
-      </p>
-
-      <p v-else-if="inspectError" class="add-library__error" role="alert">
-        {{ inspectError }}
-      </p>
-
-      <!-- One card, five shapes. The words are the server's; only the icon,
-           the border and whether there is a button are decided here. -->
-      <div
-        v-else-if="verdict"
-        class="add-library__verdict"
-        :class="{ 'add-library__verdict--warn': !verdict.can_add }"
-      >
-        <span class="add-library__mark" aria-hidden="true">{{
-          verdict.can_add ? "✓" : "!"
-        }}</span>
-        <div class="add-library__text">
-          <div class="add-library__headline">{{ verdict.headline }}</div>
-          <div class="add-library__detail">{{ verdict.detail }}</div>
-          <!-- In the card rather than under it, so it sits with the thing it
-               names and ahead of the button that commits it. Prefilled with the
-               folder's own name, which is what the server would pick anyway. It
-               is here because library names must be unique: two folders both
-               called `2024` would otherwise be unaddable from this dialog, and
-               the owner sent to the command line - the thing this removes. -->
-          <AppInput
-            v-if="verdict.can_add"
-            v-model="name"
-            class="add-library__name"
-            label="Call it"
-            :placeholder="verdict.suggested_name"
-            @update:model-value="nameEdited = true"
-          />
-        </div>
-        <AppButton
-          v-if="verdict.can_add"
-          size="sm"
-          variant="primary"
-          :loading="adding"
-          @click="add"
-        >
-          {{ actionLabel }}
-        </AppButton>
-      </div>
-
-      <p v-if="addError" class="add-library__error" role="alert">
-        {{ addError }}
-      </p>
+        Browse…
+      </AppButton>
     </div>
 
-    <template #footer>
-      <AppButton size="sm" variant="secondary" @click="emit('close')">
-        Cancel
-      </AppButton>
-    </template>
-  </AppDialog>
+    <p v-if="inDocker" class="choose-step__note">
+      PixlStash is running in a container, so this is a path inside it.
+    </p>
+
+    <FolderMappingScanStep
+      v-if="scanning"
+      :path="path"
+      :resume-task-id="resume?.taskId ?? ''"
+      :match-existing="Boolean(resume)"
+      @task="emit('task', $event)"
+      @ready="emit('ready', $event)"
+      @cancel="emit('cancel')"
+    />
+
+    <p
+      v-else-if="inspecting"
+      class="choose-step__note"
+      role="status"
+      aria-live="polite"
+    >
+      Reading that folder…
+    </p>
+
+    <p v-else-if="inspectError" class="choose-step__error" role="alert">
+      {{ inspectError }}
+    </p>
+
+    <!-- One card, five shapes. The words are the server's; only the border
+         and whether there is a button are decided here. -->
+    <FolderMappingCard
+      v-else-if="verdict"
+      class="choose-step__verdict"
+      :title="verdict.headline"
+      :lead="verdict.detail"
+      :warn="!verdict.can_add"
+    >
+      <!-- In the card rather than under it, so it sits with the thing it
+           names and ahead of the button that commits it. Prefilled with the
+           folder's own name, which is what the server would pick anyway. It
+           is here because library names must be unique: two folders both
+           called `2024` would otherwise be unaddable from this dialog, and
+           the owner sent to the command line - the thing this removes. -->
+      <AppInput
+        v-if="verdict.can_add"
+        v-model="name"
+        class="choose-step__name"
+        label="Call it"
+        :placeholder="verdict.suggested_name"
+        @update:model-value="nameEdited = true"
+      />
+      <template v-if="verdict.can_add" #actions>
+        <AppButton variant="primary" :loading="adding" @click="add">
+          {{ actionLabel }}
+        </AppButton>
+        <AppButton variant="secondary" @click="emit('cancel')">
+          Cancel
+        </AppButton>
+      </template>
+    </FolderMappingCard>
+
+    <p v-if="addError" class="choose-step__error" role="alert">
+      {{ addError }}
+    </p>
+  </div>
 
   <FolderBrowser
     :open="browserOpen"
@@ -318,31 +284,31 @@ async function add() {
 </template>
 
 <style scoped>
-.add-library {
+.choose-step {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
-.add-library__path {
+.choose-step__path {
   display: flex;
   align-items: flex-end;
   gap: var(--space-3);
 }
 
-.add-library__field {
+.choose-step__field {
   flex: 1;
   min-width: 0;
 }
 
-.add-library__note {
+.choose-step__note {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
   line-height: var(--leading-snug);
 }
 
-.add-library__error {
+.choose-step__error {
   margin: 0;
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
@@ -352,54 +318,12 @@ async function add() {
   border-radius: var(--radius-sm);
 }
 
-.add-library__name {
-  margin-top: var(--space-3);
+.choose-step__name {
   max-width: 320px;
 }
 
-.add-library__verdict {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-}
-
-.add-library__verdict--warn {
-  border-color: rgb(var(--v-theme-warning));
-}
-
-.add-library__mark {
-  flex-shrink: 0;
-  font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-success));
-}
-
-.add-library__verdict--warn .add-library__mark {
-  color: rgb(var(--v-theme-warning));
-}
-
-.add-library__text {
-  flex: 1;
-  min-width: 0;
-}
-
-.add-library__headline {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.add-library__detail {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  line-height: var(--leading-snug);
-  margin-top: var(--space-1);
-}
-
 @media (max-width: 799px) {
-  .add-library__path,
-  .add-library__verdict {
+  .choose-step__path {
     align-items: stretch;
     flex-direction: column;
   }

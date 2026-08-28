@@ -1,14 +1,14 @@
-// Settings › Libraries › Add a library.
+// "Add a library" - the wizard's first pane.
 //
 // The picker's whole job is to ask the folder and then say what adding it would
 // mean, so what is worth pinning is that it renders the SERVER's words for all
 // five verdicts, that the two refusals offer no button, and that an answer for
 // a folder the owner has since navigated away from cannot be acted on.
 //
-// The "pictures" verdict is its own thing: adding it also starts a switch to
-// the new (freshly empty) library and reload, with a `useFolderMappingStore`
-// entry saved first so `FolderMappingWizard` reopens on the other side already
-// pointed at the new library's own root, in `local_import` mode.
+// "vault" and "empty" are added here and switched to, through the same
+// switch-and-reload LibrariesSection uses. "pictures" creates nothing: it
+// swaps the verdict card for the scan card in place and tells the wizard,
+// which builds the library only once the mapping is accepted.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -31,13 +31,14 @@ vi.mock("vuetify/components", () => ({
   VProgressCircular: { name: "v-progress-circular", template: "<i />" },
 }));
 
-import AddLibraryDialog from "./AddLibraryDialog.vue";
+import FolderMappingChooseStep from "./FolderMappingChooseStep.vue";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 import {
   addLibrary,
   inspectLibraryPath,
   setActiveLibrary,
 } from "../../api/libraries";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import { startFolderStructureRead } from "../../api/folderStructure";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -48,6 +49,13 @@ vi.mock("../../api/libraries", () => ({
   inspectLibraryPath: vi.fn(),
   addLibrary: vi.fn(),
   setActiveLibrary: vi.fn(),
+  listLibraries: vi.fn(),
+}));
+
+vi.mock("../../api/folderStructure", () => ({
+  startFolderStructureRead: vi.fn(),
+  getFolderStructureReadStatus: vi.fn(),
+  cancelFolderStructureRead: vi.fn(),
 }));
 
 vi.mock("../../api/folders", () => ({
@@ -90,8 +98,8 @@ const PICTURES = {
 let pinia;
 
 function mountDialog(props = {}) {
-  return mount(AddLibraryDialog, {
-    props: { open: true, ...props },
+  return mount(FolderMappingChooseStep, {
+    props,
     global: {
       plugins: [pinia],
       stubs: {
@@ -116,15 +124,37 @@ async function settle(wrapper) {
 }
 
 async function typePath(wrapper, path) {
-  await wrapper.find(".add-library__field .app-input__field").setValue(path);
-  await wrapper.find(".add-library__field .app-input__field").trigger("blur");
+  await wrapper.find(".choose-step__field .app-input__field").setValue(path);
+  await wrapper.find(".choose-step__field .app-input__field").trigger("blur");
   return settle(wrapper);
 }
 
 function actionButton(wrapper) {
   return wrapper
-    .findAll(".add-library__verdict button")
-    .find((button) => button.text().trim().length > 0);
+    .findAll(".choose-step__verdict button")
+    .find((button) => button.text().trim() !== "Cancel");
+}
+
+function seedActiveLibrary() {
+  const librariesStore = useLibrariesStore();
+  librariesStore.libraries = [
+    {
+      uuid: "uuid-current",
+      name: "Family Photos",
+      is_active: true,
+      is_reachable: true,
+      path: "/home/me/Pictures/Family",
+      active_share_links: 0,
+    },
+    {
+      uuid: "uuid-work",
+      name: "Client work",
+      is_active: false,
+      is_reachable: true,
+      path: "/mnt/work/client",
+      active_share_links: 0,
+    },
+  ];
 }
 
 beforeEach(() => {
@@ -135,6 +165,7 @@ beforeEach(() => {
   inspectLibraryPath.mockResolvedValue(structuredClone(VAULT));
   addLibrary.mockResolvedValue({ uuid: "uuid-new", name: "Generations" });
   setActiveLibrary.mockResolvedValue({ status: "ok" });
+  startFolderStructureRead.mockReturnValue(new Promise(() => {}));
 });
 
 describe("asking the folder", () => {
@@ -146,7 +177,7 @@ describe("asking the folder", () => {
   it.each([
     ["vault", "A library you already made", "Add it"],
     ["pictures", "28,412 pictures, no library here yet", "Bring them in"],
-    ["empty", "Empty", "Start it"],
+    ["empty", "Empty", "Start here"],
   ])(
     "renders the server's words for %s and offers its own verb",
     async (verdict, headline, label) => {
@@ -192,7 +223,7 @@ describe("asking the folder", () => {
 
       expect(wrapper.text()).toContain(detail);
       expect(actionButton(wrapper)).toBeFalsy();
-      expect(wrapper.find(".add-library__verdict--warn").exists()).toBe(true);
+      expect(wrapper.find(".mapping-card--warn").exists()).toBe(true);
     },
   );
 
@@ -204,18 +235,19 @@ describe("asking the folder", () => {
     });
     const wrapper = await typePath(mountDialog(), "/etc");
 
-    expect(wrapper.find(".add-library__error").text()).toContain(
+    expect(wrapper.find(".choose-step__error").text()).toContain(
       "restricted system directory",
     );
-    expect(wrapper.find(".add-library__verdict").exists()).toBe(false);
+    expect(wrapper.find(".choose-step__verdict").exists()).toBe(false);
   });
 });
 
 describe("adding it", () => {
-  it("adds the path the server resolved, not the one that was typed", async () => {
+  it("adds the path the server resolved, not the one that was typed, and switches to it", async () => {
     // The typed path may be relative to a home directory or carry a trailing
     // separator; the verdict describes the resolved one, and that is what the
     // button was offered for.
+    seedActiveLibrary();
     const wrapper = await typePath(mountDialog(), "~/Pictures/Generations/");
 
     await actionButton(wrapper).trigger("click");
@@ -225,11 +257,30 @@ describe("adding it", () => {
       "/home/me/Pictures/Generations",
       "Generations",
     );
-    expect(wrapper.emitted("added")[0][0]).toEqual({
+    expect(wrapper.emitted("close")).toBeTruthy();
+    expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
+    expect(reloadPage).toHaveBeenCalled();
+    const switchStore = useLibrarySwitchStore();
+    expect(switchStore.targetLibrary).toEqual({
       uuid: "uuid-new",
       name: "Generations",
     });
-    expect(wrapper.emitted("close")).toBeTruthy();
+    expect(switchStore.currentLibrary?.name).toBe("Family Photos");
+    expect(startFolderStructureRead).not.toHaveBeenCalled();
+  });
+
+  it("does not switch when the create itself fails", async () => {
+    seedActiveLibrary();
+    addLibrary.mockRejectedValue({
+      response: { data: { detail: '"Generations" covers this folder.' } },
+    });
+    const wrapper = await typePath(mountDialog(), VAULT.path);
+
+    await actionButton(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(setActiveLibrary).not.toHaveBeenCalled();
+    expect(wrapper.emitted("close")).toBeFalsy();
   });
 
   it("shows the server's refusal and re-asks, so the card agrees with it", async () => {
@@ -244,11 +295,11 @@ describe("adding it", () => {
     await actionButton(wrapper).trigger("click");
     await settle(wrapper);
 
-    expect(wrapper.find(".add-library__error").text()).toContain(
+    expect(wrapper.find(".choose-step__error").text()).toContain(
       "covers this folder",
     );
     expect(inspectLibraryPath).toHaveBeenCalled();
-    expect(wrapper.emitted("added")).toBeFalsy();
+    expect(setActiveLibrary).not.toHaveBeenCalled();
   });
 
   it("does not silently fail on the first press when blur lands before the click", async () => {
@@ -269,7 +320,7 @@ describe("adding it", () => {
         ),
     );
 
-    await wrapper.find(".add-library__field .app-input__field").trigger("blur");
+    await wrapper.find(".choose-step__field .app-input__field").trigger("blur");
     await actionButton(wrapper)?.trigger("click");
     await settle(wrapper);
 
@@ -280,7 +331,7 @@ describe("adding it", () => {
     const wrapper = await typePath(mountDialog(), VAULT.path);
 
     await wrapper
-      .find(".add-library__name .app-input__field")
+      .find(".choose-step__name .app-input__field")
       .setValue("2024 client");
     await actionButton(wrapper).trigger("click");
     await settle(wrapper);
@@ -292,7 +343,7 @@ describe("adding it", () => {
     // Two folders both called `2024` are only addable because of this: the
     // second verdict must not put the basename back over what was typed.
     const wrapper = await typePath(mountDialog(), VAULT.path);
-    await wrapper.find(".add-library__name .app-input__field").setValue("Mine");
+    await wrapper.find(".choose-step__name .app-input__field").setValue("Mine");
 
     inspectLibraryPath.mockResolvedValue({
       ...structuredClone(VAULT),
@@ -302,7 +353,7 @@ describe("adding it", () => {
     await typePath(wrapper, "/home/me/Pictures/Other");
 
     expect(
-      wrapper.find(".add-library__name .app-input__field").element.value,
+      wrapper.find(".choose-step__name .app-input__field").element.value,
     ).toBe("Mine");
   });
 
@@ -338,121 +389,98 @@ describe("adding it", () => {
       "Generations",
     );
   });
-
-  it("clears the previous answer when the dialog is reopened", async () => {
-    const wrapper = await typePath(mountDialog(), VAULT.path);
-    expect(wrapper.find(".add-library__verdict").exists()).toBe(true);
-
-    await wrapper.setProps({ open: false });
-    await wrapper.setProps({ open: true });
-    await settle(wrapper);
-
-    expect(wrapper.find(".add-library__verdict").exists()).toBe(false);
-  });
-
-  it("does not come back still reading a folder it was closed on", async () => {
-    // Reopening bumps the epoch, which orphans the in-flight request AND its
-    // epoch-guarded `finally` - so the flag has to be cleared by the reset.
-    inspectLibraryPath.mockImplementationOnce(() => new Promise(() => {}));
-    const wrapper = mountDialog();
-    await settle(wrapper);
-    await typePath(wrapper, VAULT.path);
-    expect(wrapper.text()).toContain("Reading that folder…");
-
-    await wrapper.setProps({ open: false });
-    await wrapper.setProps({ open: true });
-    await settle(wrapper);
-
-    expect(wrapper.text()).not.toContain("Reading that folder…");
-  });
 });
 
 describe("a 'pictures' verdict", () => {
-  function seedActiveLibrary() {
-    const librariesStore = useLibrariesStore();
-    librariesStore.libraries = [
-      {
-        uuid: "uuid-current",
-        name: "Family Photos",
-        is_active: true,
-        is_reachable: true,
-        path: "/home/me/Pictures/Family",
-        active_share_links: 0,
-      },
-    ];
-  }
-
   beforeEach(() => {
     inspectLibraryPath.mockResolvedValue(structuredClone(PICTURES));
-    addLibrary.mockResolvedValue({ uuid: "uuid-new", name: "Generations" });
   });
 
-  it("saves a local_import intent and starts the switch, instead of closing plainly", async () => {
-    seedActiveLibrary();
-    const wrapper = await typePath(mountDialog(), PICTURES.path);
-
-    await actionButton(wrapper).trigger("click");
-    await settle(wrapper);
-
-    const mappingStore = useFolderMappingStore();
-    expect(mappingStore.pending).toEqual({
-      taskId: "",
-      path: PICTURES.path,
-      label: "Generations",
-      mode: "local_import",
-    });
-
-    expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
-    expect(reloadPage).toHaveBeenCalled();
-
-    const switchStore = useLibrarySwitchStore();
-    expect(switchStore.targetLibrary).toEqual({
-      uuid: "uuid-new",
-      name: "Generations",
-    });
-    expect(switchStore.currentLibrary?.name).toBe("Family Photos");
-
-    // Unlike the other verdicts, this dialog does not announce "Added" -
-    // the page is about to reload into the new library entirely.
-    expect(wrapper.emitted("added")).toBeFalsy();
-    expect(wrapper.emitted("close")).toBeTruthy();
-  });
-
-  it("saves the owner-typed name, defaulting to the library's own", async () => {
+  it("swaps the verdict card for the scan card in place and creates nothing", async () => {
     seedActiveLibrary();
     const wrapper = await typePath(mountDialog(), PICTURES.path);
     await wrapper
-      .find(".add-library__name .app-input__field")
+      .find(".choose-step__name .app-input__field")
       .setValue("2024 client");
 
     await actionButton(wrapper).trigger("click");
     await settle(wrapper);
 
-    const mappingStore = useFolderMappingStore();
-    expect(mappingStore.pending.label).toBe("2024 client");
+    expect(wrapper.find(".choose-step__verdict").exists()).toBe(false);
+    expect(wrapper.find(".scan-step .mapping-card").text()).toContain(
+      "Working out what your folders mean",
+    );
+    // The path is fixed for the read's lifetime.
+    expect(
+      wrapper.find(".choose-step__field .app-input__field").element.disabled,
+    ).toBe(true);
+    expect(wrapper.emitted("scan")[0][0]).toEqual({
+      path: PICTURES.path,
+      label: "2024 client",
+    });
+    expect(startFolderStructureRead).toHaveBeenCalledWith(PICTURES.path, {
+      matchExisting: false,
+    });
+    expect(addLibrary).not.toHaveBeenCalled();
+    expect(setActiveLibrary).not.toHaveBeenCalled();
+    expect(wrapper.emitted("close")).toBeFalsy();
   });
 
-  it("does not switch when the create itself fails", async () => {
-    seedActiveLibrary();
-    addLibrary.mockRejectedValue({
-      response: { data: { detail: '"Generations" covers this folder.' } },
-    });
+  it("hands the scan card's Cancel up unchanged", async () => {
     const wrapper = await typePath(mountDialog(), PICTURES.path);
-
     await actionButton(wrapper).trigger("click");
     await settle(wrapper);
 
-    expect(setActiveLibrary).not.toHaveBeenCalled();
-    const mappingStore = useFolderMappingStore();
-    expect(mappingStore.pending).toBeNull();
+    const cancel = wrapper
+      .findAll(".scan-step button")
+      .find((button) => button.text().trim() === "Cancel");
+    await cancel.trigger("click");
+
+    expect(wrapper.emitted("cancel")).toBeTruthy();
+  });
+});
+
+describe("resuming a saved read", () => {
+  it("reattaches to the read at that path without asking the folder", async () => {
+    const wrapper = await settle(
+      mountDialog({
+        resume: {
+          taskId: "task-7",
+          path: PICTURES.path,
+          label: "Generations",
+          mode: "local_import",
+        },
+      }),
+    );
+
+    expect(inspectLibraryPath).not.toHaveBeenCalled();
+    expect(startFolderStructureRead).not.toHaveBeenCalled();
+    expect(wrapper.find(".choose-step__field .app-input__field").element.value).toBe(
+      PICTURES.path,
+    );
+    expect(wrapper.find(".scan-step").exists()).toBe(true);
+    expect(wrapper.emitted("task")[0][0]).toBe("task-7");
+  });
+});
+
+describe("the browser", () => {
+  it("is handed the paths already registered", async () => {
+    seedActiveLibrary();
+    const wrapper = await settle(mountDialog());
+
+    expect(wrapper.findComponent(FolderBrowser).props("registeredPaths")).toEqual([
+      "/home/me/Pictures/Family",
+      "/mnt/work/client",
+    ]);
   });
 });
 
 describe("in a container", () => {
   it("offers no Browse and says the path is a container path", async () => {
-    const wrapper = await settle(mountDialog({ inDocker: true }));
+    useLibrariesStore().inDocker = true;
+    const wrapper = await settle(mountDialog());
 
-    expect(wrapper.find(".add-library__browse").exists()).toBe(false);
+    expect(wrapper.find(".choose-step__browse").exists()).toBe(false);
     expect(wrapper.text()).toContain("running in a container");
   });
 });

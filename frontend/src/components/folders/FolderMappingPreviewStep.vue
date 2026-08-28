@@ -28,12 +28,26 @@ const props = defineProps({
   // active library instead (v1.11 Phase 3, "Bring them in" on a freshly
   // created library - integration_architecture.md §22).
   mode: { type: String, default: "reference" },
-  // The mapping step's "Drop this, organise later": run `organiseLater` as
-  // soon as this step mounts, so the owner lands on the running import.
-  organiseLaterOnMount: { type: Boolean, default: false },
+  // Whether the library this commit writes into exists yet. "Add a library"
+  // shows this step BEFORE building the library: then "Yes, build this
+  // library" and "Organise later" emit `build` with the assignments to send
+  // and nothing is committed here. Once the library exists (the wizard is
+  // resumed after the switch) they commit directly, as ever.
+  libraryExists: { type: Boolean, default: true },
+  // Resumed right after the switch that built the library: commit the
+  // `assignments` as soon as this step mounts, so the owner lands on the
+  // running import rather than on a button they already pressed.
+  commitOnMount: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["back", "cancel", "committed", "update:committing"]);
+const emit = defineEmits([
+  "back",
+  "build",
+  "cancel",
+  "committed",
+  "commit-started",
+  "update:committing",
+]);
 
 const committing = ref(false);
 // The wizard makes its dialog undismissable while this is true: a commit,
@@ -118,6 +132,10 @@ async function poll(taskId) {
 }
 
 async function commit(assignments = props.assignments) {
+  if (!props.libraryExists) {
+    emit("build", assignments);
+    return;
+  }
   committing.value = true;
   commitError.value = "";
   try {
@@ -128,6 +146,7 @@ async function commit(assignments = props.assignments) {
       props.mode,
     );
     commitTaskId.value = started.task_id;
+    emit("commit-started", started.task_id);
     poll(started.task_id);
   } catch (error) {
     committing.value = false;
@@ -168,7 +187,7 @@ async function abort() {
 }
 
 onMounted(() => {
-  if (props.organiseLaterOnMount) organiseLater();
+  if (props.commitOnMount) commit();
 });
 
 onUnmounted(() => {

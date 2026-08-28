@@ -38,6 +38,7 @@ import {
   renameLibrary,
   setActiveLibrary,
 } from "../../api/libraries";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrarySwitchStore } from "../../stores/useLibrariesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
@@ -584,12 +585,17 @@ describe("adding a library", () => {
     expect(remote.text()).not.toContain("+ Add a library…");
   });
 
-  it("hands the picker the paths already registered", async () => {
+  it("opens the one add-a-library wizard", async () => {
+    // Mounted once, in SideBar; Settings only asks the store to open it.
     const wrapper = await settle(mountPane());
 
-    expect(
-      wrapper.findComponent({ name: "AddLibraryDialog" }).props("registeredPaths"),
-    ).toEqual(["/home/me/Pictures", "/mnt/work/client"]);
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Add a library"))
+      .trigger("click");
+
+    expect(useFolderMappingStore().wizardOpen).toBe(true);
+    expect(useFolderMappingStore().wizardResume).toBeNull();
   });
 });
 
