@@ -27,6 +27,7 @@ vi.mock("./AccountSection.vue", () => ({ default: sectionStub }));
 vi.mock("./AppearanceSection.vue", () => ({ default: sectionStub }));
 vi.mock("./BehaviourSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComputeSection.vue", () => ({ default: sectionStub }));
+vi.mock("./LayoutSection.vue", () => ({ default: sectionStub }));
 vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
@@ -68,7 +69,7 @@ describe("UserSettingsDialog library navigation", () => {
     );
   });
 
-  it("orders the rail with Libraries ahead of Scrapheap and Snapshots", async () => {
+  it("orders the rail with Libraries and its layout ahead of Scrapheap", async () => {
     sessionContext.value = { scope: "ALL" };
     const wrapper = mountDialog();
     await nextTick();
@@ -84,6 +85,10 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-smart-score",
       "settings-nav-workflows",
       "settings-nav-libraries",
+      // Library layout sits immediately after Libraries: it is a property of
+      // whichever library is open, so it reads as one level down from the list
+      // that opens one. Adjacency is the only cue - the rail is one flat list.
+      "settings-nav-layout",
       "settings-nav-scrapheap",
       "settings-nav-snapshots",
       "settings-nav-privacy",
