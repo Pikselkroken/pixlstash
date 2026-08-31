@@ -175,6 +175,11 @@
 
 
 .face-bbox-label {
+  /* Anchor to the top of the box - a <button> would otherwise centre it. */
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 100%;
   font-size: 0.7em;
   background-color: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));
