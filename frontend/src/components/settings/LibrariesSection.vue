@@ -50,6 +50,13 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
+// `Choose a layout…` moves the owner to the Library layout pane rather than
+// opening a second surface for it. The layout is a property of the *open*
+// library - the routes are `/server-config/...`, which is whichever library is
+// active - so the item is on the active row only, and it navigates rather than
+// editing anything here.
+const emit = defineEmits(["open-tab"]);
+
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
@@ -411,6 +418,22 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                     @click="startRename(library)"
                   >
                     Rename…
+                  </button>
+                </li>
+                <!-- Only on the active library: the layout routes address the
+                     open one, so offering this on a row that is not open would
+                     silently edit a different library's folders. -->
+                <li v-if="library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    @click="
+                      openMenuUuid = '';
+                      emit('open-tab', 'layout');
+                    "
+                  >
+                    Choose a layout…
                   </button>
                 </li>
                 <!-- Absent on the active library on purpose: detaching it is

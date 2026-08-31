@@ -140,3 +140,88 @@ export async function setViewsSettings(root, kinds) {
     kinds,
   }));
 }
+
+/** The folder-layout topic of the server config (v1.11 Phases 4b and 4c). */
+const LAYOUT_URL = "/server-config/layout";
+
+/**
+ * Read how this library's own picture root is laid out.
+ *
+ * @returns {Promise<Object>} the response body:
+ *   - `layout`: segments as `project/person,set`, or `null` for no layout,
+ *     which is every library until its owner picks one
+ *   - `layout_unfiled`: the folder a picture with nothing to file it by goes to
+ *   - `default_layout`: what a new library starts on
+ */
+export async function getLayoutSettings() {
+  return unwrap(apiClient.get(LAYOUT_URL));
+}
+
+/**
+ * Save the layout, the unfiled folder, or both.
+ *
+ * **This moves no files.** Every path already in the library is what its
+ * assignments were read from, so every path is already true; what the layout
+ * decides is where a *new* picture is written and where one goes when its
+ * folder stops describing it. Moving an existing library onto the layout is a
+ * separate, explicitly-consented action - see `getLayoutMigrationPreview`.
+ *
+ * A PATCH, not a PUT: a field left `undefined` keeps its stored value, so
+ * sending only the unfiled folder does not turn the layout off. Pass
+ * `layout: null` explicitly for that.
+ *
+ * Rejects with a 400 whose detail names the reason when the layout cannot be
+ * read or the unfiled name is not one safe path component. Nothing is stored in
+ * that case, so a malformed layout can never behave as "no layout" by accident.
+ *
+ * @param {{layout?: string|null, layoutUnfiled?: string|null}} patch
+ * @returns {Promise<Object>} the updated settings.
+ */
+export async function setLayoutSettings({ layout, layoutUnfiled } = {}) {
+  const body = {};
+  if (layout !== undefined) body.layout = layout;
+  if (layoutUnfiled !== undefined) body.layout_unfiled = layoutUnfiled;
+  return unwrap(apiClient.patch(LAYOUT_URL, body));
+}
+
+/**
+ * Count what moving the whole library onto its layout would do. Moves nothing.
+ *
+ * @returns {Promise<Object>} the response body:
+ *   - `picture_count` / `folder_count`: how many pictures into how many folders
+ *   - `samples` / `collisions`: up to 8 `{picture_id, from, to}` each, every
+ *     path relative to the library root
+ *   - `collision_count`: how many are suffixed `-2` because something already
+ *     occupies the path. The file already there is never overwritten
+ *   - `cross_volume_count`: how many sit across a mount point inside the
+ *     library and therefore **cannot be moved at all**
+ *   - `skipped_counts`: every refusal by reason
+ */
+export async function getLayoutMigrationPreview() {
+  return unwrap(apiClient.get(`${LAYOUT_URL}/migration`));
+}
+
+/**
+ * Move one window of the library onto its layout.
+ *
+ * Call again with the `next_after_id` and `batch_id` it returns until `done`.
+ * That loop is the progress bar and it is also what makes the run resumable: a
+ * pass that fails leaves the tree half-moved and wholly consistent, and a
+ * picture already where the layout wants it plans no move, so re-running
+ * finishes it rather than restarting it.
+ *
+ * **Echo the `batch_id` on every pass after the first.** Each pass records its
+ * own operation under that one id, and a batch is a single undo unit, so one
+ * undo puts every file back at the path it had. Omitting it starts a second
+ * migration whose passes undo separately.
+ *
+ * @param {{afterId?: number, batchId?: string|null}} cursor
+ * @returns {Promise<Object>} `{batch_id, moved_count, moved_picture_ids,
+ *   examined, next_after_id, done, skipped, operation_id}`.
+ */
+export async function runLayoutMigrationPass({ afterId = 0, batchId } = {}) {
+  return unwrap(apiClient.post(`${LAYOUT_URL}/migration`, {
+    after_id: afterId,
+    ...(batchId ? { batch_id: batchId } : {}),
+  }));
+}

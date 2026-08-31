@@ -11,6 +11,7 @@ import ComputeSection from "./ComputeSection.vue";
 import PrivacySection from "./PrivacySection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
+import LayoutSection from "./LayoutSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import WorkflowsSection from "./WorkflowsSection.vue";
 import { VIcon } from "vuetify/components";
@@ -94,6 +95,15 @@ const navItems = computed(() =>
       id: "libraries",
       icon: "bookshelf",
       label: "Libraries",
+      show: !isReadOnly.value,
+    },
+    {
+      // Beside Libraries, and after it: the layout is a property of whichever
+      // library is open, so it reads as one level down from the list that
+      // opens one. Adjacency is the only cue - the rail is one flat list.
+      id: "layout",
+      icon: "file-tree-outline",
+      label: "Library layout",
       show: !isReadOnly.value,
     },
     {
@@ -258,7 +268,20 @@ watch(
         role="region"
         aria-labelledby="settings-nav-libraries"
       >
-        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <LibrariesSection
+          :open="dialogOpen && settingsTab === 'libraries'"
+          @open-tab="(tab) => (settingsTab = tab)"
+        />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'layout'"
+        id="settings-pane-layout"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-layout"
+      >
+        <LayoutSection :open="dialogOpen && settingsTab === 'layout'" />
       </div>
       <div
         v-if="!isReadOnly"

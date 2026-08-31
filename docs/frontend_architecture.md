@@ -142,7 +142,7 @@ frontend/src/
     │   ├── TagHealthBoard.vue         # Landing tag-health board
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
-    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
+    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute, Libraries, Layout), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
     └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), `PicturePicker` (one faceted, single-select library picker: the shelf's thumbnail verb today, the workflow Fixed and run-time modes next), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
@@ -666,12 +666,52 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Smart Score & Filters** (id `smart-score`) → `<SmartScoreSection>` (`!isReadOnly`)
 - **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
 - **Libraries** → `<LibrariesSection>` (`!isReadOnly`)
+- **Library layout** (id `layout`) → `<LayoutSection>` (`!isReadOnly`) — v1.11 Phases 4b/4c. Immediately after Libraries because the layout is a property of whichever library is *open*: `/server-config/layout` addresses the active one, which is also why `Choose a layout…` appears on the active row's `⋯` menu only, and emits `open-tab` to land here rather than editing in place
 - **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
 - **Privacy** → `<PrivacySection>` (`!isReadOnly`)
 - **Compute** → `<ComputeSection view="compute">` (desktop only, `isDesktop && !isReadOnly`)
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
+
+##### `LayoutSection.vue` — the layout, and the one gesture that moves everything
+
+Two things share the pane and the pane's whole job is to keep them apart.
+Everything above the last section **moves no files**: choosing a layout decides
+where a *new* picture is written and where one goes when its folder stops
+describing it, and the copy beside the builder is a table of what does and does
+not move rather than a warning. The last section is Phase 4c's migration, which
+moves the existing library, and it is previewed, consented to and undoable.
+
+- **The builder** is `v-select multiple` per segment over the four facets, with
+  the four worked examples rendered live underneath (`utils/libraryLayout.js`).
+  The renderer behind those examples is **private and partial on purpose** — it
+  reproduces first-match-wins and skip-an-unfilled-segment and none of the
+  server's sanitising — because its only inputs are four constant fixtures and
+  exporting it would invite a caller with real names for whom it would be
+  quietly wrong.
+- **Saves are debounced 500 ms.** `v-select multiple` emits per item toggle and
+  every save re-reads the migration preview, which walks the whole library on
+  disk; without the debounce, ticking three facets is three writes and three
+  scans. An edit sequence number stops a superseded response snapping the
+  builder back.
+- **A failed initial read hides the builder** and offers a retry. An empty
+  `segments` after a failed GET is indistinguishable from "this library has no
+  layout", and the next click would PATCH one over a layout nobody had read.
+- **The migration runs in passes and echoes one `batch_id`**, which is what
+  makes the whole run a single undo (integration §23). The loop guards on the
+  cursor strictly advancing, and `undoBatchById` returning `null` — it refuses
+  rather than throws — keeps the Undo on screen instead of discarding the batch
+  id with it.
+- **Every refusal the API reports is shown**, from the preview's
+  `skipped_counts` and from each pass's `skipped`. A run that could not touch
+  500 locked files must not report a clean "Moved 3,609 pictures", and
+  `cross_volume_count` renders even when `picture_count` is zero — a library
+  whose every candidate is across a mount point counts no movable pictures, and
+  that is the one case the check exists for.
+
+A library switch reloads the page (`useLibrariesStore.begin` → `reloadPage`), so
+nothing in this pane has to survive one.
 
 **Pane height is fixed** (`.settings-content`, 524px) so the dialog does not
 resize as the rail is clicked. A pane that outgrows it scrolls whole, header and
