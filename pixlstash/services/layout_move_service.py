@@ -491,13 +491,19 @@ def _sidecar_plan(
     so leaving it behind would strand the owner's captions in a folder the
     picture has left and let the next scan read them as somebody else's.
 
-    A layout move changes the folder and never the file name, so the sidecar
-    keeps its own name too and only its folder changes. Only a sidecar inside
-    the same root is carried: one pointed anywhere else is not this tree's to
-    rearrange.
+    A layout move normally changes the folder and never the file name, so the
+    sidecar keeps its own name too and only its folder changes. **The one
+    exception is Phase 4c's collision suffix**, which does change the picture's
+    name - and a sidecar pairs with its picture by *stem*, so it has to carry
+    the same suffix or it lands beside a picture it no longer names (and
+    collides with the sidecar of whatever file was already there). Only a
+    sidecar inside the same root is carried: one pointed anywhere else is not
+    this tree's to rearrange.
     """
     carried = []
     destination_dir = os.path.dirname(destination)
+    source_stem = os.path.splitext(os.path.basename(source))[0]
+    destination_stem = os.path.splitext(os.path.basename(destination))[0]
     for attribute in ("tags_file", "description_file"):
         sidecar = getattr(picture, attribute, None)
         if not sidecar or not os.path.isfile(sidecar):
@@ -509,13 +515,10 @@ def _sidecar_plan(
             # Not a sibling of the picture. Leave it where it is rather than
             # relocating a file the move has no claim on.
             continue
-        carried.append(
-            (
-                attribute,
-                sidecar_abs,
-                os.path.join(destination_dir, os.path.basename(sidecar_abs)),
-            )
-        )
+        name = os.path.basename(sidecar_abs)
+        if destination_stem != source_stem and name.startswith(source_stem):
+            name = destination_stem + name[len(source_stem) :]
+        carried.append((attribute, sidecar_abs, os.path.join(destination_dir, name)))
     return carried
 
 
@@ -821,18 +824,50 @@ def plan_match_moves(
     return plan, skipped
 
 
+def _free_name(destination_path: str, claimed: set) -> Optional[str]:
+    """The first unused spelling of *destination_path*, suffixing ``-2``, ``-3``...
+
+    **The suffix rule, decided once** (v1.11 Phase 4c). Two pictures of the same
+    name from two different folders render into one path when a library is
+    migrated onto a layout, and the migration is the owner asking for every file
+    to move - declining the second one would leave the tree half-arranged for a
+    reason nobody can see from looking at it.
+
+    What is suffixed is the file *being moved*, never the file already sitting
+    at the destination: renaming somebody else's file to make room is the
+    liberty this module does not take, and the automatic path still does not
+    take it either (``uniquify=False`` keeps refusing outright).
+
+    Returns ``None`` rather than looping forever if a thousand spellings are all
+    taken; the caller declines that picture as ``destination_taken``.
+    """
+    stem, extension = os.path.splitext(destination_path)
+    for suffix in range(2, 1001):
+        candidate = f"{stem}-{suffix}{extension}"
+        if candidate not in claimed and not os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def _prepare_move(
     picture: Picture,
     root: LayoutRoot,
     source: str,
     destination: str,
     claimed: set,
+    *,
+    uniquify: bool = False,
 ) -> tuple:
     """Turn a decided destination folder into a move, or say why there is none.
 
     Shared by the rule's own moves and the offered ones so the refusals cannot
     drift apart - the offer must be exactly as careful as the automatic path,
     not less.
+
+    Args:
+        uniquify: Apply :func:`_free_name` to a taken destination instead of
+            declining the picture. Phase 4c's whole-library migration only - see
+            that function for why the two callers differ.
 
     Returns:
         ``(PlannedMove, None)`` or ``(None, reason)``.
@@ -855,10 +890,19 @@ def _prepare_move(
     # Two pictures of the same name from two folders can render into one. The
     # claim set catches the pair inside this batch; ``publish_no_clobber``
     # catches everything else, including a file that appeared while the plan was
-    # being made. Refused, never uniquified: renaming the owner's file to make
-    # room is a bigger liberty than declining to move it.
+    # being made.
+    #
+    # **The rule's own moves refuse rather than uniquify**, because renaming a
+    # file to make room for one the owner did not ask to have moved is a bigger
+    # liberty than declining to move it. Phase 4c's migration - which the owner
+    # asked for, previewed and consented to - passes ``uniquify`` and gets the
+    # suffix instead. Either way the containment check above still holds: the
+    # suffix changes the basename and never the folder.
     if destination_path in claimed or os.path.exists(destination_path):
-        return None, "destination_taken"
+        renamed = _free_name(destination_path, claimed) if uniquify else None
+        if renamed is None:
+            return None, "destination_taken"
+        destination_path = renamed
     claimed.add(destination_path)
     return (
         PlannedMove(

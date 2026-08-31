@@ -6428,6 +6428,149 @@ same two folders next month be dismissed as ours.
 `ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
 moves it attributes to the owner — which is exactly Phase 5's input.
 
+### Moving an existing library onto its layout (v1.11 Phase 4c)
+
+`pixlstash/services/layout_migration_service.py`, two routes on
+`/server-config/layout/migration`. Offered whenever a layout is set or changed
+— a flat library choosing one for the first time, or a library whose layout the
+owner edits afterwards — and never automatic, never on import.
+
+> **It is not the move-when-false rule and must not be described as one.** Under
+> that rule a flat path parses against nothing, can never be false, and never
+> moves, which is exactly why old libraries need no migration. This is the owner
+> asking for something else: *make it all match, now.*
+
+That difference is one function, `library_layout.migrate_destination`, and it is
+the only new decision the phase contains. It asks `render` where the layout would
+put the picture rather than asking `_walk` whether the folder has stopped being
+true, and it keeps two of `relocate`'s properties because a second reading of the
+same tree would be a second rule: the owner's own folders below the layout travel
+rather than being flattened, and the unfiled folder is not a level to nest under.
+It answers `None` — leave it — in four cases. **Nothing files the picture**, so
+`render` would answer the unfiled folder and sweeping it into `_Inbox` would be
+movement for no gain. **It is in a folder of the owner's own**, which the layout
+owns no part of: that is the permanent override, and `migrate_destination` has
+to give the same answer `match_destination` gives or the one gesture that runs
+over the whole library would be the one that undoes every override in it — a
+picture at the *root* is not that case, because it is in no folder at all and
+overrides nothing, and it is the flat library this phase exists for. It is
+already where the layout wants it. Or its path carries `.`/`..` and is refused
+whole exactly as `is_true` refuses it.
+
+The unfiled folder gets its own branch above the override guard, at any depth:
+`_Inbox/2026-08` migrates to `<rendered>/2026-08`, never to
+`<rendered>/_Inbox/2026-08`. `_Inbox` is not somebody's override — it is where
+PixlStash itself put a picture nothing filed — and nesting it would leave a
+permanent unfiled folder inside a project that no later pass ever cleans up,
+because after the move `render` agrees and nothing is offered again.
+
+Everything that touches a file is §26's: the same `_prepare_move` refusals, the
+same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`
+undo. What a whole-library move needs and a one-picture move does not is four
+things.
+
+**Preview before consent.** `GET .../migration` plans the library and moves
+nothing, answering the count, the number of destination folders, a sample of
+before/after paths, and the refusals below. Consent to move 4,109 files is not
+consent anybody can give from a sentence that does not say 4,109. Every path in
+the answer is relative to the library root, never absolute.
+
+It plans **in the run's own windows**, not in one pass. That is not tidiness:
+`picture_facets` and the size lookup pass their ids to a raw `IN`, which Phase
+4b never had to think about because it only ever handed them a 200-id batch, and
+a whole-library `IN` is the SQLite bound-parameter ceiling — the reason
+`scope_id_subquery` exists. Windowing keeps every clause the size the engine was
+written for. The cost is that two pictures colliding across a window boundary
+are not counted as a collision here, only at the run; `publish_no_clobber` still
+refuses the overwrite and the run still suffixes it, so the count can be low and
+the behaviour cannot be wrong.
+
+**A collision rule, decided once.** Two folders' worth of `0001.png` render onto
+one path. `_free_name` suffixes `-2`, `-3`… and `_prepare_move` grew a
+`uniquify` flag rather than a second planner, so the automatic path keeps
+refusing outright — the rule's own moves must not start renaming anything. What
+is suffixed is the file **being moved**, never the file already sitting at the
+destination: renaming somebody else's file to make room is the liberty this
+module does not take, and the count is in the preview so it is applied visibly.
+The suffix reaches the picture's sidecars too, because a sidecar pairs with its
+picture by *stem* — `0001.txt` travelling unchanged would land beside
+`0001-2.png`, naming nothing, on top of the sidecar of whatever file was
+already there. It is the only case in which a layout move changes a file name
+at all, which is why `_sidecar_plan` had to learn about it.
+
+**Cross-volume detection, and the answer the plan did not predict.** The plan
+assumed a mount point inside the library turns a rename into a *copy* — minutes
+instead of the 0.19 s it measured for 28,412 same-volume renames. It does not:
+`publish_no_clobber` claims the destination with `os.link` and falls back to
+`os.replace`, and **both raise `EXDEV` across a device**, so such a move cannot
+happen at all. Copying across the boundary would be a new capability with its
+own verification and is deliberately not in this phase.
+
+So the detection is real and the consequence is different: `_same_volume`
+(`model_mover.same_device`, which already owns the `st_dev` reasoning about bind
+mounts and symlinked folders, and the seam a test needs to force the branch on a
+single-volume machine) refuses those pictures **in the plan**, with reason
+`destination_other_volume`. They are counted in the preview, they are in
+`skipped`, and they stay exactly where they are. Discovering it per file inside
+`apply_moves` — which is what happens without this — leaves the picture in
+neither `moved_picture_ids` nor `skipped` while the pass reports a clean finish.
+
+For the same reason the run reports every picture it planned and did not move,
+as `move_failed`: a name that appeared at the destination since the plan, a file
+locked on Windows, a folder gone read-only. `apply_moves` logs and carries on,
+which is what makes a failing run finishable — but a client about to stop
+looping has to be told, or the miss is a log line nobody reads.
+
+**Resumability, and why the run is in passes.** `POST .../migration` examines
+`MIGRATION_BATCH` pictures, moves what the layout would move, commits, and
+answers `next_after_id` and `done`; the client loops. That is the progress bar
+and the resumability at once — and it is deliberately *not* one transaction over
+28k pictures on the single DB writer thread. Two properties make it safe:
+
+1. **Every pass shares one server-minted `batch_id`**, so the whole run is one
+   undo. A batch is a single undo unit (`_batch_members_in_session`), which
+   means undoing any member reverts them all and one Ctrl+Z puts every file back
+   at the path it had — the acceptance criterion, without holding one
+   transaction open across the whole library. The id is minted here and echoed
+   back by the client, and validated on the way in against
+   `_MIGRATION_BATCH_ID_RE`. That check is on the **shape, not the provenance**
+   — it cannot tell an id this server minted from a well-formed one a client
+   composed — and it is there for what `OriginClientMiddleware` validates the
+   `X-Operation-Batch-Id` header for: `batch_id` decides what one undo reverses,
+   so it stays bounded, safe and inside this feature's namespace rather than
+   being free text that could join a migration's passes to another gesture's
+   undo unit. A caller who composes one can only regroup its own migrations, and
+   reaching the route needs a local owner.
+2. **The plan is idempotent**, so there is no checkpoint to keep. A picture
+   already where the layout wants it plans no move, so a pass that dies on file
+   27,000 leaves a tree that is half-moved and wholly consistent, and re-running
+   finishes it rather than restarting it.
+
+The asymmetry is deliberate and worth naming, because it looks like a
+contradiction: the **undo** of a migration *is* one transaction over the whole
+batch (`undo_in_session` → `_batch_members_in_session` → one `commit`). That is
+the existing batch machinery and it is a different shape of work — it applies
+recorded absolute paths and re-plans nothing, so it has no planner, no vocabulary
+load and no per-picture facet query. Splitting the undo would mean giving up the
+one-Ctrl-Z guarantee that is the acceptance criterion, which is not a trade this
+phase gets to make. The rollback window is unchanged from `move_to_match`'s: a
+failure rolls back **one pass**, not the run, so the residue `apply_moves`
+documents stays bounded at `MIGRATION_BATCH` files however long the migration is.
+
+Only the library's **own** picture root is migrated. A reference folder is a
+tree the owner arranged and PixlStash indexes in place, and
+`PATCH /server-config/layout` — the gesture this hangs off — says nothing about
+one; migrating a reference folder would need its own consent on its own route,
+naming that folder.
+
+Both routes are `LOCAL_OWNER_ONLY` (§16.3), and the POST is the strongest
+host-filesystem authority any route in this library exercises. It is above
+`POST /pictures/layout/move-to-match` for exactly the reason that one is
+`picture_scoped`: there the caller names the pictures, so the per-object check
+is the check that matters; here the caller names none and the scope is the whole
+library, so there is nothing for the gate to bound and the tier carries it. The
+GET is on `READ_BLOCKED_GET_PATHS` beside `GET /server-config/layout`.
+
 ## 27. Reconciling moves made outside PixlStash (v1.11 Phase 5)
 
 `pixlstash/utils/library_layout.py::reconcile_move` decides what an owner-made

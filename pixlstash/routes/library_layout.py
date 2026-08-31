@@ -1,21 +1,33 @@
-"""The library layout, and the offered "Move to match" (v1.11 Phase 4b).
+"""The library layout, the offered "Move to match", and the migration.
 
-Three routes and one rule between them: **a picture moves only when its folder
+One rule holds the first two together: **a picture moves only when its folder
 stops being true.** Choosing a layout reorganises nothing, because every path
 already in the library is what the assignments were read from. Drift - a folder
 that is still true but is not what the owner would pick today - is *offered*
-here and never taken automatically.
-
-The automatic half has no route at all: it is ``LayoutMoveTask``, woken by the
+here and never taken automatically. That is v1.11 Phase 4b, and the automatic
+half has no route at all: it is ``LayoutMoveTask``, woken by the
 assignment-change stamp in ``database.py``.
+
+``/server-config/layout/migration`` (Phase 4c) is the deliberate exception and
+is **not** that rule. Under the rule a flat path parses against nothing, can
+never be false, and never moves; the migration is the owner asking for
+something else - *make it all match, now* - so it is previewed, consented to,
+and reversible in one undo. See ``services/layout_migration_service.py``.
 """
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.event_types import EventType
+from pixlstash.services.layout_migration_service import (
+    MIGRATION_BATCH,
+    new_batch_id,
+    preview_migration,
+    run_migration_pass,
+)
 from pixlstash.services.layout_move_service import (
     move_to_match,
     picture_exists,
@@ -116,6 +128,108 @@ class PictureLayoutResponse(BaseModel):
     )
 
 
+#: The shape a migration's batch id has to have. A migration mints its own
+#: (``new_batch_id``) and the client echoes it on every following pass, so the
+#: whole run is one undo unit.
+#:
+#: **This checks the shape, not the provenance** - it cannot tell an id this
+#: server minted from a well-formed one a client composed, and it does not try
+#: to. What it is for is what ``OriginClientMiddleware`` validates the
+#: ``X-Operation-Batch-Id`` header for: ``batch_id`` decides what one undo
+#: reverses, so it stays bounded, safe, and inside this feature's own
+#: namespace rather than being free text that could join a migration's passes
+#: to some other gesture's undo unit. A caller who composes one can only
+#: regroup its own migrations, and reaching this route at all needs a local
+#: owner.
+_MIGRATION_BATCH_ID_RE = re.compile(r"^srv-layout-migration-[0-9a-f]{16}$")
+
+
+class MigrationSample(BaseModel):
+    """One before/after pair, both relative to the library root."""
+
+    picture_id: int
+    from_path: str = Field(alias="from")
+    to_path: str = Field(alias="to")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MigrationPreviewResponse(BaseModel):
+    status: str = "success"
+    layout: Optional[str] = Field(
+        default=None, description="The layout this would move the library onto."
+    )
+    picture_count: int = Field(description="How many pictures would move.")
+    folder_count: int = Field(description="How many folders they would move into.")
+    samples: list[MigrationSample] = Field(default_factory=list)
+    collision_count: int = Field(
+        description=(
+            "How many of them render onto a path something else already has, "
+            "and are therefore suffixed `-2`, `-3`... The file already sitting "
+            "there is never renamed and never overwritten."
+        )
+    )
+    collisions: list[MigrationSample] = Field(default_factory=list)
+    cross_volume_count: int = Field(
+        description=(
+            "How many sit on a different filesystem from where the layout "
+            "would put them - a mount point or a bind mount inside the "
+            "library. Those **cannot be moved**: the destination is claimed "
+            "with `os.link` and then `os.replace`, and both refuse to cross a "
+            "device. They are refused in the plan rather than attempted, so "
+            "they also appear in `skipped_counts` as "
+            "`destination_other_volume`, and they stay exactly where they are."
+        )
+    )
+    skipped_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Pictures the planner refuses, **counted by reason** — not the "
+            "per-picture list the `POST` answers with, because a preview over "
+            "a whole library would otherwise be a listing of it."
+        ),
+    )
+
+
+class MigrationRunRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"after_id": 0, "batch_id": None}}
+    )
+
+    after_id: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Resume cursor: only pictures with a higher id are examined. Send "
+            "`0` to start, then the `next_after_id` of the previous pass."
+        ),
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The `batch_id` the first pass returned. Omit it on the first pass "
+            "and echo it on every one after, so the whole migration is one "
+            "undo. Compose one and it is refused: the value has to be in "
+            "this feature's own `srv-layout-migration-` namespace, so a "
+            "migration's passes can never join another gesture's undo unit."
+        ),
+    )
+
+
+class MigrationRunResponse(BaseModel):
+    status: str = "success"
+    batch_id: str
+    moved_count: int
+    moved_picture_ids: list[int]
+    examined: int
+    next_after_id: int
+    done: bool = Field(
+        description="True when the last picture in the library has been examined."
+    )
+    skipped: list[dict] = Field(default_factory=list)
+    operation_id: Optional[int] = None
+
+
 class MoveToMatchRequest(BaseModel):
     picture_ids: list[int] = Field(description="The pictures to move.")
 
@@ -212,6 +326,100 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         set_layout(server.vault.db, layout, unfiled)
         return _response(*get_layout(server.vault.db))
+
+    @router.get(
+        "/server-config/layout/migration",
+        summary="What moving the whole library onto its layout would do",
+        description=(
+            "**Counts it, and moves nothing.** v1.11 Phase 4c: the one "
+            "operation in this release that deliberately moves everything, and "
+            "it is offered - when a layout is set or changed - never taken.\n\n"
+            "This is *not* the move-when-false rule and must not be described "
+            "as one. Under that rule a flat path parses against nothing, can "
+            "never be false, and never moves, which is why an existing library "
+            "needs no migration. This is the owner asking for something else: "
+            "make it all match, now.\n\n"
+            "Three things the count is for. `collision_count` is how many "
+            "pictures render onto a path something already occupies and are "
+            "therefore suffixed `-2`, `-3`... - the file already there is never "
+            "renamed and never overwritten. `cross_volume_count` is how many "
+            "sit across a mount point inside the library and therefore "
+            "**cannot be moved at all**, because the destination claim refuses "
+            "to cross a device. `skipped_counts` is every refusal by reason, "
+            "that one included.\n\n"
+            "Two kinds of picture are in none of those counts and do not move: "
+            "one the layout cannot place, because nothing files it, and one in "
+            "a folder of the owner's own, which contradicts nothing and is a "
+            "permanent override. Moving either would be movement for no gain."
+        ),
+        response_model=MigrationPreviewResponse,
+    )
+    def preview_layout_migration(request: Request):
+        return MigrationPreviewResponse(**preview_migration(server.vault))
+
+    @router.post(
+        "/server-config/layout/migration",
+        summary="Move the library onto its layout, one pass",
+        description=(
+            f"Examines up to {MIGRATION_BATCH} pictures and moves the ones the "
+            "layout would put somewhere else. Call it again with the "
+            "`next_after_id` and the `batch_id` it returned until `done` is "
+            "true; that is the progress bar, and it is also what makes the run "
+            "resumable - a pass that fails leaves the tree half-moved and "
+            "wholly consistent, and re-running finishes it, because a picture "
+            "already where the layout wants it plans no move.\n\n"
+            "**Every pass of one migration is one undo.** Each records its own "
+            "`pictures.layout.move` operation, all stamped with the same "
+            "`batch_id`, and a batch is a single undo unit - so one undo puts "
+            "every file back at the path it had.\n\n"
+            "A folder left empty by the move is kept, never deleted."
+        ),
+        response_model=MigrationRunResponse,
+        responses={400: {"description": "batch_id is not one this route minted."}},
+    )
+    def run_layout_migration(request: Request, body: MigrationRunRequest = Body(...)):
+        batch_id = body.batch_id
+        if batch_id is not None and not _MIGRATION_BATCH_ID_RE.match(batch_id):
+            # The id decides which operations one undo reverses, so it has to
+            # stay inside this feature's namespace. A shape check, not a
+            # provenance one - see _MIGRATION_BATCH_ID_RE.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "batch_id must be the value a previous pass returned, or "
+                    "omitted to start a new migration"
+                ),
+            )
+        if batch_id is None:
+            batch_id = new_batch_id()
+        context = request_context(request)
+        # The gesture is this migration, not whatever the client was already
+        # grouping: overriding the header is what keeps every pass in one undo.
+        context["batch_id"] = batch_id
+        result = run_migration_pass(server.vault, after_id=body.after_id, **context)
+        if result["moved_picture_ids"]:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": result["moved_picture_ids"],
+                    "change_kind": "updated",
+                    "fields": ["file_path", "pixels"],
+                    "source": "ui",
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                },
+            )
+        return MigrationRunResponse(
+            batch_id=batch_id,
+            moved_count=len(result["moved_picture_ids"]),
+            moved_picture_ids=result["moved_picture_ids"],
+            examined=result["examined"],
+            next_after_id=result["next_after_id"],
+            done=result["done"],
+            skipped=result["skipped"],
+            operation_id=result["operation_id"],
+        )
 
     return router
 
