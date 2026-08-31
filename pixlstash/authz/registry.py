@@ -301,6 +301,38 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "owner iff allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
+    ("GET", "/api/v1/server-config/layout/migration"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 v1.11 Phase 4c. Counts what moving every file in the "
+            "library root onto its layout would do, and is the consent screen "
+            "of the POST beside it - the tier that alone may move the owner's "
+            "whole tree is the tier that may see the count. It also reads back "
+            "host-filesystem facts nothing else exposes: how many files cross "
+            "a mount point inside the library, and sample paths relative to "
+            "the root. Sibling of GET /server-config/layout; owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
+    ("POST", "/api/v1/server-config/layout/migration"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 v1.11 Phase 4c, and the most host-filesystem authority any "
+            "route in this library exercises: it renames every picture in the "
+            "library's own root into the folders the layout renders. It takes "
+            "no caller-supplied path - the root is the library's own and every "
+            "destination is computed from a layout only this same tier could "
+            "have set - and the planner still refuses a source outside the "
+            "root, a symlink, or a destination that would escape it. Strictly "
+            "above POST /pictures/layout/move-to-match, which is picture-scoped "
+            "because the caller names the pictures; here the caller names none "
+            "and the scope is the whole library. Sibling of PATCH "
+            "/server-config/layout, which grants this authority in the first "
+            "place; owner + loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
     ("GET", "/api/v1/server-config/views"): RoutePolicy(
         _LOCAL,
         justification=(

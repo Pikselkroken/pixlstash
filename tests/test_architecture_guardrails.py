@@ -186,6 +186,12 @@ def test_services_no_direct_db_calls():
         # owes run_recorded_metadata_task the same atomicity layout_move_service
         # owes it above - capture, mutate and record in ONE queued task.
         "pixlstash/services/move_reconciliation_service.py",
+        # v1.11 Phase 4c. run_migration_pass owes exactly the atomicity
+        # move_to_match owes above - plan, move the files, capture and record
+        # in ONE queued task - and preview_migration is its read half, which
+        # walks the whole library's paths and must see one consistent snapshot
+        # of them.
+        "pixlstash/services/layout_migration_service.py",
     }
 
     violations = []

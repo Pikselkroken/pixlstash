@@ -175,6 +175,11 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # LOCAL_OWNER_ONLY at the gate; here as well for the same rollback
         # reason as the entries above.
         "/api/v1/server-config/layout",
+        # The migration preview (v1.11 Phase 4c) is the same belt one route
+        # further: it counts what moving the whole library onto that layout
+        # would do, and the sample paths and mount-point findings it returns
+        # are more of the owner's folder tree, not less.
+        "/api/v1/server-config/layout/migration",
     }
 )
 

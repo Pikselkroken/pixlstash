@@ -423,6 +423,79 @@ def match_destination(
     return None if _components(destination) == components else destination
 
 
+def migrate_destination(
+    folder: str,
+    facets: FacetValues,
+    layout: Layout,
+    known_names: FacetVocabulary,
+) -> str | None:
+    """Where the whole-library migration puts a picture, or ``None`` to leave it.
+
+    v1.11 Phase 4c, and **deliberately not the move-when-false rule.** Under
+    that rule a flat library parses against nothing, can never be false, and
+    never moves - which is exactly why old libraries need no migration. This is
+    the owner asking for something else: *make it all match, now.* So it does
+    not ask whether the folder is still true; it asks where the layout would put
+    the picture, and answers that.
+
+    Two things it keeps from :func:`relocate`, because a second reading of the
+    same tree would be a second rule:
+
+    * **The owner's own folders below the layout travel.** ``2024 Shoots/Mira/
+      2026-08`` migrates to ``<rendered>/2026-08``, never flattened. The walk
+      decides where the layout's part of the path ends, exactly as it does for
+      a move.
+    * **The unfiled folder is not a level**, at any depth. A picture in
+      ``_Inbox`` that now has a project goes to the project, and one in
+      ``_Inbox/2026-08`` goes to ``<rendered>/2026-08`` - never to
+      ``<rendered>/_Inbox/2026-08``, which would leave a permanent unfiled
+      folder inside a project that no later pass ever cleans up.
+
+    Returns:
+        A ``/``-separated relative folder, or ``None`` when the picture stays
+        where it is - which is four cases:
+
+        * **The layout cannot place it.** Nothing files it, so ``render`` would
+          answer the unfiled folder. Sweeping it into ``_Inbox`` would be
+          movement for no gain: it already contradicts nothing.
+        * **It is in a folder of the owner's own.** The layout owns no part of
+          the path, which is a **permanent override** - the same answer
+          :func:`match_destination` gives for the same reason, and it has to be
+          the same answer here or the one gesture that runs over the whole
+          library would be the one that undoes every override in it. A picture
+          at the root itself is not this case: it is in no folder at all, which
+          overrides nothing, and it is the flat library this phase exists for.
+        * It is already where the layout would put it.
+        * The folder is a path the layout cannot read at all - one carrying
+          ``.`` or ``..`` - which is refused whole here as it is everywhere
+          else in this module.
+    """
+    placed = render(facets, layout)
+    if placed == layout.unfiled:
+        return None
+    components = _components(folder)
+    if folder and not components:
+        # ``.``/``..`` - refused whole rather than tidied up, exactly as
+        # :func:`is_true` refuses it. Rewriting the prefix of a path the layout
+        # cannot read would drop the tail it could not parse.
+        return None
+    if components and _match_key(components[0]) == _match_key(layout.unfiled):
+        # The unfiled folder is not somebody's override - it is where PixlStash
+        # itself put the picture when nothing filed it. Something files it now,
+        # so the folder goes and whatever the owner built under it travels.
+        # Its own branch, and above the override guard below, because the tail
+        # of an unfiled path is by definition not one the layout owns.
+        destination = "/".join((placed, *components[1:]))
+        return None if _components(destination) == components else destination
+    _, owned = _walk(components, facets, layout, known_names)
+    if components and owned == 0:
+        # A folder of the owner's own, contradicting nothing: the permanent
+        # override, and the same answer ``match_destination`` gives.
+        return None
+    destination = "/".join((placed, *components[owned:]))
+    return None if _components(destination) == components else destination
+
+
 # ---------------------------------------------------------------------------
 # Reconciliation - the mirror, for moves made outside PixlStash (v1.11 Phase 5)
 # ---------------------------------------------------------------------------
