@@ -434,10 +434,12 @@ def create_router(server) -> APIRouter:
             "leave, and whether it exists yet. Path-ordered so it can be drawn "
             "by indenting on `depth`, capped at the busiest folders, and the "
             "remainder counted in `tree_truncated`.\n\n"
-            "Two kinds of picture are in none of those counts and do not move: "
-            "one the layout cannot place, because nothing files it, and one in "
-            "a folder of the owner's own, which contradicts nothing and is a "
-            "permanent override. Moving either would be movement for no gain."
+            "A picture the layout cannot place, because nothing files it, is in "
+            "none of those counts and does not move. Everything else lands "
+            "exactly where the layout says, folders of the owner's own "
+            "included: the automatic rule leaves those alone, the migration "
+            "flattens them. Two files of one name meeting in one folder are "
+            "suffixed, never overwritten."
         ),
         response_model=MigrationPreviewResponse,
     )

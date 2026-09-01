@@ -1658,7 +1658,7 @@ def test_the_migration_files_a_flat_library_the_rule_would_never_touch():
     # rule - and the migration says where it goes.
     assert relocate("", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT, KNOWN) is None
     assert (
-        migrate_destination("", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT, KNOWN)
+        migrate_destination("", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT)
         == "2024 Shoots"
     )
 
@@ -1666,20 +1666,24 @@ def test_the_migration_files_a_flat_library_the_rule_would_never_touch():
 def test_the_migration_leaves_a_picture_the_layout_cannot_place():
     # Nothing files it, so ``render`` would answer ``_Inbox``. Sweeping it there
     # is movement for no gain: it already contradicts nothing.
-    assert migrate_destination("", facets(), DEFAULT_LAYOUT, KNOWN) is None
+    assert migrate_destination("", facets(), DEFAULT_LAYOUT) is None
+    # ...from wherever it is. A date folder is not a reason to move a picture
+    # the layout has no name for.
+    assert migrate_destination("2024/2024-08-15", facets(), DEFAULT_LAYOUT) is None
 
 
-def test_the_migration_leaves_a_folder_of_the_owners_own_alone():
-    """The permanent override. This is the one gesture that runs over the whole
-    library, so it is the one that would undo every override in it - and
-    ``match_destination`` refuses the same folder for the same reason."""
+def test_the_migration_flattens_a_folder_of_the_owners_own():
+    """The migration is the one gesture where a folder of the owner's own is not
+    an override. A dated library - what most libraries are before they have a
+    layout - would otherwise migrate nothing at all, since none of ``2024/
+    2024-08-15`` names anything the layout knows. ``match_destination`` keeps
+    refusing the same folders: the rule never sweeps them, the button does."""
     filed = facets(projects=["2024 Shoots"])
-    for folder in ("_unsorted", "Archive/2019/Weddings", "Do not touch"):
-        assert migrate_destination(folder, filed, DEFAULT_LAYOUT, KNOWN) is None
+    for folder in ("_unsorted", "2024/2024-08-15", "Archive/2019/Weddings"):
+        assert migrate_destination(folder, filed, DEFAULT_LAYOUT) == "2024 Shoots"
         assert match_destination(folder, filed, DEFAULT_LAYOUT, KNOWN) is None
-    # The library root is not that case: a picture there is in no folder at
-    # all, so it overrides nothing, and it is the flat library 4c exists for.
-    assert migrate_destination("", filed, DEFAULT_LAYOUT, KNOWN) == "2024 Shoots"
+    # The automatic rule still leaves them alone.
+    assert relocate("2024/2024-08-15", filed, DEFAULT_LAYOUT, KNOWN) is None
 
 
 def test_the_migration_leaves_a_picture_already_where_the_layout_wants_it():
@@ -1688,15 +1692,26 @@ def test_the_migration_leaves_a_picture_already_where_the_layout_wants_it():
             "2024 Shoots/Mira",
             facets(projects=["2024 Shoots"], people=["Mira"]),
             DEFAULT_LAYOUT,
-            KNOWN,
         )
         is None
     )
 
 
-def test_the_migration_carries_the_owners_own_subfolders_across():
+def test_the_migration_flattens_the_owners_own_subfolders_too():
+    """Unlike ``relocate``, which carries ``2026-08`` across. The migration
+    puts every picture exactly where ``render`` says, and a date tail was the
+    arrangement the layout replaces; two files of one name meeting is what the
+    suffix rule is for."""
     assert (
         migrate_destination(
+            "2024 Shoots/Mira/2026-08",
+            facets(projects=["Client Nordvik"], people=["Mira"]),
+            DEFAULT_LAYOUT,
+        )
+        == "Client Nordvik/Mira"
+    )
+    assert (
+        relocate(
             "2024 Shoots/Mira/2026-08",
             facets(projects=["Client Nordvik"], people=["Mira"]),
             DEFAULT_LAYOUT,
@@ -1704,35 +1719,28 @@ def test_the_migration_carries_the_owners_own_subfolders_across():
         )
         == "Client Nordvik/Mira/2026-08"
     )
-    # The tail travels whether or not the layout still agrees about the prefix:
-    # ``2026-08`` is nobody's business but the owner's, and flattening it would
-    # collapse a date tree and collide two files of the same name.
+    # Even when the prefix is already right: a subfolder below it is not where
+    # the layout puts the picture.
     assert (
         migrate_destination(
-            "Client Nordvik/Mira/2026-08/raw",
-            facets(projects=["2024 Shoots"], people=["Mira"]),
+            "Client Nordvik/Mira/raw",
+            facets(projects=["Client Nordvik"], people=["Mira"]),
             DEFAULT_LAYOUT,
-            KNOWN,
         )
-        == "2024 Shoots/Mira/2026-08/raw"
+        == "Client Nordvik/Mira"
     )
 
 
 def test_the_unfiled_folder_is_not_a_level_the_migration_nests_under():
     filed = facets(projects=["2024 Shoots"])
-    assert (
-        migrate_destination(DEFAULT_LAYOUT.unfiled, filed, DEFAULT_LAYOUT, KNOWN)
-        == "2024 Shoots"
+    assert migrate_destination(DEFAULT_LAYOUT.unfiled, filed, DEFAULT_LAYOUT) == (
+        "2024 Shoots"
     )
-    # And at depth, which is the case that matters: nesting here would leave a
-    # permanent ``_Inbox`` inside a project folder that no later pass cleans up,
-    # because after the move ``render`` agrees and nothing is ever offered
-    # again. The tail below it still travels - it is the owner's.
+    # And at depth: nothing of the old path survives, ``_Inbox`` included, so
+    # no permanent ``_Inbox`` is ever left inside a project folder.
     assert (
-        migrate_destination(
-            f"{DEFAULT_LAYOUT.unfiled}/2026-08", filed, DEFAULT_LAYOUT, KNOWN
-        )
-        == "2024 Shoots/2026-08"
+        migrate_destination(f"{DEFAULT_LAYOUT.unfiled}/2026-08", filed, DEFAULT_LAYOUT)
+        == "2024 Shoots"
     )
 
 
@@ -1741,10 +1749,7 @@ def test_a_path_the_layout_cannot_read_is_not_migrated_either():
     # Rewriting the prefix would silently drop the tail it could not parse.
     assert (
         migrate_destination(
-            "2024 Shoots/../Mira",
-            facets(projects=["2024 Shoots"]),
-            DEFAULT_LAYOUT,
-            KNOWN,
+            "2024 Shoots/../Mira", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT
         )
         is None
     )
@@ -1775,8 +1780,26 @@ def _plant(library, relative_path, *, filed=True):
     return picture.id
 
 
+def _settled(library):
+    """Put the fixture's picture where the migration would put it.
+
+    The fixture keeps it under the owner's own ``2026-08`` folder for the
+    rule's tail-carrying tests; the migration flattens that folder, so a test
+    counting *other* moves settles it first.
+    """
+    session, root = library["session"], library["root"]
+    old = os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    new = os.path.join(root, "2024 Shoots", "Mira", "0412.png")
+    os.replace(old, new)
+    picture = session.get(Picture, library["picture_id"])
+    picture.file_path = "2024 Shoots/Mira/0412.png"
+    session.add(picture)
+    session.commit()
+
+
 def test_the_migration_plans_a_flat_library_and_leaves_the_unfilable(library):
     session, root = library["session"], library["root"]
+    _settled(library)
     filed = _plant(library, "0001.png")
     unfilable = _plant(library, "0002.png", filed=False)
 
@@ -1796,14 +1819,16 @@ def test_a_collision_is_suffixed_and_never_overwrites_the_file_already_there(lib
     first = _plant(library, "a/0001.png")
     second = _plant(library, "b/0001.png")
 
-    # ``a/`` and ``b/`` are folders of the owner's own, so those two are
-    # permanent overrides and never enter the plan at all.
+    # ``a/`` and ``b/`` are folders of the owner's own, and the migration
+    # flattens them, so two files of one name arrive at one folder: the second
+    # is suffixed in the plan, not refused.
     plan, skipped, _examined, _last = migration.plan_migration(session, root)
     assert skipped == []
-    assert first not in [move.picture_id for move in plan]
-    assert second not in [move.picture_id for move in plan]
+    moved = {move.picture_id: move.stored_path for move in plan}
+    assert moved[first] == "2024 Shoots/Mira/0001.png"
+    assert moved[second] == "2024 Shoots/Mira/0001-2.png"
 
-    # The collision is two files of the same name arriving at one folder.
+    # And a file already sitting at the destination is never the one renamed.
     third = _plant(library, "0001.png")
     fourth_path = os.path.join(root, "2024 Shoots", "Mira", "0001.png")
     os.makedirs(os.path.dirname(fourth_path), exist_ok=True)
@@ -1812,7 +1837,9 @@ def test_a_collision_is_suffixed_and_never_overwrites_the_file_already_there(lib
 
     plan, _skipped, _examined, _last = migration.plan_migration(session, root)
     moved = {move.picture_id: move.stored_path for move in plan}
-    assert moved[third] == "2024 Shoots/Mira/0001-2.png"
+    assert moved[first] == "2024 Shoots/Mira/0001-2.png"
+    assert moved[second] == "2024 Shoots/Mira/0001-3.png"
+    assert moved[third] == "2024 Shoots/Mira/0001-4.png"
 
     migration.apply_moves(session, plan, image_root=root)
     session.commit()
@@ -1820,7 +1847,8 @@ def test_a_collision_is_suffixed_and_never_overwrites_the_file_already_there(lib
     # point of suffixing the file being moved rather than the one in the way.
     with open(fourth_path, "rb") as handle:
         assert handle.read() == b"somebody else's file"
-    assert os.path.isfile(os.path.join(root, "2024 Shoots", "Mira", "0001-2.png"))
+    for name in ("0001-2.png", "0001-3.png", "0001-4.png"):
+        assert os.path.isfile(os.path.join(root, "2024 Shoots", "Mira", name))
 
 
 def test_the_automatic_path_still_refuses_a_taken_destination(library):
@@ -1839,6 +1867,7 @@ def test_the_automatic_path_still_refuses_a_taken_destination(library):
 
 def test_the_migration_is_resumable_by_id_and_idempotent_when_rerun(library):
     session, root = library["session"], library["root"]
+    _settled(library)
     first = _plant(library, "0001.png")
     second = _plant(library, "0002.png")
 
@@ -1916,6 +1945,7 @@ def test_a_destination_on_another_volume_is_refused_rather_than_attempted(
     this suite runs on, so the real branch is unreachable here.
     """
     session, root = library["session"], library["root"]
+    _settled(library)
     moving = _plant(library, "0001.png")
 
     plan, skipped, _examined, _last = migration.plan_migration(session, root)
@@ -1946,6 +1976,7 @@ def test_the_device_probe_reads_a_folder_that_does_not_exist_yet(library):
 
 def test_the_preview_counts_the_move_without_making_it(library):
     session, root = library["session"], library["root"]
+    _settled(library)
     filed = _plant(library, "0001.png")
     _plant(library, "0002.png", filed=False)
 
@@ -2006,13 +2037,14 @@ def _drawable_library(library):
     """
     session = library["session"]
     # The fixture's own picture leaves 2024 Shoots/Mira/2026-08 for the other
-    # project, carrying the owner's own 2026-08 tail with it.
+    # project. The migration flattens, so the owner's own 2026-08 tail is not
+    # carried: it lands in Client · Nordvik/Mira.
     _swap_project(library)
     _plant(library, "0001.png")  # root -> 2024 Shoots/Mira
     _plant(library, "0002.png", filed=False)  # nothing files it, so it stays
-    # An owner's own folder, a permanent override, and named so it sorts
-    # ahead of every busy folder: a cap that ordered by path would keep it.
-    _plant(library, "00 Loose/0003.png")
+    # An owner's own folder, flattened too, and named so it sorts ahead of
+    # every busier folder: a cap that ordered by path would keep it.
+    _plant(library, "00 Loose/0003.png")  # -> 2024 Shoots/Mira
 
     # A person with no folder on disk yet, so one row comes back is_new.
     nova = Character(name="Nova")
@@ -2042,7 +2074,7 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
             "depth": 0,
             "have": 1,
             "arriving": 0,
-            "leaving": 0,
+            "leaving": 1,
             "is_new": False,
         },
         {
@@ -2050,7 +2082,7 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
             "name": "Mira",
             "depth": 1,
             "have": 0,
-            "arriving": 1,
+            "arriving": 2,
             "leaving": 0,
             "is_new": False,
         },
@@ -2073,9 +2105,9 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
             "is_new": True,
         },
         {
-            "path": "Client · Nordvik/Mira/2026-08",
-            "name": "2026-08",
-            "depth": 2,
+            "path": "Client · Nordvik/Mira",
+            "name": "Mira",
+            "depth": 1,
             "have": 0,
             "arriving": 1,
             "leaving": 0,
@@ -2107,13 +2139,12 @@ def test_the_tree_is_capped_at_the_busiest_folders_and_says_how_many_it_dropped(
 
     preview = migration.preview_in_session(session, root)
 
-    # Four folders have a move to their name and ``00 Loose`` has none, so the
-    # two that survive are picked from the four - a truncated tree still shows
-    # where the migration does its work, and ``00 Loose`` is dropped despite
-    # sorting first - and the remaining three are counted.
+    # Every folder has a move to its name, so the two that survive are the
+    # busiest: ``2024 Shoots/Mira`` with two arriving, then the first by path
+    # of the four with one move each - and the remaining three are counted.
     assert [entry["path"] for entry in preview["tree"]] == [
+        "00 Loose",
         "2024 Shoots/Mira",
-        "2024 Shoots/Mira/2026-08",
     ]
     assert preview["tree_truncated"] == 3
 
@@ -2207,6 +2238,7 @@ def test_the_run_reports_a_cursor_and_only_says_done_at_the_end(library):
     and told the client the library was migrated. Nothing else in the suite
     calls ``run_migration_pass`` on a library with pictures in it."""
     session, root = library["session"], library["root"]
+    _settled(library)
     vault = _StubVault(session, root)
     planted = [_plant(library, f"{n:04d}.png") for n in range(1, 4)]
 
@@ -2275,6 +2307,7 @@ def test_a_planned_file_that_could_not_be_moved_is_reported_not_dropped(
     the pass still says `done`, and the only trace is a log line — a clean
     finish reported over a file that never moved."""
     session, root = library["session"], library["root"]
+    _settled(library)
     vault = _StubVault(session, root)
     stubborn = _plant(library, "0001.png")
     monkeypatch.setattr(migration, "move_planned_files", lambda *a, **k: [])

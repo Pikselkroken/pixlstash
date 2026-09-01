@@ -6443,26 +6443,24 @@ owner edits afterwards — and never automatic, never on import.
 That difference is one function, `library_layout.migrate_destination`, and it is
 the only new decision the phase contains. It asks `render` where the layout would
 put the picture rather than asking `_walk` whether the folder has stopped being
-true, and it keeps two of `relocate`'s properties because a second reading of the
-same tree would be a second rule: the owner's own folders below the layout travel
-rather than being flattened, and the unfiled folder is not a level to nest under.
-It answers `None` — leave it — in four cases. **Nothing files the picture**, so
+true, and the answer is the destination whole: nothing of the old path is kept.
+It answers `None`, leave it, in three cases. **Nothing files the picture**, so
 `render` would answer the unfiled folder and sweeping it into `_Inbox` would be
-movement for no gain. **It is in a folder of the owner's own**, which the layout
-owns no part of: that is the permanent override, and `migrate_destination` has
-to give the same answer `match_destination` gives or the one gesture that runs
-over the whole library would be the one that undoes every override in it — a
-picture at the *root* is not that case, because it is in no folder at all and
-overrides nothing, and it is the flat library this phase exists for. It is
-already where the layout wants it. Or its path carries `.`/`..` and is refused
-whole exactly as `is_true` refuses it.
+movement for no gain. **It is already where the layout wants it.** Or its path
+carries `.`/`..` and is refused whole exactly as `is_true` refuses it.
 
-The unfiled folder gets its own branch above the override guard, at any depth:
-`_Inbox/2026-08` migrates to `<rendered>/2026-08`, never to
-`<rendered>/_Inbox/2026-08`. `_Inbox` is not somebody's override — it is where
-PixlStash itself put a picture nothing filed — and nesting it would leave a
-permanent unfiled folder inside a project that no later pass ever cleans up,
-because after the move `render` agrees and nothing is offered again.
+What it deliberately does *not* share with `relocate` and `match_destination` is
+the override: a folder of the owner's own stays put under the rule and under the
+drift offer, and is flattened into the layout here. The first version kept the
+override, and that made the migration a no-op on the library it exists for. A
+library filed by year and date has every picture in a folder the layout owns no
+part of, so the excuse covered all of them and "Move them now" moved nothing
+(decided 2026-09-01). The two readings of the tree are reconciled by who is
+acting: the rule runs on its own, so it must not touch what the owner arranged;
+the migration is the owner asking for exactly that, previewed, consented and one
+undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg`,
+`_Inbox/2026-08` at `<rendered>`, and two files of one name arriving at one
+folder are told apart by the suffix rule below rather than refused.
 
 Everything that touches a file is §26's: the same `_prepare_move` refusals, the
 same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`

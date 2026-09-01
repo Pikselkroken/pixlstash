@@ -701,7 +701,7 @@ function netDelta(row) {
             </li>
             <li>
               Move anything you dragged into a folder of your own. There is
-              nothing to contradict, so it stays. Permanently.
+              nothing to contradict, so it stays. Only "Move them now" moves it.
             </li>
             <li>Delete a folder it empties.</li>
           </ul>

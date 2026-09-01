@@ -54,7 +54,6 @@ from pixlstash.services.layout_move_service import (
     journal_moves,
     move_planned_files,
     layout_roots,
-    library_vocabulary,
     picture_facets,
     relative_folder,
     record_moves,
@@ -144,7 +143,6 @@ def plan_migration(
     if not pictures:
         return [], [], 0, None
 
-    vocabulary = library_vocabulary(session, [root.layout])
     facets_by_id = picture_facets(session, [p.id for p in pictures if p.id is not None])
 
     plan: list = []
@@ -164,7 +162,6 @@ def plan_migration(
             relative_folder(source, root),
             facets_by_id.get(last_id, {}),
             root.layout,
-            vocabulary,
         )
         if destination is None:
             # Already where the layout wants it, or the layout cannot place it

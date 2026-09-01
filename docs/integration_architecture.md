@@ -2128,10 +2128,11 @@ and the one gesture that moves everything. Backend design is
 3. **Drift is offered, never taken.** A picture whose folder is still true but is
    not what the layout would pick today is *not wrong*. `suggested_folder` is an
    offer the owner accepts; nothing in the product acts on it by itself. The
-   Phase 4c migration does not weaken this either — it is the owner acting, on
-   the whole library at once, and it stops exactly where `match_destination`
-   stops: **a folder of the owner's own is a permanent override and is never
-   swept into the layout**, by the rule or by the migration.
+   Phase 4c migration is the one thing that does sweep a folder of the owner's
+   own into the layout, and only because it is the owner acting, on the whole
+   library at once, after a preview and with one undo: **the rule and the drift
+   offer treat a folder of the owner's own as a permanent override; "Move them
+   now" flattens it.**
 
 ### The layout string
 
