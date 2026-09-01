@@ -131,8 +131,8 @@
   /* The same accent as a GLOW rather than a stroke, for the one place a stroke
      cannot sit: a Vuetify field, whose floating label rides ON the top border.
      A 3px stroke there is a bar through the label. The 2px spread is still solid
-     accent, so the indicator keeps the contrast the ring was made solid for; the
-     blur is what lets it fade behind the label text instead of striking it. */
+     accent, so the indicator keeps the contrast the ring was made solid for.
+     `style.css` paints it beneath the label and clips it off the top edge. */
   --focus-glow: 0 0 6px 2px rgb(var(--v-theme-accent));
 
   /* ---------------------------------------------------------------------------

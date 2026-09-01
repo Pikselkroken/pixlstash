@@ -307,18 +307,37 @@ button:disabled {
    that input fills the box and the ring looks right by accident; in a SELECT it
    is sized to its own text, so the ring drew a 3px amber rectangle around the
    label - tightest, and most obviously wrong, on an empty select showing only
-   its placeholder. Move the indicator out to the field box so it wraps the
-   control, and paint it on `.v-field__outline`, not on `.v-field`: an outlined
-   field floats its label INTO the outline's notch, so a shadow on the field
-   paints over the label while one on the outline paints beneath it. A glow
-   rather than the 3px stroke for the same reason, see `--focus-glow`.
+   its placeholder.
+
+   The indicator is therefore a glow (`--focus-glow`) on a pseudo-element the
+   size of the field, painted first so it sits beneath the outline and the
+   label, and an outlined field's is clipped at the top edge: its label floats
+   INTO the top border, and any shadow up there is a bar through the label. What
+   is left is a glow down the sides and under the field, below the label.
+
+   A select's menu drops flush against the field's bottom edge and would cut
+   that glow in half, so it goes away while the menu is open; an open menu is
+   its own account of where the keyboard is.
 
    `:has(:focus-visible)` rather than Vuetify's own `.v-field--focused`, because
    that class lands on a mouse click too and this indicator is meant to be the
-   keyboard one. Both selectors are at least (0,2,0) and so beat the (0,1,0)
-   rule above without `!important`. */
-.v-field:has(:focus-visible) .v-field__outline {
+   keyboard one. All of these are at least (0,2,0) and so beat the (0,1,0) rule
+   above without `!important`. */
+.v-field:has(:focus-visible)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
   box-shadow: var(--focus-glow);
+}
+.v-field--variant-outlined:has(:focus-visible)::before {
+  clip-path: inset(0 -12px -12px -12px);
+}
+.v-select--active-menu .v-field::before,
+.v-autocomplete--active-menu .v-field::before,
+.v-combobox--active-menu .v-field::before {
+  box-shadow: none;
 }
 .v-field :focus-visible {
   box-shadow: none;
