@@ -397,6 +397,11 @@ def create_router(server) -> APIRouter:
 
         for library in registry.list_libraries():
             if library.path == folder:
+                # Counted here too: the desktop's first-run setup makes a
+                # vault in whatever folder was chosen, so an attached library
+                # can sit on top of pictures nothing has indexed yet. The
+                # count is what lets the empty library offer to bring them in.
+                found, capped = _count(folder, count)
                 return LibraryInspection(
                     verdict="attached",
                     path=folder,
@@ -404,6 +409,8 @@ def create_router(server) -> APIRouter:
                     headline="Already on the list",
                     detail=f'This folder is the library "{library.name}".',
                     suggested_name=suggested,
+                    picture_count=found,
+                    picture_count_capped=capped,
                     library=_to_response(library, include_path),
                 )
 

@@ -404,6 +404,24 @@ sidebar accessory nobody was pointed at.
 (with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
 new signal, for `SideBar.openReferenceFolderEditor`.
 
+**The empty library asks whether its own folder is empty.** The desktop's
+first-run setup creates the vault in whatever folder was chosen, and the web
+flow's "Add a library" only saves a pending mapping entry for folders it read
+itself, so a vault made over loose pictures had nothing to bring the wizard up:
+the owner chose a folder full of pictures and got "This library is empty".
+`ImageGrid` emits `library-empty` the first time `showLibraryEmptyState` turns
+true; App.vue forwards it to `SideBar.offerLoosePictures`, which asks
+`GET /libraries/inspect` about the active library's own path (the `attached`
+verdict now carries `picture_count`, what is on disk whether indexed or not)
+and, when there is anything there, opens `FolderMappingWizard` with
+`{ path, mode: "local_import" }` and no read: the scan card starts one, the
+read saves the pending entry as any resumed read does, so Cancel leaves the
+sidebar's "Finish organising…" row offering it. Once per page load, like the
+pending-entry auto-open beside it, and never for a read-only session, a remote
+one (`canManage` false), or while an entry is already pending. The wizard's
+"Drop this, organise later" commits with no assignments when the library
+already exists rather than trying to add it again.
+
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import
 them automatically"* — which copies files in, and the button that reaches it

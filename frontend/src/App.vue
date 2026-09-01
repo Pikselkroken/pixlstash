@@ -346,6 +346,11 @@ function openAddReferenceFolder() {
   sidebarRef.value?.openReferenceFolderEditor?.();
 }
 
+/** The library is empty: let the sidebar ask whether its folder is. */
+function offerLoosePictures() {
+  sidebarRef.value?.offerLoosePictures?.();
+}
+
 // ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
 // App.vue owns `--floating-bottom-h`: the height of the tallest bottom-anchored
 // floating element currently visible inside the notice column's footprint, plus
@@ -730,6 +735,7 @@ defineExpose({
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
                 @choose-folder="openAddReferenceFolder"
+                @library-empty="offerLoosePictures"
                 @confirm-export-zip="confirmExportZip"
                 @confirm-export-folder="confirmExportFolder"
               />

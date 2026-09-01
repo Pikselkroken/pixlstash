@@ -453,7 +453,7 @@ given a visible reason instead of controls that each fail.
 
 | `verdict` | `can_add` | Means |
 |---|---|---|
-| `attached` | `false` | This exact folder is a registered library (`library` names it) |
+| `attached` | `false` | This exact folder is a registered library (`library` names it). `picture_count` is still what is on disk, indexed or not: a desktop first run creates the vault in a folder that may already hold pictures, and the empty library asks this to know whether to offer bringing them in |
 | `overlaps` | `false` | A registered library contains it, or it contains one (`library` names it) |
 | `vault` | `true` | A vault nothing is using — `POST /libraries` attaches it |
 | `pictures` | `true` | Pictures, no vault — `POST /libraries` starts a library over them |

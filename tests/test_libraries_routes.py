@@ -645,6 +645,19 @@ class TestInspect:
         assert body["library"]["uuid"] == active.uuid
         assert active.name in body["detail"]
 
+    def test_the_active_library_still_counts_what_is_on_disk(self, server):
+        # A desktop first run puts the vault in a folder the owner already
+        # kept pictures in, so the empty library needs to know they are there.
+        active = server.library_registry.active_library()
+        _write_picture(Path(active.path) / "loose.jpg")
+        try:
+            body = _inspect(_owner(server), Path(active.path))
+        finally:
+            (Path(active.path) / "loose.jpg").unlink()
+
+        assert body["verdict"] == "attached"
+        assert body["picture_count"] == 1
+
     def test_a_folder_inside_an_attached_library_is_refused_by_name(
         self, server, added_libraries, tmp_path
     ):

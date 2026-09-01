@@ -343,6 +343,47 @@ describe("resuming after the switch", () => {
   });
 });
 
+describe("the empty library's own folder", () => {
+  // No read yet and no entry: the sidebar opens this when the library is
+  // empty but its folder is not (a desktop first run over loose pictures).
+  const own = { path: "/home/me/Pictures/Family", mode: "local_import" };
+
+  it("reads the folder, saves the read, and organising later commits", async () => {
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: READ_RESULT,
+    });
+    const wrapper = mountWizard({ resume: own });
+    await settle();
+
+    expect(startFolderStructureRead).toHaveBeenCalledWith(own.path, {
+      matchExisting: true,
+    });
+    expect(useFolderMappingStore().pending).toEqual({
+      taskId: "read-1",
+      path: own.path,
+      label: "",
+      mode: "local_import",
+    });
+
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(addLibrary).not.toHaveBeenCalled();
+    expect(startFolderStructureCommit).toHaveBeenCalledWith(
+      "read-1",
+      [],
+      "",
+      "local_import",
+    );
+  });
+});
+
 describe("the other verdicts", () => {
   it.each([
     ["vault", "A library you already made", "Add it"],

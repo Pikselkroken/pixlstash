@@ -1408,6 +1408,9 @@ const emit = defineEmits([
   // The empty library's folder route. The reference-folder editor is the
   // sidebar's, and App.vue already holds the ref that reaches it.
   "choose-folder",
+  // The empty library was shown. The sidebar checks whether the library's own
+  // folder holds pictures nothing has indexed and offers to bring them in.
+  "library-empty",
 ]);
 
 // Props
@@ -6788,6 +6791,10 @@ const showLibraryEmptyState = computed(
     !isScrapheapView.value &&
     !isSetOverlapView.value,
 );
+
+watch(showLibraryEmptyState, (shown) => {
+  if (shown) emit("library-empty");
+});
 
 /**
  * Files chosen through the empty library's "Add files…".

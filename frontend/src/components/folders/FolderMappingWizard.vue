@@ -158,6 +158,22 @@ function onMappingNext(built) {
 }
 
 /**
+ * "Drop this, organise later": index everything, map nothing. For a library
+ * that does not exist yet that is `build([])`; for one that does (a resumed
+ * read, or the empty library offering its own folder) there is nothing to
+ * add, so it is the Preview step's commit with no assignments.
+ */
+function later() {
+  if (!libraryExists.value) {
+    build([]);
+    return;
+  }
+  assignments.value = [];
+  autoCommit.value = true;
+  step.value = "preview";
+}
+
+/**
  * The library does not exist yet: create it, remember what to commit, and
  * switch to it. The commit itself runs after the reload - see the header.
  */
@@ -264,7 +280,7 @@ function onCommitted(result) {
       v-else-if="step === 'mapping' && readResult"
       :result="readResult"
       @next="onMappingNext"
-      @later="build([])"
+      @later="later"
     />
 
     <FolderMappingPreviewStep
