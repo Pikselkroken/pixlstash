@@ -17,7 +17,17 @@ vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i><slot /></i>" },
   VSelect: {
     name: "v-select",
-    props: ["modelValue", "items", "label", "disabled"],
+    // Typed rather than a name list: Vuetify declares these Boolean, so a bare
+    // `persistent-placeholder` attribute coerces to true. An untyped stub keeps
+    // it as "" and the assertion would be testing the stub, not the component.
+    props: {
+      modelValue: { type: Array, default: () => [] },
+      items: { type: Array, default: () => [] },
+      label: { type: String, default: "" },
+      placeholder: { type: String, default: "" },
+      disabled: { type: Boolean, default: false },
+      persistentPlaceholder: { type: Boolean, default: false },
+    },
     emits: ["update:modelValue"],
     template:
       '<select :data-level="label" :disabled="disabled"><slot name="selection" :index="0" /></select>',
@@ -172,6 +182,43 @@ describe("LibraryLayoutDialog", () => {
 
   // ---- the builder ---------------------------------------------------------
 
+  it("keeps the label in the outline and shows None until a level is picked", async () => {
+    // The empty slot used to sit its label inline as placeholder text while a
+    // filled one floated it into the outline notch, so the two read as
+    // different kinds of control rather than the same one at two states.
+    const wrapper = mountDialog();
+    await flushPromises();
+    const selects = wrapper.findAllComponents({ name: "v-select" });
+    for (const select of selects) {
+      expect(select.props("persistentPlaceholder")).toBe(true);
+      expect(select.props("placeholder")).toBe("None");
+      expect(select.props("label")).toMatch(/^Level \d$/);
+    }
+  });
+
+  it("refuses to clear the last level, because a layout with none moves nothing", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    setLayoutSettings.mockClear();
+
+    // Two levels: clearing one is fine, the other becomes level 1.
+    editLevel(wrapper, 1, []);
+    await flushPromises();
+    expect(
+      wrapper.findAllComponents({ name: "v-select" })[0].props("modelValue"),
+    ).toEqual(["project"]);
+
+    // Now clear the only one left: refused, and the select keeps its value.
+    setLayoutSettings.mockClear();
+    editLevel(wrapper, 0, []);
+    await flushPromises();
+    expect(setLayoutSettings).not.toHaveBeenCalled();
+    expect(
+      wrapper.findAllComponents({ name: "v-select" })[0].props("modelValue"),
+    ).toEqual(["project"]);
+    expect(wrapper.text()).toContain("Keep at least one level");
+  });
+
   it("opens a library with no layout on Project, one level, not two", async () => {
     // The builder grows one level at a time, so an unset library is proposed
     // the first level rather than the two-level DEFAULT_LAYOUT. It is written
@@ -192,7 +239,7 @@ describe("LibraryLayoutDialog", () => {
     expect(setLayoutSettings).toHaveBeenCalledWith(
       expect.objectContaining({ layout: "project" }),
     );
-    const selects = wrapper.findAllComponents({ name: "VSelect" });
+    const selects = wrapper.findAllComponents({ name: "v-select" });
     // One filled level plus the single empty slot to grow into: two boxes, one
     // chosen facet. Seeding the two-level default would show two filled.
     expect(selects).toHaveLength(2);

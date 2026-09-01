@@ -112,6 +112,8 @@ const blocked = computed(
 );
 const unavailable = computed(() => blocked.value || refused.value);
 const isOn = computed(() => segments.value.length > 0);
+/** Set when an edit that would leave no level at all was refused. */
+const atLeastOneLevel = ref(false);
 const layoutText = computed(() =>
   segments.value.map((segment) => describeSegment(segment)).join(" / "),
 );
@@ -262,7 +264,17 @@ function setLevel(index, facets) {
   // A level emptied by clearing its last facet is a level the owner has
   // removed, not an empty folder to draw: dropping it is what the grammar does
   // anyway, and keeping it would send a layout with a hole in it.
-  scheduleSave(next.filter((segment) => segment.length > 0));
+  const kept = next.filter((segment) => segment.length > 0);
+  if (kept.length === 0) {
+    // Every level cleared is a layout that names no folder at all, which makes
+    // the tree, the count and the move below it meaningless. Refused rather
+    // than saved: `segments` is unchanged, so the select snaps back on its own.
+    // The hint is what stops that reading as a broken dropdown.
+    atLeastOneLevel.value = true;
+    return;
+  }
+  atLeastOneLevel.value = false;
+  scheduleSave(kept);
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +590,8 @@ function netDelta(row) {
               hide-details
               :disabled="migrating"
               :label="`Level ${index + 1}`"
+              placeholder="None"
+              persistent-placeholder
               class="layout-level__select"
               @update:model-value="(value) => setLevel(index, value)"
             >
@@ -594,6 +608,11 @@ function netDelta(row) {
           </div>
         </template>
       </div>
+
+      <p v-if="atLeastOneLevel" class="layout-level__hint" role="status">
+        Keep at least one level. A layout with none names no folder, so there is
+        nothing to draw and nothing to move.
+      </p>
 
       <template v-if="isOn">
         <div class="layout-tree__head">
@@ -800,6 +819,15 @@ function netDelta(row) {
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   margin: 0 0 var(--space-5);
+}
+
+/* Only ever on screen after an edit was refused, so it sits in the gap the
+   builder already leaves rather than reserving height of its own. */
+.layout-level__hint {
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgb(var(--v-theme-warning));
+  margin: calc(-1 * var(--space-3)) 0 var(--space-4);
 }
 
 .layout-dlg__error {
