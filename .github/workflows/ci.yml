@@ -477,6 +477,7 @@ jobs:
           tests/test_comfyui_stack_filter.py
           tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_coreml_providers.py
           tests/test_database_engine_config.py
           tests/test_dedup_mixed_stacks.py
           tests/test_dedup_sweep_api.py
