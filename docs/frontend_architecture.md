@@ -666,7 +666,6 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Smart Score & Filters** (id `smart-score`) → `<SmartScoreSection>` (`!isReadOnly`)
 - **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
 - **Libraries** → `<LibrariesSection>` (`!isReadOnly`)
-- **Library layout** (id `layout`) → `<LayoutSection>` (`!isReadOnly`) — v1.11 Phases 4b/4c. Immediately after Libraries because the layout is a property of whichever library is *open*: `/server-config/layout` addresses the active one, which is also why `Choose a layout…` appears on the active row's `⋯` menu only, and emits `open-tab` to land here rather than editing in place
 - **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
 - **Privacy** → `<PrivacySection>` (`!isReadOnly`)
@@ -674,44 +673,89 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
-##### `LayoutSection.vue` — the layout, and the one gesture that moves everything
+##### `LibraryLayoutDialog.vue`: the layout, and the one gesture that moves everything
 
-Two things share the pane and the pane's whole job is to keep them apart.
-Everything above the last section **moves no files**: choosing a layout decides
-where a *new* picture is written and where one goes when its folder stops
-describing it, and the copy beside the builder is a table of what does and does
-not move rather than a warning. The last section is Phase 4c's migration, which
-moves the existing library, and it is previewed, consented to and undoable.
+**A dialog, not a tab.** It opens from `Choose a layout…` on the active
+library's `⋯` menu in `LibrariesSection`, and only that row's: the layout routes
+are `/server-config/layout`, which address whichever library is *open*, so the
+item on any other row would silently edit a different library's folders. There
+is deliberately no Library layout entry on the settings rail.
 
-- **The builder** is `v-select multiple` per segment over the four facets, with
-  the four worked examples rendered live underneath (`utils/libraryLayout.js`).
-  The renderer behind those examples is **private and partial on purpose** — it
-  reproduces first-match-wins and skip-an-unfilled-segment and none of the
-  server's sanitising — because its only inputs are four constant fixtures and
-  exporting it would invite a caller with real names for whom it would be
-  quietly wrong.
+620px rather than the house 440 (`AppDialog :width="620"`), and the extra width
+is spent on the one thing that needs it. One pane, no steps:
+
+- **The level builder** is one `v-select multiple` per folder level, each in its
+  own colour, with the level number on the select's own label so colour is
+  never the only thing telling two levels apart. The hues are theme colours
+  `level-1`..`level-4` (+ their `on-*` pairs) in `main.js`, and they are the one
+  family that is deliberately **different in light and dark**: the hue has to
+  clear 4.5:1 as small text, which needs luminance <= 0.183 on white and >= 0.310
+  on the dark `input-background`, and those windows do not overlap. The tint
+  alpha behind each field is `--level-wash` in `style.css`, 0.10 light and 0.14
+  dark for the same luminance step.
+  Four levels must sit on one line without wrapping: 620 minus 48 padding = 572px,
+  less three separators and six gaps leaves about 527px over four 120px-basis
+  flex columns, and a label longer than its column ellipsises with the full text
+  in `title`. Measured in Chromium at 620px: four levels give four 132px cells
+  at one shared top, row height 36px, no horizontal scrollbar. The row is
+  `align-items: stretch`, not `center`, because a filled select is taller than
+  an empty one and centring the two puts the boxes on different baselines.
+  That budget only holds while the row carries selects and separators and
+  **nothing else**: no per-level remove button, and no add control at four
+  levels. `LibraryLayoutDialog.test.js` pins that. A fifth level cannot happen,
+  because there are four facets and none may be used twice.
+- **The tree is the argument.** `getLayoutMigrationPreview` returns `tree`, a
+  flat list of `{path, name, depth, have, arriving, leaving, is_new}`, plus
+  `tree_truncated`. A folder is a row only when one of have/arriving/leaving is
+  non-zero, so an intermediate folder that holds nothing and receives nothing is
+  absent while its child is present, and **under a multi-level layout almost
+  every row is such an orphan**. Indenting on `depth` alone therefore says
+  nothing: measured against the e2e fixture on Project/Person/Set/Tag, all nine
+  rows were leaves whose ancestors had no row, and they read "arm hair",
+  "beard", "arm hair" with no way to tell whose they were. So each row shows the
+  ancestors that have no row of their own as a **muted breadcrumb read off
+  `path`**, and indents only under the nearest ancestor that IS present. Nothing
+  is synthesised and no withheld parent row is invented. The breadcrumb is the
+  only part that shrinks (`flex: 0 1 auto` + ellipsis); the leaf identifies the
+  row and always shows in full, and `title` carries the whole stored path.
+  `have` renders a dash off `is_new`, not off `have == 0`, because a real folder
+  can legitimately hold nothing.
+- **The layout is frozen for the duration of a move**, in `scheduleSave`, every
+  edit routes through it, so one guard covers the model, the debounce and the
+  write. Editing mid-run makes later passes re-plan against a new layout, so
+  half the library lands on one and half on the other, under one undo batch that
+  describes neither. The selects are `disabled` too, but that is the affordance,
+  not the rule.
+- **`refreshPreview` never touches `lastRun`.** Its `batchId` is the only route
+  back to a move that has already happened, and a re-count is not a reason to
+  throw one away. Nor is a pass that fails: `lastRun` is only overwritten when
+  the new run actually minted a batch id.
+- **There is no confirm, and the Move button is the guard instead.** The
+  consequence bar carries the number beside the verb, so a modal on top would be
+  a second yes for one gesture. Every edit marks the count stale, the bar reads
+  `counting…` *instead of* the old number, and the primary is inert until a
+  fresh count lands. A number that lags the tree is worse than no number.
 - **Saves are debounced 500 ms.** `v-select multiple` emits per item toggle and
-  every save re-reads the migration preview, which walks the whole library on
-  disk; without the debounce, ticking three facets is three writes and three
-  scans. An edit sequence number stops a superseded response snapping the
-  builder back.
-- **A failed initial read hides the builder** and offers a retry. An empty
-  `segments` after a failed GET is indistinguishable from "this library has no
-  layout", and the next click would PATCH one over a layout nobody had read.
-- **The migration runs in passes and echoes one `batch_id`**, which is what
-  makes the whole run a single undo (integration §23). The loop guards on the
-  cursor strictly advancing, and `undoBatchById` returning `null` — it refuses
-  rather than throws — keeps the Undo on screen instead of discarding the batch
-  id with it.
-- **Every refusal the API reports is shown**, from the preview's
-  `skipped_counts` and from each pass's `skipped`. A run that could not touch
-  500 locked files must not report a clean "Moved 3,609 pictures", and
-  `cross_volume_count` renders even when `picture_count` is zero — a library
-  whose every candidate is across a mount point counts no movable pictures, and
-  that is the one case the check exists for.
+  every save re-counts.
+- **The migration runs in passes and echoes one `batch_id`**, which is what makes
+  the whole run a single undo (integration §23). The loop guards on the cursor
+  strictly advancing. `undoBatchById` refuses by returning `null` rather than
+  throwing, which is what keeps the Undo on screen instead of discarding the
+  batch id with it.
+- **Two exits, both filled buttons, side by side.** `Keep layout, move nothing`
+  is `secondary`, not `ghost`: choosing a layout and declining the move is the
+  common case and must not read as backing out. `Move them now` is
+  `primary_green` and is the only control on the pane that changes colour.
+- **Every refusal the API reports is shown** as a flag chip, from the preview's
+  `skipped_counts` and from each pass's `skipped`, alongside `collision_count`
+  and `cross_volume_count`. A run that could not touch 500 locked files must not
+  report a clean "Moved 3,609 pictures".
+- **The prose is a disclosure.** `What this layout will never do` is three lines
+  behind a closed `<details>`; it is a promise checked once, not copy read every
+  time.
 
-A library switch reloads the page (`useLibrariesStore.begin` → `reloadPage`), so
-nothing in this pane has to survive one.
+A library switch reloads the page (`useLibrariesStore.begin` -> `reloadPage`), so
+nothing in this dialog has to survive one.
 
 **Pane height is fixed** (`.settings-content`, 524px) so the dialog does not
 resize as the rail is clicked. A pane that outgrows it scrolls whole, header and

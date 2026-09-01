@@ -61,6 +61,10 @@ body {
   --hover-wash: rgba(var(--v-theme-accent), 0.14);
   /* .18 → .26: compensates the deepened primary (#8EA604 → #6b7d04). */
   --active-wash: rgba(var(--v-theme-primary), 0.26);
+  /* Tint alpha behind a folder-level dropdown (LibraryLayoutDialog). Deeper
+     than light: 0.10 over the dark `input-background` is a smudge, 0.14 gives
+     the same 1.28 luminance step off the field that 0.10 gives on white. */
+  --level-wash: 0.14;
   --active-bar: rgb(var(--v-theme-primary));
   /* Correct as-is: `on-primary` (now #fff) over the 26% primary tint on the
      dark sidebar measures 11.22:1. The 1.32:1 figure in the docs is a
@@ -113,6 +117,8 @@ body {
      green, which clashes with the warm palette. Dark keeps the green convention. */
   --hover-wash: rgba(var(--v-theme-accent), 0.14);
   --active-wash: rgba(var(--v-theme-accent), 0.2);
+  /* See the dark block above. */
+  --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-accent));
   --active-text: rgb(var(--v-theme-on-surface));
 

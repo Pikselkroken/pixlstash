@@ -42,6 +42,7 @@ import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
 
 const props = defineProps({
@@ -50,12 +51,10 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
-// `Choose a layout…` moves the owner to the Library layout pane rather than
-// opening a second surface for it. The layout is a property of the *open*
-// library - the routes are `/server-config/...`, which is whichever library is
-// active - so the item is on the active row only, and it navigates rather than
-// editing anything here.
-const emit = defineEmits(["open-tab"]);
+// `Choose a layout…` opens LibraryLayoutDialog over this pane. The layout is a
+// property of the *open* library - the routes are `/server-config/...`, which
+// is whichever library is active - so the item is on the active row only.
+const layoutDialogOpen = ref(false);
 
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
@@ -430,7 +429,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                     class="library-menu__item"
                     @click="
                       openMenuUuid = '';
-                      emit('open-tab', 'layout');
+                      layoutDialogOpen = true;
                     "
                   >
                     Choose a layout…
@@ -582,6 +581,11 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         </AppButton>
       </template>
     </AppDialog>
+
+    <LibraryLayoutDialog
+      :open="layoutDialogOpen"
+      @close="layoutDialogOpen = false"
+    />
 
     <p class="visually-hidden" role="status" aria-live="polite">
       {{ copyAnnouncement }}

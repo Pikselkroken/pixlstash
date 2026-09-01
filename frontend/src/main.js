@@ -111,6 +111,31 @@ const pixlStashLight = {
     "on-secondary": "#f7f1ea",
     tertiary: "#46707a", // warm-white 4.85:1 (teal)
     "on-tertiary": "#f7f1ea",
+    // ── Folder-level hues (LibraryLayoutDialog) ────────────────────────────
+    // One hue per folder level in the layout builder, so Level 1 is visibly not
+    // Level 2. They walk one arc - azure, indigo, magenta, plum - through the
+    // only sector the brand does not already occupy, so they read as one
+    // ordered family and none of them can be mistaken for the olive Move
+    // button or the amber "leaving" delta. Level 4 doubles back to plum rather
+    // than continuing into red, to stay clear of `secondary` and `error`.
+    //
+    // **These are the one family that is NOT shared between the themes**, and
+    // the arithmetic forces it: the hue is small TEXT (the select's floating
+    // label), so 4.5:1 on white needs luminance <= 0.183 while 4.5:1 on the
+    // dark `input-background` needs >= 0.310. Disjoint. So the light values are
+    // inks and the dark values are their pale mirrors, the same shape as the
+    // `dark-surface-*` family above. Colour is never the only cue - the level
+    // number is on the label whatever the hue does.
+    // Measured on `surface`/`input-background` #ffffff (and `background`
+    // #faf9f7), plus the warm near-white label on the solid fill:
+    "level-1": "#12507f", //    8.47:1 / 8.05:1, label 7.55:1
+    "on-level-1": "#f7f1ea",
+    "level-2": "#5138cf", //    7.46:1 / 7.09:1, label 6.65:1
+    "on-level-2": "#f7f1ea",
+    "level-3": "#bb1bbb", //    5.27:1 / 5.01:1, label 4.70:1
+    "on-level-3": "#f7f1ea",
+    "level-4": "#77154e", //   10.49:1 / 9.97:1, label 9.35:1
+    "on-level-4": "#f7f1ea",
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
     border: "#d8d3c8",
     divider: "#e8e4dc",
@@ -179,6 +204,31 @@ const pixlStashDark = {
     "on-secondary": "#f7f1ea",
     tertiary: "#46707a", // warm-white 4.85:1 (teal)
     "on-tertiary": "#f7f1ea",
+    // ── Folder-level hues (LibraryLayoutDialog) ────────────────────────────
+    // One hue per folder level in the layout builder, so Level 1 is visibly not
+    // Level 2. They walk one arc - azure, indigo, magenta, plum - through the
+    // only sector the brand does not already occupy, so they read as one
+    // ordered family and none of them can be mistaken for the olive Move
+    // button or the amber "leaving" delta. Level 4 doubles back to plum rather
+    // than continuing into red, to stay clear of `secondary` and `error`.
+    //
+    // **These are the one family that is NOT shared between the themes**, and
+    // the arithmetic forces it: the hue is small TEXT (the select's floating
+    // label), so 4.5:1 on white needs luminance <= 0.183 while 4.5:1 on the
+    // dark `input-background` needs >= 0.310. Disjoint. So the light values are
+    // inks and the dark values are their pale mirrors, the same shape as the
+    // `dark-surface-*` family above. Colour is never the only cue - the level
+    // number is on the label whatever the hue does.
+    // Measured on `input-background` #2b3138 (the tightest of the three) and
+    // with the warm near-black label on the solid fill:
+    "level-1": "#7cbaea", //    6.30:1, label 7.71:1
+    "on-level-1": "#23211d",
+    "level-2": "#a898f0", //    5.26:1, label 6.44:1
+    "on-level-2": "#23211d",
+    "level-3": "#de7ad0", //    4.88:1, label 5.97:1
+    "on-level-3": "#23211d",
+    "level-4": "#ed9bcb", //    6.35:1, label 7.77:1
+    "on-level-4": "#23211d",
     border: "#363d45",
     divider: "#2c323a",
     overlay: "#00000066",

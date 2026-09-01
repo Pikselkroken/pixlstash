@@ -196,6 +196,14 @@ export async function setLayoutSettings({ layout, layoutUnfiled } = {}) {
  *   - `cross_volume_count`: how many sit across a mount point inside the
  *     library and therefore **cannot be moved at all**
  *   - `skipped_counts`: every refusal by reason
+ *   - `tree`: the library's folders as this layout would draw them, one flat
+ *     row per folder as `{path, name, depth, have, arriving, leaving, is_new}`.
+ *     **Indent on the row's own `depth` and nothing else.** A folder is a row
+ *     only when one of have/arriving/leaving is non-zero, so an intermediate
+ *     folder that holds nothing and receives nothing is legitimately absent
+ *     while its child is present: depth does not step by one between
+ *     consecutive rows, and a parent may not be there to look up
+ *   - `tree_truncated`: how many folders the cap left out of `tree`
  */
 export async function getLayoutMigrationPreview() {
   return unwrap(apiClient.get(`${LAYOUT_URL}/migration`));
