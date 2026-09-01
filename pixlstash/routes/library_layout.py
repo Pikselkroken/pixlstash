@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.event_types import EventType
 from pixlstash.services.layout_migration_service import (
     MIGRATION_BATCH,
+    TREE_FOLDERS,
     new_batch_id,
     preview_migration,
     run_migration_pass,
@@ -154,6 +155,66 @@ class MigrationSample(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class MigrationFolder(BaseModel):
+    """One folder of the library as the chosen layout would draw it.
+
+    A row is here when anything about it is non-zero, so a folder that only
+    ever holds subfolders is absent rather than listed empty. The library root
+    itself is never a row: it is the thing every `path` is relative to.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "path": "Harbour Nights/Nova",
+                "name": "Nova",
+                "depth": 1,
+                "have": 0,
+                "arriving": 34,
+                "leaving": 0,
+                "is_new": True,
+            }
+        }
+    )
+
+    path: str = Field(
+        description=(
+            "The folder, relative to the library root and `/`-joined - never "
+            "absolute, because an absolute path says where the owner keeps "
+            "their pictures. `Harbour Nights/Nova`."
+        )
+    )
+    name: str = Field(
+        description="The last component of `path`, to show: `Nova`.",
+    )
+    depth: int = Field(
+        description=(
+            "How far below the library root this sits: `0` for a top-level "
+            "folder, `1` for one nested inside it. The root has no row of its "
+            "own, so a depth of `0` is the first level the owner sees."
+        )
+    )
+    have: int = Field(
+        description="How many pictures sit in this folder today, before any move."
+    )
+    arriving: int = Field(
+        description="How many pictures the migration would move **into** it."
+    )
+    leaving: int = Field(
+        description=(
+            "How many it would move **out** of it. A folder can be both: one "
+            "picture arrives as another leaves."
+        )
+    )
+    is_new: bool = Field(
+        description=(
+            "True when the folder is not on disk yet and the migration would "
+            "create it. A folder left empty by the move is kept, never deleted, "
+            "so the opposite never happens."
+        )
+    )
+
+
 class MigrationPreviewResponse(BaseModel):
     status: str = "success"
     layout: Optional[str] = Field(
@@ -187,6 +248,27 @@ class MigrationPreviewResponse(BaseModel):
             "Pictures the planner refuses, **counted by reason** — not the "
             "per-picture list the `POST` answers with, because a preview over "
             "a whole library would otherwise be a listing of it."
+        ),
+    )
+    tree: list[MigrationFolder] = Field(
+        default_factory=list,
+        description=(
+            "The library as this layout would draw it, one row per folder, so "
+            "the shape can be seen before it is agreed to. **Ordered by path**, "
+            "so a parent listed here comes immediately before its children and "
+            "the tree can be drawn by indenting on `depth`. Capped at "
+            f"{TREE_FOLDERS} folders, and the cap keeps the busiest - most "
+            "arrivals plus departures - so a truncated tree still shows where "
+            "the migration does its work. A parent can be missing from it "
+            "either way: a folder that only ever holds subfolders has nothing "
+            "to count and is not a row."
+        ),
+    )
+    tree_truncated: int = Field(
+        default=0,
+        description=(
+            "How many folders the cap left out of `tree`. `0` when the whole "
+            "library fits."
         ),
     )
 
@@ -347,6 +429,11 @@ def create_router(server) -> APIRouter:
             "**cannot be moved at all**, because the destination claim refuses "
             "to cross a device. `skipped_counts` is every refusal by reason, "
             "that one included.\n\n"
+            "`tree` is the same answer drawn rather than counted: one row per "
+            "folder, with what it holds now, what would arrive, what would "
+            "leave, and whether it exists yet. Path-ordered so it can be drawn "
+            "by indenting on `depth`, capped at the busiest folders, and the "
+            "remainder counted in `tree_truncated`.\n\n"
             "Two kinds of picture are in none of those counts and do not move: "
             "one the layout cannot place, because nothing files it, and one in "
             "a folder of the owner's own, which contradicts nothing and is a "

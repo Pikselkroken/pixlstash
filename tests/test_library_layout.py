@@ -1992,6 +1992,141 @@ def test_the_preview_of_a_library_with_no_layout_is_zero_rather_than_absent(libr
     assert preview["picture_count"] == 0
     assert preview["cross_volume_count"] == 0
     assert preview["skipped_counts"] == {}
+    assert preview["tree"] == []
+    assert preview["tree_truncated"] == 0
+
+
+def _drawable_library(library):
+    """A tree with something of every kind in it, for the preview's ``tree``.
+
+    Five folders end up worth a row, and the two that do not are the point as
+    much as the five: the library root, which is never a row of its own, and
+    ``2024 Shoots``, which holds no picture and receives none because the layout
+    only ever puts things one level below it.
+    """
+    session = library["session"]
+    # The fixture's own picture leaves 2024 Shoots/Mira/2026-08 for the other
+    # project, carrying the owner's own 2026-08 tail with it.
+    _swap_project(library)
+    _plant(library, "0001.png")  # root -> 2024 Shoots/Mira
+    _plant(library, "0002.png", filed=False)  # nothing files it, so it stays
+    # An owner's own folder, a permanent override, and named so it sorts
+    # ahead of every busy folder: a cap that ordered by path would keep it.
+    _plant(library, "00 Loose/0003.png")
+
+    # A person with no folder on disk yet, so one row comes back is_new.
+    nova = Character(name="Nova")
+    session.add(nova)
+    session.commit()
+    with_nova = _plant(library, "0005.png", filed=False)
+    picture = session.get(Picture, with_nova)
+    picture.project_id = library["project_id"]
+    session.add(picture)
+    session.add(
+        PictureProjectMember(picture_id=with_nova, project_id=library["project_id"])
+    )
+    session.add(Face(picture_id=with_nova, character_id=nova.id))
+    session.commit()
+
+
+def test_the_preview_draws_the_tree_the_layout_would_make(library):
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+
+    tree = migration.preview_in_session(session, root)["tree"]
+
+    assert tree == [
+        {
+            "path": "00 Loose",
+            "name": "00 Loose",
+            "depth": 0,
+            "have": 1,
+            "arriving": 0,
+            "leaving": 0,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Mira",
+            "name": "Mira",
+            "depth": 1,
+            "have": 0,
+            "arriving": 1,
+            "leaving": 0,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Mira/2026-08",
+            "name": "2026-08",
+            "depth": 2,
+            "have": 1,
+            "arriving": 0,
+            "leaving": 1,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Nova",
+            "name": "Nova",
+            "depth": 1,
+            "have": 0,
+            "arriving": 1,
+            "leaving": 0,
+            "is_new": True,
+        },
+        {
+            "path": "Client · Nordvik/Mira/2026-08",
+            "name": "2026-08",
+            "depth": 2,
+            "have": 0,
+            "arriving": 1,
+            "leaving": 0,
+            "is_new": True,
+        },
+    ]
+
+
+def test_the_tree_has_no_row_for_the_library_root(library):
+    """Three pictures sit at the root and two of them leave it, and none of that
+    is a row: the root is what every path is relative to, so a row for it would
+    draw a level the owner does not have."""
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+
+    tree = migration.preview_in_session(session, root)["tree"]
+    assert all(entry["path"] for entry in tree)
+    assert [entry["path"] for entry in tree] == sorted(
+        entry["path"] for entry in tree
+    ), "path order is what lets the screen indent on depth without re-sorting"
+
+
+def test_the_tree_is_capped_at_the_busiest_folders_and_says_how_many_it_dropped(
+    library, monkeypatch
+):
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+    monkeypatch.setattr(migration, "TREE_FOLDERS", 2)
+
+    preview = migration.preview_in_session(session, root)
+
+    # Four folders have a move to their name and ``00 Loose`` has none, so the
+    # two that survive are picked from the four - a truncated tree still shows
+    # where the migration does its work, and ``00 Loose`` is dropped despite
+    # sorting first - and the remaining three are counted.
+    assert [entry["path"] for entry in preview["tree"]] == [
+        "2024 Shoots/Mira",
+        "2024 Shoots/Mira/2026-08",
+    ]
+    assert preview["tree_truncated"] == 3
+
+
+def test_the_tree_of_an_empty_library_is_empty_rather_than_a_root_row(library):
+    session, root = library["session"], library["root"]
+    for picture in session.exec(select(Picture)).all():
+        session.delete(picture)
+    session.commit()
+
+    preview = migration.preview_in_session(session, root)
+    assert preview["tree"] == []
+    assert preview["tree_truncated"] == 0
 
 
 def test_a_suffixed_picture_carries_its_sidecar_under_the_same_suffix(library):

@@ -36,6 +36,7 @@ no checkpoint of its own.
 
 import os
 import uuid
+from collections import Counter
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -68,6 +69,7 @@ logger = get_logger(__name__)
 
 __all__ = [
     "MIGRATION_BATCH",
+    "TREE_FOLDERS",
     "apply_moves",
     "plan_migration",
     "run_migration_pass",
@@ -83,6 +85,13 @@ MIGRATION_BATCH: int = 200
 #: How many before/after path pairs the preview shows. Enough to recognise the
 #: shape of the tree that is about to appear; not a listing of the library.
 SAMPLE_SIZE: int = 8
+
+#: How many folders the preview's tree lists. The tree is there so the owner can
+#: see the shape the library would take, not so they can audit every folder of
+#: it - a library with 4,000 folders would otherwise send 4,000 rows to draw a
+#: picture that is legible at sixty. The ones kept are the busiest, and the rest
+#: are counted in ``tree_truncated`` rather than dropped silently.
+TREE_FOLDERS: int = 60
 
 
 def _library_root(session: Session, image_root: Optional[str]) -> Optional[LayoutRoot]:
@@ -253,6 +262,12 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
     the run suffixes it, so the count can be low and the behaviour cannot be
     wrong.
 
+    ``tree`` is the same walk read a second way: the destination folders were
+    already being collected to be counted, so per-folder arrivals and
+    departures cost nothing beyond keeping them. Only ``have`` is new work, and
+    it is one query over one column for the whole library - less than the walk
+    it sits beside, which loads every picture row.
+
     Every path in the answer is in **stored** form - relative to the library
     root - because that is what the screen shows and because the absolute one
     says where the owner keeps their pictures.
@@ -268,6 +283,8 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
             "collisions": [],
             "cross_volume_count": 0,
             "skipped_counts": {},
+            "tree": [],
+            "tree_truncated": 0,
         }
 
     folders: set = set()
@@ -276,6 +293,11 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
     picture_count = 0
     collision_count = 0
     reasons: dict = {}
+    # Aggregated off the plan the loop below already builds. The set of
+    # destination folders was being counted and thrown away; these two keep the
+    # same walk's answer per folder instead.
+    arriving: Counter = Counter()
+    leaving: Counter = Counter()
     cursor = 0
     while True:
         plan, skipped, examined, last_id = plan_migration(
@@ -284,6 +306,12 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
         for move in plan:
             picture_count += 1
             folders.add(os.path.dirname(move.destination_path))
+            arriving[_stored_folder(move.stored_path)] += 1
+            leaving[
+                _stored_folder(
+                    move.old_stored_path or stored_form(move.source_path, root)
+                )
+            ] += 1
             if len(samples) < SAMPLE_SIZE:
                 samples.append(_sample(move, root))
             # A suffixed basename is exactly what a collision is, so it is read
@@ -300,6 +328,9 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
         if examined < MIGRATION_BATCH:
             break
         cursor = last_id if last_id is not None else cursor + 1
+    tree, tree_truncated = _folder_tree(
+        root, _folders_pictures_are_in(session), arriving, leaving
+    )
     return {
         "layout": format_layout(root.layout),
         "picture_count": picture_count,
@@ -309,6 +340,8 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
         "collisions": collisions,
         "cross_volume_count": reasons.get("destination_other_volume", 0),
         "skipped_counts": reasons,
+        "tree": tree,
+        "tree_truncated": tree_truncated,
     }
 
 
@@ -323,6 +356,76 @@ def _sample(move: PlannedMove, root: LayoutRoot) -> dict:
         "from": move.old_stored_path or stored_form(move.source_path, root),
         "to": move.stored_path,
     }
+
+
+def _stored_folder(stored_path: str) -> str:
+    """The folder part of a stored path. ``""`` is the library root itself.
+
+    Split on ``/`` and not with :func:`os.path.dirname`, because a stored path
+    is always ``/``-joined (:func:`~pixlstash.services.layout_move_service.stored_form`
+    writes it that way on every platform) and ``dirname`` on Windows would also
+    read a backslash inside a file name as a folder level.
+    """
+    head, separator, _tail = stored_path.rpartition("/")
+    return head if separator else ""
+
+
+def _folders_pictures_are_in(session: Session) -> Counter:
+    """How many pictures sit in each folder today, keyed by stored folder.
+
+    One query for the whole library, one column wide, grouped here rather than
+    in SQL: SQLite has no ``dirname``, and the alternative - a folder-shaped
+    ``LIKE`` per folder - is the per-folder query this must not become. The
+    scope is the same as :func:`plan_migration`'s, or a folder would report a
+    ``have`` counting rows the migration never looks at.
+    """
+    rows = session.exec(
+        select(Picture.file_path)
+        .where(Picture.reference_folder_id.is_(None))
+        .where(Picture.deleted.is_(False))
+    ).all()
+    return Counter(_stored_folder(path) for path in rows if path)
+
+
+def _folder_tree(
+    root: LayoutRoot,
+    have: Counter,
+    arriving: Counter,
+    leaving: Counter,
+) -> tuple[list, int]:
+    """The library as this layout would draw it, capped at :data:`TREE_FOLDERS`.
+
+    A folder is in it when anything about it is non-zero, which is why the
+    library root is not: it has no row of its own to show, and a synthetic one
+    would draw a level the owner does not have.
+
+    **Two orders, and they are not in conflict.** The cap picks by activity, so
+    what survives a truncation is the folders the migration actually does
+    something to; the surviving rows are then sorted by path, so a parent that
+    is in the list always comes immediately before its children and the screen
+    can indent by ``depth`` without re-sorting. A parent can still be absent -
+    a layout whose first segment only ever holds subfolders puts no pictures in
+    it and moves none into it - and that is the inclusion rule, not the cap.
+    """
+    paths = set(have) | set(arriving) | set(leaving)
+    paths.discard("")
+    ranked = sorted(
+        paths,
+        key=lambda path: (-(arriving[path] + leaving[path]), path),
+    )
+    kept = sorted(ranked[:TREE_FOLDERS])
+    return [
+        {
+            "path": path,
+            "name": path.rpartition("/")[2],
+            "depth": path.count("/"),
+            "have": have[path],
+            "arriving": arriving[path],
+            "leaving": leaving[path],
+            "is_new": not os.path.isdir(os.path.join(root.path, *path.split("/"))),
+        }
+        for path in kept
+    ], max(len(ranked) - TREE_FOLDERS, 0)
 
 
 # ---------------------------------------------------------------------------
