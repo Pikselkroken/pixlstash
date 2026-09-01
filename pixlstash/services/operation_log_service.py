@@ -80,7 +80,10 @@ from pixlstash.db_models.operation import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.layout_move_service import restore_location
+from pixlstash.services.layout_move_service import (
+    restore_location,
+    rollback_applied_moves,
+)
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -1467,6 +1470,7 @@ def apply_state_in_session(
     origin_client_id: Optional[str] = None,
     vacated_stack_ids: Optional[set[int]] = None,
     image_root: Optional[str] = None,
+    applied: Optional[list] = None,
 ) -> list[int]:
     """Write a recorded metadata state back onto its pictures.
 
@@ -1629,9 +1633,13 @@ def apply_state_in_session(
                     # it.
                     try:
                         restore_location(
-                            session, picture_id, value, image_root=image_root
+                            session,
+                            picture_id,
+                            value,
+                            image_root=image_root,
+                            applied=applied,
                         )
-                    except OSError as exc:
+                    except (OSError, ValueError) as exc:
                         logger.error(
                             "operation_log: could not move picture %d back to "
                             "%r (%s); the rest of this restore still applies "
@@ -1844,6 +1852,7 @@ def _restore(
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
     image_root: Optional[str] = None,
+    applied: Optional[list] = None,
 ) -> tuple[list[int], set[str], dict[str, list[int]]]:
     """Apply the before- (undo) or after- (redo) state of *operations* in order.
 
@@ -1891,6 +1900,7 @@ def _restore(
                 origin_client_id=origin_client_id,
                 vacated_stack_ids=vacated_stack_ids,
                 image_root=image_root,
+                applied=applied,
             )
         )
         for picture_facets in state.values():
@@ -2117,16 +2127,27 @@ def undo_in_session(
     members = [member for member in members if member.undoable]
     if not members:
         raise OperationLogError("Nothing to undo")
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=True,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    _mark_undone(session, members)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=True,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        _mark_undone(session, members)
+        session.commit()
+    except BaseException:
+        # An undo renames files before this transaction commits, and everything
+        # between - the post-restore hooks, the emptied-stack sweep, the commit
+        # itself - can raise. The writer then rolls the session back while the
+        # files stay where the undo put them, and a row naming a path with no
+        # file at it is what ``MissingFilePurgeTask`` deletes a picture over.
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
@@ -2150,16 +2171,22 @@ def undo_batch_in_session(
     if not members:
         raise OperationLogError(f"Batch {batch_id} has nothing to undo")
     _enforce_latest_undo_unit(session, members[0])
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=True,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    _mark_undone(session, members)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=True,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        _mark_undone(session, members)
+        session.commit()
+    except BaseException:
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
@@ -2180,19 +2207,25 @@ def redo_in_session(
     members = _batch_members_in_session(session, operation, STATUS_UNDONE)
     # Redo replays in application order, the mirror of undo's reverse order.
     members = sorted(members, key=lambda op: op.id or 0)
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=False,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    for member in members:
-        member.status = STATUS_APPLIED
-        member.undone_at = None
-        session.add(member)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=False,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        for member in members:
+            member.status = STATUS_APPLIED
+            member.undone_at = None
+            session.add(member)
+        session.commit()
+    except BaseException:
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 

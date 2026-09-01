@@ -23,6 +23,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.external_move_review import ExternalMoveReview
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.db_models import DeletedFileLog
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.routes.library_layout import _MIGRATION_BATCH_ID_RE
@@ -2059,8 +2060,8 @@ class _StubVault:
         self.db = self
         self._session = session
 
-    def run_task(self, fn, priority=None):
-        return fn(self._session)
+    def run_task(self, fn, *args, priority=None):
+        return fn(self._session, *args)
 
     def run_immediate_read_task(self, fn, *args):
         return fn(self._session, *args)
@@ -2141,8 +2142,129 @@ def test_a_planned_file_that_could_not_be_moved_is_reported_not_dropped(
     session, root = library["session"], library["root"]
     vault = _StubVault(session, root)
     stubborn = _plant(library, "0001.png")
-    monkeypatch.setattr(migration, "apply_moves", lambda *a, **k: [])
+    monkeypatch.setattr(migration, "move_planned_files", lambda *a, **k: [])
 
     result = migration.run_migration_pass(vault, after_id=0, limit=10)
     assert result["moved_picture_ids"] == []
     assert result["skipped"] == [{"picture_id": stubborn, "reason": "move_failed"}]
+
+
+# ---------------------------------------------------------------------------
+# The crash window: a file that moved and a row that did not follow
+# ---------------------------------------------------------------------------
+
+
+def _purge(library, picture_ids):
+    """Run one MissingFilePurgeTask over the named pictures."""
+    from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+
+    session, root = library["session"], library["root"]
+    pictures = [session.get(Picture, pid) for pid in picture_ids]
+    task = MissingFilePurgeTask(_StubVault(session, root), pictures)
+    result = task._run_task()
+    session.expire_all()
+    return result
+
+
+def test_a_move_that_crashed_before_the_row_was_written_is_repaired_not_purged(
+    library,
+):
+    """The blocking case. The engine journals the move, renames the file, and
+    the process dies before the row is repointed. The row names a path with no
+    file at it, which is exactly what the purge sweep deletes pictures over,
+    and the DeletedFileLog it writes carries file_removed=True, which restore
+    reads as *never resurrect*. The journal is what makes it a repair."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0001.png")
+
+    # The rename landed; the transaction that would have recorded it did not.
+    landed = os.path.join(root, "2024 Shoots", "Mira", "0001.png")
+    os.makedirs(os.path.dirname(landed), exist_ok=True)
+    os.replace(os.path.join(root, "0001.png"), landed)
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0001.png",
+            new_path="2024 Shoots/Mira/0001.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["repaired"] == 1
+    picture = session.get(Picture, picture_id)
+    assert picture is not None, "the picture must survive a crashed move"
+    assert picture.file_path == "2024 Shoots/Mira/0001.png"
+    assert session.exec(select(DeletedFileLog)).all() == []
+
+
+def test_an_undo_that_crashed_before_the_row_was_written_is_repaired_not_purged(
+    library,
+):
+    """The same window, entered from the other end. An undo puts the file back
+    at the path the move took it from, so the journal row that names the pair is
+    read backwards: the row's `old_path` is where the file now is."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "2024 Shoots/Mira/0002.png")
+
+    # The undo's rename landed; its transaction rolled back.
+    os.replace(
+        os.path.join(root, "2024 Shoots", "Mira", "0002.png"),
+        os.path.join(root, "0002.png"),
+    )
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0002.png",
+            new_path="2024 Shoots/Mira/0002.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["repaired"] == 1
+    assert session.get(Picture, picture_id).file_path == "0002.png"
+
+
+def test_a_file_the_owner_really_deleted_is_still_purged(library):
+    """The guard must not become a blanket exemption: with no journal row
+    naming the path, a missing file is a deletion and is recorded as one."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0003.png")
+    os.remove(os.path.join(root, "0003.png"))
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 1
+    assert result["repaired"] == 0
+    assert session.get(Picture, picture_id) is None
+    logged = session.exec(select(DeletedFileLog)).all()
+    assert [row.file_removed for row in logged] == [True]
+
+
+def test_a_move_still_in_flight_is_deferred_rather_than_purged(library):
+    """A journal row whose other end holds no file either. Something is mid
+    flight, or the move failed after the intent was committed; neither is a
+    deletion, and the row expires on its own if it never completes."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0004.png")
+    os.remove(os.path.join(root, "0004.png"))
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0004.png",
+            new_path="2024 Shoots/Mira/0004.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["deferred"] == 1
+    assert session.get(Picture, picture_id) is not None
+    assert session.exec(select(DeletedFileLog)).all() == []

@@ -27,9 +27,12 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.layout_move_service import (
     BATCH_SIZE,
     OP_LAYOUT_MOVE,
-    apply_moves,
+    drop_unlanded_journal,
+    journal_moves,
+    move_planned_files,
     plan_moves,
     prune_move_journal,
+    record_moves,
     rollback_applied_moves,
 )
 from pixlstash.services.operation_log_service import (
@@ -84,9 +87,31 @@ class LayoutMoveTask(BaseTask):
         if not picture_ids:
             return {"moved_count": 0, "moved_picture_ids": [], "skipped": []}
 
-        moved, skipped, operation = self._db.run_task(
-            self._move_batch, picture_ids, priority=DBPriority.LOW
+        image_root = self._db.image_root
+        applied: list = []
+        # Phase 1: decide, and commit the intent before a single file moves.
+        plan, skipped = self._db.run_task(
+            self._plan_and_journal, picture_ids, priority=DBPriority.LOW
         )
+        if not plan:
+            return {
+                "moved_count": 0,
+                "moved_picture_ids": [],
+                "skipped": skipped,
+                "operation": None,
+            }
+        try:
+            # Phase 2: the renames, on this thread. Not the writer's.
+            landed = move_planned_files(plan, applied=applied)
+            # Phase 3: repoint the rows and log the operation, in one short
+            # transaction that holds no filesystem work at all.
+            moved, operation = self._db.run_task(
+                self._record_batch, plan, landed, priority=DBPriority.LOW
+            )
+        except BaseException:
+            rollback_applied_moves(applied, image_root)
+            self._abandon_journal(plan)
+            raise
         if moved:
             logger.info(
                 "Layout: moved %d file(s) in %.2fs; one undo puts them all back.",
@@ -101,21 +126,21 @@ class LayoutMoveTask(BaseTask):
             "operation": operation,
         }
 
-    def _move_batch(self, session: Session, picture_ids: list):
-        """Plan, count, move, record - all inside one transaction.
+    def _plan_and_journal(self, session: Session, picture_ids: list):
+        """Plan the batch, journal the intent, spend the stamps. Then commit.
 
-        One transaction on purpose, for the reason ``run_recorded_metadata_task``
-        gives: the ``Operation`` row and the change it describes have to commit
-        against the same serialised writer, or a write landing between the
-        snapshot and the mutation is silently attributed to this move.
+        **The journal is committed before any file moves**, which is the whole
+        reason this is its own transaction. A crash during the renames then
+        leaves a durable row naming both paths, and ``MissingFilePurgeTask``
+        repoints the picture instead of deleting it and its metadata. Rows for
+        files that do not end up moving are dropped in phase three.
 
         The stamp is cleared for **every** candidate, not only the ones that
-        moved. A picture whose folder is still true has had its question asked
-        and answered; leaving it stamped would re-ask it on every cycle for
-        ever.
+        will move. A picture whose folder is still true has had its question
+        asked and answered; leaving it stamped would re-ask it on every cycle
+        for ever.
         """
         image_root = self._db.image_root
-        applied: list = []
         plan, skipped = plan_moves(session, picture_ids, image_root)
         for picture_id, reason in skipped:
             logger.warning(
@@ -123,9 +148,6 @@ class LayoutMoveTask(BaseTask):
                 picture_id,
                 reason,
             )
-
-        operation = None
-        moved: list = []
         if plan:
             # Counted before it happens.
             logger.info(
@@ -133,42 +155,70 @@ class LayoutMoveTask(BaseTask):
                 "true; moving them now.",
                 len(plan),
             )
-            targets = [move.picture_id for move in plan]
-        try:
-            if plan:
-                before = capture_state_in_session(session, targets)
-                moved = apply_moves(
-                    session, plan, image_root=image_root, applied=applied
-                )
-                after = capture_state_in_session(session, targets)
-                record = record_operation_in_session(
-                    session,
-                    op_type=OP_LAYOUT_MOVE,
-                    before=before,
-                    after=after,
-                    source="system",
-                    summary=_summary,
-                    undoable=True,
-                    commit=False,
-                )
-                operation = record.id if record is not None else None
+            journal_moves(session, plan)
+        self._clear_due(session, picture_ids)
+        pruned = prune_move_journal(session)
+        if pruned:
+            logger.debug("Layout: pruned %d expired move-journal row(s).", pruned)
+        session.commit()
+        return plan, skipped
 
-            self._clear_due(session, picture_ids)
-            pruned = prune_move_journal(session)
-            if pruned:
-                logger.debug("Layout: pruned %d expired move-journal row(s).", pruned)
-            session.commit()
-        except BaseException:
-            # The rollback has to cover the WHOLE task, not just the move loop.
-            # Everything after ``apply_moves`` - two captures, the operation row,
-            # the flag clear, the commit - can raise, and the writer thread then
-            # rolls the session back while the files stay where this put them.
-            # A row naming a path with no file at it is not a cosmetic
-            # inconsistency: ``MissingFilePurgeFinder`` deletes that row within
-            # the hour and the picture's tags, sets and score go with it.
-            rollback_applied_moves(applied, image_root)
-            raise
-        return moved, skipped, operation
+    def _record_batch(self, session: Session, plan: list, landed: list):
+        """Repoint the moved rows and record the undo. One short transaction.
+
+        The ``before`` capture, the row writes and the ``after`` capture stay in
+        a single transaction for the reason ``run_recorded_metadata_task``
+        gives: the ``Operation`` row and the change it describes must commit
+        against the same serialised writer, or a write landing between the
+        snapshot and the mutation is silently attributed to this move. Only the
+        filesystem work moved out, and it never belonged here.
+        """
+        image_root = self._db.image_root
+        targets = [move.picture_id for move in plan]
+        before = capture_state_in_session(session, targets)
+        moved = record_moves(session, landed, image_root=image_root)
+        drop_unlanded_journal(session, plan, landed)
+        after = capture_state_in_session(session, targets)
+        operation = None
+        if moved:
+            record = record_operation_in_session(
+                session,
+                op_type=OP_LAYOUT_MOVE,
+                before=before,
+                after=after,
+                source="system",
+                summary=_summary,
+                undoable=True,
+                commit=False,
+            )
+            operation = record.id if record is not None else None
+        session.commit()
+        return moved, operation
+
+    def _abandon_journal(self, plan: list) -> None:
+        """Drop the intent rows after the files were put back. Best effort.
+
+        Runs while an error is already on its way to the caller, so a failure
+        here is logged rather than raised - it would replace the real one. A row
+        left behind names a move that did not happen, which would let a later
+        genuine owner move between the same two paths be dismissed as ours.
+        """
+        try:
+            self._db.run_task(
+                lambda session: (
+                    drop_unlanded_journal(session, plan, []),
+                    session.commit(),
+                ),
+                priority=DBPriority.LOW,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Layout: could not drop the move journal for %d abandoned "
+                "move(s): %s. A later owner move between the same paths may be "
+                "mistaken for ours until the row expires.",
+                len(plan),
+                exc,
+            )
 
     @staticmethod
     def _clear_due(session: Session, picture_ids: list) -> None:

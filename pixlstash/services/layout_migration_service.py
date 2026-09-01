@@ -49,10 +49,14 @@ from pixlstash.services.layout_move_service import (
     _prepare_move,
     absolute_path,
     apply_moves,
+    drop_unlanded_journal,
+    journal_moves,
+    move_planned_files,
     layout_roots,
     library_vocabulary,
     picture_facets,
     relative_folder,
+    record_moves,
     rollback_applied_moves,
     stored_form,
 )
@@ -61,6 +65,13 @@ from pixlstash.utils.library_layout import format_layout, migrate_destination
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+__all__ = [
+    "MIGRATION_BATCH",
+    "apply_moves",
+    "plan_migration",
+    "run_migration_pass",
+]
 
 #: How many pictures one pass examines. The same order as
 #: ``layout_move_service.BATCH_SIZE`` and for the same reason - the unit of work
@@ -338,14 +349,23 @@ def run_migration_pass(
     *,
     after_id: int = 0,
     limit: int = MIGRATION_BATCH,
+    should_stop=None,
     **operation_context,
 ) -> dict:
     """Move one window of the library onto its layout.
 
-    One pass, one transaction, one operation row - and the caller repeats until
-    ``done``, carrying ``next_after_id`` and the same ``batch_id`` each time. A
-    pass that raises rolls its own files back and leaves every earlier pass
-    standing, which is the half-moved-but-consistent tree Phase 4c asks for.
+    One pass, one operation row - and the caller repeats until ``done``,
+    carrying ``next_after_id`` and the same ``batch_id`` each time. A pass that
+    raises rolls its own files back and leaves every earlier pass standing,
+    which is the half-moved-but-consistent tree Phase 4c asks for.
+
+    **Three phases, and the middle one is not on the writer thread.** The plan
+    and its journal commit first, then the renames run here, then the rows are
+    repointed in a second short transaction. A whole-library migration moves
+    real files by the thousand; doing that inside the serialised writer's open
+    transaction meant a shutdown or a library switch could dispose the engine
+    part way through a batch, and the best-effort rollback that followed is the
+    one path that can lose a picture's metadata for good.
     """
     from pixlstash.services.operation_log_service import (
         capture_state_in_session,
@@ -354,37 +374,51 @@ def run_migration_pass(
 
     image_root = vault.image_root
 
-    def _run(session: Session) -> dict:
+    def _plan(session: Session):
         plan, skipped, examined, last_id = plan_migration(
             session, image_root, after_id=after_id, limit=limit
         )
-        next_after_id = last_id if last_id is not None else after_id
-        result = {
-            "moved_picture_ids": [],
-            "examined": examined,
-            "skipped": [
-                {"picture_id": picture_id, "reason": reason}
-                for picture_id, reason in skipped
-            ],
-            "next_after_id": next_after_id,
-            "done": examined < limit,
-            "operation_id": None,
-        }
-        if not plan:
-            return result
-        logger.info(
-            "Layout migration: moving %d file(s) onto the layout (pass after id "
-            "%d, %d examined).",
-            len(plan),
-            after_id,
-            examined,
-        )
-        applied: list = []
-        targets = [move.picture_id for move in plan]
-        try:
-            before = capture_state_in_session(session, targets)
-            moved = apply_moves(session, plan, image_root=image_root, applied=applied)
-            after = capture_state_in_session(session, targets)
+        if plan:
+            logger.info(
+                "Layout migration: moving %d file(s) onto the layout (pass after "
+                "id %d, %d examined).",
+                len(plan),
+                after_id,
+                examined,
+            )
+            # Committed before a single file moves, so a crash during the
+            # renames leaves a record the purge sweep can repair from.
+            journal_moves(session, plan)
+            session.commit()
+        return plan, skipped, examined, last_id
+
+    plan, skipped, examined, last_id = vault.db.run_task(
+        _plan, priority=DBPriority.IMMEDIATE
+    )
+    next_after_id = last_id if last_id is not None else after_id
+    result = {
+        "moved_picture_ids": [],
+        "examined": examined,
+        "skipped": [
+            {"picture_id": picture_id, "reason": reason}
+            for picture_id, reason in skipped
+        ],
+        "next_after_id": next_after_id,
+        "done": examined < limit,
+        "operation_id": None,
+    }
+    if not plan:
+        return result
+
+    targets = [move.picture_id for move in plan]
+
+    def _record(session: Session, landed: list):
+        before = capture_state_in_session(session, targets)
+        moved = record_moves(session, landed, image_root=image_root)
+        drop_unlanded_journal(session, plan, landed)
+        after = capture_state_in_session(session, targets)
+        operation = None
+        if moved:
             operation = record_operation_in_session(
                 session,
                 op_type=OP_LAYOUT_MOVE,
@@ -395,35 +429,66 @@ def run_migration_pass(
                 commit=False,
                 **operation_context,
             )
-            session.commit()
-        except BaseException:
-            # Same reasoning as ``move_to_match``: a row naming a path with no
-            # file at it is purged within the hour, and the picture's metadata
-            # with it, so the rollback covers the whole transaction rather than
-            # the move loop.
-            rollback_applied_moves(applied, image_root)
-            raise
-        # A picture the plan named and ``apply_moves`` did not move - a name
-        # that appeared at the destination since the plan, a file locked on
-        # Windows, a folder gone read-only. ``_move_one_file`` logs and carries
-        # on, which is what makes a failing run finishable, but a caller that is
-        # about to stop looping has to be told: without this the picture is in
-        # neither list and the pass reports a clean finish over a file it never
-        # touched.
-        left_behind = [pid for pid in targets if pid not in set(moved)]
-        result["skipped"].extend(
-            {"picture_id": picture_id, "reason": "move_failed"}
-            for picture_id in left_behind
-        )
-        if left_behind:
-            logger.warning(
-                "Layout migration: %d of %d planned file(s) could not be moved "
-                "and keep the folder they are in; see the errors above.",
-                len(left_behind),
-                len(targets),
-            )
-        result["moved_picture_ids"] = moved
-        result["operation_id"] = operation.id if operation is not None else None
-        return result
+        session.commit()
+        return moved, (operation.id if operation is not None else None)
 
-    return vault.db.run_task(_run, priority=DBPriority.IMMEDIATE)
+    applied: list = []
+    try:
+        landed = move_planned_files(plan, applied=applied, should_stop=should_stop)
+        moved, operation_id = vault.db.run_task(
+            lambda session: _record(session, landed), priority=DBPriority.IMMEDIATE
+        )
+    except BaseException:
+        # Same reasoning as ``move_to_match``: a row naming a path with no file
+        # at it is purged within the hour, and the picture's metadata with it,
+        # so the rollback covers the whole pass rather than the move loop. The
+        # intent rows go with the files, or they would excuse a later genuine
+        # owner move between the same two paths.
+        rollback_applied_moves(applied, image_root)
+        _abandon_journal(vault, plan)
+        raise
+    # A picture the plan named and the move loop did not move - a name that
+    # appeared at the destination since the plan, a file locked on Windows, a
+    # folder gone read-only. ``_move_one_file`` logs and carries on, which is
+    # what makes a failing run finishable, but a caller that is about to stop
+    # looping has to be told: without this the picture is in neither list and
+    # the pass reports a clean finish over a file it never touched.
+    left_behind = [pid for pid in targets if pid not in set(moved)]
+    result["skipped"].extend(
+        {"picture_id": picture_id, "reason": "move_failed"}
+        for picture_id in left_behind
+    )
+    if left_behind:
+        logger.warning(
+            "Layout migration: %d of %d planned file(s) could not be moved "
+            "and keep the folder they are in; see the errors above.",
+            len(left_behind),
+            len(targets),
+        )
+    result["moved_picture_ids"] = moved
+    result["operation_id"] = operation_id
+    return result
+
+
+def _abandon_journal(vault, plan: list) -> None:
+    """Drop the intent rows after a failed pass put the files back. Best effort.
+
+    Runs while an error is already on its way to the caller, so a failure here
+    is logged rather than raised - it would replace the real one.
+    """
+    try:
+        vault.db.run_task(
+            lambda session: (
+                drop_unlanded_journal(session, plan, []),
+                session.commit(),
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Layout migration: could not drop the move journal for %d abandoned "
+            "move(s): %s. A later owner move between the same paths may be "
+            "mistaken for ours until the row expires.",
+            len(plan),
+            exc,
+        )
