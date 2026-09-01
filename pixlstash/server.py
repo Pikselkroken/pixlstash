@@ -1297,7 +1297,7 @@ class Server(
             # warning and ignored, leaving the config's own default_device in
             # place, rather than being written straight through and silently
             # falling back to CPU with no explanation.
-            _valid_devices = {"cpu", "cuda", "gpu", "auto"}
+            _valid_devices = {"cpu", "cuda", "gpu", "auto", "mps"}
             if _device_override in _valid_devices:
                 # Remember what the owner configured: persist_server_config
                 # writes that back, never the runtime's answer.

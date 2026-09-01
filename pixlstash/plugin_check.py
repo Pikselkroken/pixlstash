@@ -434,9 +434,9 @@ def _device() -> str:
     # Local import: torch is seconds of start-up, and every other verb in this
     # CLI - including `plugins test` without --image - runs without it.
     try:
-        import torch
+        from pixlstash.utils.device_utils import detect_device
 
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        return detect_device()
     except Exception as exc:
         # Deliberately not just ImportError. A torch that is installed but
         # cannot load its shared libraries raises OSError here, and a partial

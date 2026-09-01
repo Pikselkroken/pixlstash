@@ -15,7 +15,9 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
+from pixlstash.utils.device_utils import empty_device_cache, is_accelerator
 from pixlstash.utils.model_utils import from_pretrained_local_first
+from pixlstash.utils.vram_utils import is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -612,6 +614,28 @@ class Florence2Service:
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
+            elif requested_device.type == "mps":
+                # Florence-2 deliberately stays on the CPU even when the rest
+                # of the engine is on Metal. Loading it with device_map="mps"
+                # segfaults the interpreter inside transformers' own weight
+                # loader (core_model_loading.py::_materialize_copy), which
+                # materialises shards from a thread pool and is not safe
+                # writing into Metal tensors concurrently. Measured on torch
+                # 2.13 / transformers 5.5: 2 crashes in 3 runs of
+                # tests/test_florence.py, against 3 clean runs on CPU.
+                #
+                # Nothing else needs this exemption. The tagger, CLIP and
+                # SBERT build their modules and then move them, so they never
+                # reach that loader. The route back is to load with
+                # device_map="cpu" and move the assembled model to Metal
+                # afterwards, which keeps the threaded copy on the CPU — worth
+                # doing once Florence-2 inference itself is verified on Metal.
+                logger.info(
+                    "Loading Florence-2 on CPU: its weight loader is not "
+                    "thread-safe on Metal. Other models still use the GPU."
+                )
+                self._load_model(torch.device("cpu"), torch.float32)
+                self._batch_size = FLORENCE_BATCH_SIZE_CPU
             else:
                 # Preserve explicitly supported non-CUDA accelerators rather
                 # than silently changing their device. CUDA is special-cased
@@ -688,8 +712,7 @@ class Florence2Service:
         try:
             self._model = None
             self._processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache()
             self._load_model(torch.device("cpu"), torch.float32)
             self._batch_size = FLORENCE_BATCH_SIZE_CPU
             logger.debug("Florence-2 reloaded on CPU")
@@ -784,12 +807,16 @@ class Florence2Service:
         return detections
 
     def _is_cuda_error(self, error: Exception) -> bool:
+        """True when *error* is a GPU failure worth retrying on the CPU.
+
+        Named for CUDA because that was the only GPU when it was written; it
+        answers for Metal too. The device guard matters: without it a genuine
+        CPU-side error would trigger a pointless reload onto the CPU it is
+        already running on.
+        """
         import torch
 
-        if (
-            self._model_device is None
-            or getattr(self._model_device, "type", "") != "cuda"
-        ):
+        if not is_accelerator(self._model_device):
             return False
         # PyTorch's typed OOM deliberately does not promise the word "cuda" in
         # its message. Type identity is the stable signal; the string fallback
@@ -803,6 +830,10 @@ class Florence2Service:
             if isinstance(error_type, type)
         )
         if typed_cuda_errors and isinstance(error, typed_cuda_errors):
+            return True
+        # Metal reports OOM as a bare RuntimeError naming the backend rather
+        # than any of the CUDA spellings below, so is_vram_oom carries that case.
+        if is_vram_oom(error):
             return True
         message = str(error).lower()
         return "cuda" in message or "cudnn" in message or "cublas" in message

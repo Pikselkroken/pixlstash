@@ -1185,9 +1185,12 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     # 64 proves the schema's default was merged rather than the plugin's own
     # `or 128` fallback; init-called proves init() ran; the device proves
     # setup() was handed one.
-    assert "(64 tokens, cuda, init-called)" in out or (
-        "(64 tokens, cpu, init-called)" in out
-    )
+    #
+    # Matched as a pattern rather than an or-chain of the devices that exist
+    # today: what is under test is that _device() handed the plugin *a* device,
+    # not which machine the suite runs on. Spelling them out meant this failed
+    # on Apple hardware the moment "mps" joined the set.
+    assert re.search(r"\(64 tokens, [a-z]+(?::\d+)?, init-called\)", out), out
 
 
 def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):

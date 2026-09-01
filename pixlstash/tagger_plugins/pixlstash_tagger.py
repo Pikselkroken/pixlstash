@@ -22,7 +22,9 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
     from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.device_utils import empty_device_cache, is_accelerator
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
+from pixlstash.utils.vram_utils import is_vram_oom
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
@@ -112,7 +114,7 @@ class PixlStashTaggerService:
     inference for tag-only, joint tag+score, and score-only passes.
 
     Args:
-        device: Initial inference device ("cuda" or "cpu").
+        device: Initial inference device ("cuda", "mps", or "cpu").
         model_dir: Directory where model files are stored. Paths to the
             checkpoint, meta.json, and revision sidecar are constructed
             internally from ``model_dir`` and this class's filename constants.
@@ -300,11 +302,12 @@ class PixlStashTaggerService:
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
         # load the state dict (now a consistent dtype), then promote to FP16
-        # on CUDA for faster inference.  CPU always stays FP32.
+        # on any GPU for faster inference.  CPU always stays FP32, because
+        # FP16 on CPU is emulated and slower than the FP32 path it replaces.
         self._model.float()
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
-        if str(self._device) == "cuda":
+        if is_accelerator(self._device):
             self._model.half()
             self._dtype = torch.float16
         else:
@@ -320,18 +323,13 @@ class PixlStashTaggerService:
             True if the model is successfully loaded, False if loading
             failed on both GPU and CPU.
         """
-        import torch
-
         if self.is_loaded():
             return True
         try:
             self.init()
             return True
         except Exception as exc:
-            is_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                "out of memory" in str(exc).lower()
-            )
-            if is_oom and self._device != "cpu":
+            if is_vram_oom(exc) and self._device != "cpu":
                 logger.warning(
                     "PixlStash tagger GPU load failed (OOM); retrying on CPU: %s", exc
                 )
@@ -379,8 +377,7 @@ class PixlStashTaggerService:
                 self._model.float()
             self._device = "cpu"
             self._dtype = torch.float32
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache()
             logger.debug("PixlStash tagger reloaded on CPU")
             return True
         except Exception as cpu_error:
@@ -482,12 +479,14 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                # Delegated to is_vram_oom rather than matched inline: Metal
+                # raises a plain RuntimeError saying "MPS backend out of
+                # memory", so neither the CUDA exception type nor the literal
+                # "CUDA out of memory" this used to look for ever matches on
+                # Apple hardware — the spillover below would never have run.
+                if is_vram_oom(exc) and is_accelerator(device):
                     logger.warning(
-                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger GPU OOM; falling back to CPU for this run."
                     )
                     if self.reload_on_cpu():
                         logger.warning("PixlStash tagger is now running on CPU.")
@@ -596,12 +595,14 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).float().cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                # Delegated to is_vram_oom rather than matched inline: Metal
+                # raises a plain RuntimeError saying "MPS backend out of
+                # memory", so neither the CUDA exception type nor the literal
+                # "CUDA out of memory" this used to look for ever matches on
+                # Apple hardware — the spillover below would never have run.
+                if is_vram_oom(exc) and is_accelerator(device):
                     logger.warning(
-                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger GPU OOM; falling back to CPU for this run."
                     )
                     if self.reload_on_cpu():
                         logger.warning("PixlStash tagger is now running on CPU.")
@@ -744,12 +745,14 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                # Delegated to is_vram_oom rather than matched inline: Metal
+                # raises a plain RuntimeError saying "MPS backend out of
+                # memory", so neither the CUDA exception type nor the literal
+                # "CUDA out of memory" this used to look for ever matches on
+                # Apple hardware — the spillover below would never have run.
+                if is_vram_oom(exc) and is_accelerator(device):
                     logger.warning(
-                        "Custom scorer CUDA OOM; falling back to CPU for this batch."
+                        "Custom scorer GPU OOM; falling back to CPU for this batch."
                     )
                     if self.reload_on_cpu():
                         inputs = inputs.to(device="cpu", dtype=torch.float32)
@@ -807,7 +810,7 @@ class PixlStashTaggerService:
         defect), the result is flagged diffuse with no box or heatmap.
 
         Grad-CAM needs gradients, so this runs OUTSIDE ``torch.inference_mode``
-        and forces fp32: the CUDA model is kept in fp16 for the hot tagging
+        and forces fp32: the GPU model is kept in fp16 for the hot tagging
         path, which yields NaN gradients. To stay correct without permanently
         mutating the shared model, the model is temporarily upcast to fp32 for
         the CAM and its original dtype is restored in a ``finally`` block. A

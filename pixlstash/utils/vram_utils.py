@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.device_utils import empty_device_cache
 
 logger = get_logger(__name__)
 
@@ -67,7 +68,13 @@ def vram_limited_batch_cap(
 #: these the phrase is ambiguous: ``sqlite3.OperationalError: out of memory``
 #: (SQLITE_NOMEM) says it too, and treating that as transient GPU pressure
 #: would retry a task that has nothing to do with the GPU.
-_DEVICE_WORDS = ("cuda", "gpu", "hip", "vram")
+#:
+#: ``mps`` earns its place from the exact text Metal raises, which names the
+#: backend but none of the other words here:
+#: ``MPS backend out of memory (MPS allocated: ..., max allowed: ...)``.
+#: Without it every Metal OOM classified as a non-device error and skipped the
+#: retry/CPU-spillover path entirely.
+_DEVICE_WORDS = ("cuda", "gpu", "hip", "vram", "mps")
 
 #: How far up the ``__cause__``/``__context__`` chain to look. A plugin that
 #: wraps the driver's error in its own class is the common case; a chain deeper
@@ -119,24 +126,20 @@ def is_vram_oom(error: BaseException) -> bool:
 
 
 def empty_cuda_cache() -> bool:
-    """Flush PyTorch's CUDA allocator cache back to the driver.
+    """Flush the torch allocator cache back to the driver, on any backend.
 
-    ``torch`` is looked up in :data:`sys.modules` rather than imported. If torch
-    was never imported, this process cannot have allocated any CUDA memory, so
-    there is nothing to flush - and importing it here purely to discover that
-    would cost seconds. That matters because this module sits on the API
-    server's import path and on every best-effort teardown path in the test
-    suite, where the caller usually never touched a model at all.
+    Kept under its original name because every teardown path in the codebase
+    already calls it; it now covers Metal as well as CUDA. On an Apple Silicon
+    machine the old CUDA-only body returned ``False`` without freeing anything,
+    so model unloads released no device memory at all — the allocator simply
+    accumulated across a long import run.
+
+    See :func:`pixlstash.utils.device_utils.empty_device_cache` for why torch is
+    read from :data:`sys.modules` rather than imported.
 
     Returns:
-        ``True`` if the cache was flushed, ``False`` when torch is not loaded or
-        no CUDA device is available (callers use this to skip their own cache
+        ``True`` if a cache was flushed, ``False`` when torch is not loaded or
+        no accelerator is available (callers use this to skip their own cache
         bookkeeping).
     """
-    torch = sys.modules.get("torch")
-    if torch is None:
-        return False
-    if not torch.cuda.is_available():
-        return False
-    torch.cuda.empty_cache()
-    return True
+    return empty_device_cache()

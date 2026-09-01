@@ -496,19 +496,19 @@ class InferenceEngine:
         Returns:
             A fully constructed :class:`InferenceEngine` ready for use.
         """
-        import torch
         from pixlstash.tagger_plugins.clip_service import ClipService
         from pixlstash.tagger_plugins.sbert import SBertService
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
         from pixlstash.tagger_plugins.wd14 import WD14Service
         from pixlstash.tagger_plugins.florence2 import Florence2Service
+        from pixlstash.utils.device_utils import detect_device
 
         model_dir = builtin_model_dir()
 
         if force_cpu:
             device = "cpu"
         elif device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = detect_device()
 
         clip_service = ClipService(device=device)
         sbert_service = SBertService(device=device)

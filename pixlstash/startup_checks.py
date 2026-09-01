@@ -53,6 +53,21 @@ def _ort():
     return _ort_mod
 
 
+def _mps_available(torch) -> bool:
+    """True when *torch* can reach Apple's Metal (MPS) backend.
+
+    Takes the module as an argument instead of importing it so the device check
+    stays injectable: the suite drives these paths with a stand-in torch (see
+    ``test_rocm_device_check.py``) and never touches real hardware. A stand-in
+    without a ``backends`` attribute raises and is read as "no Metal", which is
+    the right answer for the CUDA and ROCm cases those tests describe.
+    """
+    try:
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
+
+
 class StartupCheckError(Exception):
     def __init__(self, failures: list[str]):
         self.failures = list(failures)
@@ -139,9 +154,9 @@ class StartupChecks:
             outcome.hard_failures.append("Port must be an integer between 1 and 65535.")
 
         default_device = str(self._server_config.get("default_device", "cpu")).lower()
-        if default_device not in {"cpu", "cuda", "gpu", "auto"}:
+        if default_device not in {"cpu", "cuda", "gpu", "auto", "mps"}:
             outcome.hard_failures.append(
-                "default_device must be one of: cpu, cuda, gpu, auto."
+                "default_device must be one of: cpu, cuda, gpu, auto, mps."
             )
 
         samesite = str(self._server_config.get("cookie_samesite", "Lax"))
@@ -358,6 +373,7 @@ class StartupChecks:
 
         is_auto_mode = device_value == "auto"
         is_explicit_gpu = device_value == "cuda"
+        is_explicit_mps = device_value == "mps"
 
         # PyTorch's ROCm build drives the AMD GPU through the CUDA API (torch.cuda.*
         # works, HIP masquerades as CUDA), so the checks below run unchanged; only
@@ -397,6 +413,28 @@ class StartupChecks:
             gpu_available = False
             outcome.notes.append(f"GPU availability probe failed ({exc}).")
         if not gpu_available:
+            # Apple Metal does not answer to torch.cuda, so a Mac with a working
+            # GPU arrives here with gpu_available False and would otherwise be
+            # forced onto the CPU. Accept Metal before that fallback runs.
+            #
+            # This returns rather than falling through: everything below is
+            # CUDA-specific (nvidia-smi VRAM totals, CUDAExecutionProvider) and
+            # says nothing about Metal. ONNX models keep running on CPU, which
+            # is the same arrangement ROCm already ships with.
+            if (is_auto_mode or is_explicit_mps) and _mps_available(torch):
+                outcome.notes.append(
+                    "Apple Metal (MPS) is available; using it for torch "
+                    "inference. ONNX models (WD14, InsightFace) run on CPU."
+                )
+                return
+            if is_explicit_mps:
+                self._force_cpu_with_warning(
+                    outcome,
+                    "Metal (MPS) is unavailable while default_device is set to "
+                    "mps; forcing CPU inference.",
+                    is_auto_mode=is_auto_mode,
+                )
+                return
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
