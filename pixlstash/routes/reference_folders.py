@@ -131,13 +131,13 @@ class ReferenceFolderUpdateRequest(BaseModel):
     layout: Optional[str] = Field(
         default=None,
         description=(
-            "How this folder is laid out, as `project/person,set` - segments "
-            "separated by `/`, a segment's alternatives by `,`, first match "
-            "wins (v1.11 Phase 4b). `null` turns the layout off, which is the "
-            "default: without one PixlStash places nothing here and moves "
-            "nothing here, whatever changes about the pictures. Setting one "
-            "does NOT reorganise the folder - every path already in it produced "
-            "the assignments it holds, so every path is already true."
+            "Reserved. **A reference folder cannot be given a layout in this "
+            "version**: any value other than `null` is refused with a 400. "
+            "PixlStash never reorganises a folder you curate yourself, so "
+            "without a layout it places nothing here and moves nothing here, "
+            "whatever changes about the pictures. Layouts apply to the "
+            "library's own root instead. `null`, the default, is accepted and "
+            "leaves the folder alone."
         ),
     )
     layout_unfiled: Optional[str] = Field(
@@ -904,6 +904,29 @@ def create_router(server) -> APIRouter:
                     if "layout_unfiled" in payload.model_fields_set
                     else rf.layout_unfiled
                 )
+                if (
+                    "layout" in payload.model_fields_set
+                    and (payload.layout or None) is not None
+                ):
+                    # v1.11 ships this field disarmed. Setting it arms the
+                    # automatic mover inside a tree the owner curates by hand,
+                    # and the Phase 5 machinery behind it still carries two
+                    # faults: the scan can walk the tree before it reads the
+                    # database and write `file_path` to a path the move has
+                    # just vacated, and a dismissed reconciliation is reversed
+                    # by the engine at the next membership edit. There is no
+                    # UI, no preview and no migration route for it, so nothing
+                    # shipping sets it - which is what makes refusing free and
+                    # leaving it reachable not.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "A reference folder cannot be given a layout in "
+                            "this version: PixlStash does not reorganise a "
+                            "folder you curate yourself. Layouts apply to the "
+                            "library's own root."
+                        ),
+                    )
                 if unfiled is not None and unfiled != folder_name(unfiled):
                     raise HTTPException(
                         status_code=400,
