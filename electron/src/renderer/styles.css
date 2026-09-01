@@ -23,6 +23,35 @@
   box-sizing: border-box;
 }
 
+/* The same thin overlay scrollbars as the app (frontend/src/style.css,
+   .is-desktop) instead of Chromium's fat light ones on the dark chrome. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(242, 229, 218, 0.22) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(242, 229, 218, 0.18);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(242, 229, 218, 0.32);
+  background-clip: padding-box;
+}
+
 html,
 body {
   margin: 0;
@@ -330,8 +359,12 @@ input[type="text"]:focus-visible,
   align-items: stretch;
   gap: 16px;
   max-width: 560px;
-  margin: 0 auto;
-  padding: 40px 32px;
+  /* The page scrolls once the compute options and the install progress are
+     both showing. Start the scroll region below the fixed title bar so the
+     scrollbar is not clipped under it. */
+  height: calc(100% - 34px);
+  margin: 34px auto 0;
+  padding: 6px 32px 40px;
   overflow-y: auto;
 }
 
