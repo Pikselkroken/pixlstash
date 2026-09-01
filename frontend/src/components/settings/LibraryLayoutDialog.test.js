@@ -172,6 +172,44 @@ describe("LibraryLayoutDialog", () => {
 
   // ---- the builder ---------------------------------------------------------
 
+  it("opens a library with no layout on Project, one level, not two", async () => {
+    // The builder grows one level at a time, so an unset library is proposed
+    // the first level rather than the two-level DEFAULT_LAYOUT. It is written
+    // through the normal save path, which is what puts folders in the tree
+    // instead of an empty state; a layout on its own moves no existing file.
+    getLayoutSettings.mockResolvedValue({
+      layout: null,
+      layout_unfiled: "_Inbox",
+      default_layout: "project/person,set",
+    });
+    setLayoutSettings.mockResolvedValue({ ...WITH_LAYOUT, layout: "project" });
+    vi.useFakeTimers();
+    const wrapper = mountDialog();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(600);
+    await flushPromises();
+
+    expect(setLayoutSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ layout: "project" }),
+    );
+    const selects = wrapper.findAllComponents({ name: "VSelect" });
+    // One filled level plus the single empty slot to grow into: two boxes, one
+    // chosen facet. Seeding the two-level default would show two filled.
+    expect(selects).toHaveLength(2);
+    expect(selects[0].props("modelValue")).toEqual(["project"]);
+    expect(selects[1].props("modelValue")).toEqual([]);
+  });
+
+  it("leaves a library that already has a layout alone", async () => {
+    // The seed must never overwrite a choice the owner already made.
+    vi.useFakeTimers();
+    mountDialog();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(600);
+    await flushPromises();
+    expect(setLayoutSettings).not.toHaveBeenCalled();
+  });
+
   it("draws four levels on one line and nothing else in the row", async () => {
     // The width budget the row is drawn to (see MAX_LEVELS in the component):
     // 620px dialog - 48px padding = 572px, minus three separators and six gaps

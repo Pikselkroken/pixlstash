@@ -80,6 +80,9 @@ import { errorDetail } from "../../utils/apiError";
  */
 const MAX_LEVELS = LAYOUT_FACETS.length;
 
+/** What a library with no layout of its own is proposed when the dialog opens. */
+const DEFAULT_FACET = "project";
+
 const props = defineProps({
   open: { type: Boolean, default: false },
 });
@@ -153,6 +156,20 @@ async function load() {
   try {
     applySettings(await getLayoutSettings());
     loaded.value = true;
+    if (segments.value.length === 0) {
+      // A library with no layout opens on Project rather than an empty slot.
+      // One level, not the two-level DEFAULT_LAYOUT: levels are added one at a
+      // time, so the builder proposes the first and the owner decides whether
+      // there is a second. Routed through `scheduleSave` so seeding is an edit
+      // like any other - it writes the layout and re-reads the preview, which
+      // is what puts folders in the tree instead of an empty state.
+      //
+      // Writing on open is safe in the way that matters: a layout decides where
+      // the NEXT picture is written and never moves a file that is already
+      // here. Moving those is the button below, and a separate yes.
+      scheduleSave([[DEFAULT_FACET]]);
+      return;
+    }
     await refreshPreview();
   } catch (err) {
     refused.value = err?.response?.status === 403;
