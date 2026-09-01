@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from PIL import Image
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -76,6 +77,7 @@ from pixlstash.services.project_membership_service import (
     set_picture_set_projects,
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
@@ -825,6 +827,43 @@ def _link_pictures(
         rel = "" if rel == "." else rel
         by_folder.setdefault(rel, []).append(pic)
 
+    def _free_name(model, name: str, project_id: Optional[int] = None) -> str:
+        """A name no existing row already holds, in the scope its index covers.
+
+        ``Project.name`` is unique case-insensitively across the library;
+        ``Character`` and ``PictureSet`` are unique per ``(project_id,
+        lower(name))``. Creating a second row with a taken name raises
+        ``IntegrityError``, which is neither ``CommitError`` nor
+        ``CommitStopped`` - so the route leaves the durable record *pending*,
+        every start-up resumes it, re-walks and re-hashes the whole root, and
+        fails the same way for ever.
+
+        The owner asked for a new one, so the answer is a new one under a free
+        name rather than silently reusing the row they declined to match. The
+        suffix is the shape migrations 0010-0012 already use for exactly this
+        collision.
+        """
+        taken = select(model).where(func.lower(model.name) == name.lower())
+        if project_id is not None and model is not Project:
+            taken = taken.where(model.project_id == project_id)
+        if session.exec(taken).first() is None:
+            return name
+        counter = 2
+        while True:
+            candidate = f"{name} ({counter})"
+            probe = select(model).where(func.lower(model.name) == candidate.lower())
+            if project_id is not None and model is not Project:
+                probe = probe.where(model.project_id == project_id)
+            if session.exec(probe).first() is None:
+                logger.info(
+                    "Folder commit: %s %r already exists, creating %r instead.",
+                    model.__name__,
+                    name,
+                    candidate,
+                )
+                return candidate
+            counter += 1
+
     project_cache: dict[tuple[str, str], int] = {}
     character_cache: dict[tuple[str, str], int] = {}
     set_cache: dict[tuple[str, str], int] = {}
@@ -842,7 +881,7 @@ def _link_pictures(
                 raise CommitError(f"Project {assignment.match_id} not found")
             result.projects_matched += 1
         else:
-            project = Project(name=name)
+            project = Project(name=_free_name(Project, name))
             session.add(project)
             session.flush()
             result.projects_created += 1
@@ -862,7 +901,7 @@ def _link_pictures(
                 raise CommitError(f"Person {assignment.match_id} not found")
             result.people_matched += 1
         else:
-            character = Character(name=name)
+            character = Character(name=_free_name(Character, name, project_id))
             session.add(character)
             session.flush()
             if project_id is not None:
@@ -884,7 +923,7 @@ def _link_pictures(
                 raise CommitError(f"Set {assignment.match_id} not found")
             result.sets_matched += 1
         else:
-            picture_set = PictureSet(name=name)
+            picture_set = PictureSet(name=_free_name(PictureSet, name, project_id))
             session.add(picture_set)
             session.flush()
             if project_id is not None:
@@ -892,6 +931,38 @@ def _link_pictures(
             result.sets_created += 1
         set_cache[key] = picture_set.id
         return picture_set.id
+
+    # A second commit over a folder that already carries its assignments would
+    # re-insert rows whose keys are already taken - PictureProjectMember and
+    # PictureSetMember have composite primary keys and Tag a
+    # (picture_id, tag) unique constraint - and that IntegrityError wedges the
+    # durable record `pending` exactly as a taken name does: every start-up
+    # resumes it, re-walks the whole root, and fails identically. Load what is
+    # already there once and skip it.
+    linked_ids = [pic.id for pic in pictures if pic.id is not None]
+    existing_projects: set[tuple[int, int]] = set()
+    existing_sets: set[tuple[int, int]] = set()
+    existing_tags: set[tuple[int, str]] = set()
+    for chunk in chunked(linked_ids):
+        batch = list(chunk)
+        existing_projects.update(
+            (row.picture_id, row.project_id)
+            for row in session.exec(
+                select(PictureProjectMember).where(
+                    PictureProjectMember.picture_id.in_(batch)
+                )
+            ).all()
+        )
+        existing_sets.update(
+            (row.set_id, row.picture_id)
+            for row in session.exec(
+                select(PictureSetMember).where(PictureSetMember.picture_id.in_(batch))
+            ).all()
+        )
+        existing_tags.update(
+            (row.picture_id, row.tag)
+            for row in session.exec(select(Tag).where(Tag.picture_id.in_(batch))).all()
+        )
 
     tag_created: set[str] = set()
 
@@ -911,9 +982,11 @@ def _link_pictures(
         for pic in folder_pictures:
             if project_id is not None:
                 pic.project_id = project_id
-                session.add(
-                    PictureProjectMember(picture_id=pic.id, project_id=project_id)
-                )
+                if (pic.id, project_id) not in existing_projects:
+                    existing_projects.add((pic.id, project_id))
+                    session.add(
+                        PictureProjectMember(picture_id=pic.id, project_id=project_id)
+                    )
             if character_id is not None:
                 # Deferred, exactly as the character-assignment endpoint
                 # defers when face extraction has not run yet for a
@@ -921,9 +994,13 @@ def _link_pictures(
                 # best face once it has. A folder-derived person is not a
                 # detection, so there is no face row to attach to yet.
                 pic.pending_character_id = character_id
-            if set_id is not None:
+            if set_id is not None and (set_id, pic.id) not in existing_sets:
+                existing_sets.add((set_id, pic.id))
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic.id))
             for tag_name in tag_names:
+                if (pic.id, tag_name) in existing_tags:
+                    continue
+                existing_tags.add((pic.id, tag_name))
                 session.add(Tag(picture_id=pic.id, tag=tag_name))
             session.add(pic)
 

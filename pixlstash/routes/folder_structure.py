@@ -469,6 +469,50 @@ def create_router(server) -> APIRouter:
         label: Optional[str],
         mode: str,
     ) -> None:
+        """Hold a library read lease for the whole commit, then run it.
+
+        Without the lease ``LibraryGenerationCoordinator.begin_switch`` sees
+        zero readers and lets a switch through while this thread is still
+        working - and every step of it re-reads ``server.vault``. A commit
+        against library A that survived a switch would create A's projects,
+        people, sets and tags **inside B**, link B's rows to them, and write A's
+        durable record into B, so B would resume A's commit at the next
+        start-up. The window is ``INDEX_TIMEOUT_S``: thirty minutes.
+
+        Holding the lease makes a switch wait and then fail rather than
+        proceed. That is the intended answer - the owner is told the library is
+        busy, and "Organise later" stops the commit if they would rather switch
+        than wait.
+        """
+        lease = server.library_coordinator.acquire_read()
+        if lease is None:
+            logger.error(
+                "Folder-structure commit %s cannot start: the library is "
+                "switching or unavailable. The pending record is kept, so the "
+                "next start-up tries again.",
+                task_id,
+            )
+            with server.folder_structure_commit_lock:
+                state = server.folder_structure_commit
+                if state and state["task_id"] == task_id:
+                    state["error"] = "Library is switching or unavailable."
+                    state["status"] = "failed"
+            return
+        try:
+            _run_commit_holding_the_library(
+                task_id, root_path, expected_pictures, assignments, label, mode
+            )
+        finally:
+            server.library_coordinator.release_read(lease)
+
+    def _run_commit_holding_the_library(
+        task_id: str,
+        root_path: str,
+        expected_pictures: int,
+        assignments: list,
+        label: Optional[str],
+        mode: str,
+    ) -> None:
         with server.folder_structure_commit_lock:
             state = server.folder_structure_commit
             if state and state["task_id"] == task_id:
