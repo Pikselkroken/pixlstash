@@ -295,7 +295,7 @@ def test_windows_separators_are_read_as_folder_levels():
 
 def test_the_new_library_default_is_project_then_person_or_set():
     assert DEFAULT_LAYOUT.segments == ((Facet.PROJECT,), (Facet.PERSON, Facet.SET))
-    assert DEFAULT_LAYOUT.unfiled == "_Inbox"
+    assert DEFAULT_LAYOUT.unfiled == "Unassigned"
 
 
 # ===========================================================================
@@ -359,12 +359,12 @@ def test_an_off_layout_folder_is_a_permanent_override():
 
 
 def test_the_unfiled_folder_empties_itself_when_something_files_the_picture():
-    assert relocate("_Inbox", {}, LAYOUT, VOCAB) is None
-    assert relocate("_Inbox", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Mira"
+    assert relocate("Unassigned", {}, LAYOUT, VOCAB) is None
+    assert relocate("Unassigned", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Mira"
 
 
 def test_losing_every_assignment_files_the_picture_as_unfiled():
-    assert relocate("2024 Shoots", {}, LAYOUT, VOCAB) == "_Inbox"
+    assert relocate("2024 Shoots", {}, LAYOUT, VOCAB) == "Unassigned"
 
 
 def test_drift_is_offered_but_never_a_move():
@@ -975,7 +975,7 @@ def test_placement_puts_a_new_picture_where_render_says(library):
 
 def test_placement_is_the_unfiled_folder_when_nothing_files_it(library):
     session = library["session"]
-    assert engine.placement_subfolder(session, library["root"]) == "_Inbox"
+    assert engine.placement_subfolder(session, library["root"]) == "Unassigned"
 
 
 def test_placement_is_nothing_at_all_without_a_layout(library):
@@ -1015,7 +1015,7 @@ def test_a_set_member_keeps_the_layout_reading_it(library):
     session.commit()
     plan, _ = engine.plan_moves(session, [picture.id], root)
     assert len(plan) == 1
-    assert plan[0].stored_path == "_Inbox/b.png"
+    assert plan[0].stored_path == "Unassigned/b.png"
 
 
 # ---------------------------------------------------------------------------
@@ -1126,7 +1126,7 @@ def test_nothing_is_stamped_in_a_library_with_no_layout(stamped):
 
 
 def test_a_person_landing_on_a_picture_stamps_it(stamped):
-    """How an unfiled drop-to-person import leaves ``_Inbox`` on its own."""
+    """How an unfiled drop-to-person import leaves ``Unassigned`` on its own."""
     session = stamped["session"]
     other = Character(name="Someone Else")
     session.add(other)
@@ -1664,12 +1664,35 @@ def test_the_migration_files_a_flat_library_the_rule_would_never_touch():
 
 
 def test_the_migration_leaves_a_picture_the_layout_cannot_place():
-    # Nothing files it, so ``render`` would answer ``_Inbox``. Sweeping it there
-    # is movement for no gain: it already contradicts nothing.
+    # Nothing files it, so ``render`` would answer ``Unassigned``. Sweeping it
+    # there is opt-in, not the default.
     assert migrate_destination("", facets(), DEFAULT_LAYOUT) is None
     # ...from wherever it is. A date folder is not a reason to move a picture
     # the layout has no name for.
     assert migrate_destination("2024/2024-08-15", facets(), DEFAULT_LAYOUT) is None
+
+
+def test_the_sweep_puts_the_unplaceable_in_the_unfiled_folder():
+    # Asked for, every picture nothing files lands in one folder, flattened
+    # like everything else; one already there stays.
+    for folder in ("", "2024/2024-08-15", f"{DEFAULT_LAYOUT.unfiled}/2024"):
+        assert (
+            migrate_destination(folder, facets(), DEFAULT_LAYOUT, sweep_unfiled=True)
+            == DEFAULT_LAYOUT.unfiled
+        )
+    assert (
+        migrate_destination(
+            DEFAULT_LAYOUT.unfiled, facets(), DEFAULT_LAYOUT, sweep_unfiled=True
+        )
+        is None
+    )
+    # And it changes nothing for a picture the layout can place.
+    assert (
+        migrate_destination(
+            "", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT, sweep_unfiled=True
+        )
+        == "2024 Shoots"
+    )
 
 
 def test_the_migration_flattens_a_folder_of_the_owners_own():
@@ -1736,8 +1759,8 @@ def test_the_unfiled_folder_is_not_a_level_the_migration_nests_under():
     assert migrate_destination(DEFAULT_LAYOUT.unfiled, filed, DEFAULT_LAYOUT) == (
         "2024 Shoots"
     )
-    # And at depth: nothing of the old path survives, ``_Inbox`` included, so
-    # no permanent ``_Inbox`` is ever left inside a project folder.
+    # And at depth: nothing of the old path survives, ``Unassigned`` included, so
+    # no permanent ``Unassigned`` is ever left inside a project folder.
     assert (
         migrate_destination(f"{DEFAULT_LAYOUT.unfiled}/2026-08", filed, DEFAULT_LAYOUT)
         == "2024 Shoots"
@@ -1996,6 +2019,27 @@ def test_the_preview_counts_the_move_without_making_it(library):
     assert os.path.isfile(os.path.join(root, "0001.png"))
 
 
+def test_the_sweep_is_previewed_and_run_with_the_same_flag(library):
+    session, root = library["session"], library["root"]
+    _settled(library)
+    loose = _plant(library, "2024/0002.png", filed=False)
+
+    assert migration.preview_in_session(session, root)["picture_count"] == 0
+    preview = migration.preview_in_session(session, root, sweep_unfiled=True)
+    assert preview["picture_count"] == 1
+    assert preview["samples"] == [
+        {"picture_id": loose, "from": "2024/0002.png", "to": "Unassigned/0002.png"}
+    ]
+    assert [row["path"] for row in preview["tree"] if row["is_new"]] == ["Unassigned"]
+
+    result = migration.run_migration_pass(
+        _StubVault(session, root), after_id=0, sweep_unfiled=True
+    )
+    assert result["moved_picture_ids"] == [loose]
+    assert session.get(Picture, loose).file_path == "Unassigned/0002.png"
+    assert os.path.isfile(os.path.join(root, "Unassigned", "0002.png"))
+
+
 def test_the_preview_counts_a_collision_and_names_the_suffixed_path(library):
     session, root = library["session"], library["root"]
     _plant(library, "0001.png")
@@ -2024,7 +2068,6 @@ def test_the_preview_of_a_library_with_no_layout_is_zero_rather_than_absent(libr
     assert preview["cross_volume_count"] == 0
     assert preview["skipped_counts"] == {}
     assert preview["tree"] == []
-    assert preview["tree_truncated"] == 0
 
 
 def _drawable_library(library):
@@ -2130,23 +2173,19 @@ def test_the_tree_has_no_row_for_the_library_root(library):
     ), "path order is what lets the screen indent on depth without re-sorting"
 
 
-def test_the_tree_is_capped_at_the_busiest_folders_and_says_how_many_it_dropped(
-    library, monkeypatch
-):
+def test_the_tree_is_never_capped(library):
+    """A tree of sixty rows and "...and 299 more folders" was the version before
+    this one, and the 299 were the date folders the owner wanted to check."""
     session, root = library["session"], library["root"]
     _drawable_library(library)
-    monkeypatch.setattr(migration, "TREE_FOLDERS", 2)
+    for n in range(80):
+        _plant(library, f"2024/2024-08-{n:02d}/{n:04d}.png")
 
     preview = migration.preview_in_session(session, root)
-
-    # Every folder has a move to its name, so the two that survive are the
-    # busiest: ``2024 Shoots/Mira`` with two arriving, then the first by path
-    # of the four with one move each - and the remaining three are counted.
-    assert [entry["path"] for entry in preview["tree"]] == [
-        "00 Loose",
-        "2024 Shoots/Mira",
-    ]
-    assert preview["tree_truncated"] == 3
+    assert (
+        len([row for row in preview["tree"] if row["path"].startswith("2024/")]) == 80
+    )
+    assert "tree_truncated" not in preview
 
 
 def test_the_tree_of_an_empty_library_is_empty_rather_than_a_root_row(library):
@@ -2157,7 +2196,6 @@ def test_the_tree_of_an_empty_library_is_empty_rather_than_a_root_row(library):
 
     preview = migration.preview_in_session(session, root)
     assert preview["tree"] == []
-    assert preview["tree_truncated"] == 0
 
 
 def test_a_suffixed_picture_carries_its_sidecar_under_the_same_suffix(library):

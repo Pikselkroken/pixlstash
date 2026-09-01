@@ -38,7 +38,7 @@
  * so nothing here has to survive one.
  */
 import { computed, onUnmounted, ref, watch } from "vue";
-import { VIcon, VSelect } from "vuetify/components";
+import { VCheckbox, VIcon, VSelect, VTextField } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -106,6 +106,15 @@ const refused = ref(false);
 
 /** `[["project"], ["person", "set"]]`, the builder's own model. */
 const segments = ref([]);
+/** The folder a picture with nothing to file it by goes to. */
+const unfiled = ref("");
+/**
+ * Whether "Move them now" also sweeps the pictures the layout cannot place
+ * into `unfiled`. Off by default and not stored: it is an option on the
+ * gesture, not on the layout, so it is sent with the preview and with every
+ * pass rather than saved.
+ */
+const sweepUnfiled = ref(false);
 
 const blocked = computed(
   () => libraries.hasLoadedSuccessfully && !libraries.canManage,
@@ -148,6 +157,7 @@ function itemsFor(index) {
 
 function applySettings(body) {
   segments.value = parseLayout(body.layout);
+  unfiled.value = body.layout_unfiled || "";
 }
 
 async function load() {
@@ -218,15 +228,25 @@ function scheduleSave(next) {
   // but that is the affordance, not the rule.
   if (migrating.value) return;
   segments.value = next;
+  scheduleWrite({ layout: formatLayout(next) });
+}
+
+/** The unfiled folder is a layout setting too, and is saved the same way. */
+function setUnfiled(name) {
+  if (migrating.value) return;
+  unfiled.value = name;
+  // Empty resets it: the server answers with its default, which the response
+  // then puts back in the field.
+  scheduleWrite({ layoutUnfiled: name.trim() || null });
+}
+
+function scheduleWrite(patch) {
   // The count on the bar now describes a layout nobody is looking at.
   countStale.value = true;
   editSeq += 1;
   const seq = editSeq;
   window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(
-    () => save({ layout: formatLayout(next) }, seq),
-    SAVE_DEBOUNCE_MS,
-  );
+  saveTimer = window.setTimeout(() => save(patch, seq), SAVE_DEBOUNCE_MS);
 }
 
 onUnmounted(() => {
@@ -340,8 +360,6 @@ const treeRows = computed(() => {
     };
   });
 });
-const treeTruncated = computed(() => preview.value?.tree_truncated || 0);
-
 /** Refusals worth naming, whichever half of the flow produced them. */
 const refusals = computed(() => {
   const counts = { ...(preview.value?.skipped_counts || {}) };
@@ -409,7 +427,9 @@ async function refreshPreview() {
   }
   previewing.value = true;
   try {
-    preview.value = await getLayoutMigrationPreview();
+    preview.value = await getLayoutMigrationPreview({
+      sweepUnfiled: sweepUnfiled.value,
+    });
     countStale.value = false;
   } catch (err) {
     preview.value = null;
@@ -424,6 +444,14 @@ async function refreshPreview() {
     previewing.value = false;
   }
 }
+
+// The sweep changes the count, so toggling it is an edit as far as the bar is
+// concerned: stale until the new count lands.
+watch(sweepUnfiled, () => {
+  if (migrating.value) return;
+  countStale.value = true;
+  refreshPreview();
+});
 
 /**
  * Run the migration to completion, one pass at a time.
@@ -449,7 +477,11 @@ async function migrate() {
   let batchId = null;
   try {
     for (;;) {
-      const pass = await runLayoutMigrationPass({ afterId: cursor, batchId });
+      const pass = await runLayoutMigrationPass({
+        afterId: cursor,
+        batchId,
+        sweepUnfiled: sweepUnfiled.value,
+      });
       batchId = pass.batch_id;
       movedSoFar.value += pass.moved_count || 0;
       for (const entry of pass.skipped || []) {
@@ -614,6 +646,30 @@ function netDelta(row) {
         nothing to draw and nothing to move.
       </p>
 
+      <!-- The unfiled folder is where a picture with nothing to file it by is
+           written, sweep or no sweep; the sweep is only whether the ones
+           already here are moved there too. -->
+      <div class="layout-unfiled">
+        <v-checkbox
+          v-model="sweepUnfiled"
+          label="Also move pictures nothing files into"
+          density="compact"
+          hide-details
+          :disabled="migrating"
+        />
+        <v-text-field
+          :model-value="unfiled"
+          density="compact"
+          variant="outlined"
+          hide-details
+          class="layout-unfiled__name"
+          aria-label="Folder for pictures nothing files"
+          title="Where a picture with no project, person, set or tag is written"
+          :disabled="migrating"
+          @update:model-value="setUnfiled"
+        />
+      </div>
+
       <template v-if="isOn">
         <div class="layout-tree__head">
           <span>{{
@@ -669,17 +725,7 @@ function netDelta(row) {
               <template v-else>unchanged</template>
             </span>
           </div>
-          <div v-if="treeTruncated" class="layout-tree__row" role="row">
-            <span class="layout-tree__more" role="cell">
-              …and {{ treeTruncated.toLocaleString() }} more
-              {{ treeTruncated === 1 ? "folder" : "folders" }}
-            </span>
-          </div>
-          <div
-            v-if="!treeRows.length && !treeTruncated"
-            class="layout-tree__row"
-            role="row"
-          >
+          <div v-if="!treeRows.length" class="layout-tree__row" role="row">
             <span class="layout-tree__more" role="cell">
               {{ previewing ? "Reading your folders…" : "No folders to draw." }}
             </span>
@@ -922,6 +968,24 @@ function netDelta(row) {
 .layout-level__select :deep(.v-label) {
   color: var(--level-hue);
   opacity: 1;
+}
+
+/* ---- the unfiled folder -------------------------------------------------- */
+.layout-unfiled {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-5);
+}
+
+.layout-unfiled__name {
+  flex: 0 1 180px;
+}
+
+.layout-unfiled__name :deep(.v-field__input) {
+  padding-inline: var(--space-3);
+  min-height: 34px;
+  font-size: var(--text-sm);
 }
 
 /* ---- the tree ------------------------------------------------------------ */

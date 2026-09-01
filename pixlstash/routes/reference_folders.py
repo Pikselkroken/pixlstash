@@ -144,7 +144,7 @@ class ReferenceFolderUpdateRequest(BaseModel):
         default=None,
         description=(
             "The folder a picture with nothing to file it by is written to. "
-            "One safe path component; `null` means `_Inbox`."
+            "One safe path component; `null` means `Unassigned`."
         ),
     )
 

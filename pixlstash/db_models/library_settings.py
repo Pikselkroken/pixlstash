@@ -63,7 +63,7 @@ class LibrarySettings(SQLModel, table=True):
             describes the library's own folder tree.
         layout_unfiled: The folder a picture with nothing to file it by is
             written to under that layout. NULL means the model's default,
-            ``_Inbox``. Kept out of ``layout`` on purpose - it is a name the
+            ``Unassigned``. Kept out of ``layout`` on purpose - it is a name the
             owner types, and a free-text name has no business inside a
             separator-bearing format.
         similarity_character: The character the grid sorts "most like" against.

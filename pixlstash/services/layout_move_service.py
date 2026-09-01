@@ -166,7 +166,7 @@ def layout_roots(session: Session, image_root: Optional[str]) -> dict:
 def _parse(text: str, unfiled: Optional[str], where: str) -> Optional[Layout]:
     """Parse a stored layout, or log why it was ignored and return ``None``."""
     try:
-        return parse_layout(text, unfiled or "_Inbox")
+        return parse_layout(text, unfiled or DEFAULT_LAYOUT.unfiled)
     except ValueError as exc:
         logger.error(
             "Layout for %s is not usable (%r, unfiled %r): %s. Nothing will be "

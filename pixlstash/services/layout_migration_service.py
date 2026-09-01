@@ -68,7 +68,6 @@ logger = get_logger(__name__)
 
 __all__ = [
     "MIGRATION_BATCH",
-    "TREE_FOLDERS",
     "apply_moves",
     "plan_migration",
     "run_migration_pass",
@@ -84,13 +83,6 @@ MIGRATION_BATCH: int = 200
 #: How many before/after path pairs the preview shows. Enough to recognise the
 #: shape of the tree that is about to appear; not a listing of the library.
 SAMPLE_SIZE: int = 8
-
-#: How many folders the preview's tree lists. The tree is there so the owner can
-#: see the shape the library would take, not so they can audit every folder of
-#: it - a library with 4,000 folders would otherwise send 4,000 rows to draw a
-#: picture that is legible at sixty. The ones kept are the busiest, and the rest
-#: are counted in ``tree_truncated`` rather than dropped silently.
-TREE_FOLDERS: int = 60
 
 
 def _library_root(session: Session, image_root: Optional[str]) -> Optional[LayoutRoot]:
@@ -111,6 +103,7 @@ def plan_migration(
     *,
     after_id: int = 0,
     limit: Optional[int] = None,
+    sweep_unfiled: bool = False,
 ) -> tuple[list, list, int, Optional[int]]:
     """Plan the migration of the library's own root onto its layout.
 
@@ -120,6 +113,8 @@ def plan_migration(
             table: the window is a fact about the database, not about the run.
         limit: How many pictures to examine, or ``None`` for the whole library
             (what the preview does).
+        sweep_unfiled: Also move the pictures the layout cannot place into its
+            unfiled folder. See :func:`migrate_destination`.
 
     Returns:
         ``(plan, skipped, examined, last_id)``. *skipped* carries Phase 4b's own
@@ -162,11 +157,12 @@ def plan_migration(
             relative_folder(source, root),
             facets_by_id.get(last_id, {}),
             root.layout,
+            sweep_unfiled=sweep_unfiled,
         )
         if destination is None:
             # Already where the layout wants it, or the layout cannot place it
-            # at all. Neither is a refusal: sweeping an unplaceable picture into
-            # the unfiled folder would be movement for no gain.
+            # and the owner did not ask for those swept up. Neither is a
+            # refusal.
             continue
         move, reason = _prepare_move(
             picture, root, source, destination, claimed, uniquify=True
@@ -242,7 +238,9 @@ def _same_volume(move: PlannedMove, devices: dict) -> bool:
     return devices[key]
 
 
-def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
+def preview_in_session(
+    session: Session, image_root: Optional[str], *, sweep_unfiled: bool = False
+) -> dict:
     """Count what a migration would do, and move nothing.
 
     Planned in the same windows the run uses rather than in one pass over the
@@ -281,7 +279,6 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
             "cross_volume_count": 0,
             "skipped_counts": {},
             "tree": [],
-            "tree_truncated": 0,
         }
 
     folders: set = set()
@@ -298,7 +295,11 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
     cursor = 0
     while True:
         plan, skipped, examined, last_id = plan_migration(
-            session, image_root, after_id=cursor, limit=MIGRATION_BATCH
+            session,
+            image_root,
+            after_id=cursor,
+            limit=MIGRATION_BATCH,
+            sweep_unfiled=sweep_unfiled,
         )
         for move in plan:
             picture_count += 1
@@ -325,9 +326,7 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
         if examined < MIGRATION_BATCH:
             break
         cursor = last_id if last_id is not None else cursor + 1
-    tree, tree_truncated = _folder_tree(
-        root, _folders_pictures_are_in(session), arriving, leaving
-    )
+    tree = _folder_tree(root, _folders_pictures_are_in(session), arriving, leaving)
     return {
         "layout": format_layout(root.layout),
         "picture_count": picture_count,
@@ -338,13 +337,14 @@ def preview_in_session(session: Session, image_root: Optional[str]) -> dict:
         "cross_volume_count": reasons.get("destination_other_volume", 0),
         "skipped_counts": reasons,
         "tree": tree,
-        "tree_truncated": tree_truncated,
     }
 
 
-def preview_migration(vault) -> dict:
+def preview_migration(vault, *, sweep_unfiled: bool = False) -> dict:
     """:func:`preview_in_session` on the vault's own read queue."""
-    return vault.db.run_immediate_read_task(preview_in_session, vault.image_root)
+    return vault.db.run_immediate_read_task(
+        preview_in_session, vault.image_root, sweep_unfiled=sweep_unfiled
+    )
 
 
 def _sample(move: PlannedMove, root: LayoutRoot) -> dict:
@@ -389,28 +389,25 @@ def _folder_tree(
     have: Counter,
     arriving: Counter,
     leaving: Counter,
-) -> tuple[list, int]:
-    """The library as this layout would draw it, capped at :data:`TREE_FOLDERS`.
+) -> list:
+    """The library as this layout would draw it, every folder of it.
 
     A folder is in it when anything about it is non-zero, which is why the
     library root is not: it has no row of its own to show, and a synthetic one
-    would draw a level the owner does not have.
+    would draw a level the owner does not have. Uncapped on purpose: an earlier
+    version kept the sixty busiest and counted the rest, and on a library filed
+    by date that was "...and 299 more folders" over the rows the owner needed
+    to check. A few thousand rows is a list; a count of the rows withheld is
+    not.
 
-    **Two orders, and they are not in conflict.** The cap picks by activity, so
-    what survives a truncation is the folders the migration actually does
-    something to; the surviving rows are then sorted by path, so a parent that
-    is in the list always comes immediately before its children and the screen
-    can indent by ``depth`` without re-sorting. A parent can still be absent -
-    a layout whose first segment only ever holds subfolders puts no pictures in
-    it and moves none into it - and that is the inclusion rule, not the cap.
+    Sorted by path, so a parent that is in the list always comes immediately
+    before its children and the screen can indent by ``depth`` without
+    re-sorting. A parent can still be absent - a layout whose first segment
+    only ever holds subfolders puts no pictures in it and moves none into it -
+    and that is the inclusion rule, not a cap.
     """
     paths = set(have) | set(arriving) | set(leaving)
     paths.discard("")
-    ranked = sorted(
-        paths,
-        key=lambda path: (-(arriving[path] + leaving[path]), path),
-    )
-    kept = sorted(ranked[:TREE_FOLDERS])
     return [
         {
             "path": path,
@@ -421,8 +418,8 @@ def _folder_tree(
             "leaving": leaving[path],
             "is_new": not os.path.isdir(os.path.join(root.path, *path.split("/"))),
         }
-        for path in kept
-    ], max(len(ranked) - TREE_FOLDERS, 0)
+        for path in sorted(paths)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +446,7 @@ def run_migration_pass(
     *,
     after_id: int = 0,
     limit: int = MIGRATION_BATCH,
+    sweep_unfiled: bool = False,
     should_stop=None,
     **operation_context,
 ) -> dict:
@@ -476,7 +474,11 @@ def run_migration_pass(
 
     def _plan(session: Session):
         plan, skipped, examined, last_id = plan_migration(
-            session, image_root, after_id=after_id, limit=limit
+            session,
+            image_root,
+            after_id=after_id,
+            limit=limit,
+            sweep_unfiled=sweep_unfiled,
         )
         if plan:
             logger.info(

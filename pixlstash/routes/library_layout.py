@@ -18,13 +18,12 @@ and reversible in one undo. See ``services/layout_migration_service.py``.
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.event_types import EventType
 from pixlstash.services.layout_migration_service import (
     MIGRATION_BATCH,
-    TREE_FOLDERS,
     new_batch_id,
     preview_migration,
     run_migration_pass,
@@ -85,7 +84,7 @@ class LayoutPatch(BaseModel):
         default=None,
         description=(
             "One safe path component for the unfiled folder; null means "
-            "`_Inbox`. It is never the library root - the root is where an "
+            "`Unassigned`. It is never the library root - the root is where an "
             "unmigrated flat library lives, and those files must never move."
         ),
     )
@@ -254,28 +253,22 @@ class MigrationPreviewResponse(BaseModel):
         default_factory=list,
         description=(
             "The library as this layout would draw it, one row per folder, so "
-            "the shape can be seen before it is agreed to. **Ordered by path**, "
-            "so a parent listed here comes immediately before its children and "
-            "the tree can be drawn by indenting on `depth`. Capped at "
-            f"{TREE_FOLDERS} folders, and the cap keeps the busiest - most "
-            "arrivals plus departures - so a truncated tree still shows where "
-            "the migration does its work. A parent can be missing from it "
-            "either way: a folder that only ever holds subfolders has nothing "
-            "to count and is not a row."
-        ),
-    )
-    tree_truncated: int = Field(
-        default=0,
-        description=(
-            "How many folders the cap left out of `tree`. `0` when the whole "
-            "library fits."
+            "the shape can be seen before it is agreed to. **Every folder**, "
+            "not a sample: a library filed by date has hundreds of folders "
+            "leaving, and each one is a row the owner may need to check. "
+            "**Ordered by path**, so a parent listed here comes immediately "
+            "before its children and the tree can be drawn by indenting on "
+            "`depth`. A parent can be missing from it: a folder that only ever "
+            "holds subfolders has nothing to count and is not a row."
         ),
     )
 
 
 class MigrationRunRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"after_id": 0, "batch_id": None}}
+        json_schema_extra={
+            "example": {"after_id": 0, "batch_id": None, "sweep_unfiled": False}
+        }
     )
 
     after_id: int = Field(
@@ -294,6 +287,15 @@ class MigrationRunRequest(BaseModel):
             "undo. Compose one and it is refused: the value has to be in "
             "this feature's own `srv-layout-migration-` namespace, so a "
             "migration's passes can never join another gesture's undo unit."
+        ),
+    )
+    sweep_unfiled: bool = Field(
+        default=False,
+        description=(
+            "Also move the pictures the layout cannot place - nothing files "
+            "them - into the unfiled folder (`layout_unfiled`). Off, they stay "
+            "wherever they are. Send the same value on every pass of one "
+            "migration, and the value the preview was read with."
         ),
     )
 
@@ -432,19 +434,30 @@ def create_router(server) -> APIRouter:
             "`tree` is the same answer drawn rather than counted: one row per "
             "folder, with what it holds now, what would arrive, what would "
             "leave, and whether it exists yet. Path-ordered so it can be drawn "
-            "by indenting on `depth`, capped at the busiest folders, and the "
-            "remainder counted in `tree_truncated`.\n\n"
+            "by indenting on `depth`.\n\n"
             "A picture the layout cannot place, because nothing files it, is in "
-            "none of those counts and does not move. Everything else lands "
-            "exactly where the layout says, folders of the owner's own "
-            "included: the automatic rule leaves those alone, the migration "
-            "flattens them. Two files of one name meeting in one folder are "
-            "suffixed, never overwritten."
+            "none of those counts and does not move unless `sweep_unfiled` is "
+            "true, which puts every one of them in the unfiled folder "
+            "(`layout_unfiled`). Everything else lands exactly where the layout "
+            "says, folders of the owner's own included: the automatic rule "
+            "leaves those alone, the migration flattens them. Two files of one "
+            "name meeting in one folder are suffixed, never overwritten."
         ),
         response_model=MigrationPreviewResponse,
     )
-    def preview_layout_migration(request: Request):
-        return MigrationPreviewResponse(**preview_migration(server.vault))
+    def preview_layout_migration(
+        request: Request,
+        sweep_unfiled: bool = Query(
+            default=False,
+            description=(
+                "Count the pictures nothing files as moving into the unfiled "
+                "folder too. Read with the same value the `POST` will be sent."
+            ),
+        ),
+    ):
+        return MigrationPreviewResponse(
+            **preview_migration(server.vault, sweep_unfiled=sweep_unfiled)
+        )
 
     @router.post(
         "/server-config/layout/migration",
@@ -485,7 +498,12 @@ def create_router(server) -> APIRouter:
         # The gesture is this migration, not whatever the client was already
         # grouping: overriding the header is what keeps every pass in one undo.
         context["batch_id"] = batch_id
-        result = run_migration_pass(server.vault, after_id=body.after_id, **context)
+        result = run_migration_pass(
+            server.vault,
+            after_id=body.after_id,
+            sweep_unfiled=body.sweep_unfiled,
+            **context,
+        )
         if result["moved_picture_ids"]:
             server.vault.notify(
                 EventType.CHANGED_PICTURES,

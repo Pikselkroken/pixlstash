@@ -15,6 +15,18 @@ import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i><slot /></i>" },
+  VCheckbox: {
+    props: { modelValue: Boolean, disabled: Boolean, label: String },
+    emits: ["update:modelValue"],
+    template:
+      '<label><input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)" />{{ label }}</label>',
+  },
+  VTextField: {
+    props: { modelValue: String, disabled: Boolean },
+    emits: ["update:modelValue"],
+    template:
+      '<input :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+  },
   VSelect: {
     name: "v-select",
     // Typed rather than a name list: Vuetify declares these Boolean, so a bare
@@ -54,7 +66,7 @@ import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 
 const WITH_LAYOUT = {
   layout: "project/person,set",
-  layout_unfiled: "_Inbox",
+  layout_unfiled: "Unassigned",
   default_layout: "project/person,set",
 };
 const FOUR_LEVELS = { ...WITH_LAYOUT, layout: "project/person/set/tag" };
@@ -68,7 +80,6 @@ const NOTHING_TO_MOVE = {
   cross_volume_count: 0,
   skipped_counts: {},
   tree: [],
-  tree_truncated: 0,
 };
 const WOULD_MOVE = {
   ...NOTHING_TO_MOVE,
@@ -103,8 +114,8 @@ const WOULD_MOVE = {
       is_new: false,
     },
     {
-      path: "_Inbox",
-      name: "_Inbox",
+      path: "Unassigned",
+      name: "Unassigned",
       depth: 0,
       have: 903,
       arriving: 0,
@@ -112,7 +123,6 @@ const WOULD_MOVE = {
       is_new: false,
     },
   ],
-  tree_truncated: 208,
 };
 
 const PASS_DONE = {
@@ -226,7 +236,7 @@ describe("LibraryLayoutDialog", () => {
     // instead of an empty state; a layout on its own moves no existing file.
     getLayoutSettings.mockResolvedValue({
       layout: null,
-      layout_unfiled: "_Inbox",
+      layout_unfiled: "Unassigned",
       default_layout: "project/person,set",
     });
     setLayoutSettings.mockResolvedValue({ ...WITH_LAYOUT, layout: "project" });
@@ -300,8 +310,7 @@ describe("LibraryLayoutDialog", () => {
     await flushPromises();
 
     const rows = wrapper.findAll(".layout-tree__row");
-    // Four folders plus the truncation row.
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(4);
 
     // Depth is an indent, not a prefix in the name.
     expect(rows[0].find(".layout-tree__name").attributes("style")).toContain(
@@ -396,13 +405,49 @@ describe("LibraryLayoutDialog", () => {
     );
   });
 
-  it("says how many folders it did not list rather than implying it listed them all", async () => {
+  it("lists every folder rather than a count of the ones it left out", async () => {
     const wrapper = mountDialog();
     await flushPromises();
 
-    expect(wrapper.find(".layout-tree__more").text()).toBe(
-      "…and 208 more folders",
+    expect(wrapper.findAll(".layout-tree__row")).toHaveLength(
+      WOULD_MOVE.tree.length,
     );
+    expect(wrapper.find(".layout-tree__more").exists()).toBe(false);
+  });
+
+  it("previews and runs the sweep with the same flag, off by default", async () => {
+    runLayoutMigrationPass.mockResolvedValue(PASS_DONE);
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(getLayoutMigrationPreview).toHaveBeenLastCalledWith({
+      sweepUnfiled: false,
+    });
+
+    await wrapper.find(".layout-unfiled input[type=checkbox]").setValue(true);
+    await flushPromises();
+    expect(getLayoutMigrationPreview).toHaveBeenLastCalledWith({
+      sweepUnfiled: true,
+    });
+
+    await buttonWith(wrapper, "Move them now").trigger("click");
+    await flushPromises();
+    expect(runLayoutMigrationPass.mock.calls[0][0]).toEqual({
+      afterId: 0,
+      batchId: null,
+      sweepUnfiled: true,
+    });
+  });
+
+  it("saves the unfiled folder name like any other layout edit", async () => {
+    vi.useFakeTimers();
+    const wrapper = mountDialog();
+    await flushPromises();
+    setLayoutSettings.mockClear();
+
+    await wrapper.find(".layout-unfiled__name").setValue("Loose");
+    await vi.advanceTimersByTimeAsync(600);
+    await flushPromises();
+    expect(setLayoutSettings).toHaveBeenCalledWith({ layoutUnfiled: "Loose" });
   });
 
   // ---- the three carried-forward guards -------------------------------------
@@ -559,10 +604,12 @@ describe("LibraryLayoutDialog", () => {
     expect(runLayoutMigrationPass.mock.calls[0][0]).toEqual({
       afterId: 0,
       batchId: null,
+      sweepUnfiled: false,
     });
     expect(runLayoutMigrationPass.mock.calls[1][0]).toEqual({
       afterId: 200,
       batchId: "srv-layout-migration-0123456789abcdef",
+      sweepUnfiled: false,
     });
   });
 

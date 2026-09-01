@@ -3085,7 +3085,7 @@ library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
 
 | Function | Answers |
 |---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `_Inbox` — never the library root, which is where an unmigrated flat library lives. |
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
 | `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
 
 The release rests on `is_true`, and on one property of it: **a path that does
@@ -6444,10 +6444,14 @@ That difference is one function, `library_layout.migrate_destination`, and it is
 the only new decision the phase contains. It asks `render` where the layout would
 put the picture rather than asking `_walk` whether the folder has stopped being
 true, and the answer is the destination whole: nothing of the old path is kept.
-It answers `None`, leave it, in three cases. **Nothing files the picture**, so
-`render` would answer the unfiled folder and sweeping it into `_Inbox` would be
-movement for no gain. **It is already where the layout wants it.** Or its path
-carries `.`/`..` and is refused whole exactly as `is_true` refuses it.
+It answers `None`, leave it, in three cases. **Nothing files the picture** and
+`sweep_unfiled` is off, so `render` would answer the unfiled folder and sweeping
+it there was not asked for; with the flag on, every such picture lands in the
+unfiled folder (`Unassigned` by default), which is the owner choosing one folder
+of everything the layout has no name for over loose files left in the old date
+tree. The flag is an option on the gesture, sent with the preview and with every
+pass, not a stored setting. **It is already where the layout wants it.** Or its
+path carries `.`/`..` and is refused whole exactly as `is_true` refuses it.
 
 What it deliberately does *not* share with `relocate` and `match_destination` is
 the override: a folder of the owner's own stays put under the rule and under the
@@ -6459,7 +6463,7 @@ part of, so the excuse covered all of them and "Move them now" moved nothing
 acting: the rule runs on its own, so it must not touch what the owner arranged;
 the migration is the owner asking for exactly that, previewed, consented and one
 undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg`,
-`_Inbox/2026-08` at `<rendered>`, and two files of one name arriving at one
+`Unassigned/2026-08` at `<rendered>`, and two files of one name arriving at one
 folder are told apart by the suffix rule below rather than refused.
 
 Everything that touches a file is §26's: the same `_prepare_move` refusals, the

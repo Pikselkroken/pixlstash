@@ -705,8 +705,10 @@ is spent on the one thing that needs it. One pane, no steps:
   levels. `LibraryLayoutDialog.test.js` pins that. A fifth level cannot happen,
   because there are four facets and none may be used twice.
 - **The tree is the argument.** `getLayoutMigrationPreview` returns `tree`, a
-  flat list of `{path, name, depth, have, arriving, leaving, is_new}`, plus
-  `tree_truncated`. A folder is a row only when one of have/arriving/leaving is
+  flat list of `{path, name, depth, have, arriving, leaving, is_new}`, every
+  folder of the library, uncapped: the list scrolls, because a cap that showed
+  sixty rows and "...and 299 more folders" hid exactly the date folders the
+  owner wanted to check. A folder is a row only when one of have/arriving/leaving is
   non-zero, so an intermediate folder that holds nothing and receives nothing is
   absent while its child is present, and **under a multi-level layout almost
   every row is such an orphan**. Indenting on `depth` alone therefore says

@@ -2148,8 +2148,8 @@ One field, `layout`, in the form `project/person,set`:
 
 `null` or `""` means **no layout**, which is the default and the only state in
 which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
-with nothing to file it by goes to — one safe path component, `_Inbox` when
-null. It is deliberately not the library root: the root is where an unmigrated
+with nothing to file it by goes to — one safe path component, `Unassigned`
+when null. It is deliberately not the library root: the root is where an unmigrated
 flat library lives and those files must never move.
 
 **Both PATCHes are patches, not puts.** A field you do not send keeps its stored

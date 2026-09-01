@@ -120,7 +120,7 @@ class Layout:
     """
 
     segments: tuple[tuple[Facet, ...], ...]
-    unfiled: str = "_Inbox"
+    unfiled: str = "Unassigned"
 
     def __post_init__(self) -> None:
         if self.unfiled != folder_name(self.unfiled):
@@ -423,7 +423,9 @@ def match_destination(
     return None if _components(destination) == components else destination
 
 
-def migrate_destination(folder: str, facets: FacetValues, layout: Layout) -> str | None:
+def migrate_destination(
+    folder: str, facets: FacetValues, layout: Layout, *, sweep_unfiled: bool = False
+) -> str | None:
     """Where the whole-library migration puts a picture, or ``None`` to leave it.
 
     v1.11 Phase 4c, and **deliberately not the move-when-false rule.** Under
@@ -444,20 +446,27 @@ def migrate_destination(folder: str, facets: FacetValues, layout: Layout) -> str
     the migration's suffix rule is for (decided once, 2026-09-01; the rule's
     own moves still carry the tail and still refuse a taken name).
 
+    Args:
+        sweep_unfiled: Also move the pictures nothing files into
+            ``layout.unfiled``. Off, they stay wherever they are; on, the
+            owner has asked for one folder of everything the layout could not
+            place, which is the difference between a tidy tree and a tree
+            with a few thousand loose files still in the old date folders.
+
     Returns:
         A ``/``-separated relative folder, or ``None`` when the picture stays
         where it is - which is three cases:
 
-        * **The layout cannot place it.** Nothing files it, so ``render`` would
-          answer the unfiled folder. Sweeping it into ``_Inbox`` would be
-          movement for no gain: it already contradicts nothing.
+        * **The layout cannot place it**, and *sweep_unfiled* is off. Nothing
+          files it, so ``render`` would answer the unfiled folder, and
+          sweeping it there was not asked for.
         * It is already where the layout would put it.
         * The folder is a path the layout cannot read at all - one carrying
           ``.`` or ``..`` - which is refused whole here as it is everywhere
           else in this module.
     """
     placed = render(facets, layout)
-    if placed == layout.unfiled:
+    if placed == layout.unfiled and not sweep_unfiled:
         return None
     components = _components(folder)
     if folder and not components:
@@ -699,7 +708,7 @@ def format_layout(layout: Layout) -> str:
     )
 
 
-def parse_layout(text: str | None, unfiled: str = "_Inbox") -> Layout | None:
+def parse_layout(text: str | None, unfiled: str = "Unassigned") -> Layout | None:
     """Return the layout *text* describes, or ``None`` for "this root has none".
 
     ``None`` and the empty string both mean no layout, which is the default and
