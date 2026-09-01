@@ -849,16 +849,31 @@ def read_requirements(requirements: Path) -> list[str]:
     ]
 
 
-def install_requirements(requirements: Path) -> None:
-    """Install *requirements* with pip."""
+def install_requirements(changes: list[DependencyChange]) -> None:
+    """Install exactly the resolution *changes* describes, and nothing else.
+
+    *changes* is what :func:`resolve_requirements` worked out and what the
+    caller showed the user before asking. Installing it, rather than running
+    ``pip install -r`` again, is what makes that agreement binding: a second
+    run is a second resolution, free to pick different versions, so the torch
+    replacement someone was told would not happen could happen anyway.
+
+    ``--no-deps`` for the same reason. The resolved list already holds every
+    transitive dependency pip found, so letting it resolve again could only add
+    something nobody was shown.
+    """
+    if not changes:
+        return
+    pins = [f"{change.name}=={change.version}" for change in changes]
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+        [sys.executable, "-m", "pip", "install", "--no-deps", *pins],
         check=False,
     )
     if result.returncode != 0:
         raise PluginError(
-            f"pip failed on {requirements} (exit {result.returncode}). The "
-            "plugin was installed; its dependencies were not."
+            f"pip failed installing {', '.join(pins)} (exit "
+            f"{result.returncode}). The plugin was installed; its "
+            "dependencies were not."
         )
 
 
