@@ -302,6 +302,24 @@ button:disabled {
   box-shadow: var(--focus-ring);
 }
 
+/* ...except inside a Vuetify field, where the focused element is an <input>
+   the component owns rather than the control the owner sees. In a text field
+   that input fills the box and the ring looks right by accident; in a SELECT it
+   is sized to its own text, so the ring drew a 3px amber rectangle around the
+   label - tightest, and most obviously wrong, on an empty select showing only
+   its placeholder. Move the ring out to the field box so it wraps the control.
+
+   `:has(:focus-visible)` rather than Vuetify's own `.v-field--focused`, because
+   that class lands on a mouse click too and this indicator is meant to be the
+   keyboard one. Both selectors are (0,2,0) and so beat the (0,1,0) rule above
+   without `!important`. */
+.v-field:has(:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+.v-field :focus-visible {
+  box-shadow: none;
+}
+
 /* The sidebar, toolbar and title bar each paint from their OWN theme token
    (`sidebar`, `toolbar`, `toolbar` respectively) and the grid canvas from
    `background`. Want them to read as one continuous chrome strip? Set those tokens
