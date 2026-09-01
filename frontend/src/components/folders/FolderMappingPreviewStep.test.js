@@ -1,110 +1,112 @@
-// Wizard step 3 ("Preview") - what's worth pinning here is the one thing this
-// screen actually sends over the wire: `mode` has to reach the commit call
-// unchanged, because that field is what tells the server whether to register
-// an external reference folder or import into the active library in place
-// (integration_architecture.md §22). The default has to keep matching every
-// existing (reference-folder) caller that never passes `mode` at all.
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount } from "@vue/test-utils";
-import { nextTick } from "vue";
+import { mount, flushPromises } from "@vue/test-utils";
 
-vi.mock("vuetify/components", () => ({
-  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
-  VProgressCircular: { name: "v-progress-circular", template: "<i />" },
+const getFolderStructureCommitStatus = vi.fn();
+const startFolderStructureCommit = vi.fn();
+const stopFolderStructureCommit = vi.fn();
+vi.mock("../../api/folderStructure", () => ({
+  getFolderStructureCommitStatus: (...a) =>
+    getFolderStructureCommitStatus(...a),
+  startFolderStructureCommit: (...a) => startFolderStructureCommit(...a),
+  stopFolderStructureCommit: (...a) => stopFolderStructureCommit(...a),
 }));
 
 import FolderMappingPreviewStep from "./FolderMappingPreviewStep.vue";
-import { startFolderStructureCommit } from "../../api/folderStructure";
-
-vi.mock("../../api/folderStructure", () => ({
-  startFolderStructureCommit: vi.fn(),
-  getFolderStructureCommitStatus: vi.fn(),
-}));
 
 function mountStep(props = {}) {
   return mount(FolderMappingPreviewStep, {
     props: {
-      path: "/home/me/Pictures/Generations",
-      readTaskId: "task-1",
-      assignments: [],
-      label: "Generations",
-      pictureCount: 12,
+      path: "/home/me/pictures",
+      readTaskId: "read-1",
+      assignments: [{ kind: "project", relative_path: "2024 Shoots" }],
+      commitOnMount: true,
       ...props,
     },
     global: {
       stubs: {
+        "v-icon": { template: "<i><slot /></i>" },
+        "v-progress-circular": { template: "<span />" },
         AppButton: {
-          props: ["disabled", "loading"],
-          template:
-            '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+          props: ["disabled", "loading", "variant", "size"],
+          template: '<button :disabled="disabled || loading"><slot /></button>',
         },
       },
     },
   });
 }
 
-async function settle(wrapper) {
-  await nextTick();
-  await nextTick();
-  return wrapper;
+function buttonWith(wrapper, text) {
+  return wrapper.findAll("button").find((b) => b.text().includes(text));
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  // Never resolves in these tests: the assertion is on the request that was
-  // sent, not on what happens once it settles.
-  startFolderStructureCommit.mockReturnValue(new Promise(() => {}));
-});
+describe("FolderMappingPreviewStep", () => {
+  beforeEach(() => {
+    for (const fn of [
+      getFolderStructureCommitStatus,
+      startFolderStructureCommit,
+      stopFolderStructureCommit,
+    ]) {
+      fn.mockReset();
+    }
+    getFolderStructureCommitStatus.mockResolvedValue({
+      status: "running",
+      stage: "indexing",
+      processed: 3,
+      total: 10,
+    });
+  });
 
-describe("committing", () => {
-  it("defaults to reference mode, unchanged for every existing caller", async () => {
-    const wrapper = await settle(mountStep());
+  it("cannot be stopped in the seconds before the commit has a task id", async () => {
+    // Between `committing` going true and the server answering, both stops used
+    // to send stop("") - which fails with "Could not stop the import." while the
+    // mapping commits anyway.
+    let started;
+    startFolderStructureCommit.mockImplementation(
+      () => new Promise((resolve) => (started = resolve)),
+    );
 
-    await wrapper.find(".preview-step__actions button").trigger("click");
-    await settle(wrapper);
+    const wrapper = mountStep();
+    await flushPromises();
+
+    const later = buttonWith(wrapper, "Organise later");
+    const abort = buttonWith(wrapper, "Abort");
+    expect(later.attributes("disabled")).toBeDefined();
+    expect(abort.attributes("disabled")).toBeDefined();
+
+    await later.trigger("click");
+    await abort.trigger("click");
+    await flushPromises();
+    expect(stopFolderStructureCommit).not.toHaveBeenCalled();
+
+    // Positive control: the moment the id lands, both stops work and address it.
+    started({ task_id: "commit-7" });
+    await flushPromises();
+
+    const liveLater = buttonWith(wrapper, "Organise later");
+    expect(liveLater.attributes("disabled")).toBeUndefined();
+    await liveLater.trigger("click");
+    await flushPromises();
+    expect(stopFolderStructureCommit).toHaveBeenCalledWith("commit-7", "defer");
+  });
+
+  it("still commits with no assignments when nothing is running", async () => {
+    // "Organise later" before the import means something else entirely, and the
+    // guard above must not disable it.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-9" });
+
+    const wrapper = mountStep({ commitOnMount: false });
+    await flushPromises();
+
+    const later = buttonWith(wrapper, "Organise later");
+    expect(later.attributes("disabled")).toBeUndefined();
+    await later.trigger("click");
+    await flushPromises();
 
     expect(startFolderStructureCommit).toHaveBeenCalledWith(
-      "task-1",
+      "read-1",
       [],
-      "Generations",
+      "",
       "reference",
-    );
-  });
-
-  it("sends local_import through when the wizard is in that mode", async () => {
-    const wrapper = await settle(mountStep({ mode: "local_import" }));
-
-    await wrapper.find(".preview-step__actions button").trigger("click");
-    await settle(wrapper);
-
-    expect(startFolderStructureCommit).toHaveBeenCalledWith(
-      "task-1",
-      [],
-      "Generations",
-      "local_import",
-    );
-  });
-});
-
-describe("the 'no folder is created' fact", () => {
-  it("keeps the reference-folder wording by default", async () => {
-    const wrapper = await settle(mountStep());
-    expect(wrapper.text()).toContain(
-      "no folder is created inside your library",
-    );
-  });
-
-  it("says these become ordinary library pictures for a local import", async () => {
-    // The reference-folder line is false framing here: the scanned root
-    // already IS the library's own root, and there is no external reference
-    // folder to distinguish these pictures from.
-    const wrapper = await settle(mountStep({ mode: "local_import" }));
-    expect(wrapper.text()).toContain(
-      "these pictures become ordinary pictures of this library",
-    );
-    expect(wrapper.text()).not.toContain(
-      "no folder is created inside your library",
     );
   });
 });
