@@ -4,7 +4,9 @@
  *
  * Columns: Active (radio) | Name (+ description tooltip) | Loaded | Settings
  *
- * Exactly one plugin may be active for the capability (or none).
+ * Exactly one plugin may be active for the capability, or none: the first
+ * row of the table is an explicit None, so the off state is selectable
+ * rather than reached by clicking the checked radio a second time.
  *
  * Replaces the former TagPluginsTable / DescriptionPluginsTable, which were the
  * same table twice over: they differed only in which capability flag they
@@ -42,6 +44,12 @@ const supportsFlag = computed(() =>
 );
 const activeKey = computed(() => `active_${props.kind}_plugin`);
 
+const noneLabel = computed(() =>
+  props.kind === "tag"
+    ? "None — no automatic tagging"
+    : "None — no automatic captioning",
+);
+
 const capablePlugins = computed(() =>
   props.plugins.filter((p) => p[supportsFlag.value]),
 );
@@ -66,15 +74,13 @@ function openSettings(plugin) {
 async function setActive(pluginName) {
   settingActive.value = true;
   activeError.value = "";
-  // Toggle off if already active
-  const next = activePlugin.value === pluginName ? null : pluginName;
   try {
     await patchUserConfig({
-      tagger_settings: { [activeKey.value]: next },
+      tagger_settings: { [activeKey.value]: pluginName },
     });
     emit("update:settings", {
       ...props.settings,
-      [activeKey.value]: next,
+      [activeKey.value]: pluginName,
     });
   } catch (e) {
     activeError.value = errorDetail(e) || "Failed to update.";
@@ -113,6 +119,26 @@ function onParamsSaved({ name, params }) {
         </tr>
       </thead>
       <tbody>
+        <tr v-if="capablePlugins.length" class="pt-row">
+          <td class="pt-col-active">
+            <input
+              type="radio"
+              :name="`active-${kind}-plugin`"
+              value=""
+              :checked="activePlugin === null"
+              :disabled="settingActive"
+              class="pt-radio"
+              :aria-label="noneLabel"
+              @change="setActive(null)"
+            />
+          </td>
+          <td class="pt-col-name">
+            <span class="pt-plugin-name pt-none">{{ noneLabel }}</span>
+          </td>
+          <td class="pt-col-loaded"></td>
+          <td class="pt-col-actions"></td>
+        </tr>
+
         <tr
           v-for="plugin in capablePlugins"
           :key="plugin.name"
@@ -126,6 +152,7 @@ function onParamsSaved({ name, params }) {
               :checked="activePlugin === plugin.name"
               :disabled="settingActive"
               class="pt-radio"
+              :aria-label="`Use ${plugin.display_name}`"
               @change="setActive(plugin.name)"
             />
           </td>
@@ -274,6 +301,10 @@ function onParamsSaved({ name, params }) {
   font-size: var(--text-2xs);
   color: rgb(var(--v-theme-error));
   margin-top: var(--space-2);
+}
+
+.pt-none {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .pt-empty {
