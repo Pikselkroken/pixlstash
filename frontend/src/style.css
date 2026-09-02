@@ -297,10 +297,20 @@ button:disabled {
    and its own rules are class-only (0,1,0): a tie we would win or lose on import
    order, flattening an elevated button while it holds focus. Vuetify's buttons
    keep their own focus treatment. */
-:focus-visible:not(:where(.v-btn, .v-btn *)) {
+:focus-visible:not(
+  :where(.v-btn, .v-btn *, .v-overlay__content, .v-overlay__content > .v-card)
+) {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+/* A dialog takes focus when it opens, so the keyboard lands inside it rather
+   than behind it. That is focus for containment, not for pointing: the ring the
+   rule above would paint draws a square around the entire card, which reads as
+   "this whole thing is the control" and, on a card that carries its own
+   elevation, replaces the shadow with it. The two surfaces Vuetify focuses -
+   the overlay content and the card it holds - are therefore excluded above;
+   every control INSIDE the dialog still rings normally. */
 
 /* ...except inside a Vuetify field, where the focused element is an <input>
    the component owns rather than the control the owner sees. In a text field
