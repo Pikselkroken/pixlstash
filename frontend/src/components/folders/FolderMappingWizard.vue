@@ -120,7 +120,7 @@ watch(
 const title = computed(() => {
   switch (step.value) {
     case "mapping":
-      return "Name what your folders are";
+      return "Create the PixlStash database";
     case "preview":
       return "Before anything is written";
     default:
