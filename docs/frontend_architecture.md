@@ -430,7 +430,11 @@ emits `library-loaded` `{ empty }` when the first count lands; App.vue awaits
 the loose-picture offer for an empty library, then marks the library settled,
 and `TelemetryConsentDialog` is shown only once that is true and no mapping
 wizard is open or pending. The request itself is kept, so the dialog appears
-the moment the wizard closes.
+the moment the wizard closes. `SideBar.offerLoosePictures` hands every caller
+the same in-flight promise: `library-empty` and `library-loaded` fire in the
+same tick, and a second call that returned at once (already offered) settled
+the library before the path had even been inspected, so the dialog came up
+under the wizard anyway.
 
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import

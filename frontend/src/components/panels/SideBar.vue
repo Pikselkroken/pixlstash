@@ -607,10 +607,19 @@ watch(
 // same wizard the sidebar's row would, against the library root, as a
 // `local_import` with no read yet. Once per page load, like the auto-open
 // above: a cancelled read is saved as pending and the row offers it again.
-let offeredLoosePictures = false;
-async function offerLoosePictures() {
-  if (offeredLoosePictures || isReadOnly.value || mappingStore.pending) return;
-  offeredLoosePictures = true;
+// The grid asks twice in one tick (`library-empty`, then `library-loaded`),
+// and App.vue holds the telemetry question on the second answer, so every
+// caller gets the one in-flight offer rather than an instant "already
+// asked": settling before the wizard had opened is what let the question
+// through on a fresh desktop library.
+let loosePicturesOffer = null;
+function offerLoosePictures() {
+  if (isReadOnly.value || mappingStore.pending) return Promise.resolve();
+  loosePicturesOffer ??= _offerLoosePictures();
+  return loosePicturesOffer;
+}
+
+async function _offerLoosePictures() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
