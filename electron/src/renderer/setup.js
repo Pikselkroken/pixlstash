@@ -131,6 +131,9 @@ let privacyChoice = null;
 // True once the runtime install has reported anything, which is also when the
 // backend is already up reading the library behind it.
 let reading = false;
+// A commit that came back with an error. The install step keeps it on screen
+// rather than dropping the user at the first question with nothing to read.
+let failed = false;
 
 function show(el) {
   el.classList.remove('hidden');
@@ -228,9 +231,15 @@ function render() {
     el.classList.toggle('off', id !== currentStep());
   });
   renderSteps();
-  els.back.classList.toggle('off', at === 0 || currentStep() === 'install' || busy);
-  els.next.classList.toggle('off', currentStep() === 'install');
-  els.next.textContent = at === steps.length - 2 ? 'Get started' : 'Continue';
+  // On the install step there is nothing to press - unless it failed, in which
+  // case both controls come back: one to change an answer, one to try again.
+  els.back.classList.toggle('off', at === 0 || busy || (currentStep() === 'install' && !failed));
+  els.next.classList.toggle('off', currentStep() === 'install' && !failed);
+  els.next.textContent = failed
+    ? 'Try again'
+    : at === steps.length - 2
+      ? 'Get started'
+      : 'Continue';
   els.hint.textContent = '';
   if (currentStep() === 'library') renderLibrary();
   if (currentStep() === 'privacy') els.next.disabled = privacyChoice === null;
@@ -540,7 +549,7 @@ function privacyPatch() {
 // word for a note, and a single bar. pip reports a line per package it fetches,
 // so anything that keys a row by message grows a list a screen long; this
 // replaces the line instead.
-const progress = { name: '', note: '', fraction: -1 };
+const progress = { name: '', note: '', fraction: -1, bar: true };
 
 function renderProgress() {
   els.phases.innerHTML = '';
@@ -553,6 +562,11 @@ function renderProgress() {
     '<span class="pname"></span><span class="pnote"></span>';
   item.querySelector('.pname').textContent = progress.name;
   item.querySelector('.pnote').textContent = progress.note;
+  // Nothing is running any more, so nothing should look like it is.
+  if (!progress.bar) {
+    els.phases.appendChild(item);
+    return;
+  }
   const bar = document.createElement('div');
   bar.className = 'bar';
   const fill = document.createElement('div');
@@ -575,11 +589,12 @@ function setProgress(patch) {
 async function commit() {
   if (busy) return;
   busy = true;
+  failed = false;
   hide(els.error);
   go(steps.indexOf('install'));
   els.next.disabled = true;
   const useGpu = gpu.available && selectedUseGpu();
-  setProgress({ name: 'Preparing your library', note: '', fraction: -1 });
+  setProgress({ name: 'Preparing your library', note: '', fraction: -1, bar: true });
   try {
     await api.commitSetup({
       imageRoot: els.folder.value.trim(),
@@ -591,9 +606,17 @@ async function commit() {
     });
     // Success → main process navigates this window to the library.
   } catch (e) {
-    showError((e && e.message) || String(e));
+    // Stay on the step that failed and say why. Dropping back to the first
+    // question hid the message on a screen that was no longer shown, which is
+    // how "the backend refuses this folder's permissions" reached the user as
+    // an unexplained trip back to the beginning.
     busy = false;
-    go(0);
+    failed = true;
+    els.next.disabled = false;
+    setProgress({ name: 'Setup could not finish', note: '', fraction: -1, bar: false });
+    showError((e && e.message) || String(e));
+    render();
+    els.hint.textContent = 'Change an answer, or try again.';
   }
 }
 
@@ -619,11 +642,17 @@ els.pickInstall.addEventListener('click', async () => {
   if (dir) els.installPath.value = dir;
 });
 
-els.back.addEventListener('click', () => !busy && go(at - 1));
+els.back.addEventListener('click', () => {
+  if (busy) return;
+  hide(els.error);
+  failed = false;
+  setProgress({ name: '', note: '', fraction: -1, bar: true });
+  go(at - 1);
+});
 
 els.next.addEventListener('click', () => {
   if (busy || els.next.disabled) return;
-  if (at >= steps.length - 2) commit();
+  if (failed || at >= steps.length - 2) commit();
   else go(at + 1);
 });
 

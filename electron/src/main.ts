@@ -842,6 +842,34 @@ async function startWithOverlayFallback(
 }
 
 /**
+ * Start the backend from first-run setup, offering the permission repair the
+ * way `boot()` does.
+ *
+ * Setup starts the backend itself, so without this a library folder the backend
+ * refuses (a group-writable one, mode 775) came back to the setup screen as a
+ * bare rejection: the repair the app knows how to offer was never offered, and
+ * the reason never reached the person choosing the folder. Declining puts the
+ * setup screen back rather than quitting - the answer to "I will not use that
+ * folder" is to choose another one.
+ */
+async function startFromSetup(accel: Accel | null, navigate: boolean): Promise<void> {
+  try {
+    await startWithOverlayFallback(accel, false, navigate);
+  } catch (caught) {
+    if (!isPermissionRepairRequired(caught)) throw caught;
+    if (!(await offerPermissionRepair(caught))) {
+      await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+      throw new Error(
+        'PixlStash will not open a library with those permissions. Choose another folder, or allow the repair.',
+      );
+    }
+    // Exactly one user-authorised retry, as boot() does. Python rechecks
+    // ownership, type and inode before changing any recorded path.
+    await startWithOverlayFallback(accel, true, navigate);
+  }
+}
+
+/**
  * The repair report the permissions screen is currently showing. Held in main
  * (rather than passed through a query string) so the renderer can only ever see
  * a report the backend actually produced this launch.
@@ -1238,7 +1266,7 @@ function registerIpc(): void {
       const gpu = gpuUpgrade();
       if (!choices?.useGpu || !gpu) {
         await manager.setActiveAccel(null);
-        await startWithOverlayFallback(await activeOverlayAccel());
+        await startFromSetup(await activeOverlayAccel(), true);
         return;
       }
 
@@ -1251,12 +1279,12 @@ function registerIpc(): void {
       // in the meantime survives it: the task planner finds whatever is still
       // outstanding when the new process comes up.
       await manager.setActiveAccel(null);
-      await startWithOverlayFallback(null, false, false);
+      await startFromSetup(null, false);
       await manager.installOverlay(gpu, runtime, (p) =>
         mainWindow?.webContents.send('install:progress', p),
       );
       await manager.setActiveAccel(gpu);
-      await startWithOverlayFallback(gpu);
+      await startFromSetup(gpu, true);
     },
   );
 

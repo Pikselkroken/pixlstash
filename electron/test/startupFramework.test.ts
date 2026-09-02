@@ -36,7 +36,7 @@ describe('the startup framework', () => {
   it('keeps the install screen to one line however many packages pip fetches', () => {
     // pip reports a line per download. Keying a row by message grew the screen
     // a line at a time; the message is the note on the one line instead.
-    assert.match(script, /const progress = \{ name: '', note: '', fraction: -1 \}/);
+    assert.match(script, /const progress = \{ name: '', note: ''/);
     assert.doesNotMatch(script, /PHASES\.push/);
   });
 
@@ -62,10 +62,26 @@ describe('the startup framework', () => {
     // the bundled runtime first, without navigating, so hashing and thumbnails
     // run through the download instead of after it.
     const commit = mainSrc.slice(mainSrc.indexOf("'setup:commit'"));
-    const startedFirst = commit.indexOf('startWithOverlayFallback(null, false, false)');
+    const startedFirst = commit.indexOf('startFromSetup(null, false)');
     const installed = commit.indexOf('manager.installOverlay(gpu');
     assert.ok(startedFirst > 0, 'the backend has to start before the download');
     assert.ok(startedFirst < installed, 'starting must come first, or nothing overlaps');
+  });
+
+  it('offers the permission repair from setup, as boot does', () => {
+    // The backend refuses a group-writable library folder. boot() knows to
+    // offer the repair; setup starts the backend itself, and without this the
+    // refusal came back as a bare rejection nobody could act on.
+    assert.match(mainSrc, /async function startFromSetup/);
+    assert.match(mainSrc, /startFromSetup\(null, false\)/);
+    assert.match(mainSrc, /if \(!isPermissionRepairRequired\(caught\)\) throw caught;/);
+  });
+
+  it('keeps a failed setup on the step that failed', () => {
+    // Dropping back to the first question hid the message on a screen that was
+    // no longer shown: an unexplained trip back to the beginning.
+    assert.match(script, /failed = true;/);
+    assert.doesNotMatch(script, /showError\([^)]*\);\s*\n\s*busy = false;\s*\n\s*go\(0\);/);
   });
 
   it('parks the privacy answer for the app instead of writing it itself', () => {

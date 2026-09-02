@@ -215,6 +215,17 @@ overlay lands it is activated and the backend restarts onto it — the planner
 picks up whatever is still outstanding — and that start is the one that
 navigates the window into the library.
 
+**A start that fails during setup is handled here, not thrown at the screen.**
+The backend refuses to run against a group-writable library folder (mode 775),
+and `boot()` has always known to offer the bounded permission repair; setup
+starts the backend itself, so it goes through `startFromSetup`, which offers the
+same repair and retries once. Declining puts the setup screen back — the answer
+to "I will not open that folder" is to choose another one — and any other
+failure leaves the install step on screen with the error under it, Back to
+change an answer and Try again to re-run the commit. It must never drop the user
+at the first question: the message lives on the install step, so a screen change
+is also a message that vanishes.
+
 Subsequent launches see the config exists → no steps to run → straight into the
 library.
 
