@@ -453,7 +453,7 @@ given a visible reason instead of controls that each fail.
 
 | `verdict` | `can_add` | Means |
 |---|---|---|
-| `attached` | `false` | This exact folder is a registered library (`library` names it) |
+| `attached` | `false` | This exact folder is a registered library (`library` names it). `picture_count` is still what is on disk, indexed or not: a desktop first run creates the vault in a folder that may already hold pictures, and the empty library asks this to know whether to offer bringing them in |
 | `overlaps` | `false` | A registered library contains it, or it contains one (`library` names it) |
 | `vault` | `true` | A vault nothing is using — `POST /libraries` attaches it |
 | `pictures` | `true` | Pictures, no vault — `POST /libraries` starts a library over them |
@@ -2128,10 +2128,11 @@ and the one gesture that moves everything. Backend design is
 3. **Drift is offered, never taken.** A picture whose folder is still true but is
    not what the layout would pick today is *not wrong*. `suggested_folder` is an
    offer the owner accepts; nothing in the product acts on it by itself. The
-   Phase 4c migration does not weaken this either — it is the owner acting, on
-   the whole library at once, and it stops exactly where `match_destination`
-   stops: **a folder of the owner's own is a permanent override and is never
-   swept into the layout**, by the rule or by the migration.
+   Phase 4c migration is the one thing that does sweep a folder of the owner's
+   own into the layout, and only because it is the owner acting, on the whole
+   library at once, after a preview and with one undo: **the rule and the drift
+   offer treat a folder of the owner's own as a permanent override; "Move them
+   now" flattens it.**
 
 ### The layout string
 
@@ -2147,8 +2148,8 @@ One field, `layout`, in the form `project/person,set`:
 
 `null` or `""` means **no layout**, which is the default and the only state in
 which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
-with nothing to file it by goes to — one safe path component, `_Inbox` when
-null. It is deliberately not the library root: the root is where an unmigrated
+with nothing to file it by goes to — one safe path component, `Unassigned`
+when null. It is deliberately not the library root: the root is where an unmigrated
 flat library lives and those files must never move.
 
 **Both PATCHes are patches, not puts.** A field you do not send keeps its stored

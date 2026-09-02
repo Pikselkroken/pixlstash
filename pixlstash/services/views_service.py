@@ -245,15 +245,37 @@ def same_root(a: Optional[str], b: Optional[str]) -> bool:
     """
     if not a or not b:
         return a == b
-    resolved = []
-    for path in (a, b):
-        absolute = os.path.abspath(path)
-        try:
-            absolute = os.path.realpath(absolute)
-        except OSError as exc:
-            logger.debug("Views: could not resolve %s: %s", path, exc)
-        resolved.append(os.path.normcase(absolute))
-    return resolved[0] == resolved[1]
+    return _resolved(a) == _resolved(b)
+
+
+def _resolved(path: str) -> str:
+    """One host path, normalised the one way this module compares them."""
+    absolute = os.path.abspath(path)
+    try:
+        absolute = os.path.realpath(absolute)
+    except OSError as exc:
+        logger.debug("Views: could not resolve %s: %s", path, exc)
+    return os.path.normcase(absolute)
+
+
+def roots_overlap(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether one views root sits **strictly inside** the other.
+
+    Publishing into a folder under the previous root - or over it - means the
+    "remove the old tree" step that runs next walks the tree just written and
+    deletes it, then reports success over an empty folder. It is the same
+    silent shape :func:`same_root` was written for, reached by containment
+    instead of by spelling, so it is refused before anything is written.
+
+    Equal roots are deliberately not an overlap: nothing is removed in that
+    case, which is exactly what :func:`same_root` is asked first.
+    """
+    if not a or not b:
+        return False
+    first, second = _resolved(a), _resolved(b)
+    if first == second:
+        return False
+    return first.startswith(second + os.sep) or second.startswith(first + os.sep)
 
 
 def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) -> None:

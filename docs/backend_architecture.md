@@ -2736,6 +2736,22 @@ descriptor before their contents are processed. Every operation is idempotent,
 so a crash between copy, stamp, archive replacement, and marker update converges
 toward redundant sanitation rather than credential loss or reintroduction.
 
+**Vault loss is read-only-validated first, then recovered only from a folder
+with content in it.** Opening a vault creates the file, so the active library's
+fingerprint is checked read-only before anything opens it
+(`prevalidate_library_fingerprint`); a stamped registration whose `vault.db` is
+gone would otherwise become an unrecognisable vault on every later start. What
+happens next depends on the folder. A folder that still holds files (a restored
+or hand-copied picture folder) is treated as an import folder: startup logs a
+warning, `LibraryRegistry.forget_vault_fingerprint` clears `vault_uuid`, a
+fresh vault is created and stamped with the library's own uuid, and the app
+opens on an empty library whose folder is full of pictures, which is what makes
+the folder-mapping wizard offer them. An *empty* folder is refused as before,
+with the attached libraries that do open named in the error and offered in an
+interactive terminal: an unmounted external drive looks exactly like an empty
+folder, and a fresh vault inside the mount point would lock the real library
+out once the drive came back.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub
@@ -3085,7 +3101,7 @@ library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
 
 | Function | Answers |
 |---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `_Inbox` — never the library root, which is where an unmigrated flat library lives. |
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
 | `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
 
 The release rests on `is_true`, and on one property of it: **a path that does
@@ -6443,26 +6459,28 @@ owner edits afterwards — and never automatic, never on import.
 That difference is one function, `library_layout.migrate_destination`, and it is
 the only new decision the phase contains. It asks `render` where the layout would
 put the picture rather than asking `_walk` whether the folder has stopped being
-true, and it keeps two of `relocate`'s properties because a second reading of the
-same tree would be a second rule: the owner's own folders below the layout travel
-rather than being flattened, and the unfiled folder is not a level to nest under.
-It answers `None` — leave it — in four cases. **Nothing files the picture**, so
-`render` would answer the unfiled folder and sweeping it into `_Inbox` would be
-movement for no gain. **It is in a folder of the owner's own**, which the layout
-owns no part of: that is the permanent override, and `migrate_destination` has
-to give the same answer `match_destination` gives or the one gesture that runs
-over the whole library would be the one that undoes every override in it — a
-picture at the *root* is not that case, because it is in no folder at all and
-overrides nothing, and it is the flat library this phase exists for. It is
-already where the layout wants it. Or its path carries `.`/`..` and is refused
-whole exactly as `is_true` refuses it.
+true, and the answer is the destination whole: nothing of the old path is kept.
+It answers `None`, leave it, in three cases. **Nothing files the picture** and
+`sweep_unfiled` is off, so `render` would answer the unfiled folder and sweeping
+it there was not asked for; with the flag on, every such picture lands in the
+unfiled folder (`Unassigned` by default), which is the owner choosing one folder
+of everything the layout has no name for over loose files left in the old date
+tree. The flag is an option on the gesture, sent with the preview and with every
+pass, not a stored setting. **It is already where the layout wants it.** Or its
+path carries `.`/`..` and is refused whole exactly as `is_true` refuses it.
 
-The unfiled folder gets its own branch above the override guard, at any depth:
-`_Inbox/2026-08` migrates to `<rendered>/2026-08`, never to
-`<rendered>/_Inbox/2026-08`. `_Inbox` is not somebody's override — it is where
-PixlStash itself put a picture nothing filed — and nesting it would leave a
-permanent unfiled folder inside a project that no later pass ever cleans up,
-because after the move `render` agrees and nothing is offered again.
+What it deliberately does *not* share with `relocate` and `match_destination` is
+the override: a folder of the owner's own stays put under the rule and under the
+drift offer, and is flattened into the layout here. The first version kept the
+override, and that made the migration a no-op on the library it exists for. A
+library filed by year and date has every picture in a folder the layout owns no
+part of, so the excuse covered all of them and "Move them now" moved nothing
+(decided 2026-09-01). The two readings of the tree are reconciled by who is
+acting: the rule runs on its own, so it must not touch what the owner arranged;
+the migration is the owner asking for exactly that, previewed, consented and one
+undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg`,
+`Unassigned/2026-08` at `<rendered>`, and two files of one name arriving at one
+folder are told apart by the suffix rule below rather than refused.
 
 Everything that touches a file is §26's: the same `_prepare_move` refusals, the
 same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`

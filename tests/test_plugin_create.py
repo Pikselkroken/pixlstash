@@ -11,6 +11,7 @@ repository would turn down for its name.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import os
 import shlex
 import shutil
@@ -20,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from pixlstash import cli, plugin_create
+from pixlstash import cli, plugin_create, plugin_install
 from pixlstash.plugin_install import CAPTIONING, IMAGE, PluginError
 
 EXAMPLE_STAMP = '''\
@@ -1256,3 +1257,168 @@ def test_the_no_gh_message_points_at_the_branch_where_it_actually_is(
     )
     with pytest.raises(PluginError, match=r"https://example\.invalid/compare"):
         plugin_create.open_pull_request(_submission(tmp_path), "Add edge_glow", "body")
+
+
+# ----------------------------------------------------------------------
+# Nothing unparseable, and nothing half-written
+# ----------------------------------------------------------------------
+
+
+#: Long enough that `_header_literal` has to wrap it, which is what makes the
+#: scaffolded plugin an example the header rewrite cannot read back with a
+#: single-line pattern.
+WRAPPING_PURPOSE = (
+    "Give every picture a soft glow around its edges, much like a bloom "
+    "filter would, without touching anything in the middle of the frame."
+)
+
+
+def test_a_plugin_scaffolded_from_a_scaffolded_plugin_still_parses(checkout):
+    """`--from` a plugin this tool made is the guaranteed break B13 named.
+
+    The first scaffold writes a wrapped `description`; the second has to
+    replace all of it rather than its opening line, or the continuation lines
+    and their `)` are left stranded in a module that will not import.
+    """
+    plugin_create.scaffold(
+        checkout,
+        "edge_glow",
+        IMAGE,
+        example="hello_world_stamp",
+        purpose=WRAPPING_PURPOSE,
+    )
+    _folder, module, _readme, _brief, warnings = plugin_create.scaffold(
+        checkout, "soft_glow", IMAGE, example="edge_glow", description="Short one."
+    )
+
+    source = module.read_text(encoding="utf-8")
+    ast.parse(source)
+    assert warnings == []
+    assert 'description = "Short one."' in source
+    # The wrapped value it replaced, gone in full rather than beheaded.
+    assert "bloom" not in source
+
+
+def test_a_quote_in_the_purpose_does_not_produce_a_broken_module(checkout):
+    """Both halves of B13 at once: a wrapped header and a quoted docstring."""
+    _folder, module, _readme, _brief, _warnings = plugin_create.scaffold(
+        checkout,
+        "edge_glow",
+        IMAGE,
+        example="hello_world_stamp",
+        purpose=f'{WRAPPING_PURPOSE} Users call it "the halo", apparently.',
+    )
+    ast.parse(module.read_text(encoding="utf-8"))
+
+
+def test_a_purpose_that_cannot_be_written_is_refused_rather_than_written(checkout):
+    """A module that will not parse is a refusal, never a reported success."""
+    with pytest.raises(PluginError, match="would not parse"):
+        plugin_create.scaffold(
+            checkout,
+            "edge_glow",
+            IMAGE,
+            example="hello_world_stamp",
+            purpose='Ends a docstring: """ and carries on.',
+        )
+
+
+def test_a_scaffold_that_fails_leaves_nothing_behind(checkout):
+    """A half-written folder holds the example's code under your plugin's name."""
+    folder = checkout / "plugins" / "image" / "edge_glow"
+    with pytest.raises(PluginError):
+        plugin_create.scaffold(
+            checkout,
+            "edge_glow",
+            IMAGE,
+            example="hello_world_stamp",
+            purpose='Ends a docstring: """ and carries on.',
+        )
+    assert not folder.exists()
+
+    # And so the retry is not refused for a folder this tool made itself.
+    _folder, module, _readme, _brief, _warnings = plugin_create.scaffold(
+        checkout, "edge_glow", IMAGE, example="hello_world_stamp", purpose="A glow."
+    )
+    assert module.exists()
+
+
+def test_a_taken_name_is_refused_before_a_branch_is_made(offline, monkeypatch):
+    """A refusal that leaves a branch behind is a refusal you have to clean up."""
+    branched: list[str] = []
+    monkeypatch.setattr(
+        plugin_create,
+        "start_branch",
+        lambda _directory, branch: branched.append(branch),
+    )
+    # Taken by the captioning plugin, so the collision is the repository-wide
+    # one rather than a folder already sitting where this would go.
+    with pytest.raises(PluginError, match="is taken"):
+        plugin_create.create("hello_world_captioner", IMAGE, directory=offline)
+    assert branched == []
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("ruff") is None, reason="needs ruff to format with"
+)
+def test_the_checks_never_rewrite_the_contributors_checkout(tmp_path, monkeypatch):
+    """`submit` is a gate in front of a push, and a gate reads.
+
+    Formatting the checkout would rewrite files the contributor owns and that
+    `commit` does not stage, before the confirmation is asked and even under
+    `--dry-run`.
+    """
+    checkout = tmp_path / "checkout"
+    (checkout / "plugins" / "image" / "edge_glow").mkdir(parents=True)
+    unrelated = checkout / "something_of_their_own.py"
+    unrelated.write_text("x   =    1\n", encoding="utf-8")
+
+    # Only the formatting check, taken from the real tuple rather than written
+    # out here: `pytest -q` on a directory that is not a repository is slow and
+    # is not what this is about.
+    monkeypatch.setattr(
+        plugin_create,
+        "CHECKS",
+        tuple(check for check in plugin_create.CHECKS if "format" in check[1]),
+    )
+    submission = plugin_create.Submission(
+        checkout,
+        IMAGE,
+        "edge_glow",
+        checkout / "plugins" / "image" / "edge_glow",
+        "add-edge_glow",
+        Path(sys.executable),
+    )
+    failed = plugin_create.run_checks(submission)
+
+    assert failed, "an unformatted checkout should fail the check"
+    assert unrelated.read_text(encoding="utf-8") == "x   =    1\n"
+
+
+def test_the_approved_resolution_is_the_one_installed(monkeypatch):
+    """B15: `pip install -r` would resolve again, free to pick other versions.
+
+    Lives here rather than beside `plugins install` because it is the second
+    half of the same refusal: `_report_dependencies` promises the user that
+    nothing they were not shown will be replaced, and only pinning what was
+    resolved keeps that promise.
+    """
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+    plugin_install.install_requirements(
+        [
+            plugin_install.DependencyChange("something", "1.0"),
+            plugin_install.DependencyChange("torch", "2.4.0", installed="2.9.0"),
+        ]
+    )
+
+    (command,) = commands
+    assert "--no-deps" in command
+    assert command[-2:] == ["something==1.0", "torch==2.4.0"]
+    # The file is never handed to pip again: reading it is a second resolution.
+    assert not any(argument == "-r" for argument in command)

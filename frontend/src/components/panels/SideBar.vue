@@ -42,6 +42,7 @@ import {
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
+import { inspectLibraryPath } from "../../api/libraries";
 import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
@@ -597,6 +598,46 @@ watch(
   },
   { immediate: true },
 );
+
+// The empty library, when its own folder is not empty. The desktop's first
+// run creates the vault in whatever folder was chosen, and the web flow's
+// "Add a library" only saves a pending entry for folders IT read, so a vault
+// made over loose pictures has nothing to bring the wizard up. The grid says
+// the library is empty; this asks the server what is on disk and opens the
+// same wizard the sidebar's row would, against the library root, as a
+// `local_import` with no read yet. Once per page load, like the auto-open
+// above: a cancelled read is saved as pending and the row offers it again.
+// The grid asks twice in one tick (`library-empty`, then `library-loaded`),
+// and App.vue holds the telemetry question on the second answer, so every
+// caller gets the one in-flight offer rather than an instant "already
+// asked": settling before the wizard had opened is what let the question
+// through on a fresh desktop library.
+let loosePicturesOffer = null;
+function offerLoosePictures() {
+  if (isReadOnly.value || mappingStore.pending) return Promise.resolve();
+  loosePicturesOffer ??= _offerLoosePictures();
+  return loosePicturesOffer;
+}
+
+async function _offerLoosePictures() {
+  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  const path = librariesStore.activeLibrary?.path;
+  if (!path || !librariesStore.canManage) return;
+  try {
+    const verdict = await inspectLibraryPath(path);
+    if (verdict?.picture_count > 0) {
+      // The read the wizard starts saves a pending entry, which the watch
+      // above would otherwise take as its cue to open the wizard again.
+      autoOpenedPendingMapping = true;
+      openFolderMappingWizard({ path, mode: "local_import" });
+    }
+  } catch (error) {
+    console.warn("Could not check the library folder for pictures", {
+      path,
+      error,
+    });
+  }
+}
 
 function pathParent(path) {
   const raw = String(path || "");
@@ -4092,6 +4133,7 @@ defineExpose({
   // "Nothing is moved" one screen earlier, so routing through the chooser would
   // have the release's headline claim falsified by the next click.
   openReferenceFolderEditor,
+  offerLoosePictures,
   startLocalImport,
   currentProjectId,
   openCurrentSelectionEditor,

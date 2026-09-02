@@ -196,9 +196,25 @@ export async function setLayoutSettings({ layout, layoutUnfiled } = {}) {
  *   - `cross_volume_count`: how many sit across a mount point inside the
  *     library and therefore **cannot be moved at all**
  *   - `skipped_counts`: every refusal by reason
+ *   - `tree`: the library's folders as this layout would draw them, one flat
+ *     row per folder as `{path, name, depth, have, arriving, leaving, is_new}`.
+ *     **Indent on the row's own `depth` and nothing else.** A folder is a row
+ *     only when one of have/arriving/leaving is non-zero, so an intermediate
+ *     folder that holds nothing and receives nothing is legitimately absent
+ *     while its child is present: depth does not step by one between
+ *     consecutive rows, and a parent may not be there to look up. Every
+ *     folder, uncapped: the list scrolls
+ *
+ * @param {{sweepUnfiled?: boolean}} options - `sweepUnfiled` counts the
+ *   pictures nothing files as moving into the unfiled folder too. Read with
+ *   the same value the run will be sent.
  */
-export async function getLayoutMigrationPreview() {
-  return unwrap(apiClient.get(`${LAYOUT_URL}/migration`));
+export async function getLayoutMigrationPreview({ sweepUnfiled = false } = {}) {
+  return unwrap(
+    apiClient.get(`${LAYOUT_URL}/migration`, {
+      params: sweepUnfiled ? { sweep_unfiled: true } : {},
+    }),
+  );
 }
 
 /**
@@ -215,13 +231,22 @@ export async function getLayoutMigrationPreview() {
  * undo puts every file back at the path it had. Omitting it starts a second
  * migration whose passes undo separately.
  *
- * @param {{afterId?: number, batchId?: string|null}} cursor
+ * @param {{afterId?: number, batchId?: string|null, sweepUnfiled?: boolean}}
+ *   cursor - `sweepUnfiled` also moves the pictures nothing files into the
+ *   unfiled folder; send the same value on every pass.
  * @returns {Promise<Object>} `{batch_id, moved_count, moved_picture_ids,
  *   examined, next_after_id, done, skipped, operation_id}`.
  */
-export async function runLayoutMigrationPass({ afterId = 0, batchId } = {}) {
-  return unwrap(apiClient.post(`${LAYOUT_URL}/migration`, {
-    after_id: afterId,
-    ...(batchId ? { batch_id: batchId } : {}),
-  }));
+export async function runLayoutMigrationPass({
+  afterId = 0,
+  batchId,
+  sweepUnfiled = false,
+} = {}) {
+  return unwrap(
+    apiClient.post(`${LAYOUT_URL}/migration`, {
+      after_id: afterId,
+      ...(batchId ? { batch_id: batchId } : {}),
+      ...(sweepUnfiled ? { sweep_unfiled: true } : {}),
+    }),
+  );
 }

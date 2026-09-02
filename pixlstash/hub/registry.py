@@ -887,6 +887,20 @@ class LibraryRegistry:
         )
         return self.get(existing.id)
 
+    def forget_vault_fingerprint(self, library: Library) -> Library:
+        """Treat a registered library whose vault file is gone as never opened.
+
+        Startup creates a fresh vault at the same path and stamps it with the
+        library's own uuid, exactly as for a folder registered without one.
+        The library keeps its uuid, so share links stay stamped for it; they
+        find nothing until pictures are imported again.
+        """
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET vault_uuid = NULL WHERE id = ?", (library.id,)
+            )
+        return self.by_uuid(library.uuid) or library
+
     def adopt_vault_fingerprint(self, library: Library) -> Library:
         """Record the fingerprint of a registered vault this hub never opened.
 

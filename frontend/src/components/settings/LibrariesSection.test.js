@@ -96,6 +96,9 @@ function mountPane() {
       stubs: {
         VIcon: true,
         VProgressCircular: true,
+        // Its own suite covers what the dialog does; here the only question is
+        // whether the menu item opens it, and on which row.
+        LibraryLayoutDialog: true,
         AppButton: {
           props: ["disabled", "loading"],
           template:
@@ -358,6 +361,7 @@ describe("switching", () => {
         stubs: {
           VIcon: true,
           VProgressCircular: true,
+          LibraryLayoutDialog: true,
           AppButton: {
             props: ["disabled", "loading"],
             template:
@@ -414,6 +418,22 @@ describe("the row menu", () => {
       "Rename…",
       "Stop using this…",
     ]);
+  });
+
+  it("offers Choose a layout on the open library only, and opens the dialog", async () => {
+    // The layout routes are `/server-config/...`, which address whichever
+    // library is *open*. On a row that is not open the item could only edit a
+    // different library's folders.
+    const wrapper = await settle(mountPane());
+
+    expect(menuItem(wrapper, "Client work", "Choose a layout…")).toBeFalsy();
+    const item = menuItem(wrapper, "Family Photos", "Choose a layout…");
+    expect(item).toBeTruthy();
+
+    const dialog = () => wrapper.findComponent({ name: "LibraryLayoutDialog" });
+    expect(dialog().props("open")).toBe(false);
+    await item.trigger("click");
+    expect(dialog().props("open")).toBe(true);
   });
 
   it("never offers to stop using the library that is open", async () => {

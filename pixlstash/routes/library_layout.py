@@ -18,7 +18,7 @@ and reversible in one undo. See ``services/layout_migration_service.py``.
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.event_types import EventType
@@ -84,7 +84,7 @@ class LayoutPatch(BaseModel):
         default=None,
         description=(
             "One safe path component for the unfiled folder; null means "
-            "`_Inbox`. It is never the library root - the root is where an "
+            "`Unassigned`. It is never the library root - the root is where an "
             "unmigrated flat library lives, and those files must never move."
         ),
     )
@@ -154,6 +154,66 @@ class MigrationSample(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class MigrationFolder(BaseModel):
+    """One folder of the library as the chosen layout would draw it.
+
+    A row is here when anything about it is non-zero, so a folder that only
+    ever holds subfolders is absent rather than listed empty. The library root
+    itself is never a row: it is the thing every `path` is relative to.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "path": "Harbour Nights/Nova",
+                "name": "Nova",
+                "depth": 1,
+                "have": 0,
+                "arriving": 34,
+                "leaving": 0,
+                "is_new": True,
+            }
+        }
+    )
+
+    path: str = Field(
+        description=(
+            "The folder, relative to the library root and `/`-joined - never "
+            "absolute, because an absolute path says where the owner keeps "
+            "their pictures. `Harbour Nights/Nova`."
+        )
+    )
+    name: str = Field(
+        description="The last component of `path`, to show: `Nova`.",
+    )
+    depth: int = Field(
+        description=(
+            "How far below the library root this sits: `0` for a top-level "
+            "folder, `1` for one nested inside it. The root has no row of its "
+            "own, so a depth of `0` is the first level the owner sees."
+        )
+    )
+    have: int = Field(
+        description="How many pictures sit in this folder today, before any move."
+    )
+    arriving: int = Field(
+        description="How many pictures the migration would move **into** it."
+    )
+    leaving: int = Field(
+        description=(
+            "How many it would move **out** of it. A folder can be both: one "
+            "picture arrives as another leaves."
+        )
+    )
+    is_new: bool = Field(
+        description=(
+            "True when the folder is not on disk yet and the migration would "
+            "create it. A folder left empty by the move is kept, never deleted, "
+            "so the opposite never happens."
+        )
+    )
+
+
 class MigrationPreviewResponse(BaseModel):
     status: str = "success"
     layout: Optional[str] = Field(
@@ -189,11 +249,26 @@ class MigrationPreviewResponse(BaseModel):
             "a whole library would otherwise be a listing of it."
         ),
     )
+    tree: list[MigrationFolder] = Field(
+        default_factory=list,
+        description=(
+            "The library as this layout would draw it, one row per folder, so "
+            "the shape can be seen before it is agreed to. **Every folder**, "
+            "not a sample: a library filed by date has hundreds of folders "
+            "leaving, and each one is a row the owner may need to check. "
+            "**Ordered by path**, so a parent listed here comes immediately "
+            "before its children and the tree can be drawn by indenting on "
+            "`depth`. A parent can be missing from it: a folder that only ever "
+            "holds subfolders has nothing to count and is not a row."
+        ),
+    )
 
 
 class MigrationRunRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"after_id": 0, "batch_id": None}}
+        json_schema_extra={
+            "example": {"after_id": 0, "batch_id": None, "sweep_unfiled": False}
+        }
     )
 
     after_id: int = Field(
@@ -212,6 +287,15 @@ class MigrationRunRequest(BaseModel):
             "undo. Compose one and it is refused: the value has to be in "
             "this feature's own `srv-layout-migration-` namespace, so a "
             "migration's passes can never join another gesture's undo unit."
+        ),
+    )
+    sweep_unfiled: bool = Field(
+        default=False,
+        description=(
+            "Also move the pictures the layout cannot place - nothing files "
+            "them - into the unfiled folder (`layout_unfiled`). Off, they stay "
+            "wherever they are. Send the same value on every pass of one "
+            "migration, and the value the preview was read with."
         ),
     )
 
@@ -347,15 +431,33 @@ def create_router(server) -> APIRouter:
             "**cannot be moved at all**, because the destination claim refuses "
             "to cross a device. `skipped_counts` is every refusal by reason, "
             "that one included.\n\n"
-            "Two kinds of picture are in none of those counts and do not move: "
-            "one the layout cannot place, because nothing files it, and one in "
-            "a folder of the owner's own, which contradicts nothing and is a "
-            "permanent override. Moving either would be movement for no gain."
+            "`tree` is the same answer drawn rather than counted: one row per "
+            "folder, with what it holds now, what would arrive, what would "
+            "leave, and whether it exists yet. Path-ordered so it can be drawn "
+            "by indenting on `depth`.\n\n"
+            "A picture the layout cannot place, because nothing files it, is in "
+            "none of those counts and does not move unless `sweep_unfiled` is "
+            "true, which puts every one of them in the unfiled folder "
+            "(`layout_unfiled`). Everything else lands exactly where the layout "
+            "says, folders of the owner's own included: the automatic rule "
+            "leaves those alone, the migration flattens them. Two files of one "
+            "name meeting in one folder are suffixed, never overwritten."
         ),
         response_model=MigrationPreviewResponse,
     )
-    def preview_layout_migration(request: Request):
-        return MigrationPreviewResponse(**preview_migration(server.vault))
+    def preview_layout_migration(
+        request: Request,
+        sweep_unfiled: bool = Query(
+            default=False,
+            description=(
+                "Count the pictures nothing files as moving into the unfiled "
+                "folder too. Read with the same value the `POST` will be sent."
+            ),
+        ),
+    ):
+        return MigrationPreviewResponse(
+            **preview_migration(server.vault, sweep_unfiled=sweep_unfiled)
+        )
 
     @router.post(
         "/server-config/layout/migration",
@@ -396,7 +498,12 @@ def create_router(server) -> APIRouter:
         # The gesture is this migration, not whatever the client was already
         # grouping: overriding the header is what keeps every pass in one undo.
         context["batch_id"] = batch_id
-        result = run_migration_pass(server.vault, after_id=body.after_id, **context)
+        result = run_migration_pass(
+            server.vault,
+            after_id=body.after_id,
+            sweep_unfiled=body.sweep_unfiled,
+            **context,
+        )
         if result["moved_picture_ids"]:
             server.vault.notify(
                 EventType.CHANGED_PICTURES,

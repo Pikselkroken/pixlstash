@@ -19,6 +19,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
+import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
@@ -137,6 +138,18 @@ const gridWrapperRef = ref(null);
 const shortcutsDialogOpen = ref(false);
 const telemetryConsentOpen = ref(false);
 const telemetryConsentIsUpgrade = ref(false);
+// Initial setup comes first: the telemetry question waits until the library
+// has been counted and any folder-mapping wizard (a pending mapping, or the
+// first-run offer to import the pictures already in the folder) is closed.
+const librarySettled = ref(false);
+const mappingStore = useFolderMappingStore();
+const telemetryConsentVisible = computed(
+  () =>
+    telemetryConsentOpen.value &&
+    librarySettled.value &&
+    !mappingStore.wizardOpen &&
+    !mappingStore.pending,
+);
 const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
 const installType = ref("pip");
@@ -344,6 +357,17 @@ function openSettingsDialog(tab = "") {
  */
 function openAddReferenceFolder() {
   sidebarRef.value?.openReferenceFolderEditor?.();
+}
+
+/** The library is empty: let the sidebar ask whether its folder is. */
+function offerLoosePictures() {
+  return sidebarRef.value?.offerLoosePictures?.();
+}
+
+/** The first count is in; an empty library gets its import offer first. */
+async function onLibraryLoaded({ empty }) {
+  if (empty) await offerLoosePictures();
+  librarySettled.value = true;
 }
 
 // ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
@@ -626,7 +650,7 @@ defineExpose({
         </Transition>
 
         <TelemetryConsentDialog
-          :open="telemetryConsentOpen"
+          :open="telemetryConsentVisible"
           :is-upgrade="telemetryConsentIsUpgrade"
           :update-checks-enabled="userPrefsStore.checkForUpdates === true"
           :version="appVersion"
@@ -730,6 +754,8 @@ defineExpose({
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
                 @choose-folder="openAddReferenceFolder"
+                @library-empty="offerLoosePictures"
+                @library-loaded="onLibraryLoaded"
                 @confirm-export-zip="confirmExportZip"
                 @confirm-export-folder="confirmExportFolder"
               />

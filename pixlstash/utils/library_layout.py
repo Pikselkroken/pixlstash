@@ -120,7 +120,7 @@ class Layout:
     """
 
     segments: tuple[tuple[Facet, ...], ...]
-    unfiled: str = "_Inbox"
+    unfiled: str = "Unassigned"
 
     def __post_init__(self) -> None:
         if self.unfiled != folder_name(self.unfiled):
@@ -424,10 +424,7 @@ def match_destination(
 
 
 def migrate_destination(
-    folder: str,
-    facets: FacetValues,
-    layout: Layout,
-    known_names: FacetVocabulary,
+    folder: str, facets: FacetValues, layout: Layout, *, sweep_unfiled: bool = False
 ) -> str | None:
     """Where the whole-library migration puts a picture, or ``None`` to leave it.
 
@@ -435,65 +432,48 @@ def migrate_destination(
     that rule a flat library parses against nothing, can never be false, and
     never moves - which is exactly why old libraries need no migration. This is
     the owner asking for something else: *make it all match, now.* So it does
-    not ask whether the folder is still true; it asks where the layout would put
-    the picture, and answers that.
+    not read the folder at all; it asks where the layout would put the picture,
+    and answers that.
 
-    Two things it keeps from :func:`relocate`, because a second reading of the
-    same tree would be a second rule:
+    **Every picture lands exactly where ``render`` says, with nothing of its old
+    path kept.** A library arranged by year and date, which is what most
+    libraries are before they have a layout, goes to ``Nordvik/Mira``, not to
+    ``Nordvik/Mira/2024/2024-08-15``. The date tree was the arrangement the
+    layout replaces, so carrying it across would keep the thing the owner
+    pressed the button to be rid of; and a folder of the owner's own is not an
+    override here, because the whole point of the gesture is that nothing is.
+    Two files of one name from two old folders therefore meet, which is what
+    the migration's suffix rule is for (decided once, 2026-09-01; the rule's
+    own moves still carry the tail and still refuse a taken name).
 
-    * **The owner's own folders below the layout travel.** ``2024 Shoots/Mira/
-      2026-08`` migrates to ``<rendered>/2026-08``, never flattened. The walk
-      decides where the layout's part of the path ends, exactly as it does for
-      a move.
-    * **The unfiled folder is not a level**, at any depth. A picture in
-      ``_Inbox`` that now has a project goes to the project, and one in
-      ``_Inbox/2026-08`` goes to ``<rendered>/2026-08`` - never to
-      ``<rendered>/_Inbox/2026-08``, which would leave a permanent unfiled
-      folder inside a project that no later pass ever cleans up.
+    Args:
+        sweep_unfiled: Also move the pictures nothing files into
+            ``layout.unfiled``. Off, they stay wherever they are; on, the
+            owner has asked for one folder of everything the layout could not
+            place, which is the difference between a tidy tree and a tree
+            with a few thousand loose files still in the old date folders.
 
     Returns:
         A ``/``-separated relative folder, or ``None`` when the picture stays
-        where it is - which is four cases:
+        where it is - which is three cases:
 
-        * **The layout cannot place it.** Nothing files it, so ``render`` would
-          answer the unfiled folder. Sweeping it into ``_Inbox`` would be
-          movement for no gain: it already contradicts nothing.
-        * **It is in a folder of the owner's own.** The layout owns no part of
-          the path, which is a **permanent override** - the same answer
-          :func:`match_destination` gives for the same reason, and it has to be
-          the same answer here or the one gesture that runs over the whole
-          library would be the one that undoes every override in it. A picture
-          at the root itself is not this case: it is in no folder at all, which
-          overrides nothing, and it is the flat library this phase exists for.
+        * **The layout cannot place it**, and *sweep_unfiled* is off. Nothing
+          files it, so ``render`` would answer the unfiled folder, and
+          sweeping it there was not asked for.
         * It is already where the layout would put it.
         * The folder is a path the layout cannot read at all - one carrying
           ``.`` or ``..`` - which is refused whole here as it is everywhere
           else in this module.
     """
     placed = render(facets, layout)
-    if placed == layout.unfiled:
+    if placed == layout.unfiled and not sweep_unfiled:
         return None
     components = _components(folder)
     if folder and not components:
         # ``.``/``..`` - refused whole rather than tidied up, exactly as
-        # :func:`is_true` refuses it. Rewriting the prefix of a path the layout
-        # cannot read would drop the tail it could not parse.
+        # :func:`is_true` refuses it.
         return None
-    if components and _match_key(components[0]) == _match_key(layout.unfiled):
-        # The unfiled folder is not somebody's override - it is where PixlStash
-        # itself put the picture when nothing filed it. Something files it now,
-        # so the folder goes and whatever the owner built under it travels.
-        # Its own branch, and above the override guard below, because the tail
-        # of an unfiled path is by definition not one the layout owns.
-        destination = "/".join((placed, *components[1:]))
-        return None if _components(destination) == components else destination
-    _, owned = _walk(components, facets, layout, known_names)
-    if components and owned == 0:
-        # A folder of the owner's own, contradicting nothing: the permanent
-        # override, and the same answer ``match_destination`` gives.
-        return None
-    destination = "/".join((placed, *components[owned:]))
-    return None if _components(destination) == components else destination
+    return None if _components(placed) == components else placed
 
 
 # ---------------------------------------------------------------------------
@@ -728,7 +708,7 @@ def format_layout(layout: Layout) -> str:
     )
 
 
-def parse_layout(text: str | None, unfiled: str = "_Inbox") -> Layout | None:
+def parse_layout(text: str | None, unfiled: str = "Unassigned") -> Layout | None:
     """Return the layout *text* describes, or ``None`` for "this root has none".
 
     ``None`` and the empty string both mean no layout, which is the default and
