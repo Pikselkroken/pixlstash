@@ -436,6 +436,19 @@ same tick, and a second call that returned at once (already offered) settled
 the library before the path had even been inspected, so the dialog came up
 under the wizard anyway.
 
+**The first frame's theme is remembered, not guessed.** The theme a person
+chose lives on their user record, a round trip away, so everything painted
+before that answer lands is painted in whatever `createVuetify`'s
+`defaultTheme` says. That default is **dark** - it matches the desktop shell the
+window opens from, and a picture is looked at against a dark canvas - which left
+someone who had chosen light watching one frame of dark first.
+`utils/themeMemory.js` closes it: App.vue's theme watcher writes the mode it
+just applied to `localStorage`, and `main.js` reads it back to pick
+`defaultTheme` before the app mounts. It is a cache of a decision made
+elsewhere and never the decision itself - a stale or unreadable value costs one
+repaint and nothing else - so a blocked `localStorage` simply falls back to the
+default, and the stored `theme_mode` still wins the moment the config arrives.
+
 **On desktop the privacy question is not this dialog's to ask.** The shell's
 startup framework (`electron/src/renderer/setup.html` / `setup.js`) asks it
 before the app loads, as one of the steps that launch needed, and parks the
