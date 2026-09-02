@@ -5,10 +5,6 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from pixlstash.db_models.tag_prediction import (
-    qualify_plugin_model_version,
-    UNKNOWN_MODEL_VERSION,
-)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import merge_video_frame_tags
@@ -93,6 +89,14 @@ class TaggingWorkflow:
         Returns:
             The version string, ``'unknown'`` when nothing can say.
         """
+        # Imported here, not at module scope: this is an inference module and
+        # pulling a db_models table in at import time is the only such edge in
+        # the package. It also reorders native library loading on Windows.
+        from pixlstash.db_models.tag_prediction import (
+            qualify_plugin_model_version,
+            UNKNOWN_MODEL_VERSION,
+        )
+
         active = self.active_plugin_name(engine_override)
         if not active:
             return UNKNOWN_MODEL_VERSION
