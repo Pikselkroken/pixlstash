@@ -1,7 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import DeletedFileLog, Picture
@@ -152,88 +151,86 @@ class MissingFilePurgeTask(BaseTask):
 
         Returns ``(repairs, deferred_count, still_missing)``.
         """
-        by_path: dict = {}
-        for pic in candidates:
-            if pic.file_path:
-                by_path.setdefault(pic.file_path, []).append(pic)
-        if not by_path:
+        by_id: dict = {pic.id: pic for pic in candidates if pic.file_path}
+        if not by_id:
             return [], 0, candidates
 
-        rows = self._db.run_immediate_read_task(self._load_move_journal, list(by_path))
+        rows = self._db.run_immediate_read_task(self._load_move_journal, list(by_id))
         if not rows:
             return [], 0, candidates
 
-        # The far end of the newest move recorded for each path.
+        # The far end of the newest move recorded for each picture. Matched on
+        # the picture id *and* the path: rows outlive their move by
+        # ``RETENTION_S``, and a later picture that reuses the path must not be
+        # repointed at wherever the earlier one went.
         other_end: dict = {}
         stamped: dict = {}
         for row in rows:
+            pic = by_id.get(row.picture_id)
+            if pic is None:
+                continue
             for here, there in (
                 (row.old_path, row.new_path),
                 (row.new_path, row.old_path),
             ):
-                if here not in by_path:
+                if here != pic.file_path:
                     continue
-                if here in stamped and stamped[here] >= row.moved_at:
+                if pic.id in stamped and stamped[pic.id] >= row.moved_at:
                     continue
-                stamped[here] = row.moved_at
-                other_end[here] = there
+                stamped[pic.id] = row.moved_at
+                other_end[pic.id] = there
 
         image_root = self._db.image_root
         repairs: list = []
         deferred = 0
         still_missing: list = []
-        for path, pictures in by_path.items():
-            landed_path = other_end.get(path)
+        for pic in candidates:
+            landed_path = other_end.get(pic.id)
             if landed_path is None:
-                still_missing.extend(pictures)
+                still_missing.append(pic)
                 continue
             try:
                 landed = ImageUtils.resolve_picture_path(image_root, landed_path)
             except Exception as exc:
                 logger.warning(
-                    "MissingFilePurgeTask: picture(s) at %s have a move journal "
+                    "MissingFilePurgeTask: picture %s at %s has a move journal "
                     "row pointing at %s, which could not be resolved (%s). "
-                    "Leaving them alone rather than purging.",
-                    path,
+                    "Leaving it alone rather than purging.",
+                    pic.id,
+                    pic.file_path,
                     landed_path,
                     exc,
                 )
-                deferred += len(pictures)
+                deferred += 1
                 continue
             if os.path.isfile(landed):
-                repairs.extend((pic.id, landed_path) for pic in pictures)
+                repairs.append((pic.id, landed_path))
                 continue
-            deferred += len(pictures)
+            deferred += 1
             logger.warning(
-                "MissingFilePurgeTask: SKIPPING %s picture(s) at %s - PixlStash "
+                "MissingFilePurgeTask: SKIPPING picture %s at %s - PixlStash "
                 "recorded a move between that path and %s, and neither holds a "
                 "file. Not purging: an operation still in flight must not be "
                 "read as a deletion. The journal row expires on its own if it "
                 "never completes.",
-                len(pictures),
-                path,
+                pic.id,
+                pic.file_path,
                 landed_path,
             )
         return repairs, deferred, still_missing
 
     @staticmethod
-    def _load_move_journal(session: Session, paths: list) -> list:
-        """Load unexpired journal rows naming any of *paths* at either end."""
+    def _load_move_journal(session: Session, picture_ids: list) -> list:
+        """Load unexpired journal rows for any of *picture_ids*."""
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             seconds=RETENTION_S
         )
         rows: list = []
-        for chunk in chunked(paths):
-            batch = list(chunk)
+        for chunk in chunked(picture_ids):
             rows.extend(
                 session.exec(
                     select(PictureMove)
-                    .where(
-                        or_(
-                            PictureMove.old_path.in_(batch),
-                            PictureMove.new_path.in_(batch),
-                        )
-                    )
+                    .where(PictureMove.picture_id.in_(list(chunk)))
                     .where(PictureMove.moved_at >= cutoff)
                 ).all()
             )

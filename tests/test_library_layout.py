@@ -2452,6 +2452,35 @@ def test_a_file_the_owner_really_deleted_is_still_purged(library):
     assert [row.file_removed for row in logged] == [True]
 
 
+def test_another_pictures_journal_row_at_the_same_path_is_not_repair_evidence(
+    library,
+):
+    """Journal rows outlive their move by RETENTION_S, and a path can be reused
+    in that window: the engine moved picture A out of `0005.png`, a later
+    import put picture B at `0005.png`, and the owner then deleted B. Matched
+    on path alone, A's row would repoint B at A's file. B is a deletion."""
+    session, root = library["session"], library["root"]
+    earlier = _plant(library, "2024 Shoots/Mira/0005.png")
+    later = _plant(library, "0005.png")
+    os.remove(os.path.join(root, "0005.png"))
+    session.add(
+        PictureMove(
+            picture_id=earlier,
+            old_path="0005.png",
+            new_path="2024 Shoots/Mira/0005.png",
+            consumed=True,
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [later])
+
+    assert result["purged"] == 1
+    assert result["repaired"] == 0
+    assert session.get(Picture, later) is None
+    assert session.get(Picture, earlier).file_path == "2024 Shoots/Mira/0005.png"
+
+
 def test_a_move_still_in_flight_is_deferred_rather_than_purged(library):
     """A journal row whose other end holds no file either. Something is mid
     flight, or the move failed after the intent was committed; neither is a
