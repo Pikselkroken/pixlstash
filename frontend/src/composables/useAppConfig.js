@@ -87,7 +87,7 @@ export function useAppConfig({
     show_problem_icon: true,
     expand_all_stacks: true,
     date_format: "locale",
-    theme_mode: "light",
+    theme_mode: "dark",
     stack_strictness: 0.92,
   });
 

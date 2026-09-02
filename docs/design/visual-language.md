@@ -250,8 +250,10 @@ and (unchanged in value, now correct in ratio) `on-secondary`.
 
 - **Light theme: barely.** `accent` drops 4 points of HSL lightness, `tertiary` 5.
   Side by side you can see it; from memory you cannot. `primary` and `secondary` — the
-  two most-used fills in the light theme, which is the default theme — **do not move at
-  all.** The light theme is effectively unchanged.
+  two most-used fills in the light theme — **do not move at
+  all.** The light theme is effectively unchanged. (It was the default theme when
+  this was measured; dark is the default now, which raises the stakes of the
+  dark-theme paragraph below rather than changing any value in it.)
 - **Dark theme: visibly.** `accent` drops 21 points of lightness (`#f28f3b` bright
   orange → `#b85c0c` burnt amber) and `primary` 8. This is the real cost, and it is the
   most visible colour change in the product: dark-mode chrome that was lit by a bright

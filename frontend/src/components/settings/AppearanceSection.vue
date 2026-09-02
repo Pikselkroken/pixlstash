@@ -14,7 +14,7 @@ const sidebarStore = useSidebarStore();
 
 const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
-  themeMode: { type: String, default: "light" },
+  themeMode: { type: String, default: "dark" },
   dateFormat: { type: String, default: "locale" },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },
@@ -103,10 +103,10 @@ const dateFormatModel = computed({
 });
 
 const themeModeModel = computed({
-  get: () => props.themeMode ?? "light",
+  get: () => props.themeMode ?? "dark",
   set: (value) => {
-    const nextValue = value ?? "light";
-    if (nextValue === (props.themeMode ?? "light")) return;
+    const nextValue = value ?? "dark";
+    if (nextValue === (props.themeMode ?? "dark")) return;
     emit("update:theme-mode", nextValue);
   },
 });

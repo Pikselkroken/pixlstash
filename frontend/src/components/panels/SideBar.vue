@@ -1866,8 +1866,8 @@ const dateFormatModel = computed({
 });
 
 const themeModeModel = computed({
-  get: () => userPrefsStore.themeMode ?? "light",
-  set: (value) => userPrefsStore.setThemeMode(value ?? "light"),
+  get: () => userPrefsStore.themeMode ?? "dark",
+  set: (value) => userPrefsStore.setThemeMode(value ?? "dark"),
 });
 
 const showKeyboardHintModel = computed({

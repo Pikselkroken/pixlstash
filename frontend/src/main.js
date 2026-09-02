@@ -256,7 +256,10 @@ const pixlStashDark = {
 
 const vuetify = createVuetify({
   theme: {
-    defaultTheme: "pixlStashLight",
+    // Dark is the default: PixlStash is a picture app, and a dark canvas is
+    // what a photograph is looked at against. A stored `theme_mode` (every
+    // existing library has one) still wins the moment the config lands.
+    defaultTheme: "pixlStashDark",
     themes: {
       pixlStashLight,
       pixlStashDark,
