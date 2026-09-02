@@ -1298,11 +1298,13 @@ input[type="text"]:focus-visible,
   opacity: 1;
 }
 
+/* The files are already cropped to this frame's ratio and to the part of the
+   screen worth showing, so the fit has nothing left to choose. */
 .slide img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: top left;
+  object-position: center;
   display: block;
 }
 
