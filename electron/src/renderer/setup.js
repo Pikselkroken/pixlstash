@@ -303,16 +303,37 @@ function renderVerdict() {
   }
 
   if (inspection.isLibrary) {
+    // A vault.db proves a library was made here, not that anything is in it.
+    // Prefer what the library itself says; fall back to the walk when it could
+    // not be read.
+    const inLibrary = inspection.library ? inspection.library.pictures : inspection.pictureCount;
+    if (!inLibrary) {
+      setVerdict({
+        tone: 'warn',
+        mark: LOGO,
+        titleHtml: `${WORDMARK} library found here, and it is empty`,
+        sub: 'Nothing has ever been added to it. Open it anyway, or choose the folder your pictures are actually in.',
+        stats: [['0', 'Pictures'], ...free],
+      });
+      return;
+    }
     setVerdict({
       tone: 'ok',
       mark: LOGO,
       titleHtml: `${WORDMARK} library found here`,
       sub: 'Tags, people and scores come back with it. Nothing is re-imported.',
-      stats: [
-        [count(inspection.pictureCount) + (inspection.truncated ? '+' : ''), 'Pictures'],
-        [humanBytes(inspection.pictureBytes), 'On disk'],
-        ...free,
-      ],
+      stats: inspection.library
+        ? [
+            [count(inspection.library.pictures), 'Pictures'],
+            [count(inspection.library.people), 'People'],
+            [count(inspection.library.tags), 'Tags'],
+            ...free,
+          ]
+        : [
+            [count(inspection.pictureCount) + (inspection.truncated ? '+' : ''), 'Pictures'],
+            [humanBytes(inspection.pictureBytes), 'On disk'],
+            ...free,
+          ],
     });
     return;
   }

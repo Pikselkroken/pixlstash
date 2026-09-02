@@ -1119,7 +1119,9 @@ function registerIpc(): void {
   // What is in the folder someone picked, for the verdict under the field: a
   // library PixlStash made before, a folder of pictures, or nothing yet. Read
   // only, and bounded - see InspectFolder.
-  ipcMain.handle('setup:inspect', async (_e, path?: string) => inspectFolder(path || ''));
+  ipcMain.handle('setup:inspect', async (_e, path?: string) =>
+    inspectFolder(path || '', bundledInterpreter()),
+  );
 
   ipcMain.handle('setup:pickFolder', async (_e, current?: string) => {
     const res = await dialog.showOpenDialog({

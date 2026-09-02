@@ -1,6 +1,16 @@
+import { execFile } from 'node:child_process';
 import { opendir, stat, statfs } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileP = promisify(execFile);
+
+export type ExecRunner = (
+  file: string,
+  args: string[],
+  options: { timeout: number },
+) => Promise<{ stdout: string; stderr: string }>;
 
 /** What the startup screen says about the folder someone picked. */
 export type FolderInspection = {
@@ -14,6 +24,14 @@ export type FolderInspection = {
   truncated: boolean;
   /** Free space on the drive the folder is (or would be) on. */
   freeBytes: number;
+  /**
+   * What the library itself holds, when there is one. **A `vault.db` alone
+   * proves nothing about content**: a library made and never filled has one,
+   * and reporting only "library found" over it is how someone opens an empty
+   * library believing they opened their pictures. `null` when there is no
+   * vault, or when it could not be read (the walk's numbers stand instead).
+   */
+  library: { pictures: number; people: number; tags: number } | null;
 };
 
 /**
@@ -76,12 +94,50 @@ async function freeSpaceFor(dir: string): Promise<number> {
 }
 
 /**
+ * Ask the library itself what it holds. Read-only (`mode=ro`), through the
+ * bundled interpreter that is already used to locate a standalone config, and
+ * best-effort: a vault that cannot be read leaves the caller with the walk's
+ * own numbers rather than an error the user cannot act on.
+ */
+export async function readVaultCounts(
+  interpreter: string,
+  vaultPath: string,
+  run: ExecRunner = execFileP,
+): Promise<{ pictures: number; people: number; tags: number } | null> {
+  const script =
+    'import json,sqlite3,sys,urllib.parse\n' +
+    'db = sqlite3.connect("file:" + urllib.parse.quote(sys.argv[1]) + "?mode=ro", uri=True)\n' +
+    'def n(sql):\n'
+    + '    try: return db.execute(sql).fetchone()[0]\n'
+    + '    except Exception: return 0\n' +
+    'print(json.dumps({"pictures": n("select count(*) from picture"), '
+    + '"people": n("select count(*) from character"), '
+    + '"tags": n("select count(*) from tag")}))';
+  try {
+    const { stdout } = await run(interpreter, ['-c', script, vaultPath], { timeout: 8000 });
+    const parsed = JSON.parse(stdout.trim());
+    return {
+      pictures: Number(parsed.pictures) || 0,
+      people: Number(parsed.people) || 0,
+      tags: Number(parsed.tags) || 0,
+    };
+  } catch (e) {
+    console.warn(`setup: could not read the library at ${vaultPath}:`, e);
+    return null;
+  }
+}
+
+/**
  * Read what is in a folder, for the verdict under the startup screen's folder
  * field. Never writes, never follows symlinks out of the tree, and gives up on
  * directories it cannot read rather than failing the whole answer: a picture
  * folder with one unreadable subfolder still has pictures in it.
  */
-export async function inspectFolder(dir: string): Promise<FolderInspection> {
+export async function inspectFolder(
+  dir: string,
+  interpreter?: string,
+  run: ExecRunner = execFileP,
+): Promise<FolderInspection> {
   const target = (dir || '').trim();
   const result: FolderInspection = {
     exists: false,
@@ -90,11 +146,16 @@ export async function inspectFolder(dir: string): Promise<FolderInspection> {
     pictureBytes: 0,
     truncated: false,
     freeBytes: await freeSpaceFor(target),
+    library: null,
   };
   if (!target || !existsSync(target)) return result;
 
   result.exists = true;
-  result.isLibrary = existsSync(join(target, 'vault.db'));
+  const vault = join(target, 'vault.db');
+  result.isLibrary = existsSync(vault);
+  if (result.isLibrary && interpreter) {
+    result.library = await readVaultCounts(interpreter, vault, run);
+  }
 
   const deadline = Date.now() + MAX_MS;
   const queue: string[] = [target];

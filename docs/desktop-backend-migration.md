@@ -174,7 +174,12 @@ The steps that exist today:
    `src/setup/InspectFolder.ts`, a bounded read-only walk): a PixlStash library
    (a `vault.db` is there, and it is announced with the padlock and the
    wordmark), a folder of pictures with its count and size, or nothing yet,
-   which refuses and points at "start empty". Free space is shown in every
+   which refuses and points at "start empty". **A vault proves a library was
+   made here, not that anything is in it**, so the counts come from the library
+   itself — a read-only `sqlite3` query through the bundled interpreter — and a
+   library with nothing in it says so ("…and it is empty") instead of reading as
+   somebody's pictures. An unreadable vault falls back to the walk's own numbers
+   rather than inventing any. Free space is shown in every
    state. If a standalone pip/Docker config is found (`setup:probe`, via the
    backend's own platformdirs) its `image_root` is the default for the "already
    have" answer, and its identity consent panel appears under the field when the
