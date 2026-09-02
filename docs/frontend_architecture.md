@@ -422,6 +422,16 @@ one (`canManage` false), or while an entry is already pending. The wizard's
 "Drop this, organise later" commits with no assignments when the library
 already exists rather than trying to add it again.
 
+**Initial setup comes before the telemetry question.** `useAppConfig` asks
+for the consent dialog as soon as the config says it was never answered, which
+on a first run is before the library has even been counted, so the privacy
+dialog came up first and the import wizard opened over it. `ImageGrid` also
+emits `library-loaded` `{ empty }` when the first count lands; App.vue awaits
+the loose-picture offer for an empty library, then marks the library settled,
+and `TelemetryConsentDialog` is shown only once that is true and no mapping
+wizard is open or pending. The request itself is kept, so the dialog appears
+the moment the wizard closes.
+
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import
 them automatically"* — which copies files in, and the button that reaches it

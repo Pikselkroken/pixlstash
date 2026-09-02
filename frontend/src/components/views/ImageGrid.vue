@@ -1411,6 +1411,7 @@ const emit = defineEmits([
   // The empty library was shown. The sidebar checks whether the library's own
   // folder holds pictures nothing has indexed and offers to bring them in.
   "library-empty",
+  "library-loaded",
 ]);
 
 // Props
@@ -6794,6 +6795,13 @@ const showLibraryEmptyState = computed(
 
 watch(showLibraryEmptyState, (shown) => {
   if (shown) emit("library-empty");
+});
+
+// The first count answers whether this is a first run. App.vue holds the
+// telemetry question until it knows, so a fresh install meets the library
+// before it meets the privacy dialog.
+watch(totalAllPicturesCountLoaded, (loaded) => {
+  if (loaded) emit("library-loaded", { empty: showLibraryEmptyState.value });
 });
 
 /**
