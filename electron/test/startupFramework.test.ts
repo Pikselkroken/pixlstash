@@ -33,18 +33,28 @@ describe('the startup framework', () => {
     );
   });
 
-  it('keeps the install screen to one line however many packages pip fetches', () => {
+  it('has a fixed set of lines, however many packages pip fetches', () => {
     // pip reports a line per download. Keying a row by message grew the screen
-    // a line at a time; the message is the note on the one line instead.
-    assert.match(script, /const progress = \{ name: '', note: ''/);
-    assert.doesNotMatch(script, /PHASES\.push/);
+    // a line at a time; the lines are decided from the answers up front and a
+    // message is the note on the line it belongs to.
+    assert.match(script, /function planLines\(useGpu\)/);
+    assert.match(script, /setLine\('runtime', \{/);
+    assert.doesNotMatch(script, /lines\.push\(\{ id: message/);
+  });
+
+  it('shows the reading and the download as two lines, not one overwriting the other', () => {
+    // The whole point of starting the server before the download is that they
+    // run at once; one line replacing the other hides it.
+    assert.match(script, /id: 'server', name: 'Preparing your library'/);
+    assert.match(script, /p\.phase === 'reading'/);
+    assert.match(mainSrc, /sendPhase\(\{ phase: 'reading' \}\)/);
   });
 
   it('reserves three lines for the installer’s own line, whatever its length', () => {
     // pip's line runs from "numpy" to a wrapped wheel filename, and a row that
     // grows with it walks the bar up and down the screen while you watch.
     const styles = readFileSync(join(rendererDir, 'styles.css'), 'utf8');
-    assert.match(styles, /\.phase \.pnote \{[^}]*min-height: 4\.35em/s);
+    assert.match(styles, /\.phase--notes \.pnote \{[^}]*min-height: 4\.35em/s);
     assert.match(styles, /\.phase \.pnote \{[^}]*-webkit-line-clamp: 3/s);
   });
 

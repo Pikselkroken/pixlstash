@@ -1153,12 +1153,17 @@ input[type="text"]:focus-visible,
   font-weight: 400;
   line-height: 1.45;
   color: rgba(242, 229, 218, 0.45);
-  min-height: 4.35em;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
+}
+
+/* Only the installer's line reserves the three; a line with nothing to say
+   would otherwise sit on three blank ones. */
+.phase--notes .pnote {
+  min-height: 4.35em;
 }
 
 .phase .bar {

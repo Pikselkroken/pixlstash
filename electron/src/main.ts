@@ -1280,6 +1280,10 @@ function registerIpc(): void {
       // outstanding when the new process comes up.
       await manager.setActiveAccel(null);
       await startFromSetup(null, false);
+      // The server is up, so the library is being read from here on. The setup
+      // screen has no other way to know: the reading is the backend's own work
+      // and reports nothing through the install channel.
+      sendPhase({ phase: 'reading' });
       await manager.installOverlay(gpu, runtime, (p) =>
         mainWindow?.webContents.send('install:progress', p),
       );
