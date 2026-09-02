@@ -66,6 +66,10 @@
   cannot span two drives, so a library split across disks gets the folders it
   can make and a list of the ones it could not, rather than a silently
   incomplete tree.
+- Update the transformers library, which captioning and search embeddings run
+  on, to 5.12.1, picking up an upstream fix for a path traversal in its
+  `save_pretrained` writer that is rated high. This release carries no security
+  tag: PixlStash never calls that writer, so no installed version was exposed.
 
 # [1.10.1]
 
