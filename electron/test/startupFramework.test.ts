@@ -67,23 +67,12 @@ describe('the startup framework', () => {
     assert.match(script, /detectedLegacyIdentitySource \|\| defaults\.existingRoot \|\| ''/);
   });
 
-  it('reads the library while the GPU runtime downloads', () => {
-    // Network and disk have nothing to say to each other: the backend starts on
-    // the bundled runtime first, without navigating, so hashing and thumbnails
-    // run through the download instead of after it.
-    const commit = mainSrc.slice(mainSrc.indexOf("'setup:commit'"));
-    const startedFirst = commit.indexOf('startFromSetup(null, false)');
-    const installed = commit.indexOf('manager.installOverlay(gpu');
-    assert.ok(startedFirst > 0, 'the backend has to start before the download');
-    assert.ok(startedFirst < installed, 'starting must come first, or nothing overlaps');
-  });
-
   it('offers the permission repair from setup, as boot does', () => {
     // The backend refuses a group-writable library folder. boot() knows to
     // offer the repair; setup starts the backend itself, and without this the
     // refusal came back as a bare rejection nobody could act on.
     assert.match(mainSrc, /async function startFromSetup/);
-    assert.match(mainSrc, /startFromSetup\(null, false\)/);
+    assert.match(mainSrc, /startBackend: startFromSetup/);
     assert.match(mainSrc, /if \(!isPermissionRepairRequired\(caught\)\) throw caught;/);
   });
 

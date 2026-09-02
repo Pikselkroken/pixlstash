@@ -205,6 +205,16 @@ step has to repeat back what an earlier one settled. Back and Continue live in a
 footer outside the stacked steps and the steps share one grid cell, so **the
 window never changes size** as you move through it.
 
+**The order of a first run is `src/setup/RunSetup.ts`, and it is tested there.**
+`setup:commit` is the wiring that hands it the real collaborators; the function
+itself takes them as arguments, so every outcome can be driven in a unit test:
+either of the two concurrent jobs finishing first, a read that returns nothing,
+throws, or never starts, a download that fails, a machine with no GPU, an
+identity import that refuses, and a backend that will not start.
+`electron/test/runSetup.test.ts` is that matrix, and it asserts the ORDER rather
+than the outcome, because the order is the part with more cases than anyone can
+hold in their head.
+
 `setup:commit` writes the desktop config, parks the privacy answer, then — when
 a GPU runtime was chosen — **starts the backend on the bundled runtime before
 downloading it**. The ~2.5 GB download is network; the first read of the library

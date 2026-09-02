@@ -50,6 +50,7 @@ import {
 } from './config';
 import { inspectFolder } from './setup/InspectFolder';
 import { readLibraryFolder } from './setup/ReadLibraryFolder';
+import { runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -1253,107 +1254,59 @@ function registerIpc(): void {
       }
 
       if (!runtime) throw new Error('No bundled runtime available');
-      const imageRoot = (choices?.imageRoot || '').trim();
-      if (!imageRoot) throw new Error('Please choose a library folder.');
-
-      // Record where the GPU runtime should install (clearing the override when
-      // it matches the default, so it keeps tracking the install dir). Done
-      // before the overlay install below so the download lands in the right place.
-      const installLocation = (choices?.installLocation || '').trim();
-      if (installLocation) {
-        setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
-      }
 
       const configDir = dirname(serverConfigPath());
       // New credential directories are private even under umask 0002. Existing
       // ones are left to the explicit recovery dialog, never silently changed.
       mkdirPrivateIfMissing(configDir);
 
-      if (choices?.importLegacyIdentity) {
-        if (!detectedLegacyIdentitySource) {
-          throw new Error('No existing standalone PixlStash library was detected.');
-        }
-        if (resolve(imageRoot) !== detectedLegacyIdentitySource) {
-          throw new Error(
-            'To import its login and share links, keep the detected existing library selected.',
-          );
-        }
-        // Fail closed before a live desktop config exists. A nonzero CLI exit
-        // leaves the vault untouched and this exception keeps the setup screen
-        // open instead of booting a server that looks migrated but is not.
-        await prepareLegacyIdentity(
-          bundledInterpreter(),
-          hubPath(),
-          detectedLegacyIdentitySource,
-        );
-      }
-
-      // Write the desktop's own config only after any requested preparation
-      // succeeds. Declining consent writes no provenance marker and therefore
-      // imports zero legacy identity. Loopback HTTP; the active runtime drives
-      // the device (default_device left as auto).
-      writeFileSync(
-        serverConfigPath(),
-        JSON.stringify(
-          {
-            host: '127.0.0.1',
-            require_ssl: false,
-            image_root: imageRoot,
-            default_device: 'auto',
-          },
-          null,
-          2,
-        ),
-      );
-
-      // The privacy answer belongs to the library's owner record, which only
-      // exists once the backend has started, so it is parked here and applied
-      // by the app on its first config load. Written after the config so a
-      // failed setup leaves no answer to a question the user may re-answer.
-      writePendingTelemetry(choices?.telemetry ?? null);
-
-      // The GPU choice maps onto the existing on-demand wheel-overlay system.
-      const gpu = gpuUpgrade();
-      if (!choices?.useGpu || !gpu) {
-        await manager.setActiveAccel(null);
-        await startFromSetup(await activeOverlayAccel(), true);
-        return;
-      }
-
-      // A ~2.5 GB download and the first read of the library have nothing to
-      // say to each other: one is network, the other disk and CPU, and none of
-      // the reading wants a GPU. So the backend starts on the bundled runtime
-      // NOW - without navigating, so the setup screen keeps reporting - and
-      // hashes and thumbnails while the overlay downloads. The restart at the
-      // end is the only thing the GPU is actually needed for, and the work done
-      // in the meantime survives it: the task planner finds whatever is still
-      // outstanding when the new process comes up.
-      await manager.setActiveAccel(null);
-      await startFromSetup(null, false);
-      // The server is up, so the reading can begin. Both run at once: the read
-      // is disk, the download is network, and the setup screen shows a line for
-      // each with the tour between them.
-      sendPhase({ phase: 'reading' });
-      writePendingMapping(null);
-      const read = runningServer
-        ? readLibraryFolder(
-            (url, init) => net.fetch(url, init),
-            runningServer.url,
-            runningServer.sessionToken,
-            imageRoot,
-            (progress) => sendPhase({ phase: 'reading', ...progress }),
-          ).then((result) => {
-            if (result) writePendingMapping({ path: imageRoot, result });
-          })
-        : Promise.resolve();
-      await manager.installOverlay(gpu, runtime, (p) =>
-        mainWindow?.webContents.send('install:progress', p),
-      );
-      // The download is the long pole, but a read that is still going gets to
-      // finish before the restart takes its server away.
-      await read;
-      await manager.setActiveAccel(gpu);
-      await startFromSetup(gpu, true);
+      // The order of everything below is `runFirstRunSetup`; this is the wiring
+      // that gives it the real collaborators.
+      await runFirstRunSetup(choices, {
+        gpu: gpuUpgrade() ?? null,
+        legacyIdentitySource: detectedLegacyIdentitySource,
+        resolvePath: (path) => resolve(path),
+        setBackendsRoot: (location) =>
+          setBackendsRoot(normalizeBackendsRoot(location, defaultBackendsRoot())),
+        prepareLegacyIdentity: (source) =>
+          prepareLegacyIdentity(bundledInterpreter(), hubPath(), source),
+        // Loopback HTTP; the active runtime drives the device (default_device
+        // left as auto).
+        writeConfig: (imageRoot) =>
+          writeFileSync(
+            serverConfigPath(),
+            JSON.stringify(
+              {
+                host: '127.0.0.1',
+                require_ssl: false,
+                image_root: imageRoot,
+                default_device: 'auto',
+              },
+              null,
+              2,
+            ),
+          ),
+        parkTelemetry: writePendingTelemetry,
+        parkMapping: writePendingMapping,
+        setActiveAccel: (accel) => manager.setActiveAccel(accel),
+        activeOverlayAccel,
+        startBackend: startFromSetup,
+        installOverlay: (accel) =>
+          manager.installOverlay(accel, runtime as RuntimeInfo, (p) =>
+            mainWindow?.webContents.send('install:progress', p),
+          ),
+        readFolder: async (imageRoot) =>
+          runningServer
+            ? readLibraryFolder(
+                (url, init) => net.fetch(url, init),
+                runningServer.url,
+                runningServer.sessionToken,
+                imageRoot,
+                (progress) => sendPhase({ phase: 'reading', ...progress }),
+              )
+            : null,
+        announceReading: () => sendPhase({ phase: 'reading' }),
+      });
     },
   );
 
