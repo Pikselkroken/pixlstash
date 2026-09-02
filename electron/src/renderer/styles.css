@@ -216,6 +216,23 @@ body {
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
 }
 
+/* The library folder is the one answer setup needs. Edged and tinted like a
+   chosen compute option, with the path at the size of a choice's label, so it
+   does not read as a footnote to the compute radios. */
+.panel--library {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+.panel--library .hw {
+  color: var(--fg);
+}
+
+.panel--library .field input[type="text"] {
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .hw {
   font-size: 11px;
   font-weight: 600;
