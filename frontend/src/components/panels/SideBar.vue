@@ -623,8 +623,10 @@ function offerLoosePictures() {
 
 /**
  * A folder read the desktop startup screen finished while the GPU runtime
- * downloaded. Null in a browser, and on a desktop launch that had nothing to
- * read or could not finish.
+ * downloaded, carrying the read's own RESULT. The task id would not do: the
+ * task lives in the server's memory and the backend restarts onto the GPU
+ * runtime before the app loads, so asking for it answered "Task not found".
+ * Null in a browser, and on a desktop launch that had nothing to read.
  */
 async function takeParkedFolderRead() {
   const desktop =
@@ -647,11 +649,11 @@ async function _offerLoosePictures() {
   // doing it there: the wizard opens on its questions instead of on a second
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
-  if (parked?.taskId && parked.path === path) {
+  if (parked?.result && parked.path === path) {
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
-      taskId: parked.taskId,
+      result: parked.result,
       mode: "local_import",
     });
     return;

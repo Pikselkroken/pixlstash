@@ -463,12 +463,15 @@ function pendingMappingPath(): string {
 /**
  * Park a finished folder read for the app.
  *
- * The wizard resumes from a task id, so a read done during the download means
- * the app opens on the questions instead of on a progress bar. Written only
- * when the read actually completed: a half-answer would send the wizard looking
- * for a task that has nothing to give.
+ * The READ'S RESULT, not its task id. The task lives in the server process's
+ * memory, and the backend restarts onto the GPU runtime before the app loads,
+ * so a parked id resolved to "Task not found" and left the wizard spinning on
+ * work that had already been done. With the result in hand the wizard opens on
+ * its questions and asks the server nothing.
  */
-function writePendingMapping(entry: { path: string; taskId: string } | null): void {
+function writePendingMapping(
+  entry: { path: string; result: Record<string, unknown> } | null,
+): void {
   try {
     if (!entry) {
       if (existsSync(pendingMappingPath())) rmSync(pendingMappingPath());
@@ -482,12 +485,12 @@ function writePendingMapping(entry: { path: string; taskId: string } | null): vo
 }
 
 /** Hand the parked read to the app exactly once. */
-function takePendingMapping(): { path: string; taskId: string } | null {
+function takePendingMapping(): { path: string; result: Record<string, unknown> } | null {
   try {
     if (!existsSync(pendingMappingPath())) return null;
     const entry = readJsonFile(pendingMappingPath());
     rmSync(pendingMappingPath());
-    return (entry as { path: string; taskId: string }) ?? null;
+    return (entry as { path: string; result: Record<string, unknown> }) ?? null;
   } catch (e) {
     console.warn('[startup] could not read the parked folder read:', e);
     return null;
@@ -1339,8 +1342,8 @@ function registerIpc(): void {
             runningServer.sessionToken,
             imageRoot,
             (progress) => sendPhase({ phase: 'reading', ...progress }),
-          ).then((taskId) => {
-            if (taskId) writePendingMapping({ path: imageRoot, taskId });
+          ).then((result) => {
+            if (result) writePendingMapping({ path: imageRoot, result });
           })
         : Promise.resolve();
       await manager.installOverlay(gpu, runtime, (p) =>

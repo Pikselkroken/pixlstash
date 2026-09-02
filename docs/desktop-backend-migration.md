@@ -214,10 +214,12 @@ screen, and the library is hashed and thumbnailed through the download. **The ch
 `/folder-structure/read` (`src/setup/ReadLibraryFolder.ts`, with the loopback
 session cookie): the read is disk work, the download is network, and the setup
 screen shows a line for each with a four-slide tour of the app between them. A
-completed read is parked in `userData/pending-mapping.json`; `SideBar`'s
-loose-picture offer takes it and opens the wizard on that task id, so the app
-arrives at the folder questions instead of at a second progress bar over an
-empty grid. A read that fails, stalls or cannot start costs the overlap and
+completed read's **result** is parked in `userData/pending-mapping.json` -
+the result, not its task id, because the task lives in the server process's
+memory and the backend restarts onto the GPU runtime before the app loads, so a
+parked id answers "Task not found". `SideBar`'s loose-picture offer takes the
+result and opens the wizard straight on the mapping questions, which asks the
+server nothing at all. A read that fails, stalls or cannot start costs the overlap and
 nothing else — the app reads the folder itself, exactly as before. When the
 overlay lands it is activated and the backend restarts onto it — the planner
 picks up whatever is still outstanding — and that start is the one that

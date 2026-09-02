@@ -56,9 +56,12 @@ function cookieHeader(sessionToken: string): Record<string, string> {
 /**
  * Start the read and follow it to the end.
  *
- * @returns the task id when the read completed, or null when it could not be
- *   started or did not finish. A null is not an error the user has to see: the
- *   app falls back to reading the folder itself.
+ * @returns the read's own RESULT when it completed, or null when it could not
+ *   be started or did not finish. The result rather than the task id, because
+ *   the task lives in the server's memory and the backend restarts onto the GPU
+ *   runtime before the app ever loads: a parked task id resolved to "Task not
+ *   found" every time. A null is not an error the user has to see - the app
+ *   reads the folder itself, as it always did.
  */
 export async function readLibraryFolder(
   fetcher: Fetcher,
@@ -68,7 +71,7 @@ export async function readLibraryFolder(
   onProgress: (progress: ReadProgress & { failed?: boolean }) => void,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => number = Date.now,
-): Promise<string | null> {
+): Promise<Record<string, unknown> | null> {
   let taskId: string;
   try {
     const response = await fetcher(`${baseUrl}${API_PREFIX}/folder-structure/read`, {
@@ -110,6 +113,7 @@ export async function readLibraryFolder(
       processed?: number;
       total?: number;
       progress?: number;
+      result?: Record<string, unknown> | null;
     };
     try {
       const response = await fetcher(
@@ -140,8 +144,11 @@ export async function readLibraryFolder(
     });
 
     // `cancelled` keeps whatever was found, so it is a usable result too - the
-    // wizard shows the partial tree rather than starting over.
-    if (status.status === 'completed' || status.status === 'cancelled') return taskId;
+    // wizard shows the partial tree rather than starting over. A settled read
+    // with no result is nothing to hand on.
+    if (status.status === 'completed' || status.status === 'cancelled') {
+      return status.result ?? null;
+    }
     if (status.status === 'failed') {
       console.warn('[startup] the folder read failed; the app will read it itself');
       return null;

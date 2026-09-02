@@ -21,7 +21,14 @@ describe('reading the library folder during the runtime download', () => {
     const statuses = [
       { status: 'running', stage: 'walking', processed: 4, total: 12, progress: 33.3 },
       { status: 'running', stage: 'faces', processed: 50, total: 153, progress: 32.7 },
-      { status: 'completed', stage: 'done', processed: 153, total: 153, progress: 100 },
+      {
+        status: 'completed',
+        stage: 'done',
+        processed: 153,
+        total: 153,
+        progress: 100,
+        result: { picture_count: 153, levels: [] },
+      },
     ];
     const fetcher = async (url: string) => {
       seen.push(url);
@@ -31,7 +38,7 @@ describe('reading the library folder during the runtime download', () => {
     const progress: number[] = [];
     const fractions: number[] = [];
 
-    const taskId = await readLibraryFolder(
+    const result = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       'session-token',
@@ -43,7 +50,9 @@ describe('reading the library folder during the runtime download', () => {
       NO_SLEEP,
     );
 
-    assert.equal(taskId, 'task-7');
+    // The RESULT, not the task: the backend restarts onto the GPU runtime
+    // before the app loads, so a task id resolves to "Task not found".
+    assert.deepEqual(result, { picture_count: 153, levels: [] });
     assert.deepEqual(progress, [4, 50, 153], 'every poll feeds the screen its count');
     assert.deepEqual(
       fractions,
@@ -93,7 +102,7 @@ describe('reading the library folder during the runtime download', () => {
     const fetcher = async () => jsonResponse({}, false, 500);
 
     const reports: Array<{ failed?: boolean }> = [];
-    const taskId = await readLibraryFolder(
+    const result = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       's',
@@ -102,7 +111,7 @@ describe('reading the library folder during the runtime download', () => {
       NO_SLEEP,
     );
 
-    assert.equal(taskId, null);
+    assert.equal(result, null);
     assert.equal(
       reports.at(-1)?.failed,
       true,
@@ -114,9 +123,9 @@ describe('reading the library folder during the runtime download', () => {
     const fetcher = async (url: string) =>
       url.endsWith('/folder-structure/read')
         ? jsonResponse({ task_id: 'half' })
-        : jsonResponse({ status: 'cancelled', processed: 3, total: 12 });
+        : jsonResponse({ status: 'cancelled', processed: 3, total: 12, result: { partial: true } });
 
-    const taskId = await readLibraryFolder(
+    const result = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       's',
@@ -125,7 +134,7 @@ describe('reading the library folder during the runtime download', () => {
       NO_SLEEP,
     );
 
-    assert.equal(taskId, 'half');
+    assert.deepEqual(result, { partial: true });
   });
 
   it('stops waiting on a read that has gone silent', async () => {
@@ -135,7 +144,7 @@ describe('reading the library folder during the runtime download', () => {
         ? jsonResponse({ task_id: 'stuck' })
         : jsonResponse({ status: 'running', processed: 1, total: 99 });
 
-    const taskId = await readLibraryFolder(
+    const result = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       's',
@@ -147,6 +156,6 @@ describe('reading the library folder during the runtime download', () => {
       () => clock,
     );
 
-    assert.equal(taskId, null, 'a read that never ends must not hold up the app');
+    assert.equal(result, null, 'a read that never ends must not hold up the app');
   });
 });

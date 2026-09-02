@@ -89,7 +89,12 @@ watch(
     path.value = entry?.path ?? "";
     label.value = entry?.label ?? "";
     readTaskId.value = entry?.taskId ?? "";
-    readResult.value = null;
+    // A read someone else already finished (the desktop startup screen does one
+    // while the GPU runtime downloads). Its RESULT travels, not its task: the
+    // task lives in the server's memory and the backend restarts before the app
+    // loads, so asking for it again answered "Task not found" while the answer
+    // was sitting right here.
+    readResult.value = entry?.result ?? null;
     assignments.value = entry?.assignments ?? [];
     pictureCount.value = entry?.pictureCount ?? 0;
     libraryExists.value = Boolean(entry);
@@ -97,7 +102,11 @@ watch(
     building.value = false;
     buildError.value = "";
     committing.value = false;
-    step.value = autoCommit.value ? "preview" : "choose";
+    step.value = autoCommit.value
+      ? "preview"
+      : readResult.value
+        ? "mapping"
+        : "choose";
     if (!entry) librariesStore.refresh();
     // The read's result did not survive the reload; "Back to the mapping"
     // after a failed commit needs it, and one poll brings it back.

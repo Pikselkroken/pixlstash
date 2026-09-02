@@ -292,7 +292,8 @@ describe("the loose-pictures offer for an empty library", () => {
     const libraries = useLibrariesStore();
     libraries.hasLoadedSuccessfully = true;
     libraries.canManage = true;
-    const takePendingMapping = vi.fn(async () => ({ path, taskId: "task-7" }));
+    const readResult = { levels: [{ depth: 1, folders: [] }] };
+    const takePendingMapping = vi.fn(async () => ({ path, result: readResult }));
     window.pixlstashDesktop = { takePendingMapping };
     const wrapper = await mountSidebar();
 
@@ -301,7 +302,7 @@ describe("the loose-pictures offer for an empty library", () => {
     expect(takePendingMapping).toHaveBeenCalledTimes(1);
     expect(useFolderMappingStore().wizardResume).toEqual({
       path,
-      taskId: "task-7",
+      result: readResult,
       mode: "local_import",
     });
 
@@ -318,7 +319,7 @@ describe("the loose-pictures offer for an empty library", () => {
     window.pixlstashDesktop = {
       takePendingMapping: async () => ({
         path: "/home/me/Elsewhere",
-        taskId: "task-9",
+        result: { levels: [] },
       }),
     };
     apiGet.mockImplementation((url) =>

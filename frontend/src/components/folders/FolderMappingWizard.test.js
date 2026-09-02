@@ -208,6 +208,34 @@ describe("a 'pictures' verdict", () => {
   });
 });
 
+describe("a read someone else already finished", () => {
+  // The desktop startup screen reads the folder while the GPU runtime
+  // downloads. Its RESULT is what travels: the task lives in the server's
+  // memory and the backend restarts before the app loads, so a resumed task id
+  // answered "Task not found" while the wizard spun on work that was done.
+  it("opens on the mapping questions, and asks the server nothing", async () => {
+    const wrapper = mountWizard({
+      resume: { path: "/home/me/Pictures", result: READ_RESULT, mode: "local_import" },
+    });
+    await settle();
+
+    expect(wrapper.find(".tree-stub").exists()).toBe(true);
+    expect(getFolderStructureReadStatus).not.toHaveBeenCalled();
+    expect(startFolderStructureRead).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
+  it("still starts at the folder question when nothing was parked", async () => {
+    const wrapper = mountWizard();
+    await settle();
+
+    expect(wrapper.find(".tree-stub").exists()).toBe(false);
+
+    wrapper.unmount();
+  });
+});
+
 describe("building the library", () => {
   async function reachTheMapping(wrapper) {
     getFolderStructureReadStatus.mockResolvedValue({
