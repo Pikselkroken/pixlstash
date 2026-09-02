@@ -1119,36 +1119,113 @@ input[type="text"]:focus-visible,
   color: var(--fg);
 }
 
-/* ---- The install step: one line, and it never moves ---------------------- */
+/* ---- The install step: one block per activity ---------------------------- */
 
+/* One activity is one block, and the block's SHAPE says what is known.
+   Determinate progress fills from the left and states its number; indeterminate
+   progress has no fill at all, only a hairline travelling the track, so it can
+   never be read as "stuck at 95%" - which is exactly what a 40%-wide amber
+   chunk of the determinate fill's own colour, height and radius said. */
 .phases {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* The gap BETWEEN activities is larger than any gap inside one, so a meter
+     groups with the label above it rather than the label below it. */
+  gap: 22px;
 }
 
-/* The installer's own line is whatever length pip felt like: a package name can
-   run to three lines or fit in one, and a row that grows with it walks the bar
-   up and down the screen. Three lines are reserved whether they are used or
-   not, and anything longer is clipped. */
 .phase {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  column-gap: 10px;
-  row-gap: 6px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 8px;
+  align-items: baseline;
   font-size: 13.5px;
   color: var(--fg);
+}
+
+.phase .pname {
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.phase .pmark {
-  color: var(--accent);
-  font-size: 12px;
+/* The number the row is actually about, on the label's own line and aligned
+   with every other number in the panel. */
+.phase .pvalue {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 12px;
 }
 
+.phase[data-state='todo'] .pname,
+.phase[data-state='todo'] .pvalue {
+  color: rgba(242, 229, 218, 0.45);
+  font-weight: 500;
+}
+
+.phase[data-state='done'] .pname {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.phase .meter {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(242, 229, 218, 0.12);
+  overflow: hidden;
+}
+
+.phase .meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.phase[data-state='done'] .meter-fill {
+  background: var(--primary);
+}
+
+/* Unknown progress: a hairline, not a fill. Half the height, a quarter of the
+   width, at the opacity of secondary text, travelling the whole track and
+   never resting at either end. */
+.phase .meter--unknown .meter-fill {
+  width: 25%;
+  height: 2px;
+  top: 1px;
+  bottom: 1px;
+  opacity: 0.55;
+  transition: none;
+  animation: meter-unknown 1.6s linear infinite;
+}
+
+@keyframes meter-unknown {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+/* The installer's own line is whatever length pip felt like: a wheel name can
+   run to three lines or fit in one, and a row that grows with it walks
+   everything below it up and down the screen. Three lines are reserved whether
+   they are used or not, and anything longer is clipped. */
 .phase .pnote {
-  grid-column: 2;
+  grid-column: 1 / -1;
   font-size: 12px;
   font-weight: 400;
   line-height: 1.45;
@@ -1160,15 +1237,18 @@ input[type="text"]:focus-visible,
   overflow-wrap: anywhere;
 }
 
-/* Only the installer's line reserves the three; a line with nothing to say
-   would otherwise sit on three blank ones. */
 .phase--notes .pnote {
   min-height: 4.35em;
 }
 
-.phase .bar {
-  grid-column: 2;
-  height: 6px;
+@media (prefers-reduced-motion: reduce) {
+  /* No travelling hairline: a still line across the track, which says "working,
+     amount unknown" without motion. */
+  .phase .meter--unknown .meter-fill {
+    width: 100%;
+    opacity: 0.35;
+    animation: none;
+  }
 }
 
 /* ---- The tour: what the wait is buying ---------------------------------- */

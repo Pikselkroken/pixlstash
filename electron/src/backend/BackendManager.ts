@@ -41,6 +41,25 @@ export interface InstallProgress {
   message: string;
   /** 0..1 within the active download, or -1 when unknown. */
   fraction: number;
+  /**
+   * Bytes of wheels pip has finished fetching, and the bytes it has announced
+   * so far. pip names each wheel's size as it starts it ("Downloading torch
+   * (820.3 MB)") and, over a pipe, says nothing more until the next one - so
+   * "how far through the download are we" is answerable, where "how far through
+   * this file" is not. The total grows as new wheels are announced, which is
+   * why `bytesDone` is what advances and the pair is reported rather than a
+   * single fraction that could walk backwards.
+   */
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+/** Bytes named in a pip "Downloading … (820.3 MB)" line, or 0. */
+export function announcedBytes(line: string): number {
+  const match = line.match(/\(([\d.]+)\s*([KMG]?B)\)/i);
+  if (!match) return 0;
+  const scale: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+  return Number(match[1]) * (scale[match[2].toUpperCase()] ?? 1);
 }
 
 export interface OverlayMeta {
@@ -272,7 +291,13 @@ export class BackendManager {
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
 
-    onProgress({ phase: 'prepare', message: 'Resolving environment…', fraction: -1 });
+    onProgress({
+      phase: 'prepare',
+      message: 'Resolving environment…',
+      fraction: -1,
+      bytesDone: 0,
+      bytesTotal: 0,
+    });
     const constraints = join(dir, 'constraints.txt');
     await writeFile(constraints, await this.bundledConstraints());
 
@@ -288,6 +313,8 @@ export class BackendManager {
     );
     if (usedFallback) {
       onProgress({
+        bytesDone: 0,
+        bytesTotal: 0,
         phase: 'prepare',
         message: `torch ${basePep440(info.torch)} isn't on the GPU index; using ${available[0]}`,
         fraction: -1,
@@ -299,7 +326,13 @@ export class BackendManager {
     const meta: OverlayMeta = { accel, torch: info.torch, installedAt: new Date().toISOString() };
     await writeFile(overlayMarkerPath(accel), JSON.stringify(meta, null, 2));
     await this.setActiveAccel(accel);
-    onProgress({ phase: 'done', message: `${ACCEL_LABELS[accel]} ready`, fraction: 1 });
+    onProgress({
+      phase: 'done',
+      message: `${ACCEL_LABELS[accel]} ready`,
+      fraction: 1,
+      bytesDone: 0,
+      bytesTotal: 0,
+    });
     return meta;
   }
 
@@ -357,6 +390,12 @@ export class BackendManager {
       // Keep the tail of pip's own output so a failure reports the real cause
       // (e.g. an unresolvable version) instead of a bare exit code.
       let tail = '';
+      // What pip has named so far, and what it has finished. A wheel counts as
+      // done when the next one is announced or the install phase starts, which
+      // is the only completion signal a piped pip gives.
+      let bytesTotal = 0;
+      let bytesDone = 0;
+      let inFlight = 0;
       const child = spawn(bundledInterpreter(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
       const onChunk = (raw: string) => {
         log.write(raw);
@@ -367,15 +406,36 @@ export class BackendManager {
           const dl = t.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*([KMG]B)/i);
           if (/^Downloading\b/i.test(t) || dl) {
             const frac = dl ? Number(dl[1]) / Number(dl[2]) : -1;
+            if (/^Downloading\b/i.test(t)) {
+              bytesDone += inFlight;
+              inFlight = announcedBytes(t);
+              bytesTotal += inFlight;
+            }
             onProgress({
               phase: 'download',
               message: prettyDownload(t),
               fraction: Number.isFinite(frac) ? frac : -1,
+              bytesDone,
+              bytesTotal,
             });
           } else if (/^Installing collected packages/i.test(t)) {
-            onProgress({ phase: 'install', message: 'Installing…', fraction: -1 });
+            bytesDone += inFlight;
+            inFlight = 0;
+            onProgress({
+              phase: 'install',
+              message: 'Installing…',
+              fraction: -1,
+              bytesDone,
+              bytesTotal,
+            });
           } else if (/^Collecting\b/i.test(t)) {
-            onProgress({ phase: 'prepare', message: t.slice(0, 120), fraction: -1 });
+            onProgress({
+              phase: 'prepare',
+              message: t.slice(0, 120),
+              fraction: -1,
+              bytesDone,
+              bytesTotal,
+            });
           }
         }
       };

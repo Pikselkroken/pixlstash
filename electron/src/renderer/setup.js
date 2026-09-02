@@ -561,23 +561,26 @@ function renderLines() {
     item.className = line.notes ? 'phase phase--notes' : 'phase';
     item.dataset.state = line.state;
     item.innerHTML =
-      `<span class="pmark" aria-hidden="true">${line.state === 'done' ? '&#10003;' : '&#9679;'}</span>` +
-      '<span class="pname"></span><span class="pnote"></span>';
+      '<span class="pname"></span><span class="pvalue"></span>' +
+      '<div class="meter"><div class="meter-fill"></div></div>' +
+      '<span class="pnote"></span>';
     item.querySelector('.pname').textContent = line.name;
+    item.querySelector('.pvalue').textContent = line.value || '';
     item.querySelector('.pnote').textContent = line.note;
-    if (line.state === 'running') {
-      const bar = document.createElement('div');
-      bar.className = 'bar';
-      const fill = document.createElement('div');
-      // pip emits no byte-level progress over a pipe (its bar is TTY-only), so
-      // an unknown fraction gets the sliding chunk rather than a misleading
-      // full one.
-      fill.className = line.fraction >= 0 ? 'barfill' : 'barfill indeterminate';
+
+    const meter = item.querySelector('.meter');
+    const fill = item.querySelector('.meter-fill');
+    const known = line.fraction >= 0;
+    if (line.state === 'done') {
       // A DOM style property, not a style attribute: the attribute is what the
       // window's CSP refuses.
-      if (line.fraction >= 0) fill.style.width = `${Math.round(line.fraction * 100)}%`;
-      bar.appendChild(fill);
-      item.appendChild(bar);
+      fill.style.width = '100%';
+    } else if (known) {
+      fill.style.width = `${Math.round(Math.min(1, line.fraction) * 100)}%`;
+    } else {
+      // No fill at all when the amount is unknown: a hairline crossing the
+      // track says "working" without claiming a percentage.
+      meter.classList.add('meter--unknown');
     }
     els.phases.appendChild(item);
   }
@@ -593,13 +596,21 @@ function setLine(id, patch) {
 /** The lines this setup will have, decided once from the answers. */
 function planLines(useGpu) {
   lines = [
-    { id: 'server', name: 'Preparing your library', note: '', state: 'running', fraction: -1 },
+    {
+      id: 'server',
+      name: 'Preparing your library',
+      note: '',
+      value: '',
+      state: 'running',
+      fraction: -1,
+    },
   ];
   if (useGpu) {
     lines.push({
       id: 'runtime',
       name: `Installing the ${gpu.label || 'GPU'} runtime`,
       note: '',
+      value: '',
       notes: true,
       state: 'running',
       fraction: -1,
@@ -635,7 +646,16 @@ async function commit() {
     busy = false;
     failed = true;
     els.next.disabled = false;
-    lines = [{ id: 'failed', name: 'Setup could not finish', note: '', state: 'todo', fraction: -1 }];
+    lines = [
+      {
+        id: 'failed',
+        name: 'Setup could not finish',
+        note: '',
+        value: '',
+        state: 'todo',
+        fraction: -1,
+      },
+    ];
     renderLines();
     showError((e && e.message) || String(e));
     render();
@@ -685,10 +705,17 @@ els.next.addEventListener('click', () => {
 // the two run at once, and one line overwriting the other hides that.
 api.onProgress((p) => {
   if (!busy) return;
+  // pip names each wheel's size as it starts it and says nothing more until the
+  // next one, so bytes fetched against bytes named is the honest measure - the
+  // per-file fraction it sometimes reports is progress through one wheel, not
+  // through the download.
+  const total = Number(p.bytesTotal) || 0;
+  const done = Number(p.bytesDone) || 0;
   setLine('runtime', {
     state: 'running',
     note: p.message || '',
-    fraction: p.fraction >= 0 ? p.fraction : -1,
+    value: total ? `${humanBytes(done)} of ${humanBytes(total)}` : '',
+    fraction: total ? done / total : -1,
   });
 });
 
@@ -704,16 +731,17 @@ api.onPhase((p) => {
     setLine('server', {
       name: 'Reading your pictures',
       state: 'running',
-      note: counted,
+      value: counted,
       fraction: typeof p.fraction === 'number' && p.fraction >= 0 ? p.fraction : -1,
     });
   } else if (p.phase === 'starting') {
     if (reading) {
-      setLine('runtime', { state: 'done', note: 'Installed', fraction: 1 });
+      setLine('runtime', { state: 'done', note: '', value: 'Installed', fraction: 1 });
       setLine('server', {
         name: 'Starting PixlStash on your GPU',
         state: 'running',
         note: '',
+        value: '',
         fraction: -1,
       });
     } else {

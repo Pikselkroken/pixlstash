@@ -45,7 +45,7 @@ describe('the startup framework', () => {
   it('shows the reading and the download as two lines, not one overwriting the other', () => {
     // The whole point of starting the server before the download is that they
     // run at once; one line replacing the other hides it.
-    assert.match(script, /id: 'server', name: 'Preparing your library'/);
+    assert.match(script, /id: 'server',\s*\n?\s*name: 'Preparing your library'/);
     assert.match(script, /p\.phase === 'reading'/);
     assert.match(mainSrc, /sendPhase\(\{ phase: 'reading' \}\)/);
   });
@@ -92,6 +92,35 @@ describe('the startup framework', () => {
     // no longer shown: an unexplained trip back to the beginning.
     assert.match(script, /failed = true;/);
     assert.doesNotMatch(script, /showError\([^)]*\);\s*\n\s*busy = false;\s*\n\s*go\(0\);/);
+  });
+
+  it('never draws unknown progress as a partial fill', () => {
+    // A 40%-wide chunk of the determinate fill's own colour, height and radius
+    // is how "62% done" is drawn; sliding it right made it "stuck at 95%".
+    // Unknown progress gets a hairline across the track and no fill at all.
+    const styles = readFileSync(join(rendererDir, 'styles.css'), 'utf8');
+    assert.match(styles, /\.meter--unknown \.meter-fill \{[^}]*height: 2px/s);
+    assert.match(script, /meter\.classList\.add\('meter--unknown'\)/);
+    assert.doesNotMatch(script, /barfill indeterminate/);
+  });
+
+  it('states the number each row is about', () => {
+    // The widest object on the screen was also the least informative: the read
+    // knows its folder counts and pip names every wheel's size.
+    assert.match(script, /of \$\{count\(p\.total\)\} folders/);
+    assert.match(script, /humanBytes\(done\)\} of \$\{humanBytes\(total\)/);
+    assert.match(mainSrc.replace(/\s+/g, ' '), /bytesDone|install:progress/);
+  });
+
+  it('groups a meter with the label above it, not the row below it', () => {
+    const styles = readFileSync(join(rendererDir, 'styles.css'), 'utf8');
+    const phases = styles.slice(styles.indexOf('.phases {'));
+    const between = Number(phases.match(/gap: (\d+)px/)?.[1]);
+    const inside = Number(styles.match(/\.phase \{[^}]*row-gap: (\d+)px/s)?.[1]);
+    assert.ok(
+      between > inside,
+      `the gap between activities (${between}px) must exceed the gap inside one (${inside}px)`,
+    );
   });
 
   it('parks the privacy answer for the app instead of writing it itself', () => {
