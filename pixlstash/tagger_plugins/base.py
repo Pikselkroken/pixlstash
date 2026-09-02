@@ -122,6 +122,31 @@ class TaggerPlugin(ABC):
         """Return a dict of ``{name: default}`` from ``parameter_schema``."""
         return {field["name"]: field["default"] for field in self.parameter_schema()}
 
+    def model_version(self) -> str:
+        """Return a version string identifying the weights this plugin runs.
+
+        Stored on every :class:`~pixlstash.db_models.tag_prediction.TagPrediction`
+        row this plugin produces, qualified with the plugin name, and it is the
+        **only** thing that marks a stored prediction stale: when the version
+        changes, the host deletes the previous generation's rows and rewrites
+        them. A plugin that always returns the same string therefore keeps its
+        confidences forever, even after its weights change.
+
+        It is also the value the human-label ledger freezes at review time
+        (``TagPrediction.label_model_version``), so that a human accept/reject
+        stays meaningful as training data once the model has moved on.
+
+        Return whatever identifies the weights *and how they are being run* -
+        a repo revision, a file hash, a release tag - and include anything that
+        changes the numbers, such as quantisation or the inference runtime: two
+        builds of the same weights that score differently are two versions.
+
+        Returns:
+            Version string, or ``""`` when the plugin cannot say (the host then
+            records ``unknown``, which never goes stale).
+        """
+        return ""
+
     def plugin_schema(self) -> dict[str, Any]:
         """Return the JSON-serialisable metadata dict for this plugin.
 

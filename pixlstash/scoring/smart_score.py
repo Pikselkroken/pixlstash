@@ -26,6 +26,7 @@ from pixlstash.db_models import (
     TagPrediction,
     User,
 )
+from pixlstash.db_models.tag_prediction import feeds_anomaly_score
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import ANOMALY_PENALTY_TAGS
 from pixlstash.utils.quality.smart_score_utils import (
@@ -203,6 +204,7 @@ def fetch_anomaly_confidences(
             TagPrediction.confidence,
             TagPrediction.label_state,
             TagPrediction.label_source,
+            TagPrediction.model_version,
         ).where(
             TagPrediction.picture_id.in_(picture_ids),
             func.lower(TagPrediction.tag).in_(ANOMALY_PENALTY_TAGS),
@@ -211,7 +213,8 @@ def fetch_anomaly_confidences(
 
     below_threshold = 0
     not_applied = 0
-    for picture_id, tag, confidence, label_state, label_source in rows:
+    plugin_sourced = 0
+    for picture_id, tag, confidence, label_state, label_source, model_version in rows:
         if not tag:
             continue
         key = tag.strip().lower()
@@ -221,6 +224,16 @@ def fetch_anomaly_confidences(
         elif label_source == HUMAN and label_state == NEG:
             probs_map[picture_id][key] = 0.0
         else:
+            if not feeds_anomaly_score(model_version):
+                # A tagger plugin's confidence. Raw confidences are not comparable
+                # between models - a plugin's 0.4 is not the built-in tagger's 0.4,
+                # and the penalty thresholds are calibrated against the latter - so
+                # this would move the score with no user action and nothing on
+                # screen to explain it. The human branches above are deliberately
+                # ahead of this one: a person's verdict counts whichever model's
+                # row happens to be carrying it.
+                plugin_sourced += 1
+                continue
             if key not in applied_tags.get(picture_id, ()):
                 not_applied += 1
                 continue
@@ -232,12 +245,14 @@ def fetch_anomaly_confidences(
                     continue
             probs_map[picture_id][key] = value
 
-    if below_threshold or not_applied:
+    if below_threshold or not_applied or plugin_sourced:
         logger.debug(
-            "Anomaly penalty inputs: dropped %d sub-threshold and %d not-applied model "
-            "prediction(s) across %d picture(s); neither is visible in the tag list.",
+            "Anomaly penalty inputs: dropped %d sub-threshold, %d not-applied and %d "
+            "plugin-sourced model prediction(s) across %d picture(s); none of them is "
+            "usable as a penalty input.",
             below_threshold,
             not_applied,
+            plugin_sourced,
             len(picture_ids),
         )
 

@@ -18,7 +18,11 @@ from pixlstash.db_models import (
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
 )
-from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.db_models.tag_prediction import (
+    feeds_anomaly_score,
+    is_plugin_model_version,
+    TagPrediction,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
@@ -745,15 +749,17 @@ class TagTask(BaseTask):
                 logger.debug("Tagging %s images", len(image_paths))
                 logger.debug("Tagging image paths: %s", image_paths)
                 # Collect raw confidence scores in the same GPU pass as tagging.
+                # Whatever the active tagger is: a plugin that reports
+                # confidences gets prediction rows too, fenced out of the
+                # anomaly score by ``feeds_anomaly_score`` because raw
+                # confidences are not comparable between models.
                 full_scores_by_path: dict = {}
                 use_pixlstash_tagger = active_workflow.is_pixlstash_tagger_enabled
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
-                    out_raw_pixlstash_scores=full_scores_by_path
-                    if use_pixlstash_tagger
-                    else None,
+                    out_raw_scores=full_scores_by_path,
                     engine_override=self._engine_override,
                 )
                 inference_s = time.perf_counter() - inference_start
@@ -923,20 +929,9 @@ class TagTask(BaseTask):
                                 u["pic_id"]: set(u.get("tags") or [])
                                 for u in update_payloads
                             }
-                            model_version = "unknown"
-                            try:
-                                version_fn = getattr(
-                                    active_workflow._engine,
-                                    "pixlstash_tagger_version",
-                                    None,
-                                )
-                                if callable(version_fn):
-                                    model_version = f"v{version_fn()}"
-                            except Exception:
-                                logger.warning(
-                                    "pixlstash_tagger_version() failed, using 'unknown' model version",
-                                    exc_info=True,
-                                )
+                            model_version = active_workflow.active_model_version(
+                                self._engine_override
+                            )
                             db_pred_start = time.perf_counter()
                             self._db.run_task(
                                 self._write_predictions_from_tags,
@@ -1074,19 +1069,27 @@ class TagTask(BaseTask):
         # --- Bulk delete stale model-version rows ---
         # Never delete a human-labeled row: its label_state/label_source is durable
         # supervision the tagger must not clobber (mirrors not_human_labeled()).
-        stale_ids = [
-            row.id
+        # Never delete across the built-in/plugin split either: a picture holds one
+        # row per tag, so a plugin run would otherwise clear the built-in tagger's
+        # confidences and silently zero the picture's anomaly_tag_uncertainty.
+        writing_as_plugin = is_plugin_model_version(model_version)
+        stale_rows = [
+            row
             for row in existing_rows
             if row.model_version != model_version
             and row.model_version != "manual"
             and row.label_source != "human"
+            and is_plugin_model_version(row.model_version) == writing_as_plugin
         ]
-        if stale_ids:
-            session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))
+        if stale_rows:
+            session.exec(
+                delete(TagPrediction).where(
+                    TagPrediction.id.in_([row.id for row in stale_rows])
+                )
+            )
             # Remove from map so they are not treated as existing below.
-            for row in existing_rows:
-                if row.id in set(stale_ids):
-                    existing_map.pop((row.picture_id, row.tag), None)
+            for row in stale_rows:
+                existing_map.pop((row.picture_id, row.tag), None)
 
         # --- Bulk fetch applied tags for anomaly uncertainty computation ---
         tag_rows = session.exec(
@@ -1111,6 +1114,20 @@ class TagTask(BaseTask):
             for tag, confidence in label_scores.items():
                 status = "CONFIRMED" if tag in applied_tags else "REJECTED"
                 existing = existing_map.get((picture_id, tag))
+                if (
+                    existing is not None
+                    and existing.model_version != "manual"
+                    and is_plugin_model_version(existing.model_version)
+                    != writing_as_plugin
+                ):
+                    # A row from the other population (built-in vs plugin) owns
+                    # this tag, and the unique key allows only one.  Leave it:
+                    # overwriting would swap a confidence the anomaly score is
+                    # calibrated against for one that is not comparable to it.
+                    # ponytail: whoever got there first wins; widen the unique
+                    # key to (picture_id, tag, model_version) if predictions
+                    # from several taggers ever need to coexist per tag.
+                    continue
                 if existing is None:
                     session.add(
                         TagPrediction(
@@ -1177,6 +1194,12 @@ class TagTask(BaseTask):
 
             # Compute anomaly_tag_uncertainty using the already-fetched applied tags
             # (avoids a redundant SELECT per picture inside recompute_anomaly_tag_uncertainty).
+            # Only the built-in tagger's confidences may: they are what the anomaly
+            # score is calibrated against, and a plugin's 0.4 does not mean the same
+            # thing.  Leave the stored value alone rather than zeroing it, so a run
+            # under a plugin does not discard the built-in tagger's assessment.
+            if not feeds_anomaly_score(model_version):
+                continue
             pic_applied = applied_tags_by_pic.get(picture_id, set())
             anomaly_scores: list[float] = []
             for tag, confidence in label_scores.items():

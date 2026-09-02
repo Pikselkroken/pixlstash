@@ -131,3 +131,60 @@ def test_backfill_marks_unscored_pictures_so_they_drop_out(tmp_path):
         found = MissingTagPredictionFinder._fetch_missing_predictions(session, 100)
         assert pic_id not in [p.id for p in found]
         assert Vault._count_missing_tag_predictions(session) == 0
+
+
+class _RecordingWorkflow:
+    """Minimal TaggingWorkflow stand-in that records the engine overrides it got.
+
+    Mirrors the real contract: ``active_model_version`` qualifies the version
+    with the plugin name for anything but the built-in tagger, so a backfill
+    that failed to pin the override would stamp ``<plugin>@<version>`` here.
+    """
+
+    def __init__(self, configured_plugin):
+        self._configured = configured_plugin
+        self.overrides = []
+        self.is_pixlstash_tagger_enabled = True
+
+    def _resolve(self, engine_override):
+        self.overrides.append(engine_override)
+        return engine_override if engine_override is not None else self._configured
+
+    def ensure_active_plugin_ready(self, engine_override=None):
+        self._resolve(engine_override)
+
+    def tag_images(self, image_paths, out_raw_scores=None, engine_override=None):
+        self._resolve(engine_override)
+        return {}
+
+    def active_model_version(self, engine_override=None):
+        active = self._resolve(engine_override)
+        return "v7" if active == "pixlstash_tagger" else f"{active}@1.0"
+
+
+class _FakeDB:
+    image_root = "/images"
+
+    def run_task(self, func, *args, priority=None, **kwargs):
+        return 0
+
+
+def test_backfill_pins_to_the_pixlstash_tagger_even_when_a_plugin_is_active(tmp_path):
+    """The backfill exists to recover *PixlStash tagger* confidences.
+
+    It must not silently run whatever third-party plugin the UI has configured:
+    that would stamp plugin-qualified rows, which are fenced out of anomaly
+    scoring, defeating the point of the backfill.
+    """
+    engine = _make_engine(tmp_path)
+    with Session(engine) as session:
+        pic_id = _add_picture(session, "a.jpg", tags=["dog"])
+        pic = session.get(Picture, pic_id)
+
+        workflow = _RecordingWorkflow(configured_plugin="thirdparty_tagger")
+        task = TagPredictionBackfillTask(_FakeDB(), workflow, [pic])
+        task._run_task()
+
+        # Every call pinned the built-in tagger, never the configured plugin.
+        assert workflow.overrides == ["pixlstash_tagger"] * 3
+        assert workflow.active_model_version("pixlstash_tagger") == "v7"

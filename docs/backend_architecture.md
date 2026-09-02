@@ -1377,6 +1377,18 @@ Every plugin declares:
 - **Lifecycle**: `needs_download()`, `download()`, `init(parameters)`, `unload()`, `is_loaded()`.
 - **Inference**: `tag_images(...)` (when `supports_tags`) returns `{path: list[TagResult]}`; `generate_descriptions(...)` (when `supports_descriptions`) returns `{path: caption_str}`. `TagResult` carries `tag` and `confidence` (may be `None` for LLM-based plugins).
 - **VRAM hints**: `estimated_vram_mb()`, `effective_batch_size()`.
+- **`model_version()`** — a string identifying the weights *and how they are run*, defaulting to `""`. See the fence below for why it matters; it must change whenever the numbers do, quantisation and inference runtime included.
+
+### Prediction provenance and the anomaly fence
+
+A tagger plugin whose `TagResult`s carry confidences now gets `TagPrediction` rows like the built-in tagger does — `TaggingWorkflow.tag_images(out_raw_scores=...)` collects them for whichever plugin is active, and `_tag_images_single_plugin` no longer reduces the results to bare tag strings.
+
+Two rules keep that from moving anything it should not, both in `pixlstash/db_models/tag_prediction.py`:
+
+- **Rows are stamped `<plugin>@<version>`** (`qualify_plugin_model_version`), with `unknown` when the plugin declares none. `model_version` is the *sole* staleness key — `TagTask._write_predictions_from_tags` deletes rows whose version differs and rewrites them — so a plugin that cannot version itself keeps its confidences forever. The built-in tagger keeps its bare `v<n>`, so its existing rows are not orphaned and no migration is needed.
+- **Only unqualified rows feed the anomaly penalty** (`feeds_anomaly_score`, enforced in `smart_score.fetch_anomaly_confidences` and `recompute_anomaly_tag_uncertainty`). Raw confidences are not comparable across models and the apply thresholds are calibrated against the built-in tagger, so a plugin's 0.4 reaching the penalty would move every affected picture's smart score with no user action. A **human** verdict is exempt in both directions: `label_source == HUMAN` is tested before the fence, so a person's POS/NEG counts whichever row carries it.
+
+The same built-in/plugin split guards the stale-row delete and the overwrite path (`is_plugin_model_version`): a picture holds one prediction row per tag, so without it a plugin run would clear the built-in tagger's confidences and take the picture's `anomaly_tag_uncertainty` with them. The consequence is that whichever population owns a tag keeps it — a plugin cannot record a prediction for a tag the built-in tagger already has a row for. Widening the unique key to `(picture_id, tag, model_version)` is the upgrade path if per-source predictions are ever needed. Covered by `tests/test_smart_score_invalidation.py::test_plugin_sourced_model_prediction_is_not_scored`, `::test_human_decision_on_a_plugin_row_still_counts` and `::test_plugin_write_leaves_the_built_in_taggers_predictions_alone`.
 
 ### `tagger_settings` JSON column
 
