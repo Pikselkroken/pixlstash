@@ -180,10 +180,12 @@ The steps that exist today:
    library with nothing in it says so ("…and it is empty") instead of reading as
    somebody's pictures. An unreadable vault falls back to the walk's own numbers
    rather than inventing any. Free space is shown in every
-   state. If a standalone pip/Docker config is found (`setup:probe`, via the
-   backend's own platformdirs) its `image_root` is the default for the "already
-   have" answer, and its identity consent panel appears under the field when the
-   chosen folder is that library.
+   state. **Only "start empty" gets a folder suggested for it**: a prefilled
+   path with nothing at it is how someone accepts the wrong folder and opens an
+   empty library, so the "already have" answer starts blank and asks, unless a
+   standalone pip/Docker library was found (`setup:probe`, via the backend's own
+   platformdirs) and still exists. That library's identity consent panel appears
+   under the field when the chosen folder is it.
 2. **`compute`** — CPU vs GPU, and only on a machine that has something to
    choose between: "GPU" routes through the on-demand overlay install (~2.5 GB).
    Mac = Metal, no GPU = no step, and the rail does not show a step that never
@@ -203,9 +205,15 @@ step has to repeat back what an earlier one settled. Back and Continue live in a
 footer outside the stacked steps and the steps share one grid cell, so **the
 window never changes size** as you move through it.
 
-`setup:commit` writes the desktop config, parks the privacy answer,
-installs/activates the chosen overlay, then boots the backend and navigates the
-window into the library.
+`setup:commit` writes the desktop config, parks the privacy answer, then — when
+a GPU runtime was chosen — **starts the backend on the bundled runtime before
+downloading it**. The ~2.5 GB download is network; the first read of the library
+is disk and CPU, and none of it wants a GPU, so `startAndLoad(accel, repair,
+navigate = false)` brings the server up without taking the window off the setup
+screen, and the library is hashed and thumbnailed through the download. When the
+overlay lands it is activated and the backend restarts onto it — the planner
+picks up whatever is still outstanding — and that start is the one that
+navigates the window into the library.
 
 Subsequent launches see the config exists → no steps to run → straight into the
 library.
