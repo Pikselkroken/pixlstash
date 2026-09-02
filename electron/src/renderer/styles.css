@@ -1141,18 +1141,25 @@ input[type="text"]:focus-visible,
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   row-gap: 8px;
-  align-items: baseline;
+  align-items: start;
   font-size: 13.5px;
   color: var(--fg);
 }
 
+/* The label wraps rather than clipping: "Installing the NVIDIA GPU (CUDA 12.8)
+   runtime" cut off just before its closing bracket, which reads as a rendering
+   fault rather than as a long name. Two lines are reserved so a wrap moves
+   nothing below it. */
 .phase .pname {
   font-weight: 600;
   min-width: 0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+
 
 /* The number the row is actually about, on the label's own line and aligned
    with every other number in the panel. */
@@ -1231,14 +1238,17 @@ input[type="text"]:focus-visible,
   line-height: 1.45;
   color: rgba(242, 229, 218, 0.45);
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
 }
 
+/* Two lines of pip, not three: `prettyDownload` cuts a wheel line down to
+   "Downloading torch (820.3 MB)", and the third reserved line was empty in
+   every case this has been watched in. */
 .phase--notes .pnote {
-  min-height: 4.35em;
+  min-height: 2.9em;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1316,8 +1326,8 @@ input[type="text"]:focus-visible,
 }
 
 .dots i {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: rgba(242, 229, 218, 0.25);
 }

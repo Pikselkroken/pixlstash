@@ -50,12 +50,12 @@ describe('the startup framework', () => {
     assert.match(mainSrc, /sendPhase\(\{ phase: 'reading' \}\)/);
   });
 
-  it('reserves three lines for the installer’s own line, whatever its length', () => {
+  it('reserves the installer’s line whatever its length', () => {
     // pip's line runs from "numpy" to a wrapped wheel filename, and a row that
     // grows with it walks the bar up and down the screen while you watch.
     const styles = readFileSync(join(rendererDir, 'styles.css'), 'utf8');
-    assert.match(styles, /\.phase--notes \.pnote \{[^}]*min-height: 4\.35em/s);
-    assert.match(styles, /\.phase \.pnote \{[^}]*-webkit-line-clamp: 3/s);
+    assert.match(styles, /\.phase--notes \.pnote \{[^}]*min-height: 2\.9em/s);
+    assert.match(styles, /\.phase \.pnote \{[^}]*-webkit-line-clamp: 2/s);
   });
 
   it('suggests a folder only for the answer that creates one', () => {

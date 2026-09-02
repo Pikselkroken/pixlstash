@@ -40,6 +40,12 @@ describe('reading the library folder during the runtime download', () => {
     assert.equal(taskId, 'task-7');
     assert.deepEqual(progress, [4, 9, 12], 'every poll feeds the screen its count');
     assert.match(seen[1], /task_id=task-7/);
+    // Every route is under /api/v1 - the frontend client's own API_PREFIX and
+    // what the authz registry declares. Without it the call 404s in silence.
+    assert.ok(
+      seen.every((url) => url.includes('/api/v1/folder-structure/read')),
+      `both calls must carry the API prefix: ${seen.join(', ')}`,
+    );
   });
 
   it('sends the loopback session cookie, or the backend would refuse it', async () => {
@@ -75,16 +81,22 @@ describe('reading the library folder during the runtime download', () => {
     // folder itself, exactly as it did before any of this existed.
     const fetcher = async () => jsonResponse({}, false, 500);
 
+    const reports: Array<{ failed?: boolean }> = [];
     const taskId = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       's',
       '/p',
-      () => {},
+      (p) => reports.push(p),
       NO_SLEEP,
     );
 
     assert.equal(taskId, null);
+    assert.equal(
+      reports.at(-1)?.failed,
+      true,
+      'the line it was going to fill has to say it is not filling',
+    );
   });
 
   it('keeps a cancelled read: the wizard shows what was found', async () => {

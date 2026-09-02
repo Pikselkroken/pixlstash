@@ -608,7 +608,7 @@ function planLines(useGpu) {
   if (useGpu) {
     lines.push({
       id: 'runtime',
-      name: `Installing the ${gpu.label || 'GPU'} runtime`,
+      name: `Installing ${gpu.label || 'the GPU runtime'}`,
       note: '',
       value: '',
       notes: true,
@@ -725,6 +725,18 @@ api.onPhase((p) => {
   if (!busy) return;
   if (p.phase === 'reading') {
     reading = true;
+    if (p.failed) {
+      // The read could not start. Say so on its own line rather than leaving a
+      // bar moving forever over work that is not happening: the app reads the
+      // folder itself when it opens, which is what used to happen anyway.
+      setLine('server', {
+        name: 'Reading your pictures',
+        state: 'todo',
+        value: 'When PixlStash opens',
+        fraction: -1,
+      });
+      return;
+    }
     // The read reports folders as it walks them; before the first count lands
     // there is only the fact that it started.
     const counted = p.total ? `${count(p.processed)} of ${count(p.total)} folders` : '';

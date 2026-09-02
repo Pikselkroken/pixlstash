@@ -17,6 +17,16 @@ export type ReadProgress = { processed: number; total: number; fraction: number 
 /** A fetch that carries the loopback session cookie (Electron's `net.fetch`). */
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
 
+/**
+ * Every route lives under this. The frontend's own client carries it as
+ * `API_PREFIX` and the authz registry declares every policy against it
+ * (`("POST", "/api/v1/folder-structure/read")`), so a call without it is a 404
+ * - which is silent here by design, and therefore took a run on real hardware
+ * to notice: the read never started, the line never got a count, and the app
+ * read the folder again from scratch.
+ */
+const API_PREFIX = '/api/v1';
+
 /** How often to ask a running read how far it has got. */
 const POLL_MS = 700;
 
@@ -44,13 +54,13 @@ export async function readLibraryFolder(
   baseUrl: string,
   sessionToken: string,
   path: string,
-  onProgress: (progress: ReadProgress) => void,
+  onProgress: (progress: ReadProgress & { failed?: boolean }) => void,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => number = Date.now,
 ): Promise<string | null> {
   let taskId: string;
   try {
-    const response = await fetcher(`${baseUrl}/folder-structure/read`, {
+    const response = await fetcher(`${baseUrl}${API_PREFIX}/folder-structure/read`, {
       method: 'POST',
       headers: cookieHeader(sessionToken),
       // `match_existing: false` for the same reason the wizard passes it: the
@@ -60,16 +70,19 @@ export async function readLibraryFolder(
     });
     if (!response.ok) {
       console.warn(`[startup] could not start the folder read: HTTP ${response.status}`);
+      onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
       return null;
     }
     const started = (await response.json()) as { task_id?: string };
     if (!started?.task_id) {
       console.warn('[startup] the folder read started without a task id');
+      onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
       return null;
     }
     taskId = started.task_id;
   } catch (e) {
     console.warn('[startup] could not start the folder read:', e);
+    onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
     return null;
   }
 
@@ -88,7 +101,7 @@ export async function readLibraryFolder(
     };
     try {
       const response = await fetcher(
-        `${baseUrl}/folder-structure/read/status?task_id=${encodeURIComponent(taskId)}`,
+        `${baseUrl}${API_PREFIX}/folder-structure/read/status?task_id=${encodeURIComponent(taskId)}`,
         { headers: cookieHeader(sessionToken) },
       );
       if (!response.ok) {
