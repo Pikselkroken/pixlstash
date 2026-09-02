@@ -12,7 +12,18 @@
  * the owner still answers, in the app, before a single file is touched.
  */
 
-export type ReadProgress = { processed: number; total: number; fraction: number };
+export type ReadProgress = {
+  processed: number;
+  total: number;
+  fraction: number;
+  /**
+   * `walking` counts folders, `faces` counts pictures, and a read with no
+   * inference engine never reaches `faces` at all. The two are separate counts,
+   * not two halves of one, so the screen names what it is counting rather than
+   * pretending a single number ran from 0 to 100.
+   */
+  stage: string;
+};
 
 /** A fetch that carries the loopback session cookie (Electron's `net.fetch`). */
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
@@ -70,19 +81,19 @@ export async function readLibraryFolder(
     });
     if (!response.ok) {
       console.warn(`[startup] could not start the folder read: HTTP ${response.status}`);
-      onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
+      onProgress({ processed: 0, total: 0, fraction: -1, stage: '', failed: true });
       return null;
     }
     const started = (await response.json()) as { task_id?: string };
     if (!started?.task_id) {
       console.warn('[startup] the folder read started without a task id');
-      onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
+      onProgress({ processed: 0, total: 0, fraction: -1, stage: '', failed: true });
       return null;
     }
     taskId = started.task_id;
   } catch (e) {
     console.warn('[startup] could not start the folder read:', e);
-    onProgress({ processed: 0, total: 0, fraction: -1, failed: true });
+    onProgress({ processed: 0, total: 0, fraction: -1, stage: '', failed: true });
     return null;
   }
 
@@ -95,6 +106,7 @@ export async function readLibraryFolder(
     await sleep(POLL_MS);
     let status: {
       status?: string;
+      stage?: string;
       processed?: number;
       total?: number;
       progress?: number;
@@ -114,10 +126,17 @@ export async function readLibraryFolder(
       return null;
     }
 
+    const processed = Number(status.processed) || 0;
+    const total = Number(status.total) || 0;
     onProgress({
-      processed: Number(status.processed) || 0,
-      total: Number(status.total) || 0,
-      fraction: typeof status.progress === 'number' ? status.progress : -1,
+      processed,
+      total,
+      // The backend's own `progress` is a PERCENTAGE (`processed / total * 100`),
+      // and reading it as a 0..1 fraction filled the bar at anything past one
+      // per cent - a full bar at 50 of 153. The two counts it is derived from
+      // are unambiguous, so the fraction comes from them.
+      fraction: total > 0 ? Math.min(1, processed / total) : -1,
+      stage: String(status.stage || ''),
     });
 
     // `cancelled` keeps whatever was found, so it is a usable result too - the

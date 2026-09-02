@@ -107,7 +107,7 @@ describe('the startup framework', () => {
   it('states the number each row is about', () => {
     // The widest object on the screen was also the least informative: the read
     // knows its folder counts and pip names every wheel's size.
-    assert.match(script, /of \$\{count\(p\.total\)\} folders/);
+    assert.match(script, /of \$\{count\(p\.total\)\} \$\{noun\}/);
     assert.match(script, /humanBytes\(done\)\} of \$\{humanBytes\(total\)/);
     assert.match(mainSrc.replace(/\s+/g, ' '), /bytesDone|install:progress/);
   });

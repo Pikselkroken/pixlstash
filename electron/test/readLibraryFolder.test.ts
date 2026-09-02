@@ -16,10 +16,12 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 describe('reading the library folder during the runtime download', () => {
   it('follows the read to the end and hands back the task the wizard resumes', async () => {
     const seen: string[] = [];
+    // `progress` is the backend's own PERCENTAGE, and it is deliberately wrong
+    // here: nothing may read it as a fraction.
     const statuses = [
-      { status: 'running', processed: 4, total: 12, progress: 0.33 },
-      { status: 'running', processed: 9, total: 12, progress: 0.75 },
-      { status: 'completed', processed: 12, total: 12, progress: 1 },
+      { status: 'running', stage: 'walking', processed: 4, total: 12, progress: 33.3 },
+      { status: 'running', stage: 'faces', processed: 50, total: 153, progress: 32.7 },
+      { status: 'completed', stage: 'done', processed: 153, total: 153, progress: 100 },
     ];
     const fetcher = async (url: string) => {
       seen.push(url);
@@ -27,18 +29,27 @@ describe('reading the library folder during the runtime download', () => {
       return jsonResponse(statuses.shift());
     };
     const progress: number[] = [];
+    const fractions: number[] = [];
 
     const taskId = await readLibraryFolder(
       fetcher,
       'http://127.0.0.1:9999',
       'session-token',
       '/home/me/Pictures',
-      (p) => progress.push(p.processed),
+      (p) => {
+        progress.push(p.processed);
+        fractions.push(Number(p.fraction.toFixed(3)));
+      },
       NO_SLEEP,
     );
 
     assert.equal(taskId, 'task-7');
-    assert.deepEqual(progress, [4, 9, 12], 'every poll feeds the screen its count');
+    assert.deepEqual(progress, [4, 50, 153], 'every poll feeds the screen its count');
+    assert.deepEqual(
+      fractions,
+      [0.333, 0.327, 1],
+      'the fraction comes from the counts: reading the percentage as one filled the bar at 50 of 153',
+    );
     assert.match(seen[1], /task_id=task-7/);
     // Every route is under /api/v1 - the frontend client's own API_PREFIX and
     // what the authz registry declares. Without it the call 404s in silence.

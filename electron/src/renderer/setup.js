@@ -737,9 +737,11 @@ api.onPhase((p) => {
       });
       return;
     }
-    // The read reports folders as it walks them; before the first count lands
-    // there is only the fact that it started.
-    const counted = p.total ? `${count(p.processed)} of ${count(p.total)} folders` : '';
+    // The read counts folders while it walks them and pictures while it looks
+    // for faces, so the line names what it is counting. Calling both "folders"
+    // is how a count of 153 pictures ended up labelled as folders.
+    const noun = p.stage === 'faces' ? 'pictures' : 'folders';
+    const counted = p.total ? `${count(p.processed)} of ${count(p.total)} ${noun}` : '';
     setLine('server', {
       name: 'Reading your pictures',
       state: 'running',
