@@ -102,7 +102,7 @@ class TagPredictionBackfillTask(BaseTask):
         # model would apply (the picture already has its tags).
         full_scores_by_path: dict = {}
         inference_start = time.perf_counter()
-        workflow.tag_images(image_paths, out_raw_pixlstash_scores=full_scores_by_path)
+        workflow.tag_images(image_paths, out_raw_scores=full_scores_by_path)
         inference_s = time.perf_counter() - inference_start
 
         label_scores_by_pic_id: dict[int, dict] = {}
@@ -127,7 +127,7 @@ class TagPredictionBackfillTask(BaseTask):
                 unscored,
             )
 
-        model_version = self._resolve_model_version(workflow)
+        model_version = workflow.active_model_version()
         written = self._db.run_task(
             self._backfill_predictions,
             label_scores_by_pic_id,
@@ -149,20 +149,6 @@ class TagPredictionBackfillTask(BaseTask):
             "backfilled": int(written or 0),
             "pictures": len(attempted_pic_ids),
         }
-
-    @staticmethod
-    def _resolve_model_version(workflow: TaggingWorkflow) -> str:
-        """Resolve the PixlStash tagger version string (mirrors TagTask)."""
-        try:
-            version_fn = getattr(workflow._engine, "pixlstash_tagger_version", None)
-            if callable(version_fn):
-                return f"v{version_fn()}"
-        except Exception:
-            logger.warning(
-                "pixlstash_tagger_version() failed, using 'unknown' model version",
-                exc_info=True,
-            )
-        return "unknown"
 
     @staticmethod
     def _backfill_predictions(

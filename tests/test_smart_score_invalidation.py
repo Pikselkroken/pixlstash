@@ -24,7 +24,11 @@ from sqlmodel import select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
-from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.db_models.tag_prediction import (
+    feeds_anomaly_score,
+    qualify_plugin_model_version,
+    TagPrediction,
+)
 from pixlstash.event_types import EventType
 from pixlstash.scoring import (
     fetch_anomaly_confidences,
@@ -135,6 +139,36 @@ def _seed_tag(server, pic_id, tag):
         session.commit()
 
     server.vault.db.run_task(insert)
+
+
+def _set_model_version(server, pic_id, tag, model_version):
+    """Restamp a seeded prediction so the test can vary only its source."""
+
+    def update(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).one()
+        row.model_version = model_version
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
+def _set_label_state(server, pic_id, tag, label_state):
+    """Flip an existing ledger row's human verdict in place."""
+
+    def update(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).one()
+        row.label_state = label_state
+        session.commit()
+
+    server.vault.db.run_task(update)
 
 
 def _wait_for(predicate, timeout=10.0):
@@ -1707,3 +1741,133 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
     finally:
         server.close()
         temp_dir.cleanup()
+
+
+# --- Tagger-plugin predictions are fenced out of the anomaly penalty --------------
+# ``TagPrediction`` rows can now come from a third-party tagger plugin, stamped with a
+# qualified ``model_version`` (``<plugin>@<version>``). Raw confidences are not
+# comparable between models - the apply thresholds above are calibrated against the
+# built-in tagger - so a plugin's score must never reach the penalty, or switching
+# tagger would move every affected picture's smart score with nothing on screen to
+# explain it. A *human* verdict still counts whichever row carries it.
+
+
+def test_plugin_sourced_model_prediction_is_not_scored():
+    """A plugin's confidence is dropped even when tagged and above the threshold."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
+        _seed_prediction(server, pic_id, "watermark", confidence=0.8)  # > 0.6
+        _set_model_version(server, pic_id, "watermark", "joycaption@2026-01")
+
+        probs, human = _probs(server, pic_id)
+        assert "watermark" not in probs.get(pic_id, {})
+        assert (
+            anomaly_penalty(
+                probs.get(pic_id, {}),
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
+        )
+
+        # The ungated read drops it too: this is a source fence, not a threshold.
+        raw, _ = server.vault.db.run_task(
+            lambda s: fetch_anomaly_confidences(s, [pic_id])
+        )
+        assert "watermark" not in raw.get(pic_id, {})
+
+        # Control: the identical row unqualified *is* scored, proving the
+        # model_version is what removed it and not the seeding.
+        _set_model_version(server, pic_id, "watermark", "v43")
+        probs, _ = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.8)
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_human_decision_on_a_plugin_row_still_counts():
+    """The fence drops model confidences, never a person's verdict."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_human_prediction(server, pic_id, "watermark", POS, confidence=0.1)
+        _set_model_version(server, pic_id, "watermark", "joycaption@2026-01")
+
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(1.0)
+        assert "watermark" in human[pic_id]
+
+        # And the negative direction, on the same plugin-stamped row.
+        _set_label_state(server, pic_id, "watermark", NEG)
+        probs, _ = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.0)
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_plugin_write_leaves_the_built_in_taggers_predictions_alone():
+    """A plugin run must not delete or overwrite built-in rows as stale.
+
+    One row per ``(picture, tag)`` is all the unique key allows, so without the
+    built-in/plugin split in the stale-row delete, running a plugin would clear the
+    built-in tagger's confidences and take the picture's anomaly penalty with them.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
+        _seed_prediction(server, pic_id, "watermark", confidence=0.8)
+
+        written = server.vault.db.run_task(
+            TagTask._write_predictions_from_tags,
+            {pic_id: {"watermark": 0.05, "bad anatomy": 0.9}},
+            {pic_id: {"watermark"}},
+            "joycaption@2026-01",
+        )
+
+        rows = server.vault.db.run_task(
+            lambda s: {
+                r.tag: (r.model_version, r.confidence)
+                for r in s.exec(
+                    select(TagPrediction).where(TagPrediction.picture_id == pic_id)
+                ).all()
+            }
+        )
+        # The built-in row survives untouched, version and confidence.
+        assert rows["watermark"] == ("test-v1", pytest.approx(0.8))
+        # The plugin's own prediction for a tag nobody owned is still recorded.
+        assert rows["bad anatomy"][0] == "joycaption@2026-01"
+        assert written >= 1
+
+        # And the surviving built-in confidence still drives the penalty.
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.8)
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            > 0.0
+        )
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_model_version_helpers_split_built_in_from_plugin_rows():
+    """The predicate the fence is built on, including the legacy shapes."""
+    assert qualify_plugin_model_version("joycaption", "2026-01") == "joycaption@2026-01"
+    assert qualify_plugin_model_version("joycaption", None) == "joycaption@unknown"
+    assert qualify_plugin_model_version("joycaption", "  ") == "joycaption@unknown"
+
+    # Every row written before plugins could predict at all must keep scoring.
+    assert feeds_anomaly_score("v43")
+    assert feeds_anomaly_score("unknown")
+    assert feeds_anomaly_score("manual")
+    assert not feeds_anomaly_score("joycaption@2026-01")
+    assert not feeds_anomaly_score("joycaption@unknown")

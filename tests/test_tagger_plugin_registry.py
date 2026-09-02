@@ -1,7 +1,12 @@
 """Tests for TaggerPluginManager and first-party plugin schemas."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from pixlstash.db_models.tag_prediction import feeds_anomaly_score
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
+from pixlstash.tagger_plugins.base import TaggerPlugin, TagResult
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
 
 
@@ -200,3 +205,107 @@ def test_joycaption_schema_has_required_parameters(manager):
 def test_joycaption_is_not_loaded_before_init(manager):
     plugin = manager.get_plugin("joycaption")
     assert plugin.is_loaded() is False
+
+
+# --- Plugin-sourced tag predictions ----------------------------------------------
+# No shipped plugin exercises this path: wd14 and pixlstash_tagger both take
+# built-in routes through TaggingWorkflow, and the description plugins produce no
+# tags.  A stub stands in for the third-party plugin the path exists for.
+
+
+class _StubTagger(TaggerPlugin):
+    """Minimal third-party tag plugin: two scored tags and one unscored."""
+
+    name = "stub_tagger"
+    supports_tags = True
+    requires_download = False
+
+    def __init__(self, version: str = "2026-01") -> None:
+        self._version = version
+
+    def model_version(self) -> str:
+        return self._version
+
+    def parameter_schema(self):
+        return []
+
+    def needs_download(self, parameters=None) -> bool:
+        return False
+
+    def init(self, parameters) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    def is_loaded(self) -> bool:
+        return True
+
+    def tag_images(self, image_paths, parameters, preloaded=None, stop_event=None):
+        return {
+            path: [
+                TagResult("watermark", 0.8),
+                TagResult("sunset", 0.25),
+                TagResult("unscored", None),
+            ]
+            for path in image_paths
+        }
+
+
+def _workflow(monkeypatch, plugin, active="stub_tagger", tagger_version=43):
+    """A TaggingWorkflow whose registry resolves *plugin* by name."""
+    manager = SimpleNamespace(get_plugin=lambda n: plugin if n == plugin.name else None)
+    monkeypatch.setattr(
+        "pixlstash.tagger_plugins.registry.get_tagger_plugin_manager",
+        lambda: manager,
+    )
+    engine = SimpleNamespace(
+        device="cpu", pixlstash_tagger_version=lambda: tagger_version
+    )
+    return TaggingWorkflow(
+        engine=engine,
+        use_wd14=False,
+        use_pixlstash_tagger=(active == "pixlstash_tagger"),
+        tagger_settings={"active_tag_plugin": active},
+    )
+
+
+def test_plugin_confidences_reach_the_caller(monkeypatch):
+    """The workflow used to reduce results to bare tags and drop every score."""
+    workflow = _workflow(monkeypatch, _StubTagger())
+    scores = {}
+
+    tags = workflow.tag_images(["/tmp/a.png"], out_raw_scores=scores)
+
+    assert tags["/tmp/a.png"] == ["sunset", "unscored", "watermark"]
+    # A tag the plugin declined to score contributes nothing, rather than a 0.0
+    # the caller would be unable to tell from a real zero.
+    assert scores["/tmp/a.png"] == {"watermark": 0.8, "sunset": 0.25}
+
+
+def test_plugin_predictions_are_stamped_with_the_plugin_and_version(monkeypatch):
+    workflow = _workflow(monkeypatch, _StubTagger("2026-01"))
+    assert workflow.active_model_version() == "stub_tagger@2026-01"
+
+
+def test_a_plugin_that_declares_no_version_is_stamped_unknown(monkeypatch):
+    """The default from the ABC. Such rows never go stale - documented, not silent."""
+    workflow = _workflow(monkeypatch, _StubTagger(""))
+    assert workflow.active_model_version() == "stub_tagger@unknown"
+
+
+def test_a_plugin_whose_version_raises_does_not_break_tagging(monkeypatch):
+    plugin = _StubTagger()
+    monkeypatch.setattr(plugin, "model_version", lambda: 1 / 0, raising=False)
+    workflow = _workflow(monkeypatch, plugin)
+    assert workflow.active_model_version() == "stub_tagger@unknown"
+
+
+def test_the_built_in_tagger_keeps_its_bare_version(monkeypatch):
+    """Unqualified on purpose: it is what feeds_anomaly_score() lets through, and
+    changing it would orphan every prediction row already in a vault."""
+    workflow = _workflow(
+        monkeypatch, _StubTagger(), active="pixlstash_tagger", tagger_version=43
+    )
+    assert workflow.active_model_version() == "v43"
+    assert feeds_anomaly_score(workflow.active_model_version())

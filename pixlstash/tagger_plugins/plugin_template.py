@@ -111,6 +111,18 @@ class MyCaptioner(TaggerPlugin):
         self._model = None
         self._device = "cpu"
 
+    def model_version(self) -> str:
+        """Identify the weights, and how they are being run.
+
+        Only matters when the plugin sets ``supports_tags`` and returns
+        confidences: it is stamped on every prediction row and is the only
+        thing that marks one stale, so returning a constant means your
+        confidences are never refreshed after the model changes.  Include
+        anything that moves the numbers - a quantisation, a different runtime -
+        because two builds that score differently are two versions.
+        """
+        return "2026-01"
+
     # ------------------------------------------------------------------
     # Schema - this JSON *is* the settings UI
     # ------------------------------------------------------------------
