@@ -254,9 +254,19 @@ def obtain_checkout(directory: Path, *, fork: bool) -> tuple[bool, bool]:
                 cwd=directory.parent,
             )
             return True, False
-        except PluginError:
+        except PluginError as exc:
             # A fork that cannot be made is not a reason to stop: the clone
             # below still gives a working checkout, and the caller says so.
+            # Logged rather than dropped, because the caller's warning can only
+            # say "you cannot push" - the reason gh gave is the part that says
+            # why, and it is the only place it is ever offered.
+            logger.warning(
+                "Could not fork %s (%s), so %s was cloned from upstream "
+                "instead and cannot be pushed to.",
+                PLUGINS_REPO,
+                exc,
+                directory,
+            )
             shutil.rmtree(directory, ignore_errors=True)
 
     _run(["git", "clone", CLONE_URL, str(directory)])
@@ -427,7 +437,11 @@ def check_name_free(checkout: Path, name: str, kind: str) -> None:
     # answers: "the name is taken" when what happened is you already made it.
     folder = checkout / "plugins" / kind / name
     if folder.exists():
-        raise PluginError(f"{folder} already exists.")
+        raise PluginError(
+            f"{folder} already exists, from an earlier run of this command or "
+            "from work of your own. Carry on there, delete it, or pick "
+            "another name."
+        )
     if name in taken_names(checkout):
         raise PluginError(
             f"the name {name!r} is taken: {PLUGINS_REPO} already publishes a "
@@ -501,6 +515,13 @@ def _header_literal(field_name: str, value: str, width: int = _LINE_LENGTH) -> s
     return f"    {field_name} = (\n{body}\n    )"
 
 
+#: One header assignment in a class body, whether it is written on one line or
+#: wrapped into a bracketed run of adjacent literals.  The bracketed branch is
+#: lazy and demands the closing `    )` at the class body's own indent, so it
+#: stops at this field's own bracket rather than swallowing the ones below it.
+_WRAPPABLE_FIELD = r"^    {field} = (?:\((?:\n[^\n]*)*?\n    \)|[^\n]*)$"
+
+
 def _rewrite_header(source: str, values: dict[str, str]) -> tuple[str, list[str]]:
     """Replace the example's header values with *values*, reporting misses.
 
@@ -509,6 +530,12 @@ def _rewrite_header(source: str, values: dict[str, str]) -> tuple[str, list[str]
     warning rather than a refusal: the scaffold is still usable, and the one
     thing that must not happen is shipping a pull request that silently credits
     the example's author.
+
+    The value being replaced may itself be wrapped across lines, because
+    `_header_literal` writes it that way whenever it will not fit and the
+    example being copied may well be a plugin this tool scaffolded.  Matching
+    only the first physical line would leave the old continuation lines and
+    their closing bracket behind, in a module that no longer parses.
     """
     warnings: list[str] = []
     for field_name, value in values.items():
@@ -518,7 +545,7 @@ def _rewrite_header(source: str, values: dict[str, str]) -> tuple[str, list[str]
         # `\g` in it would be read as a group reference by `re`.
         literal = _header_literal(field_name, value)
         source, count = re.subn(
-            rf"^    {field_name} = .*$",
+            _WRAPPABLE_FIELD.format(field=field_name),
             lambda _match, literal=literal: literal,
             source,
             count=1,
@@ -530,6 +557,42 @@ def _rewrite_header(source: str, values: dict[str, str]) -> tuple[str, list[str]
                 "holds whatever the example declared; set it by hand."
             )
     return source, warnings
+
+
+def _refuse_unparseable(source: str) -> None:
+    """Raise unless the rewritten module is still Python.
+
+    The last check before anything is written.  Everything this module
+    substitutes is text the contributor typed - a purpose holding ``\"\"\"`` or
+    ending in a backslash closes the docstring early, and a header rewrite that
+    misses part of what it was replacing leaves the rest of it stranded - and
+    all of it lands in a file the tool then reports as a success.  Refusing
+    here is the difference between one error naming the field and a pull
+    request that will not import.
+    """
+    try:
+        ast.parse(source)
+    except SyntaxError as exc:
+        raise PluginError(
+            f"the scaffolded module would not parse: {exc.msg} "
+            f"(line {exc.lineno}), from {_blame(source, exc.lineno)}. "
+            "Nothing was written. Give that field a plainer value and run "
+            "this again."
+        ) from exc
+
+
+def _blame(source: str, lineno: int | None) -> str:
+    """Name what was being written where *lineno* is, for a refusal to quote.
+
+    The nearest header assignment at or above the failure, because that is what
+    the rewrite put there; nothing above it means the failure is in the module
+    docstring, which is the only other thing this tool writes.
+    """
+    for line in reversed(source.splitlines()[: lineno or 0]):
+        match = re.match(r"^    (\w+) = ", line)
+        if match:
+            return f"`{match[1]}`"
+    return "the module docstring, which holds --purpose"
 
 
 def _replace_docstring(source: str, text: str) -> str:
@@ -680,69 +743,82 @@ def scaffold(
         source_folder, folder, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
     )
 
-    # An image plugin's folder holds one `.py` named after it - the loader
-    # scans for files and never sees the folder - so the rename is part of the
-    # contract rather than tidiness.
-    module = folder / primary.file.name
-    if module.name != "__init__.py":
-        renamed = folder / f"{name}.py"
-        module.rename(renamed)
-        module = renamed
+    try:
+        # An image plugin's folder holds one `.py` named after it - the loader
+        # scans for files and never sees the folder - so the rename is part of
+        # the contract rather than tidiness.
+        module = folder / primary.file.name
+        if module.name != "__init__.py":
+            renamed = folder / f"{name}.py"
+            module.rename(renamed)
+            module = renamed
 
-    label = display_name or display_name_for(name)
-    source = read_source(module)
-    source = source.replace(primary.name, name)
-    source = source.replace(primary.class_name, class_name_for(name))
-    # What the contributor said the plugin is for goes here as well as in the
-    # README: this is the file they - or the coding agent they hand it to -
-    # will have open, and a docstring still saying TODO next to a README that
-    # does not is the pair that gets left inconsistent.
-    said = " ".join((purpose or "").split())
-    body = (
-        "\n".join(textwrap.wrap(said, width=79))
-        if said
-        else "TODO: what it does, and how."
-    )
-    source = _replace_docstring(source, f"{label} plugin for PixlStash.\n\n{body}\n")
-    source, warnings = _rewrite_header(
-        source,
-        {
-            "display_name": label,
-            "description": description
-            or first_sentence(purpose)
-            or _PLACEHOLDER_DESCRIPTION,
-            "author": author or git_identity(checkout) or _PLACEHOLDER_AUTHOR,
-            "license": plugin_license,
-        },
-    )
-    module.write_text(source, encoding="utf-8")
+        label = display_name or display_name_for(name)
+        source = read_source(module)
+        source = source.replace(primary.name, name)
+        source = source.replace(primary.class_name, class_name_for(name))
+        # What the contributor said the plugin is for goes here as well as in
+        # the README: this is the file they - or the coding agent they hand it
+        # to - will have open, and a docstring still saying TODO next to a
+        # README that does not is the pair that gets left inconsistent.
+        said = " ".join((purpose or "").split())
+        body = (
+            "\n".join(textwrap.wrap(said, width=79))
+            if said
+            else "TODO: what it does, and how."
+        )
+        source = _replace_docstring(
+            source, f"{label} plugin for PixlStash.\n\n{body}\n"
+        )
+        source, warnings = _rewrite_header(
+            source,
+            {
+                "display_name": label,
+                "description": description
+                or first_sentence(purpose)
+                or _PLACEHOLDER_DESCRIPTION,
+                "author": author or git_identity(checkout) or _PLACEHOLDER_AUTHOR,
+                "license": plugin_license,
+            },
+        )
+        _refuse_unparseable(source)
+        module.write_text(source, encoding="utf-8")
 
-    # Written fresh rather than rewritten: the example's README describes the
-    # example, and every sentence of it left in place is a sentence a reviewer
-    # has to notice is a lie.
-    readme = folder / "README.md"
-    readme.write_text(
-        README.format(
-            display_name=label,
-            name=name,
-            brief=BRIEF_NAME,
-            license=plugin_license,
-            purpose=(purpose or "").strip() or PURPOSE_TODO,
-        ),
-        encoding="utf-8",
-    )
+        # Written fresh rather than rewritten: the example's README describes
+        # the example, and every sentence of it left in place is a sentence a
+        # reviewer has to notice is a lie.
+        readme = folder / "README.md"
+        readme.write_text(
+            README.format(
+                display_name=label,
+                name=name,
+                brief=BRIEF_NAME,
+                license=plugin_license,
+                purpose=(purpose or "").strip() or PURPOSE_TODO,
+            ),
+            encoding="utf-8",
+        )
 
-    brief = folder / BRIEF_NAME
-    brief.write_text(
-        BRIEF.format(
-            name=name,
-            kind=kind,
-            example=example,
-            module=module.name,
-            purpose=(purpose or "").strip() or BRIEF_NO_PURPOSE,
-        ),
-        encoding="utf-8",
-    )
+        brief = folder / BRIEF_NAME
+        brief.write_text(
+            BRIEF.format(
+                name=name,
+                kind=kind,
+                example=example,
+                module=module.name,
+                purpose=(purpose or "").strip() or BRIEF_NO_PURPOSE,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        # Everything above the copy is a check; everything below it can still
+        # fail, and what it leaves behind is the example's code under this
+        # plugin's name with the example author's header on it - the exact
+        # pull request this module exists to stop anyone opening. Removed so
+        # the retry finds nothing rather than a folder it has to refuse.
+        logger.warning("Scaffolding %s failed; removing %s.", name, folder)
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     return folder, module, readme, brief, warnings
 
 
@@ -829,6 +905,11 @@ def create(
         if checkout_state is not None
         else obtain_checkout(directory, fork=readiness.can_fork)
     )
+    # Before the branch rather than inside `scaffold`, which is where the same
+    # check runs on the way past: a name the repository already publishes would
+    # otherwise be discovered one step too late, leaving a branch behind in the
+    # contributor's checkout that the refusal never mentions.
+    check_name_free(directory, name, kind)
     start_branch(directory, branch)
     folder, module, readme, brief, warnings = scaffold(
         directory,
@@ -876,10 +957,21 @@ def create(
 #: being asked about without being told twice.
 _BRANCH_PREFIX = "add-"
 
-#: The repository's own checks, in the order its instructions run them:
-#: formatting changes lines, so linting before it reports positions that are
-#: about to move.
-CHECKS = (("ruff", ["format", "."]), ("ruff", ["check", "."]), ("pytest", ["-q"]))
+#: The repository's own checks, in the order its instructions run them.
+#:
+#: ``format --check`` rather than ``format``: this is a gate in front of a
+#: push, and the checkout is the contributor's own. Reformatting it would
+#: rewrite every Python file in it - including work of their own that has
+#: nothing to do with the plugin - before the confirmation is asked and even
+#: under ``--dry-run``, and `commit` stages only the plugin folder, so the
+#: churn would be left behind uncommitted for them to find. All three checks
+#: read; none of them writes. Formatting is the contributor's own `ruff
+#: format .`, run when they mean it.
+CHECKS = (
+    ("ruff", ["format", "--check", "."]),
+    ("ruff", ["check", "."]),
+    ("pytest", ["-q"]),
+)
 
 
 @dataclass

@@ -981,3 +981,199 @@ def test_a_pending_commit_is_finished_by_the_next_start_up(tmp_path):
         indexed, people = second.vault.db.run_immediate_read_task(read)
         assert indexed == 2, "the pictures the killed import never got to index"
         assert people == ["Anna"], "and the person its assignments named"
+
+
+def test_a_taken_project_name_does_not_wedge_the_commit(owner_env):
+    """`Project.name` is unique case-insensitively across the library. Marking a
+    folder as a project and choosing "start a new one" while that name is taken
+    raised IntegrityError, which is neither CommitError nor CommitStopped - so
+    the route left the durable record *pending*, every start-up resumed it,
+    re-walked and re-hashed the whole root, and failed identically for ever.
+
+    The owner asked for a new one, so they get a new one under a free name.
+    """
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.project import Project
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        CommitResult,
+        _link_pictures,
+    )
+    from sqlmodel import select
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+
+    def scenario(session):
+        session.add(Project(name="Taken Name"))
+        session.flush()
+        pic = Picture(file_path="name-clash/Taken Name/a.jpg")
+        session.add(pic)
+        session.flush()
+
+        _link_pictures(
+            session,
+            [pic],
+            [Assignment(relative_path="Taken Name", kind="project")],
+            os.path.join(image_root, "name-clash"),
+            image_root,
+            CommitResult(),
+        )
+        session.commit()
+        names = sorted(
+            session.exec(
+                select(Project.name).where(Project.name.like("Taken Name%"))
+            ).all()
+        )
+        return names, session.get(Picture, pic.id).project_id
+
+    names, project_id = server.vault.db.run_task(scenario)
+    assert names == ["Taken Name", "Taken Name (2)"], names
+    assert project_id is not None, "the picture must still be filed"
+
+
+def test_committing_the_same_folder_twice_is_idempotent(owner_env):
+    """A resumed or re-run commit re-links pictures that already carry their
+    assignments. PictureProjectMember and PictureSetMember have composite
+    primary keys and Tag a (picture_id, tag) unique constraint, so the second
+    pass raised IntegrityError and wedged the record pending."""
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        CommitResult,
+        _link_pictures,
+    )
+    from sqlmodel import select
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+
+    def scenario(session):
+        pic = Picture(file_path="twice/gallery/b.jpg")
+        session.add(pic)
+        session.flush()
+        assignments = [Assignment(relative_path="gallery", kind="tag")]
+        for _ in range(2):
+            _link_pictures(
+                session,
+                [pic],
+                assignments,
+                os.path.join(image_root, "twice"),
+                image_root,
+                CommitResult(),
+            )
+            session.commit()
+        return session.exec(select(Tag).where(Tag.picture_id == pic.id)).all()
+
+    tags = server.vault.db.run_task(scenario)
+    assert len(tags) == 1, f"the second commit must not duplicate the tag: {tags}"
+
+
+def test_the_commit_holds_a_library_lease_for_its_whole_run(owner_env, monkeypatch):
+    """The commit thread re-reads `server.vault` at every step and used to hold
+    no lease, so `LibraryGenerationCoordinator.begin_switch` saw zero readers
+    and let a switch through mid run. A commit against library A that survived
+    one created A's projects, people, sets and tags inside B, linked B's rows to
+    them, and wrote A's durable record into B - so B resumed A's commit at the
+    next start-up. The window is INDEX_TIMEOUT_S: thirty minutes.
+
+    A lease held for the thread's life makes `begin_switch` wait and then fail
+    instead of proceeding, which is the honest answer: the library is busy.
+    """
+    from pixlstash.services import (
+        folder_structure_commit_service as commit_service_module,
+    )
+
+    owner = owner_env["owner"]
+    server = owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "lease-library")
+    _make_tree(root, {"Shoots/mira": ["a.jpg"]})
+
+    read_task_id = owner.post(_READ, json={"path": root}).json()["task_id"]
+    assert _drain_read(owner, read_task_id)["status"] == "completed"
+
+    real_acquire = server.library_coordinator.acquire_read
+    real_release = server.library_coordinator.release_read
+    held: list = []
+    released: list = []
+    # Readers seen by the coordinator at the moment the commit does its work.
+    # This is the number `begin_switch` waits on, so a zero here is the bug.
+    readers_during_work: list = []
+    real_stage = commit_service_module.record_commit_stage
+
+    def watched_acquire():
+        lease = real_acquire()
+        held.append(lease)
+        return lease
+
+    def watched_release(lease):
+        released.append(lease)
+        return real_release(lease)
+
+    def watched_stage(srv, task_id, stage, *args, **kwargs):
+        # "assigning" is the step both modes reach and the one that writes the
+        # projects, people, sets and tags into whatever vault is active.
+        if stage == "assigning":
+            coordinator = server.library_coordinator
+            readers_during_work.append(
+                coordinator._readers.get(coordinator.generation, 0)
+            )
+        return real_stage(srv, task_id, stage, *args, **kwargs)
+
+    monkeypatch.setattr(server.library_coordinator, "acquire_read", watched_acquire)
+    monkeypatch.setattr(server.library_coordinator, "release_read", watched_release)
+    monkeypatch.setattr(commit_service_module, "record_commit_stage", watched_stage)
+
+    started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "assignments": [{"relative_path": "Shoots", "kind": "project"}],
+        },
+    )
+    assert started.status_code == 200, started.text
+    settled = _drain_commit(owner, started.json()["task_id"], timeout_s=60.0)
+    assert settled["status"] == "completed", settled
+
+    assert held and held[0] is not None, "the commit must take a library lease"
+    assert released, "and must give it back when it finishes"
+    assert readers_during_work, "the commit never reached the assigning step"
+    assert readers_during_work[0] > 0, (
+        "a switch would have been let through while the commit was working: "
+        f"begin_switch saw {readers_during_work[0]} reader(s)"
+    )
+
+
+def test_a_switch_refused_by_a_running_commit_says_why(owner_env):
+    """The refusal is the intended behaviour, so it has to read like one.
+
+    `begin_switch` raises "Timed out waiting for active-library readers", which
+    is the right mechanism and the wrong sentence to hand an owner who simply
+    pressed Switch while a mapping was still being organised.
+    """
+    server = owner_env["server"]
+
+    with server.folder_structure_commit_lock:
+        server.folder_structure_commit = {
+            "task_id": "pretend-running",
+            "status": "running",
+            "stage": "assigning",
+            "processed": 0,
+            "total": 1,
+            "error": None,
+            "result": None,
+            "stop": None,
+        }
+    try:
+        assert (
+            server.library_switch._what_is_holding_the_library()
+            == "a folder mapping is still being organised"
+        )
+    finally:
+        with server.folder_structure_commit_lock:
+            server.folder_structure_commit = None
+
+    # With nothing running there is nothing to name, and the caller falls back
+    # to the coordinator's own words rather than inventing a reason.
+    assert server.library_switch._what_is_holding_the_library() is None

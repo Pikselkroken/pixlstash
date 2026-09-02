@@ -271,11 +271,26 @@ onUnmounted(() => {
       </AppButton>
       <!-- Organise later stays available WHILE the import runs: it is the
            answer to "this is taking ages and I do not want to watch", and it
-           means the same thing at both moments - index it all, map it later. -->
-      <AppButton variant="secondary" @click="organiseLater">
+           means the same thing at both moments - index it all, map it later.
+           Both stops are disabled for the seconds between `committing` going
+           true and the server answering with a task id: there is nothing to
+           stop yet, and pressing them then sent `stop("")`, which fails with
+           "Could not stop the import." while the mapping commits anyway.
+           Disabled rather than a silent early return, because a live button
+           that does nothing is the same bug with the error message removed. -->
+      <AppButton
+        variant="secondary"
+        :disabled="committing && !commitTaskId"
+        @click="organiseLater"
+      >
         Organise later
       </AppButton>
-      <AppButton v-if="committing" variant="ghost" @click="abort">
+      <AppButton
+        v-if="committing"
+        variant="ghost"
+        :disabled="!commitTaskId"
+        @click="abort"
+      >
         Abort
       </AppButton>
       <AppButton v-else variant="ghost" @click="emit('cancel')">

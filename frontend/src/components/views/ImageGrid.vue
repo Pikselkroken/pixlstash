@@ -1408,6 +1408,10 @@ const emit = defineEmits([
   // The empty library's folder route. The reference-folder editor is the
   // sidebar's, and App.vue already holds the ref that reaches it.
   "choose-folder",
+  // The empty library was shown. The sidebar checks whether the library's own
+  // folder holds pictures nothing has indexed and offers to bring them in.
+  "library-empty",
+  "library-loaded",
 ]);
 
 // Props
@@ -6788,6 +6792,17 @@ const showLibraryEmptyState = computed(
     !isScrapheapView.value &&
     !isSetOverlapView.value,
 );
+
+watch(showLibraryEmptyState, (shown) => {
+  if (shown) emit("library-empty");
+});
+
+// The first count answers whether this is a first run. App.vue holds the
+// telemetry question until it knows, so a fresh install meets the library
+// before it meets the privacy dialog.
+watch(totalAllPicturesCountLoaded, (loaded) => {
+  if (loaded) emit("library-loaded", { empty: showLibraryEmptyState.value });
+});
 
 /**
  * Files chosen through the empty library's "Add files…".

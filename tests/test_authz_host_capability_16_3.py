@@ -168,10 +168,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_44_local_7_loopback():
+def test_host_capability_tier_split_is_47_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 51
-    routes carry a locality tier = 44 local + 7 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 54
+    routes carry a locality tier = 47 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -394,6 +394,35 @@ def test_host_capability_tier_split_is_44_local_7_loopback():
     that is the stricter tier the write-then-open pair as a whole is on. The
     local count is unchanged: nothing else here moved.
 
+    52 = 45 + 7 with ``DELETE /folder-structure/commit`` (``bd1ff8f7``), which
+    is ``DELETE /folder-structure/read`` one route later: it stops the owner's
+    in-flight commit - abort, or "organise later" - which is authority over
+    another principal's operation and belongs on the tier that starts it. **It
+    landed without this number being moved**, so the assertion below was red on
+    ``develop`` until the entry after this one; recorded here rather than
+    quietly folded in, because a counter that gets corrected without saying so
+    is a counter nobody trusts next time.
+
+    54 = 47 + 7 with the migration pair (v1.11 Phase 4c): ``GET`` and ``POST
+    /server-config/layout/migration``, moving an existing library onto the
+    layout the pair above chose. The POST is the strongest host-filesystem
+    thing any route in this library does - it renames *every* picture in the
+    library's own root - and it is above ``POST /pictures/layout/move-to-match``
+    for the reason that route is ``picture_scoped``: there the caller names the
+    pictures, so the scope check is the check that matters; here the caller
+    names none and the scope is the whole library, so there is nothing for a
+    per-object gate to bound and the tier has to carry it instead. It takes no
+    host path - the root is the library's own, every destination is rendered
+    from a layout only this tier could have set - and the Phase 4b planner's
+    refusals still stand under it (a source outside the root, a symlink, a
+    destination that would escape). The GET is the control-surface argument
+    again, and this time for a second reason as well: what it returns is a
+    count of the owner's files, sample paths and where a mount point sits
+    inside their library, which is ``GET /folder-structure/read/status``'s
+    disclosure class. It is on ``READ_BLOCKED_GET_PATHS`` beside ``GET
+    /server-config/layout`` for the same rollback reason. The loopback count is
+    unchanged: neither route spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -407,7 +436,7 @@ def test_host_capability_tier_split_is_44_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 44, sorted(local)
+    assert len(local) == 47, sorted(local)
 
 
 # ===========================================================================
@@ -527,6 +556,104 @@ def test_local_owner_only_remote_public_allowed_with_flag_on():
             assert not _is_locality_403(r), (
                 f"allow_remote_host_ops=true must admit a remote owner; "
                 f"got {r.status_code}: {r.text}"
+            )
+
+
+def test_the_layout_migration_routes_answer_a_local_owner_end_to_end():
+    """The in-scope 200 half of the Phase 4c declaration, over a real server.
+
+    Reuses this module's own owner environment rather than standing up another:
+    what is being proved is the route contract - the preview moves nothing, the
+    run reports a cursor and a `batch_id`, and an id this route did not mint is
+    refused - and none of that needs pictures on a disk. The moving itself is
+    `tests/test_library_layout.py`'s, against a real tree.
+    """
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server):
+            # No layout: the preview is honest about it rather than 404ing.
+            r = owner.get(f"{API}/server-config/layout/migration")
+            assert r.status_code == 200, r.text
+            assert r.json()["layout"] is None
+            assert r.json()["picture_count"] == 0
+
+            assert (
+                owner.patch(
+                    f"{API}/server-config/layout",
+                    json={"layout": "project/person,set"},
+                ).status_code
+                == 200
+            )
+
+            r = owner.get(f"{API}/server-config/layout/migration")
+            assert r.status_code == 200, r.text
+            preview = r.json()
+            assert preview["layout"] == "project/person,set"
+            # An empty library has nothing to move, and every cost is zero
+            # rather than absent - the screen reads these unconditionally.
+            assert preview["picture_count"] == 0
+            assert preview["collision_count"] == 0
+            assert preview["cross_volume_count"] == 0
+            assert preview["skipped_counts"] == {}
+
+            r = owner.post(
+                f"{API}/server-config/layout/migration", json={"after_id": 0}
+            )
+            assert r.status_code == 200, r.text
+            run = r.json()
+            assert run["done"] is True
+            assert run["moved_count"] == 0
+            # Minted server-side and echoed back, so the next pass joins the
+            # same undo unit.
+            assert run["batch_id"].startswith("srv-layout-migration-")
+            assert (
+                owner.post(
+                    f"{API}/server-config/layout/migration",
+                    json={
+                        "after_id": run["next_after_id"],
+                        "batch_id": run["batch_id"],
+                    },
+                ).status_code
+                == 200
+            )
+
+            # And an id the route did not mint is refused: batch_id decides
+            # what one undo reverses.
+            r = owner.post(
+                f"{API}/server-config/layout/migration",
+                json={"after_id": 0, "batch_id": "cli-someone-elses-gesture"},
+            )
+            assert r.status_code == 400, r.text
+
+
+def test_the_layout_migration_is_refused_to_a_remote_owner():
+    """The out-of-scope half. The POST renames every picture in the library, so
+    a genuinely remote owner must not reach it with the flag off - and the GET
+    must not hand them the count and the sample paths either."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            for call in (
+                lambda: owner.get(
+                    f"{API}/server-config/layout/migration", headers=_xff("8.8.8.8")
+                ),
+                lambda: owner.post(
+                    f"{API}/server-config/layout/migration",
+                    json={"after_id": 0},
+                    headers=_xff("8.8.8.8"),
+                ),
+            ):
+                r = call()
+                assert r.status_code == 403, r.text
+                assert "allow_remote_host_ops" in r.text, r.text
+        # And the tier is a locality one, not a blanket refusal: the same owner
+        # on the LAN is admitted, so this is not passing because the route is
+        # broken.
+        with _enforcing(server):
+            assert not _is_locality_403(
+                owner.get(
+                    f"{API}/server-config/layout/migration", headers=_xff(LAN_IPV4)
+                )
             )
 
 

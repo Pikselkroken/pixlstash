@@ -288,6 +288,10 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
 
 <template>
   <div ref="root" class="map-tree" :style="{ '--sb': sb + 'px' }">
+    <p class="map-tree__sub">
+      Say what each level of folders stands for. Your files stay where they are; nothing is written until you have
+      reviewed it.
+    </p>
     <div class="map-tree__strip" role="status" aria-label="What this makes">
       <span
         v-for="kind in ALL_KINDS"
@@ -471,13 +475,25 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   min-width: 0;
 }
 
-/* The tally strip: one chip per kind, each in its own colour. */
+/* Colour is spent the way LibraryLayoutDialog spends its level hues: the
+   kind's hue is the edge, the icon and a `--level-wash` tint; the words are
+   plain on-surface ink. `accent`/`primary`/`secondary`/`tertiary` are never
+   small text (visual-language.md, "the values"): on the light theme the amber
+   measures ~2.3:1 over its own wash. */
+.map-tree__sub {
+  margin: 0;
+  padding: var(--space-4) var(--space-5) 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The tally strip: one chip per kind, each edged in its own colour. */
 .map-tree__strip {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-5);
-  background: rgb(var(--v-theme-panel));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
@@ -488,24 +504,27 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   height: 32px;
   padding: 0 var(--space-4) 0 var(--space-3);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--kind), 0.45);
-  border-left: var(--rail-w) solid rgb(var(--kind));
-  background: rgba(var(--kind), 0.14);
-  color: rgb(var(--kind));
+  border: 1px solid rgb(var(--kind));
+  background: rgba(var(--kind), var(--level-wash));
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
 
+.map-tree__chip .v-icon,
+.map-tree__kdd .v-icon:first-child {
+  color: rgb(var(--kind));
+}
+
 .map-tree__chip--folder {
-  border-color: rgba(var(--kind), calc(0.45 * var(--opacity-text-secondary)));
-  border-left-color: rgba(var(--kind), var(--opacity-text-secondary));
-  background: rgba(var(--kind), calc(0.14 * var(--opacity-text-secondary)));
-  color: rgba(var(--kind), var(--opacity-text-secondary));
+  border-color: rgba(var(--kind), var(--opacity-text-secondary));
+  background: rgba(var(--kind), calc(var(--level-wash) * var(--opacity-text-secondary)));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .map-tree__chip-count {
-  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -642,8 +661,9 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   color: inherit;
 }
 
-/* The kind dropdown: one width everywhere, filled with the kind's wash and
-   edged in its colour. Base 22%, hover 40%, echo 31%. */
+/* The kind dropdown: one width everywhere, edged in the kind's colour over its
+   wash, the same box as a layout-level select. Hover doubles the wash, echo
+   sits halfway. */
 .map-tree__kdd {
   position: relative;
   display: inline-flex;
@@ -652,13 +672,12 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   width: 152px;
   height: 26px;
   padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--kind), 0.55);
-  border-left: var(--rail-w) solid rgb(var(--kind));
+  border: 1px solid rgb(var(--kind));
   border-radius: var(--radius-sm);
-  background: rgba(var(--kind), 0.22);
-  color: rgb(var(--kind));
+  background: rgba(var(--kind), var(--level-wash));
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   text-transform: none;
   letter-spacing: 0;
   white-space: nowrap;
@@ -666,39 +685,37 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
 }
 
 .map-tree__kdd--echo {
-  background: rgba(var(--kind), 0.31);
+  background: rgba(var(--kind), calc(var(--level-wash) * 1.5));
 }
 
 .map-tree__kdd:hover {
-  background: rgba(var(--kind), 0.4);
+  background: rgba(var(--kind), calc(var(--level-wash) * 2));
 }
 
 .map-tree__kdd-label {
   flex: 1;
   min-width: 0;
-  text-align: center;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .map-tree__kdd--folder {
-  border-color: rgba(var(--kind), calc(0.55 * var(--opacity-text-secondary)));
-  border-left-color: rgba(var(--kind), var(--opacity-text-secondary));
-  background: rgba(var(--kind), calc(0.22 * var(--opacity-text-secondary)));
-  color: rgba(var(--kind), var(--opacity-text-secondary));
+  border-color: rgba(var(--kind), var(--opacity-text-secondary));
+  background: rgba(var(--kind), calc(var(--level-wash) * var(--opacity-text-secondary)));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .map-tree__kdd--folder.map-tree__kdd--echo {
-  background: rgba(var(--kind), calc(0.31 * var(--opacity-text-secondary)));
+  background: rgba(var(--kind), calc(var(--level-wash) * 1.5 * var(--opacity-text-secondary)));
 }
 
 .map-tree__kdd--folder:hover {
-  background: rgba(var(--kind), calc(0.4 * var(--opacity-text-secondary)));
+  background: rgba(var(--kind), calc(var(--level-wash) * 2 * var(--opacity-text-secondary)));
 }
 
 .map-tree__kdd--none {
   border: 1px dashed rgb(var(--v-theme-border));
-  border-left: var(--rail-w) solid transparent;
   background: transparent;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-weight: var(--weight-medium);
@@ -712,7 +729,6 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
    (background-image is set inline from the kinds present). */
 .map-tree__kdd--mixed {
   border-color: rgb(var(--v-theme-border));
-  border-left-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   background-color: rgb(var(--v-theme-input-background));
   color: rgb(var(--v-theme-on-surface));
 }

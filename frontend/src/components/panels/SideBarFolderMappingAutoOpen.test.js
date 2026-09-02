@@ -243,3 +243,44 @@ describe("no pending entry", () => {
     wrapper.unmount();
   });
 });
+
+describe("the loose-pictures offer for an empty library", () => {
+  // App.vue asks twice in one tick (`library-empty`, then `library-loaded`)
+  // and holds the telemetry question on the second answer, so the second
+  // call must resolve only once the first has decided about the wizard.
+  it("resolves every caller only once the wizard has been opened", async () => {
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    let answer;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? new Promise((resolve) => {
+            answer = () => resolve({ data: { picture_count: 12 } });
+          })
+        : Promise.resolve(respond(url)),
+    );
+    const wrapper = await mountSidebar();
+
+    const first = wrapper.vm.offerLoosePictures();
+    let secondSettled = false;
+    const second = wrapper.vm.offerLoosePictures().then(() => {
+      secondSettled = true;
+    });
+    await flushPromises();
+    expect(secondSettled).toBe(false);
+    expect(useFolderMappingStore().wizardOpen).toBe(false);
+
+    answer();
+    await Promise.all([first, second]);
+    expect(useFolderMappingStore().wizardOpen).toBe(true);
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      mode: "local_import",
+    });
+
+    wrapper.unmount();
+  });
+});

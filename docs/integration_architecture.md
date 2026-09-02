@@ -453,7 +453,7 @@ given a visible reason instead of controls that each fail.
 
 | `verdict` | `can_add` | Means |
 |---|---|---|
-| `attached` | `false` | This exact folder is a registered library (`library` names it) |
+| `attached` | `false` | This exact folder is a registered library (`library` names it). `picture_count` is still what is on disk, indexed or not: a desktop first run creates the vault in a folder that may already hold pictures, and the empty library asks this to know whether to offer bringing them in |
 | `overlaps` | `false` | A registered library contains it, or it contains one (`library` names it) |
 | `vault` | `true` | A vault nothing is using — `POST /libraries` attaches it |
 | `pictures` | `true` | Pictures, no vault — `POST /libraries` starts a library over them |
@@ -2105,10 +2105,11 @@ The result, once `status` is `completed`:
 
 ---
 
-## 23. Layout & Move API (v1.11, Phase 4b)
+## 23. Layout & Move API (v1.11, Phases 4b and 4c)
 
-How a library's folders are laid out, and the one action the client offers over
-it. Backend design is `docs/backend_architecture.md` §26; the release plan is
+How a library's folders are laid out, the one action the client offers over it,
+and the one gesture that moves everything. Backend design is
+`docs/backend_architecture.md` §26; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
 
 **Three rules the client must hold to.**
@@ -2121,9 +2122,17 @@ it. Backend design is `docs/backend_architecture.md` §26; the release plan is
    is what its assignments were read from, so every path is already true. A
    confirmation dialog saying "this will move your files" would be false, and
    `PATCH /server-config/layout` will not have moved one when it returns.
+   *Offering* the Phase 4c migration afterwards is the correct shape, and it is
+   a separate, previewed, explicitly-consented action — never a side effect of
+   the PATCH.
 3. **Drift is offered, never taken.** A picture whose folder is still true but is
    not what the layout would pick today is *not wrong*. `suggested_folder` is an
-   offer the owner accepts; nothing in the product acts on it by itself.
+   offer the owner accepts; nothing in the product acts on it by itself. The
+   Phase 4c migration is the one thing that does sweep a folder of the owner's
+   own into the layout, and only because it is the owner acting, on the whole
+   library at once, after a preview and with one undo: **the rule and the drift
+   offer treat a folder of the owner's own as a permanent override; "Move them
+   now" flattens it.**
 
 ### The layout string
 
@@ -2139,8 +2148,8 @@ One field, `layout`, in the form `project/person,set`:
 
 `null` or `""` means **no layout**, which is the default and the only state in
 which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
-with nothing to file it by goes to — one safe path component, `_Inbox` when
-null. It is deliberately not the library root: the root is where an unmigrated
+with nothing to file it by goes to — one safe path component, `Unassigned`
+when null. It is deliberately not the library root: the root is where an unmigrated
 flat library lives and those files must never move.
 
 **Both PATCHes are patches, not puts.** A field you do not send keeps its stored
@@ -2159,6 +2168,8 @@ even when there is no layout to parse beside it.
 | `PATCH` | `/api/v1/reference-folders/{folder_id}` | `local_owner_only` | the folder, now carrying `layout` / `layout_unfiled`. The same two fields on the folder the owner indexed in place, and they are read back by `GET /reference-folders` too |
 | `GET` | `/api/v1/pictures/{id}/layout` | `picture_scoped` | `{layout, current_folder, suggested_folder}` |
 | `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |
+| `GET` | `/api/v1/server-config/layout/migration` | `local_owner_only` | what moving the whole library onto its layout would do. Moves nothing |
+| `POST` | `/api/v1/server-config/layout/migration` | `local_owner_only` | one pass of that move: `{batch_id, moved_count, moved_picture_ids, examined, next_after_id, done, skipped, operation_id}` |
 
 `GET /pictures/{id}/layout` answers `{"layout": null, "current_folder": null,
 "suggested_folder": null}` — **not** a 404 — for a picture in a root with no
@@ -2182,9 +2193,85 @@ The whole request is recorded as **one** `pictures.layout.move` operation, so
 one Ctrl+Z puts every file back — `operation_id` names it. A folder the move
 leaves empty is kept, never deleted.
 
+### The migration (Phase 4c)
+
+The one operation in this release that deliberately moves everything, offered
+whenever a layout is **set or changed** and never automatic, never on import.
+
+> **It is not rule 1 and the UI must not describe it as one.** Under that rule a
+> flat path parses against nothing, can never be false, and never moves — which
+> is why an existing library needs no migration and why rule 2 is true. This is
+> the owner asking for something else: *make it all match, now.*
+
+`GET .../migration` **moves nothing** and is the consent screen:
+
+```
+{ "layout": "project/person,set",
+  "picture_count": 4109, "folder_count": 312,
+  "samples": [ {"picture_id": 12, "from": "0412.png", "to": "2024 Shoots/Mira/0412.png"} ],
+  "collision_count": 3, "collisions": [ ... ],
+  "cross_volume_count": 0,
+  "skipped_counts": {"source_is_symlink": 1} }
+```
+
+**`skipped_counts` is a different shape from the `POST`'s `skipped`, on
+purpose**, and the name says so: the preview answers `{reason: count}` because a
+per-picture list over a whole library would be a listing of it, and the `POST`
+answers `[{picture_id, reason}]` because a pass is 200 pictures and the client
+may want to name them.
+
+Every path is **relative to the library root**, never absolute. Three numbers
+carry the whole consent and the client must show all three:
+
+- `picture_count` / `folder_count` — *"4,109 pictures will move into 312
+  folders"*, with `samples` under it. A picture the layout cannot place is in
+  none of these and does not move: sweeping it into the unfiled folder would be
+  movement for no gain, since it already contradicts nothing.
+- `collision_count` — pictures rendering onto a path something already occupies.
+  They are suffixed `-2`, `-3`… **The file already sitting there is never
+  renamed and never overwritten**; what is suffixed is the file being moved,
+  and its sidecars with it (a sidecar pairs with its picture by stem).
+  Show the count and the `collisions` samples rather than hiding it, and never
+  present it as a failure.
+- `cross_volume_count` — pictures sitting across a mount point from where the
+  layout would put them. **Those cannot be moved at all**: the destination is
+  claimed with `os.link` and then `os.replace`, and both refuse to cross a
+  device, so they are refused in the plan rather than attempted. They are also
+  in `skipped_counts` as `destination_other_volume`, they are not in
+  `picture_count`, and they stay exactly where they are. Non-zero is worth
+  saying out loud before the run — it is the one case where "make it all match"
+  cannot, and the owner may want to move the mount rather than the pictures.
+
+`POST .../migration` runs **one pass**. Body `{"after_id": 0, "batch_id": null}`;
+call it again with the `next_after_id` and the `batch_id` it returned until
+`done` is `true`. That loop is the progress bar.
+
+- **Omit `batch_id` on the first pass and echo it on every one after.** Every
+  pass records its own `pictures.layout.move` operation, all under that one id,
+  and a batch is a single undo unit — so **one undo puts every file back at the
+  path it had**. A `batch_id` outside the `srv-layout-migration-` namespace is
+  `400`; the check is on the value's shape, so what it guarantees is that a
+  migration's passes cannot be grouped into some other gesture's undo unit, not
+  that the id came from this server.
+- **A pass that fails is finishable, not restartable.** The tree is left
+  half-moved and wholly consistent; call again with the same cursor and id. A
+  picture already where the layout wants it plans no move, so re-running is
+  safe and re-moves nothing.
+- **Every picture a pass planned is accounted for**, in `moved_picture_ids` or
+  in `skipped`. A file that could not be moved after all — a name that appeared
+  at the destination since the plan, a file locked on Windows — comes back as
+  `move_failed` rather than vanishing from both lists while the pass reports a
+  clean finish. Re-run to retry it.
+- `skipped` uses §23's own vocabulary plus `destination_other_volume` and
+  `move_failed`, both above.
+- Only the library's **own** picture root is migrated. A reference folder's
+  layout has no migration route; it would need its own consent naming that
+  folder.
+
 ### Events
 
-A move — whether the owner asked for it or the rule decided it — broadcasts
+A move — whether the owner asked for it, the rule decided it, or the migration
+made it — broadcasts
 `CHANGED_PICTURES` with `change_kind: "updated"` and
 `fields: ["file_path", "pixels"]`. **`pixels` is not decoration.** The thumbnail
 URL is derived from the file path and does not come back from

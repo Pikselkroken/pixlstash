@@ -717,3 +717,44 @@ def test_applying_a_move_to_a_non_unique_set_name_is_skipped_not_guessed(
     )
     assert members == [], "a non-unique name must never be guessed"
     assert _pending_review(server, picture_id) is None, "the row must clear either way"
+
+
+def test_a_reference_folder_cannot_be_given_a_layout_over_http(server, tmp_path):
+    """v1.11 ships the field disarmed.
+
+    Arming it turns the automatic mover loose inside a tree the owner curates
+    by hand, with no UI, no preview and no migration route in front of it. The
+    Phase 5 machinery behind it is still exercised at the service level above -
+    those tests insert the layout directly - so refusing here disarms the
+    reachable surface without giving up the coverage.
+    """
+    folder_dir = str(tmp_path / "refs-layout")
+    folder_id = _make_folder(server, folder_dir)
+
+    client = TestClient(server.api)
+    login = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
+    assert login.status_code == 200, login.text
+
+    armed = client.patch(
+        f"/api/v1/reference-folders/{folder_id}",
+        json={"layout": format_layout(DEFAULT_LAYOUT)},
+    )
+    assert armed.status_code == 400, armed.text
+    assert "curate yourself" in armed.json()["detail"]
+
+    # Turning it off stays available - that is the default and the way back.
+    disarmed = client.patch(
+        f"/api/v1/reference-folders/{folder_id}", json={"layout": None}
+    )
+    assert disarmed.status_code == 200, disarmed.text
+
+    row = server.vault.db.run_task(lambda s: s.get(ReferenceFolder, folder_id))
+    assert row.layout is None
+
+    # An unrelated edit is not collateral damage.
+    relabelled = client.patch(
+        f"/api/v1/reference-folders/{folder_id}", json={"label": "still editable"}
+    )
+    assert relabelled.status_code == 200, relabelled.text

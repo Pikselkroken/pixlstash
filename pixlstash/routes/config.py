@@ -1238,6 +1238,24 @@ def create_router(server) -> APIRouter:
             library_settings_service.set_views_config(server.vault.db, None, [])
             return _views_payload()
 
+        if previous_root and views_service.roots_overlap(
+            previous_root, body.views_root
+        ):
+            # Publishing under the previous root would write the whole tree and
+            # then have the removal below walk that same root and delete it
+            # again, while the response still reported the links it had made.
+            # Refused before anything is written, because afterwards there is
+            # nothing left to refuse.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The views folder cannot be inside the one it replaces, or "
+                    "contain it. Removing the old tree would delete the new "
+                    "one. Pick a folder outside "
+                    f"{previous_root}, or turn views off first."
+                ),
+            )
+
         collected = server.vault.db.run_immediate_read_task(
             lambda session: views_service.collect_in_session(session, kinds)
         )

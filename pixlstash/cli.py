@@ -1552,7 +1552,10 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
 
         plugin_install.install(plan, force=args.force)
         if changes:
-            plugin_install.install_requirements(plan.requirements)
+            # The resolution that was shown and agreed to, not the file it came
+            # from: re-reading the file would resolve it a second time and
+            # could install something nobody was asked about.
+            plugin_install.install_requirements(changes)
 
     print(f"Installed {plan.name} to {plan.destination}")
     if plan.kind == plugin_install.CAPTIONING:

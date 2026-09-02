@@ -920,3 +920,68 @@ def test_turning_views_off_removes_the_tree_and_keeps_the_pictures(
     assert resp.json()["views_root"] is None
     assert not os.path.exists(os.path.join(views_root, "Sets"))
     assert len(os.listdir(server.vault.image_root)) > 0, "the library was touched"
+
+
+def test_a_views_root_inside_the_previous_one_is_refused(_env, _seeded, tmp_path):
+    """Publishing under the old root wrote the whole tree and then deleted it.
+
+    `publish` runs first and `remove(previous_root)` second, so a new root
+    inside the old one had the removal walk the folder just written. The
+    response still reported the links it had made, over an empty folder.
+    """
+    client, _server, _tmp = _env
+    outer = str(tmp_path / "outer-views")
+    first = client.patch(
+        f"{API}/server-config/views", json={"views_root": outer, "kinds": ["sets"]}
+    )
+    assert first.status_code == 200, first.text
+    assert os.path.isdir(os.path.join(outer, "Sets", "mira-lora-v3"))
+
+    nested = os.path.join(outer, "People", "Sub")
+    resp = client.patch(
+        f"{API}/server-config/views", json={"views_root": nested, "kinds": ["sets"]}
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "cannot be inside" in resp.json()["detail"]
+    # The tree that was already there is untouched, and still the recorded one.
+    assert os.path.isdir(os.path.join(outer, "Sets", "mira-lora-v3"))
+    assert client.get(f"{API}/server-config/views").json()["views_root"] == outer
+
+
+def test_a_views_root_containing_the_previous_one_is_refused(_env, _seeded, tmp_path):
+    """The same hazard from the other side: the removal would delete a subtree
+    of the folder just published."""
+    client, _server, _tmp = _env
+    inner = str(tmp_path / "wrapper" / "inner-views")
+    first = client.patch(
+        f"{API}/server-config/views", json={"views_root": inner, "kinds": ["sets"]}
+    )
+    assert first.status_code == 200, first.text
+
+    resp = client.patch(
+        f"{API}/server-config/views",
+        json={"views_root": str(tmp_path / "wrapper"), "kinds": ["sets"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert os.path.isdir(os.path.join(inner, "Sets", "mira-lora-v3"))
+
+
+def test_republishing_to_the_same_root_is_still_allowed(_env, _seeded, tmp_path):
+    """The guard is containment, not equality - re-publishing in place must
+    keep working, and it is the case `same_root` already handles."""
+    client, _server, _tmp = _env
+    root = str(tmp_path / "same-views")
+    assert (
+        client.patch(
+            f"{API}/server-config/views", json={"views_root": root, "kinds": ["sets"]}
+        ).status_code
+        == 200
+    )
+    again = client.patch(
+        f"{API}/server-config/views",
+        json={"views_root": root + os.sep, "kinds": ["sets", "people"]},
+    )
+    assert again.status_code == 200, again.text
+    assert os.path.isdir(os.path.join(root, "Sets", "mira-lora-v3"))

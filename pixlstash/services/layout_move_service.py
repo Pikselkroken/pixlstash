@@ -166,7 +166,7 @@ def layout_roots(session: Session, image_root: Optional[str]) -> dict:
 def _parse(text: str, unfiled: Optional[str], where: str) -> Optional[Layout]:
     """Parse a stored layout, or log why it was ignored and return ``None``."""
     try:
-        return parse_layout(text, unfiled or "_Inbox")
+        return parse_layout(text, unfiled or DEFAULT_LAYOUT.unfiled)
     except ValueError as exc:
         logger.error(
             "Layout for %s is not usable (%r, unfiled %r): %s. Nothing will be "
@@ -491,13 +491,19 @@ def _sidecar_plan(
     so leaving it behind would strand the owner's captions in a folder the
     picture has left and let the next scan read them as somebody else's.
 
-    A layout move changes the folder and never the file name, so the sidecar
-    keeps its own name too and only its folder changes. Only a sidecar inside
-    the same root is carried: one pointed anywhere else is not this tree's to
-    rearrange.
+    A layout move normally changes the folder and never the file name, so the
+    sidecar keeps its own name too and only its folder changes. **The one
+    exception is Phase 4c's collision suffix**, which does change the picture's
+    name - and a sidecar pairs with its picture by *stem*, so it has to carry
+    the same suffix or it lands beside a picture it no longer names (and
+    collides with the sidecar of whatever file was already there). Only a
+    sidecar inside the same root is carried: one pointed anywhere else is not
+    this tree's to rearrange.
     """
     carried = []
     destination_dir = os.path.dirname(destination)
+    source_stem = os.path.splitext(os.path.basename(source))[0]
+    destination_stem = os.path.splitext(os.path.basename(destination))[0]
     for attribute in ("tags_file", "description_file"):
         sidecar = getattr(picture, attribute, None)
         if not sidecar or not os.path.isfile(sidecar):
@@ -509,13 +515,10 @@ def _sidecar_plan(
             # Not a sibling of the picture. Leave it where it is rather than
             # relocating a file the move has no claim on.
             continue
-        carried.append(
-            (
-                attribute,
-                sidecar_abs,
-                os.path.join(destination_dir, os.path.basename(sidecar_abs)),
-            )
-        )
+        name = os.path.basename(sidecar_abs)
+        if destination_stem != source_stem and name.startswith(source_stem):
+            name = destination_stem + name[len(source_stem) :]
+        carried.append((attribute, sidecar_abs, os.path.join(destination_dir, name)))
     return carried
 
 
@@ -554,64 +557,160 @@ def apply_moves(
     and score with it. A caller that passes no *applied* list gets a local
     rollback covering this function alone, which is strictly weaker.
 
-    A power loss between the last rename and the commit is a residue no ordering
-    removes, and it is the same one ``POST /reference-folders/{id}/move-pictures``
-    has always carried: the file is at the new path and the row still names the
-    old one. In a reference folder the scan repairs it by ``pixel_sha`` (every
-    300 s, well inside the purge sweep's hour). In the library's own root there
-    is no scan, so the residue stands until the picture is re-imported - which
-    is why the batch is 200 files rather than the whole library.
+    **This single-transaction form does the filesystem work on whatever thread
+    the session belongs to**, which for the writer thread means the renames run
+    inside its open transaction. Production callers run the three phases
+    separately instead - :func:`journal_moves` and commit, then
+    :func:`move_planned_files` off the writer, then :func:`record_moves` - and
+    only that ordering survives a power loss: the committed journal names both
+    paths, so ``MissingFilePurgeTask`` repairs the row rather than deleting the
+    picture. This form is kept for callers already inside a short transaction of
+    their own, and for the tests that drive one batch end to end.
 
     Args:
         applied: Appended to, in order, with every move that reached the disk.
             The caller passes its own list and reverses it on failure.
     """
-    moved: list = []
     done: list = applied if applied is not None else []
     try:
-        for move in plan:
-            if not _move_one_file(move):
-                continue
-            done.append(move)
-            picture = session.get(Picture, move.picture_id)
-            if picture is None:
-                logger.warning(
-                    "Layout move: picture %d vanished before its move to %s could "
-                    "be recorded; the file is at the new path and the next scan "
-                    "will re-import it.",
-                    move.picture_id,
-                    move.destination_path,
-                )
-                continue
-            picture.file_path = move.stored_path
-            if not _carry_thumbnail(
-                image_root,
-                move.old_stored_path or move.source_path,
-                move.stored_path,
-            ):
-                # Nothing to carry, or it could not be carried. Point
-                # MissingThumbnailFinder at the picture instead of leaving the
-                # row claiming a bitmap that is not at the new name.
-                picture.thumbnail_width = None
-                picture.thumbnail_height = None
-            for attribute, _, destination in move.sidecars:
-                setattr(picture, attribute, destination)
-            # The debounce stamp is spent either way: the question has been
-            # asked and answered.
-            picture.layout_check_due_at = None
-            session.add(picture)
-            session.add(
-                PictureMove(
-                    picture_id=move.picture_id,
-                    old_path=move.old_stored_path or move.source_path,
-                    new_path=move.stored_path,
-                    reason=reason,
-                )
-            )
-            moved.append(move.picture_id)
+        landed = move_planned_files(plan, applied=done)
+        journal_moves(session, [move for move, _ in landed], reason=reason)
+        return record_moves(session, landed, image_root=image_root)
     except BaseException:
         rollback_applied_moves(done, image_root)
         raise
+
+
+def move_planned_files(
+    plan: list,
+    *,
+    applied: Optional[list] = None,
+    should_stop=None,
+) -> list:
+    """Do the filesystem half of a move. **No session, no writer thread.**
+
+    Returns one ``(move, carried_sidecars)`` pair per file that reached its
+    destination, in the order they landed.
+
+    Separating this from the row writes is the point. Up to ``BATCH_SIZE``
+    renames used to run inside the serialised writer's own open transaction, so
+    a shutdown or a library switch could dispose the engine part way through:
+    the writer finished its remaining renames, its ``commit()`` then raised, and
+    the rollback meant to save it is best-effort by construction. Doing the I/O
+    on the calling thread leaves the writer two short bursts either side of it,
+    neither of which outlives a shutdown join.
+
+    Args:
+        applied: Appended to, in order, with every move that reached the disk,
+            so the caller can reverse them with :func:`rollback_applied_moves`.
+        should_stop: Optional predicate polled between files. What has already
+            moved stays moved and is still recorded by the caller.
+    """
+    done: list = applied if applied is not None else []
+    landed: list = []
+    for move in plan:
+        if should_stop is not None and should_stop():
+            logger.info(
+                "Layout move: stopped after %d of %d file(s); what moved stays "
+                "moved and is recorded.",
+                len(landed),
+                len(plan),
+            )
+            break
+        carried = _move_one_file(move)
+        if carried is None:
+            continue
+        done.append(move)
+        landed.append((move, carried))
+    return landed
+
+
+def journal_moves(
+    session: Session, moves: list, *, reason: str = REASON_LAYOUT
+) -> None:
+    """Write one :class:`PictureMove` row per move in *moves*.
+
+    Callers that run the phases separately journal the **whole plan and commit
+    it before a single file moves**, which is what turns a crash between the
+    rename and the row write from permanent loss into a repair:
+    ``MissingFilePurgeTask`` finds the row, sees the file sitting at
+    ``new_path``, and repoints the picture instead of deleting it. Rows for
+    files that then did not move are dropped again by
+    :func:`drop_unlanded_journal`.
+    """
+    for move in moves:
+        session.add(
+            PictureMove(
+                picture_id=move.picture_id,
+                old_path=move.old_stored_path or move.source_path,
+                new_path=move.stored_path,
+                reason=reason,
+            )
+        )
+
+
+def drop_unlanded_journal(session: Session, plan: list, landed: list) -> int:
+    """Delete the intent rows for planned moves that never reached the disk.
+
+    A row naming a move that did not happen would let a later, genuine
+    owner-made move between the same two paths be dismissed as ours - the exact
+    thing ``RETENTION_S`` exists to bound. Returns how many were dropped.
+    """
+    landed_ids = {move.picture_id for move, _ in landed}
+    stale = [move for move in plan if move.picture_id not in landed_ids]
+    if not stale:
+        return 0
+    dropped = 0
+    for move in stale:
+        old_path = move.old_stored_path or move.source_path
+        rows = session.exec(
+            select(PictureMove)
+            .where(PictureMove.old_path == old_path)
+            .where(PictureMove.new_path == move.stored_path)
+        ).all()
+        for row in rows:
+            session.delete(row)
+            dropped += 1
+    return dropped
+
+
+def record_moves(session: Session, landed: list, *, image_root: Optional[str]) -> list:
+    """Point each moved picture's row at where its file now is.
+
+    Takes the ``(move, carried_sidecars)`` pairs :func:`move_planned_files`
+    returned, so only sidecars that genuinely arrived are written into the row.
+    """
+    moved: list = []
+    for move, carried in landed:
+        picture = session.get(Picture, move.picture_id)
+        if picture is None:
+            logger.warning(
+                "Layout move: picture %d vanished before its move to %s could "
+                "be recorded; the file is at the new path and the next scan "
+                "will re-import it.",
+                move.picture_id,
+                move.destination_path,
+            )
+            continue
+        picture.file_path = move.stored_path
+        if not _carry_thumbnail(
+            image_root,
+            move.old_stored_path or move.source_path,
+            move.stored_path,
+        ):
+            # Nothing to carry, or it could not be carried. Point
+            # MissingThumbnailFinder at the picture instead of leaving the
+            # row claiming a bitmap that is not at the new name.
+            picture.thumbnail_width = None
+            picture.thumbnail_height = None
+        for attribute, _, destination in move.sidecars:
+            if attribute in carried:
+                setattr(picture, attribute, destination)
+        # The debounce stamp is spent either way: the question has been
+        # asked and answered.
+        picture.layout_check_due_at = None
+        session.add(picture)
+        moved.append(move.picture_id)
     return moved
 
 
@@ -628,8 +727,15 @@ def rollback_applied_moves(applied: list, image_root: Optional[str] = None) -> N
     applied.clear()
 
 
-def _move_one_file(move: PlannedMove) -> bool:
-    """Move one picture and its sidecars. ``False`` when it was left alone."""
+def _move_one_file(move: PlannedMove) -> Optional[list]:
+    """Move one picture and its sidecars.
+
+    Returns the sidecar **attribute names that actually reached their
+    destination**, or ``None`` when the picture itself was left alone. The
+    distinction is load-bearing: a sidecar that could not be carried must not be
+    written into the row, or the row names a caption file that is still sitting
+    at the old path and the owner's text is lost to the UI.
+    """
     try:
         os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
         publish_no_clobber(move.source_path, move.destination_path)
@@ -641,23 +747,28 @@ def _move_one_file(move: PlannedMove) -> bool:
             move.destination_path,
             exc,
         )
-        return False
-    for _, source, destination in move.sidecars:
+        return None
+    carried: list = []
+    for attribute, source, destination in move.sidecars:
         try:
             publish_no_clobber(source, destination)
         except OSError as exc:
             # The picture has already moved. A sidecar left behind is visible
             # and repairable; refusing the whole move now is not, because the
-            # image is at the new name.
+            # image is at the new name. The row keeps naming the old path,
+            # which is exactly where the sidecar still is.
             logger.warning(
                 "Layout move: moved %s but could not carry its sidecar %s to %s "
-                "(%s); the sidecar is still at the old path.",
+                "(%s); the sidecar is still at the old path and the row keeps "
+                "naming it there.",
                 move.destination_path,
                 source,
                 destination,
                 exc,
             )
-    return True
+            continue
+        carried.append(attribute)
+    return carried
 
 
 def _undo_one_file(move: PlannedMove, image_root: Optional[str] = None) -> None:
@@ -821,18 +932,50 @@ def plan_match_moves(
     return plan, skipped
 
 
+def _free_name(destination_path: str, claimed: set) -> Optional[str]:
+    """The first unused spelling of *destination_path*, suffixing ``-2``, ``-3``...
+
+    **The suffix rule, decided once** (v1.11 Phase 4c). Two pictures of the same
+    name from two different folders render into one path when a library is
+    migrated onto a layout, and the migration is the owner asking for every file
+    to move - declining the second one would leave the tree half-arranged for a
+    reason nobody can see from looking at it.
+
+    What is suffixed is the file *being moved*, never the file already sitting
+    at the destination: renaming somebody else's file to make room is the
+    liberty this module does not take, and the automatic path still does not
+    take it either (``uniquify=False`` keeps refusing outright).
+
+    Returns ``None`` rather than looping forever if a thousand spellings are all
+    taken; the caller declines that picture as ``destination_taken``.
+    """
+    stem, extension = os.path.splitext(destination_path)
+    for suffix in range(2, 1001):
+        candidate = f"{stem}-{suffix}{extension}"
+        if candidate not in claimed and not os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def _prepare_move(
     picture: Picture,
     root: LayoutRoot,
     source: str,
     destination: str,
     claimed: set,
+    *,
+    uniquify: bool = False,
 ) -> tuple:
     """Turn a decided destination folder into a move, or say why there is none.
 
     Shared by the rule's own moves and the offered ones so the refusals cannot
     drift apart - the offer must be exactly as careful as the automatic path,
     not less.
+
+    Args:
+        uniquify: Apply :func:`_free_name` to a taken destination instead of
+            declining the picture. Phase 4c's whole-library migration only - see
+            that function for why the two callers differ.
 
     Returns:
         ``(PlannedMove, None)`` or ``(None, reason)``.
@@ -855,10 +998,19 @@ def _prepare_move(
     # Two pictures of the same name from two folders can render into one. The
     # claim set catches the pair inside this batch; ``publish_no_clobber``
     # catches everything else, including a file that appeared while the plan was
-    # being made. Refused, never uniquified: renaming the owner's file to make
-    # room is a bigger liberty than declining to move it.
+    # being made.
+    #
+    # **The rule's own moves refuse rather than uniquify**, because renaming a
+    # file to make room for one the owner did not ask to have moved is a bigger
+    # liberty than declining to move it. Phase 4c's migration - which the owner
+    # asked for, previewed and consented to - passes ``uniquify`` and gets the
+    # suffix instead. Either way the containment check above still holds: the
+    # suffix changes the basename and never the folder.
     if destination_path in claimed or os.path.exists(destination_path):
-        return None, "destination_taken"
+        renamed = _free_name(destination_path, claimed) if uniquify else None
+        if renamed is None:
+            return None, "destination_taken"
+        destination_path = renamed
     claimed.add(destination_path)
     return (
         PlannedMove(
@@ -1277,6 +1429,7 @@ def restore_location(
     stored_path: Optional[str],
     *,
     image_root: Optional[str],
+    applied: Optional[list] = None,
 ) -> bool:
     """Put a picture's file back at *stored_path*. The undo half of a move.
 
@@ -1293,6 +1446,13 @@ def restore_location(
     The move is journalled like any other, because it is one: without the row
     the reference-folder scan reads the undo as the owner moving the file back
     by hand.
+
+    Args:
+        applied: Appended to with the move if it reaches the disk, so the caller
+            can put it back with :func:`rollback_applied_moves` when anything
+            later in its transaction raises. An undo renames the file before the
+            transaction commits, and a row left naming a path with no file at it
+            is what ``MissingFilePurgeTask`` deletes a picture over.
 
     Returns:
         Whether the file was actually moved.
@@ -1343,6 +1503,19 @@ def restore_location(
             root_path,
         )
         return False
+    if not _destination_stays_inside(root_path, destination):
+        # The lexical check above cannot see a symlinked directory already
+        # sitting inside the root, and ``os.makedirs(exist_ok=True)`` traverses
+        # one happily. The forward path has always refused those; an undo that
+        # did not would be a write the move engine itself declines to make.
+        logger.error(
+            "Layout undo: picture %s would be written through a link out of its "
+            "root %r to reach %r; the file is not touched.",
+            picture_id,
+            root_path,
+            destination,
+        )
+        return False
     if source == destination:
         return False
     if not os.path.isfile(source) or os.path.islink(source):
@@ -1364,8 +1537,11 @@ def restore_location(
         old_stored_path=picture.file_path,
         sidecars=_sidecar_plan(picture, source, destination, root),
     )
-    if not _move_one_file(move):
+    carried = _move_one_file(move)
+    if carried is None:
         return False
+    if applied is not None:
+        applied.append(move)
     picture.file_path = move.stored_path
     if not _carry_thumbnail(
         image_root, move.old_stored_path or source, move.stored_path
@@ -1373,7 +1549,8 @@ def restore_location(
         picture.thumbnail_width = None
         picture.thumbnail_height = None
     for attribute, _, sidecar_destination in move.sidecars:
-        setattr(picture, attribute, sidecar_destination)
+        if attribute in carried:
+            setattr(picture, attribute, sidecar_destination)
     picture.layout_check_due_at = None
     session.add(picture)
     session.add(

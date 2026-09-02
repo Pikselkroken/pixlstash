@@ -40,7 +40,7 @@ from pixlstash.services.layout_move_service import (
 )
 from pixlstash.services.move_reconciliation_service import record_pending_reviews
 from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
-from pixlstash.utils.library_layout import parse_layout
+from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -163,7 +163,9 @@ class ReferenceFolderScanTask(BaseTask):
         # can contradict, so only a laid-out root's moves are worth queuing for
         # reconciliation at all (see move_reconciliation_service.record_pending_reviews).
         try:
-            self._layout = parse_layout(layout_text, layout_unfiled or "_Inbox")
+            self._layout = parse_layout(
+                layout_text, layout_unfiled or DEFAULT_LAYOUT.unfiled
+            )
         except ValueError as exc:
             logger.error(
                 "Reference folder %s: layout %r is not usable: %s. Moves made "

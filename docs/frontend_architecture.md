@@ -142,7 +142,7 @@ frontend/src/
     │   ├── TagHealthBoard.vue         # Landing tag-health board
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
-    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
+    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute, Libraries, Layout), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
     └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), `PicturePicker` (one faceted, single-select library picker: the shelf's thumbnail verb today, the workflow Fixed and run-time modes next), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
@@ -403,6 +403,38 @@ sidebar accessory nobody was pointed at.
 `SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
 (with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
 new signal, for `SideBar.openReferenceFolderEditor`.
+
+**The empty library asks whether its own folder is empty.** The desktop's
+first-run setup creates the vault in whatever folder was chosen, and the web
+flow's "Add a library" only saves a pending mapping entry for folders it read
+itself, so a vault made over loose pictures had nothing to bring the wizard up:
+the owner chose a folder full of pictures and got "This library is empty".
+`ImageGrid` emits `library-empty` the first time `showLibraryEmptyState` turns
+true; App.vue forwards it to `SideBar.offerLoosePictures`, which asks
+`GET /libraries/inspect` about the active library's own path (the `attached`
+verdict now carries `picture_count`, what is on disk whether indexed or not)
+and, when there is anything there, opens `FolderMappingWizard` with
+`{ path, mode: "local_import" }` and no read: the scan card starts one, the
+read saves the pending entry as any resumed read does, so Cancel leaves the
+sidebar's "Finish organising…" row offering it. Once per page load, like the
+pending-entry auto-open beside it, and never for a read-only session, a remote
+one (`canManage` false), or while an entry is already pending. The wizard's
+"Drop this, organise later" commits with no assignments when the library
+already exists rather than trying to add it again.
+
+**Initial setup comes before the telemetry question.** `useAppConfig` asks
+for the consent dialog as soon as the config says it was never answered, which
+on a first run is before the library has even been counted, so the privacy
+dialog came up first and the import wizard opened over it. `ImageGrid` also
+emits `library-loaded` `{ empty }` when the first count lands; App.vue awaits
+the loose-picture offer for an empty library, then marks the library settled,
+and `TelemetryConsentDialog` is shown only once that is true and no mapping
+wizard is open or pending. The request itself is kept, so the dialog appears
+the moment the wizard closes. `SideBar.offerLoosePictures` hands every caller
+the same in-flight promise: `library-empty` and `library-loaded` fire in the
+same tick, and a second call that returned at once (already offered) settled
+the library before the path had even been inspected, so the dialog came up
+under the wizard anyway.
 
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import
@@ -672,6 +704,92 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Compute** → `<ComputeSection view="compute">` (desktop only, `isDesktop && !isReadOnly`)
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
+
+##### `LibraryLayoutDialog.vue`: the layout, and the one gesture that moves everything
+
+**A dialog, not a tab.** It opens from `Choose a layout…` on the active
+library's `⋯` menu in `LibrariesSection`, and only that row's: the layout routes
+are `/server-config/layout`, which address whichever library is *open*, so the
+item on any other row would silently edit a different library's folders. There
+is deliberately no Library layout entry on the settings rail.
+
+620px rather than the house 440 (`AppDialog :width="620"`), and the extra width
+is spent on the one thing that needs it. One pane, no steps:
+
+- **The level builder** is one `v-select multiple` per folder level, each in its
+  own colour, with the level number on the select's own label so colour is
+  never the only thing telling two levels apart. The hues are theme colours
+  `level-1`..`level-4` (+ their `on-*` pairs) in `main.js`, and they are the one
+  family that is deliberately **different in light and dark**: the hue has to
+  clear 4.5:1 as small text, which needs luminance <= 0.183 on white and >= 0.310
+  on the dark `input-background`, and those windows do not overlap. The tint
+  alpha behind each field is `--level-wash` in `style.css`, 0.10 light and 0.14
+  dark for the same luminance step.
+  Four levels must sit on one line without wrapping: 620 minus 48 padding = 572px,
+  less three separators and six gaps leaves about 527px over four 120px-basis
+  flex columns, and a label longer than its column ellipsises with the full text
+  in `title`. Measured in Chromium at 620px: four levels give four 132px cells
+  at one shared top, row height 36px, no horizontal scrollbar. The row is
+  `align-items: stretch`, not `center`, because a filled select is taller than
+  an empty one and centring the two puts the boxes on different baselines.
+  That budget only holds while the row carries selects and separators and
+  **nothing else**: no per-level remove button, and no add control at four
+  levels. `LibraryLayoutDialog.test.js` pins that. A fifth level cannot happen,
+  because there are four facets and none may be used twice.
+- **The tree is the argument.** `getLayoutMigrationPreview` returns `tree`, a
+  flat list of `{path, name, depth, have, arriving, leaving, is_new}`, every
+  folder of the library, uncapped: the list scrolls, because a cap that showed
+  sixty rows and "...and 299 more folders" hid exactly the date folders the
+  owner wanted to check. A folder is a row only when one of have/arriving/leaving is
+  non-zero, so an intermediate folder that holds nothing and receives nothing is
+  absent while its child is present, and **under a multi-level layout almost
+  every row is such an orphan**. Indenting on `depth` alone therefore says
+  nothing: measured against the e2e fixture on Project/Person/Set/Tag, all nine
+  rows were leaves whose ancestors had no row, and they read "arm hair",
+  "beard", "arm hair" with no way to tell whose they were. So each row shows the
+  ancestors that have no row of their own as a **muted breadcrumb read off
+  `path`**, and indents only under the nearest ancestor that IS present. Nothing
+  is synthesised and no withheld parent row is invented. The breadcrumb is the
+  only part that shrinks (`flex: 0 1 auto` + ellipsis); the leaf identifies the
+  row and always shows in full, and `title` carries the whole stored path.
+  `have` renders a dash off `is_new`, not off `have == 0`, because a real folder
+  can legitimately hold nothing.
+- **The layout is frozen for the duration of a move**, in `scheduleSave`, every
+  edit routes through it, so one guard covers the model, the debounce and the
+  write. Editing mid-run makes later passes re-plan against a new layout, so
+  half the library lands on one and half on the other, under one undo batch that
+  describes neither. The selects are `disabled` too, but that is the affordance,
+  not the rule.
+- **`refreshPreview` never touches `lastRun`.** Its `batchId` is the only route
+  back to a move that has already happened, and a re-count is not a reason to
+  throw one away. Nor is a pass that fails: `lastRun` is only overwritten when
+  the new run actually minted a batch id.
+- **There is no confirm, and the Move button is the guard instead.** The
+  consequence bar carries the number beside the verb, so a modal on top would be
+  a second yes for one gesture. Every edit marks the count stale, the bar reads
+  `counting…` *instead of* the old number, and the primary is inert until a
+  fresh count lands. A number that lags the tree is worse than no number.
+- **Saves are debounced 500 ms.** `v-select multiple` emits per item toggle and
+  every save re-counts.
+- **The migration runs in passes and echoes one `batch_id`**, which is what makes
+  the whole run a single undo (integration §23). The loop guards on the cursor
+  strictly advancing. `undoBatchById` refuses by returning `null` rather than
+  throwing, which is what keeps the Undo on screen instead of discarding the
+  batch id with it.
+- **Two exits, both filled buttons, side by side.** `Keep layout, move nothing`
+  is `secondary`, not `ghost`: choosing a layout and declining the move is the
+  common case and must not read as backing out. `Move them now` is
+  `primary_green` and is the only control on the pane that changes colour.
+- **Every refusal the API reports is shown** as a flag chip, from the preview's
+  `skipped_counts` and from each pass's `skipped`, alongside `collision_count`
+  and `cross_volume_count`. A run that could not touch 500 locked files must not
+  report a clean "Moved 3,609 pictures".
+- **The prose is a disclosure.** `What this layout will never do` is three lines
+  behind a closed `<details>`; it is a promise checked once, not copy read every
+  time.
+
+A library switch reloads the page (`useLibrariesStore.begin` -> `reloadPage`), so
+nothing in this dialog has to survive one.
 
 **Pane height is fixed** (`.settings-content`, 524px) so the dialog does not
 resize as the rail is clicked. A pane that outgrows it scrolls whole, header and

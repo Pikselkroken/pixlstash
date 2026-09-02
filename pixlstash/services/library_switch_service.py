@@ -271,6 +271,19 @@ class LibrarySwitchService:
             try:
                 self._server.library_coordinator.begin_switch()
             except RuntimeError as exc:
+                # A refused switch is now a reachable, expected state rather
+                # than a rare one: a folder-mapping commit holds a read lease
+                # for as long as it runs, precisely so it cannot be retargeted
+                # at another library half way through. "Timed out waiting for
+                # active-library readers" is the right mechanism and the wrong
+                # sentence to hand the owner, so name the work instead.
+                busy = self._what_is_holding_the_library()
+                if busy:
+                    raise LibrarySwitchError(
+                        f"This library is busy: {busy}. Switching now would "
+                        "leave that work writing into the other library, so it "
+                        "waits. Let it finish, or stop it, then switch."
+                    ) from exc
                 raise LibrarySwitchError(str(exc)) from exc
             try:
                 return self._swap(target)
@@ -280,6 +293,27 @@ class LibrarySwitchService:
                 raise
         finally:
             self._lock.release()
+
+    def _what_is_holding_the_library(self) -> Optional[str]:
+        """Name the long-running work a switch is waiting on, when it can be.
+
+        The coordinator counts readers; it does not know what they are. These
+        two are the only holders that keep a lease for minutes rather than
+        milliseconds, so they are what an owner is actually waiting on when a
+        switch refuses. Returns ``None`` when nothing recognisable is running,
+        and the caller falls back to the coordinator's own words.
+        """
+        with self._server.folder_structure_commit_lock:
+            commit = self._server.folder_structure_commit
+            if commit and commit.get("status") in ("queued", "running"):
+                return "a folder mapping is still being organised"
+        for task in list(getattr(self._server, "import_tasks", {}).values()):
+            if isinstance(task, dict) and task.get("status") in (
+                "queued",
+                "running",
+            ):
+                return "an import is still running"
+        return None
 
     def _swap(self, target: Library) -> Library:
         """Open the target, then retire the current vault. Never the reverse."""

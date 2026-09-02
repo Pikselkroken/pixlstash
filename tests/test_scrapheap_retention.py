@@ -2022,7 +2022,7 @@ def test_missing_file_purge_task_skips_unreachable_locations(server, tmp_path):
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 0}, result
+    assert result == {"purged": 0, "repaired": 0, "deferred": 0}, result
     assert _get_picture(server, pic_id) is not None, (
         "a picture on an unmounted volume must not be reaped as missing"
     )
@@ -2045,7 +2045,10 @@ def test_missing_file_purge_task_still_reaps_a_genuinely_deleted_file(server, tm
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 1}, result
+    # Exact equality on purpose: nothing may be quietly repaired or deferred
+    # instead of reaped. The move-journal guard must not become a blanket
+    # exemption for every missing file.
+    assert result == {"purged": 1, "repaired": 0, "deferred": 0}, result
     assert _get_picture(server, pic_id) is None
     assert _ledger_flags_for(server, path) == [True]
 

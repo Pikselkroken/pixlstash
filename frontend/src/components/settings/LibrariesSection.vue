@@ -42,6 +42,7 @@ import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
 
 const props = defineProps({
@@ -49,6 +50,11 @@ const props = defineProps({
   // terminal shows up without a restart.
   open: { type: Boolean, default: false },
 });
+
+// `Choose a layout…` opens LibraryLayoutDialog over this pane. The layout is a
+// property of the *open* library - the routes are `/server-config/...`, which
+// is whichever library is active - so the item is on the active row only.
+const layoutDialogOpen = ref(false);
 
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
@@ -413,6 +419,22 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                     Rename…
                   </button>
                 </li>
+                <!-- Only on the active library: the layout routes address the
+                     open one, so offering this on a row that is not open would
+                     silently edit a different library's folders. -->
+                <li v-if="library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    @click="
+                      openMenuUuid = '';
+                      layoutDialogOpen = true;
+                    "
+                  >
+                    Choose a layout…
+                  </button>
+                </li>
                 <!-- Absent on the active library on purpose: detaching it is
                      refused by the registry, and an item that can only fail is
                      worse than no item. -->
@@ -559,6 +581,11 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         </AppButton>
       </template>
     </AppDialog>
+
+    <LibraryLayoutDialog
+      :open="layoutDialogOpen"
+      @close="layoutDialogOpen = false"
+    />
 
     <p class="visually-hidden" role="status" aria-live="polite">
       {{ copyAnnouncement }}

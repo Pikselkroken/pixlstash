@@ -435,6 +435,21 @@ def _library_opens(library: Library) -> bool:
     return True
 
 
+def _vault_gone_from_a_populated_folder(library: Library) -> bool:
+    """The folder is here with files in it, only the vault database is not.
+
+    That is a restored or hand-copied picture folder, and the useful thing to
+    do with it is start a fresh library there and offer the pictures for
+    import. An *empty* folder is left alone: an unmounted external drive looks
+    exactly like that, and a fresh vault created inside the mount point would
+    lock the real library out once the drive came back.
+    """
+    if library.is_reachable or not os.path.isdir(library.path):
+        return False
+    with os.scandir(library.path) as entries:
+        return any(True for _ in entries)
+
+
 def _alternatives_note(alternatives: list[Library]) -> str:
     if not alternatives:
         return ""
@@ -470,6 +485,16 @@ def _offer_a_usable_library(
         return library
     except HubBootstrapError as exc:
         reason = str(exc)
+
+    if _vault_gone_from_a_populated_folder(library):
+        logger.warning(
+            "The library database %s is missing but the folder still has "
+            "content; starting a fresh library there and treating what is on "
+            "disk as pictures to import. The previous library's tags, scores "
+            "and history are not in this folder.",
+            library.vault_path,
+        )
+        return registry.forget_vault_fingerprint(library)
 
     alternatives = [
         other

@@ -23,15 +23,20 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.external_move_review import ExternalMoveReview
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.db_models import DeletedFileLog
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.db_models.reference_folder import ReferenceFolder
+from pixlstash.routes.library_layout import _MIGRATION_BATCH_ID_RE
+from pixlstash.services import layout_migration_service as migration
 from pixlstash.services import layout_move_service as engine
 from pixlstash.services import move_reconciliation_service as reconciliation
+from pixlstash.db_models.operation import Operation
 from pixlstash.services.operation_log_service import (
     FACET_LOCATION,
     apply_state_in_session,
     capture_state_in_session,
     record_operation_in_session,
+    undo_in_session,
 )
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
@@ -42,6 +47,7 @@ from pixlstash.utils.library_layout import (
     format_layout,
     is_true,
     match_destination,
+    migrate_destination,
     parse_layout,
     read_named_components,
     reconcile_move,
@@ -289,7 +295,7 @@ def test_windows_separators_are_read_as_folder_levels():
 
 def test_the_new_library_default_is_project_then_person_or_set():
     assert DEFAULT_LAYOUT.segments == ((Facet.PROJECT,), (Facet.PERSON, Facet.SET))
-    assert DEFAULT_LAYOUT.unfiled == "_Inbox"
+    assert DEFAULT_LAYOUT.unfiled == "Unassigned"
 
 
 # ===========================================================================
@@ -353,12 +359,12 @@ def test_an_off_layout_folder_is_a_permanent_override():
 
 
 def test_the_unfiled_folder_empties_itself_when_something_files_the_picture():
-    assert relocate("_Inbox", {}, LAYOUT, VOCAB) is None
-    assert relocate("_Inbox", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Mira"
+    assert relocate("Unassigned", {}, LAYOUT, VOCAB) is None
+    assert relocate("Unassigned", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Mira"
 
 
 def test_losing_every_assignment_files_the_picture_as_unfiled():
-    assert relocate("2024 Shoots", {}, LAYOUT, VOCAB) == "_Inbox"
+    assert relocate("2024 Shoots", {}, LAYOUT, VOCAB) == "Unassigned"
 
 
 def test_drift_is_offered_but_never_a_move():
@@ -969,7 +975,7 @@ def test_placement_puts_a_new_picture_where_render_says(library):
 
 def test_placement_is_the_unfiled_folder_when_nothing_files_it(library):
     session = library["session"]
-    assert engine.placement_subfolder(session, library["root"]) == "_Inbox"
+    assert engine.placement_subfolder(session, library["root"]) == "Unassigned"
 
 
 def test_placement_is_nothing_at_all_without_a_layout(library):
@@ -1009,7 +1015,7 @@ def test_a_set_member_keeps_the_layout_reading_it(library):
     session.commit()
     plan, _ = engine.plan_moves(session, [picture.id], root)
     assert len(plan) == 1
-    assert plan[0].stored_path == "_Inbox/b.png"
+    assert plan[0].stored_path == "Unassigned/b.png"
 
 
 # ---------------------------------------------------------------------------
@@ -1120,7 +1126,7 @@ def test_nothing_is_stamped_in_a_library_with_no_layout(stamped):
 
 
 def test_a_person_landing_on_a_picture_stamps_it(stamped):
-    """How an unfiled drop-to-person import leaves ``_Inbox`` on its own."""
+    """How an unfiled drop-to-person import leaves ``Unassigned`` on its own."""
     session = stamped["session"]
     other = Character(name="Someone Else")
     session.add(other)
@@ -1634,3 +1640,866 @@ def test_add_and_remove_set_membership(library):
         )
     ).all()
     assert members == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c: moving an existing library onto its layout
+#
+# The one gesture in this release that deliberately moves everything, and the
+# reason it needs its own cases is that it is NOT the move-when-false rule: a
+# flat library parses against nothing, is never false, and is exactly what the
+# rule leaves alone. What follows is therefore mostly the cases the rule has no
+# opinion on at all.
+# ---------------------------------------------------------------------------
+
+
+def test_the_migration_files_a_flat_library_the_rule_would_never_touch():
+    # The headline case. ``relocate`` says None here - correctly, under the
+    # rule - and the migration says where it goes.
+    assert relocate("", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT, KNOWN) is None
+    assert (
+        migrate_destination("", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT)
+        == "2024 Shoots"
+    )
+
+
+def test_the_migration_leaves_a_picture_the_layout_cannot_place():
+    # Nothing files it, so ``render`` would answer ``Unassigned``. Sweeping it
+    # there is opt-in, not the default.
+    assert migrate_destination("", facets(), DEFAULT_LAYOUT) is None
+    # ...from wherever it is. A date folder is not a reason to move a picture
+    # the layout has no name for.
+    assert migrate_destination("2024/2024-08-15", facets(), DEFAULT_LAYOUT) is None
+
+
+def test_the_sweep_puts_the_unplaceable_in_the_unfiled_folder():
+    # Asked for, every picture nothing files lands in one folder, flattened
+    # like everything else; one already there stays.
+    for folder in ("", "2024/2024-08-15", f"{DEFAULT_LAYOUT.unfiled}/2024"):
+        assert (
+            migrate_destination(folder, facets(), DEFAULT_LAYOUT, sweep_unfiled=True)
+            == DEFAULT_LAYOUT.unfiled
+        )
+    assert (
+        migrate_destination(
+            DEFAULT_LAYOUT.unfiled, facets(), DEFAULT_LAYOUT, sweep_unfiled=True
+        )
+        is None
+    )
+    # And it changes nothing for a picture the layout can place.
+    assert (
+        migrate_destination(
+            "", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT, sweep_unfiled=True
+        )
+        == "2024 Shoots"
+    )
+
+
+def test_the_migration_flattens_a_folder_of_the_owners_own():
+    """The migration is the one gesture where a folder of the owner's own is not
+    an override. A dated library - what most libraries are before they have a
+    layout - would otherwise migrate nothing at all, since none of ``2024/
+    2024-08-15`` names anything the layout knows. ``match_destination`` keeps
+    refusing the same folders: the rule never sweeps them, the button does."""
+    filed = facets(projects=["2024 Shoots"])
+    for folder in ("_unsorted", "2024/2024-08-15", "Archive/2019/Weddings"):
+        assert migrate_destination(folder, filed, DEFAULT_LAYOUT) == "2024 Shoots"
+        assert match_destination(folder, filed, DEFAULT_LAYOUT, KNOWN) is None
+    # The automatic rule still leaves them alone.
+    assert relocate("2024/2024-08-15", filed, DEFAULT_LAYOUT, KNOWN) is None
+
+
+def test_the_migration_leaves_a_picture_already_where_the_layout_wants_it():
+    assert (
+        migrate_destination(
+            "2024 Shoots/Mira",
+            facets(projects=["2024 Shoots"], people=["Mira"]),
+            DEFAULT_LAYOUT,
+        )
+        is None
+    )
+
+
+def test_the_migration_flattens_the_owners_own_subfolders_too():
+    """Unlike ``relocate``, which carries ``2026-08`` across. The migration
+    puts every picture exactly where ``render`` says, and a date tail was the
+    arrangement the layout replaces; two files of one name meeting is what the
+    suffix rule is for."""
+    assert (
+        migrate_destination(
+            "2024 Shoots/Mira/2026-08",
+            facets(projects=["Client Nordvik"], people=["Mira"]),
+            DEFAULT_LAYOUT,
+        )
+        == "Client Nordvik/Mira"
+    )
+    assert (
+        relocate(
+            "2024 Shoots/Mira/2026-08",
+            facets(projects=["Client Nordvik"], people=["Mira"]),
+            DEFAULT_LAYOUT,
+            KNOWN,
+        )
+        == "Client Nordvik/Mira/2026-08"
+    )
+    # Even when the prefix is already right: a subfolder below it is not where
+    # the layout puts the picture.
+    assert (
+        migrate_destination(
+            "Client Nordvik/Mira/raw",
+            facets(projects=["Client Nordvik"], people=["Mira"]),
+            DEFAULT_LAYOUT,
+        )
+        == "Client Nordvik/Mira"
+    )
+
+
+def test_the_unfiled_folder_is_not_a_level_the_migration_nests_under():
+    filed = facets(projects=["2024 Shoots"])
+    assert migrate_destination(DEFAULT_LAYOUT.unfiled, filed, DEFAULT_LAYOUT) == (
+        "2024 Shoots"
+    )
+    # And at depth: nothing of the old path survives, ``Unassigned`` included, so
+    # no permanent ``Unassigned`` is ever left inside a project folder.
+    assert (
+        migrate_destination(f"{DEFAULT_LAYOUT.unfiled}/2026-08", filed, DEFAULT_LAYOUT)
+        == "2024 Shoots"
+    )
+
+
+def test_a_path_the_layout_cannot_read_is_not_migrated_either():
+    # Refused whole rather than tidied up, exactly as ``is_true`` refuses it.
+    # Rewriting the prefix would silently drop the tail it could not parse.
+    assert (
+        migrate_destination(
+            "2024 Shoots/../Mira", facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT
+        )
+        is None
+    )
+
+
+def _plant(library, relative_path, *, filed=True):
+    """Put one more picture on the disk and in the database. Returns its id."""
+    session, root = library["session"], library["root"]
+    absolute = os.path.join(root, *relative_path.split("/"))
+    os.makedirs(os.path.dirname(absolute), exist_ok=True)
+    with open(absolute, "wb") as handle:
+        handle.write(relative_path.encode())
+    picture = Picture(
+        file_path=relative_path,
+        original_file_name=os.path.basename(relative_path),
+        project_id=library["project_id"] if filed else None,
+    )
+    session.add(picture)
+    session.commit()
+    if filed:
+        session.add(
+            PictureProjectMember(
+                picture_id=picture.id, project_id=library["project_id"]
+            )
+        )
+        session.add(Face(picture_id=picture.id, character_id=library["person_id"]))
+        session.commit()
+    return picture.id
+
+
+def _settled(library):
+    """Put the fixture's picture where the migration would put it.
+
+    The fixture keeps it under the owner's own ``2026-08`` folder for the
+    rule's tail-carrying tests; the migration flattens that folder, so a test
+    counting *other* moves settles it first.
+    """
+    session, root = library["session"], library["root"]
+    old = os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    new = os.path.join(root, "2024 Shoots", "Mira", "0412.png")
+    os.replace(old, new)
+    picture = session.get(Picture, library["picture_id"])
+    picture.file_path = "2024 Shoots/Mira/0412.png"
+    session.add(picture)
+    session.commit()
+
+
+def test_the_migration_plans_a_flat_library_and_leaves_the_unfilable(library):
+    session, root = library["session"], library["root"]
+    _settled(library)
+    filed = _plant(library, "0001.png")
+    unfilable = _plant(library, "0002.png", filed=False)
+
+    plan, skipped, examined, last_id = migration.plan_migration(session, root)
+
+    assert skipped == []
+    assert examined == 3  # the fixture's picture plus these two
+    assert last_id == max(filed, unfilable)
+    # The fixture's own picture is already where the layout wants it, and the
+    # unfilable one stays put, so exactly one move is planned.
+    assert [move.picture_id for move in plan] == [filed]
+    assert plan[0].stored_path == "2024 Shoots/Mira/0001.png"
+
+
+def test_a_collision_is_suffixed_and_never_overwrites_the_file_already_there(library):
+    session, root = library["session"], library["root"]
+    first = _plant(library, "a/0001.png")
+    second = _plant(library, "b/0001.png")
+
+    # ``a/`` and ``b/`` are folders of the owner's own, and the migration
+    # flattens them, so two files of one name arrive at one folder: the second
+    # is suffixed in the plan, not refused.
+    plan, skipped, _examined, _last = migration.plan_migration(session, root)
+    assert skipped == []
+    moved = {move.picture_id: move.stored_path for move in plan}
+    assert moved[first] == "2024 Shoots/Mira/0001.png"
+    assert moved[second] == "2024 Shoots/Mira/0001-2.png"
+
+    # And a file already sitting at the destination is never the one renamed.
+    third = _plant(library, "0001.png")
+    fourth_path = os.path.join(root, "2024 Shoots", "Mira", "0001.png")
+    os.makedirs(os.path.dirname(fourth_path), exist_ok=True)
+    with open(fourth_path, "wb") as handle:
+        handle.write(b"somebody else's file")
+
+    plan, _skipped, _examined, _last = migration.plan_migration(session, root)
+    moved = {move.picture_id: move.stored_path for move in plan}
+    assert moved[first] == "2024 Shoots/Mira/0001-2.png"
+    assert moved[second] == "2024 Shoots/Mira/0001-3.png"
+    assert moved[third] == "2024 Shoots/Mira/0001-4.png"
+
+    migration.apply_moves(session, plan, image_root=root)
+    session.commit()
+    # The file that was already sitting there is untouched, which is the whole
+    # point of suffixing the file being moved rather than the one in the way.
+    with open(fourth_path, "rb") as handle:
+        assert handle.read() == b"somebody else's file"
+    for name in ("0001-2.png", "0001-3.png", "0001-4.png"):
+        assert os.path.isfile(os.path.join(root, "2024 Shoots", "Mira", name))
+
+
+def test_the_automatic_path_still_refuses_a_taken_destination(library):
+    """``uniquify`` is opt-in: the rule's own moves must not start renaming."""
+    session, root = library["session"], library["root"]
+    _swap_project(library)
+    taken = os.path.join(root, "Client · Nordvik", "Mira", "2026-08", "0412.png")
+    os.makedirs(os.path.dirname(taken), exist_ok=True)
+    with open(taken, "wb") as handle:
+        handle.write(b"in the way")
+
+    plan, skipped = engine.plan_moves(session, [library["picture_id"]], root)
+    assert plan == []
+    assert skipped == [(library["picture_id"], "destination_taken")]
+
+
+def test_the_migration_is_resumable_by_id_and_idempotent_when_rerun(library):
+    session, root = library["session"], library["root"]
+    _settled(library)
+    first = _plant(library, "0001.png")
+    second = _plant(library, "0002.png")
+
+    # One picture per pass, exactly as the route's windows work.
+    cursor, moved = 0, []
+    for _ in range(4):
+        plan, _skipped, examined, last_id = migration.plan_migration(
+            session, root, after_id=cursor, limit=1
+        )
+        moved.extend(migration.apply_moves(session, plan, image_root=root))
+        session.commit()
+        if examined < 1:
+            break
+        cursor = last_id
+    assert sorted(moved) == sorted([first, second])
+
+    # Re-running finishes nothing because there is nothing left: a picture
+    # already where the layout wants it plans no move. That is the resumability
+    # story - no checkpoint table, just an idempotent plan.
+    plan, skipped, _examined, _last = migration.plan_migration(session, root)
+    assert (plan, skipped) == ([], [])
+
+
+def test_one_undo_puts_every_migrated_file_back(library):
+    session, root = library["session"], library["root"]
+    first = _plant(library, "0001.png")
+    second = _plant(library, "sub/0002.png")
+
+    plan, _skipped, _examined, _last = migration.plan_migration(session, root)
+    targets = [move.picture_id for move in plan]
+    before = capture_state_in_session(session, targets)
+    migration.apply_moves(session, plan, image_root=root)
+    after = capture_state_in_session(session, targets)
+    operation = record_operation_in_session(
+        session,
+        op_type=engine.OP_LAYOUT_MOVE,
+        before=before,
+        after=after,
+        batch_id=migration.new_batch_id(),
+        commit=False,
+    )
+    session.commit()
+    assert operation is not None
+    assert os.path.isfile(os.path.join(root, "2024 Shoots", "Mira", "0001.png"))
+
+    import json
+
+    apply_state_in_session(
+        session, json.loads(operation.before_state), "undo", image_root=root
+    )
+    session.commit()
+    assert session.get(Picture, first).file_path == "0001.png"
+    assert session.get(Picture, second).file_path == "sub/0002.png"
+    assert os.path.isfile(os.path.join(root, "0001.png"))
+    assert os.path.isfile(os.path.join(root, "sub", "0002.png"))
+
+
+def test_a_migration_batch_id_is_one_this_route_would_accept_back():
+    """Minted here, validated there. The two must not drift apart, or a client
+    echoing the id it was given loses the grouping that makes the run one undo."""
+    assert _MIGRATION_BATCH_ID_RE.match(migration.new_batch_id())
+    assert not _MIGRATION_BATCH_ID_RE.match("cli-anything")
+
+
+def test_a_destination_on_another_volume_is_refused_rather_than_attempted(
+    library, monkeypatch
+):
+    """A mount point inside the library is not a slow move, it is no move:
+    ``publish_no_clobber`` claims the name with ``os.link`` and then
+    ``os.replace``, and both raise EXDEV. So it has to leave the plan, or the
+    file silently stays put while the pass reports a clean finish.
+
+    Forced through ``same_device``, which exists as its own function for exactly
+    this - `tmp_path` puts both directories on one filesystem on every machine
+    this suite runs on, so the real branch is unreachable here.
+    """
+    session, root = library["session"], library["root"]
+    _settled(library)
+    moving = _plant(library, "0001.png")
+
+    plan, skipped, _examined, _last = migration.plan_migration(session, root)
+    assert [move.picture_id for move in plan] == [moving] and skipped == []
+
+    monkeypatch.setattr(migration, "same_device", lambda source, target: False)
+    plan, skipped, _examined, _last = migration.plan_migration(session, root)
+    assert plan == []
+    assert skipped == [(moving, "destination_other_volume")]
+    # The claim it took while planning is given back, so a later picture of the
+    # same name is not refused for a move that is never going to happen.
+    assert not os.path.exists(os.path.join(root, "2024 Shoots", "Mira", "0001.png"))
+
+    preview = migration.preview_in_session(session, root)
+    assert preview["picture_count"] == 0
+    assert preview["cross_volume_count"] == 1
+    assert preview["skipped_counts"] == {"destination_other_volume": 1}
+
+
+def test_the_device_probe_reads_a_folder_that_does_not_exist_yet(library):
+    """The destination folder the migration is about to create has no device of
+    its own; the one it will get is its nearest existing ancestor's."""
+    root = library["root"]
+    assert migration._nearest_existing(
+        os.path.join(root, "not", "yet", "created")
+    ) == os.path.abspath(root)
+
+
+def test_the_preview_counts_the_move_without_making_it(library):
+    session, root = library["session"], library["root"]
+    _settled(library)
+    filed = _plant(library, "0001.png")
+    _plant(library, "0002.png", filed=False)
+
+    preview = migration.preview_in_session(session, root)
+
+    assert preview["layout"] == format_layout(DEFAULT_LAYOUT)
+    # The fixture's picture is already in place and the unfiled one stays put.
+    assert preview["picture_count"] == 1
+    assert preview["folder_count"] == 1
+    assert preview["samples"] == [
+        {"picture_id": filed, "from": "0001.png", "to": "2024 Shoots/Mira/0001.png"}
+    ]
+    assert preview["collision_count"] == 0
+    assert preview["cross_volume_count"] == 0
+    assert preview["skipped_counts"] == {}
+    # Nothing moved: it is a count, and the file is still where it was.
+    assert os.path.isfile(os.path.join(root, "0001.png"))
+
+
+def test_the_sweep_is_previewed_and_run_with_the_same_flag(library):
+    session, root = library["session"], library["root"]
+    _settled(library)
+    loose = _plant(library, "2024/0002.png", filed=False)
+
+    assert migration.preview_in_session(session, root)["picture_count"] == 0
+    preview = migration.preview_in_session(session, root, sweep_unfiled=True)
+    assert preview["picture_count"] == 1
+    assert preview["samples"] == [
+        {"picture_id": loose, "from": "2024/0002.png", "to": "Unassigned/0002.png"}
+    ]
+    assert [row["path"] for row in preview["tree"] if row["is_new"]] == ["Unassigned"]
+
+    result = migration.run_migration_pass(
+        _StubVault(session, root), after_id=0, sweep_unfiled=True
+    )
+    assert result["moved_picture_ids"] == [loose]
+    assert session.get(Picture, loose).file_path == "Unassigned/0002.png"
+    assert os.path.isfile(os.path.join(root, "Unassigned", "0002.png"))
+
+
+def test_the_preview_counts_a_collision_and_names_the_suffixed_path(library):
+    session, root = library["session"], library["root"]
+    _plant(library, "0001.png")
+    taken = os.path.join(root, "2024 Shoots", "Mira", "0001.png")
+    os.makedirs(os.path.dirname(taken), exist_ok=True)
+    with open(taken, "wb") as handle:
+        handle.write(b"somebody else's file")
+
+    preview = migration.preview_in_session(session, root)
+    assert preview["collision_count"] == 1
+    assert preview["collisions"][0]["to"] == "2024 Shoots/Mira/0001-2.png"
+
+
+def test_the_preview_of_a_library_with_no_layout_is_zero_rather_than_absent(library):
+    session, root = library["session"], library["root"]
+    settings = session.exec(select(LibrarySettings)).first()
+    settings.layout = None
+    session.add(settings)
+    session.commit()
+
+    preview = migration.preview_in_session(session, root)
+    assert preview["layout"] is None
+    # Every cost reads as a number, because the screen reads them all
+    # unconditionally and a missing key is a rendering bug, not a state.
+    assert preview["picture_count"] == 0
+    assert preview["cross_volume_count"] == 0
+    assert preview["skipped_counts"] == {}
+    assert preview["tree"] == []
+
+
+def _drawable_library(library):
+    """A tree with something of every kind in it, for the preview's ``tree``.
+
+    Five folders end up worth a row, and the two that do not are the point as
+    much as the five: the library root, which is never a row of its own, and
+    ``2024 Shoots``, which holds no picture and receives none because the layout
+    only ever puts things one level below it.
+    """
+    session = library["session"]
+    # The fixture's own picture leaves 2024 Shoots/Mira/2026-08 for the other
+    # project. The migration flattens, so the owner's own 2026-08 tail is not
+    # carried: it lands in Client · Nordvik/Mira.
+    _swap_project(library)
+    _plant(library, "0001.png")  # root -> 2024 Shoots/Mira
+    _plant(library, "0002.png", filed=False)  # nothing files it, so it stays
+    # An owner's own folder, flattened too, and named so it sorts ahead of
+    # every busier folder: a cap that ordered by path would keep it.
+    _plant(library, "00 Loose/0003.png")  # -> 2024 Shoots/Mira
+
+    # A person with no folder on disk yet, so one row comes back is_new.
+    nova = Character(name="Nova")
+    session.add(nova)
+    session.commit()
+    with_nova = _plant(library, "0005.png", filed=False)
+    picture = session.get(Picture, with_nova)
+    picture.project_id = library["project_id"]
+    session.add(picture)
+    session.add(
+        PictureProjectMember(picture_id=with_nova, project_id=library["project_id"])
+    )
+    session.add(Face(picture_id=with_nova, character_id=nova.id))
+    session.commit()
+
+
+def test_the_preview_draws_the_tree_the_layout_would_make(library):
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+
+    tree = migration.preview_in_session(session, root)["tree"]
+
+    assert tree == [
+        {
+            "path": "00 Loose",
+            "name": "00 Loose",
+            "depth": 0,
+            "have": 1,
+            "arriving": 0,
+            "leaving": 1,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Mira",
+            "name": "Mira",
+            "depth": 1,
+            "have": 0,
+            "arriving": 2,
+            "leaving": 0,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Mira/2026-08",
+            "name": "2026-08",
+            "depth": 2,
+            "have": 1,
+            "arriving": 0,
+            "leaving": 1,
+            "is_new": False,
+        },
+        {
+            "path": "2024 Shoots/Nova",
+            "name": "Nova",
+            "depth": 1,
+            "have": 0,
+            "arriving": 1,
+            "leaving": 0,
+            "is_new": True,
+        },
+        {
+            "path": "Client · Nordvik/Mira",
+            "name": "Mira",
+            "depth": 1,
+            "have": 0,
+            "arriving": 1,
+            "leaving": 0,
+            "is_new": True,
+        },
+    ]
+
+
+def test_the_tree_has_no_row_for_the_library_root(library):
+    """Three pictures sit at the root and two of them leave it, and none of that
+    is a row: the root is what every path is relative to, so a row for it would
+    draw a level the owner does not have."""
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+
+    tree = migration.preview_in_session(session, root)["tree"]
+    assert all(entry["path"] for entry in tree)
+    assert [entry["path"] for entry in tree] == sorted(
+        entry["path"] for entry in tree
+    ), "path order is what lets the screen indent on depth without re-sorting"
+
+
+def test_the_tree_is_never_capped(library):
+    """A tree of sixty rows and "...and 299 more folders" was the version before
+    this one, and the 299 were the date folders the owner wanted to check."""
+    session, root = library["session"], library["root"]
+    _drawable_library(library)
+    for n in range(80):
+        _plant(library, f"2024/2024-08-{n:02d}/{n:04d}.png")
+
+    preview = migration.preview_in_session(session, root)
+    assert (
+        len([row for row in preview["tree"] if row["path"].startswith("2024/")]) == 80
+    )
+    assert "tree_truncated" not in preview
+
+
+def test_the_tree_of_an_empty_library_is_empty_rather_than_a_root_row(library):
+    session, root = library["session"], library["root"]
+    for picture in session.exec(select(Picture)).all():
+        session.delete(picture)
+    session.commit()
+
+    preview = migration.preview_in_session(session, root)
+    assert preview["tree"] == []
+
+
+def test_a_suffixed_picture_carries_its_sidecar_under_the_same_suffix(library):
+    """A sidecar pairs with its picture by stem, so the collision suffix has to
+    reach it too - otherwise it lands beside a picture it no longer names, on
+    top of the sidecar of whatever file was already sitting there."""
+    session, root = library["session"], library["root"]
+    moving = _plant(library, "0001.png")
+    with open(os.path.join(root, "0001.txt"), "w") as handle:
+        handle.write("a caption")
+    session.get(Picture, moving).tags_file = os.path.join(root, "0001.txt")
+    session.commit()
+
+    # Somebody else's 0001.png is already where the layout would put ours, with
+    # its own sidecar beside it.
+    taken = os.path.join(root, "2024 Shoots", "Mira")
+    os.makedirs(taken, exist_ok=True)
+    for name, body in (("0001.png", b"theirs"), ("0001.txt", b"their caption")):
+        with open(os.path.join(taken, name), "wb") as handle:
+            handle.write(body)
+
+    plan, _skipped, _examined, _last = migration.plan_migration(session, root)
+    migration.apply_moves(session, plan, image_root=root)
+    session.commit()
+
+    assert session.get(Picture, moving).tags_file == os.path.join(taken, "0001-2.txt")
+    assert os.path.isfile(os.path.join(taken, "0001-2.txt"))
+    with open(os.path.join(taken, "0001.txt"), "rb") as handle:
+        assert handle.read() == b"their caption"
+
+
+def test_a_move_that_keeps_the_file_name_keeps_the_sidecar_name(library):
+    """The 4b path is unchanged by the suffix logic above: same name, same
+    sidecar name, only the folder moves."""
+    session, root = library["session"], library["root"]
+    folder = os.path.join(root, "2024 Shoots", "Mira", "2026-08")
+    with open(os.path.join(folder, "0412.txt"), "w") as handle:
+        handle.write("a caption")
+    session.get(Picture, library["picture_id"]).tags_file = os.path.join(
+        folder, "0412.txt"
+    )
+    session.commit()
+    _swap_project(library)
+
+    plan, _skipped = engine.plan_moves(session, [library["picture_id"]], root)
+    engine.apply_moves(session, plan, image_root=root)
+    session.commit()
+
+    moved_to = os.path.join(root, "Client · Nordvik", "Mira", "2026-08", "0412.txt")
+    assert session.get(Picture, library["picture_id"]).tags_file == moved_to
+    assert os.path.isfile(moved_to)
+
+
+class _StubVault:
+    """Just enough vault for ``run_migration_pass``: a root and a writer.
+
+    ``run_task`` runs the closure on this session rather than queueing it,
+    which is the only reason this file can exercise the pass at all without a
+    ``Server``. What is under test is the pass's own arithmetic — the cursor,
+    ``done``, the batch grouping and what lands in ``skipped`` — none of which
+    is about the queue.
+    """
+
+    def __init__(self, session, image_root):
+        self.image_root = image_root
+        self.db = self
+        self._session = session
+
+    def run_task(self, fn, *args, priority=None):
+        return fn(self._session, *args)
+
+    def run_immediate_read_task(self, fn, *args):
+        return fn(self._session, *args)
+
+
+def test_the_run_reports_a_cursor_and_only_says_done_at_the_end(library):
+    """The mutation this covers: hardcoding ``done`` to True moved 200 pictures
+    and told the client the library was migrated. Nothing else in the suite
+    calls ``run_migration_pass`` on a library with pictures in it."""
+    session, root = library["session"], library["root"]
+    _settled(library)
+    vault = _StubVault(session, root)
+    planted = [_plant(library, f"{n:04d}.png") for n in range(1, 4)]
+
+    # The window covers the fixture's own picture too, so the first pass sees
+    # it and one of the planted ones.
+    first = migration.run_migration_pass(vault, after_id=0, limit=2)
+    assert first["done"] is False, "there are pictures behind the window"
+    assert first["examined"] == 2
+    assert first["next_after_id"] == planted[0]
+    assert first["operation_id"] is not None
+
+    moved = list(first["moved_picture_ids"])
+    cursor, passes = first["next_after_id"], 1
+    while True:
+        result = migration.run_migration_pass(vault, after_id=cursor, limit=2)
+        moved.extend(result["moved_picture_ids"])
+        passes += 1
+        assert result["next_after_id"] >= cursor, "the cursor must never go back"
+        if result["done"]:
+            break
+        cursor = result["next_after_id"]
+    assert passes > 1, "done must not be true on the first window"
+    assert sorted(moved) == sorted(planted)
+    for picture_id in planted:
+        assert session.get(Picture, picture_id).file_path.startswith(
+            "2024 Shoots/Mira/"
+        )
+
+
+def test_every_pass_of_one_migration_is_one_undo(library):
+    """The acceptance criterion, and it needs *two* passes to mean anything: one
+    `batch_id` over both, and undoing either reverts them together."""
+    session, root = library["session"], library["root"]
+    vault = _StubVault(session, root)
+    planted = [_plant(library, f"{n:04d}.png") for n in range(1, 4)]
+    batch_id = migration.new_batch_id()
+
+    cursor, operations = 0, []
+    while True:
+        result = migration.run_migration_pass(
+            vault, after_id=cursor, limit=2, batch_id=batch_id, source="ui"
+        )
+        if result["operation_id"] is not None:
+            operations.append(result["operation_id"])
+        if result["done"]:
+            break
+        cursor = result["next_after_id"]
+
+    assert len(operations) == 2, "the point is that this is more than one row"
+    rows = session.exec(select(Operation).where(Operation.id.in_(operations))).all()
+    assert {row.batch_id for row in rows} == {batch_id}
+
+    # Undoing the *later* one reverts the whole batch, which is what makes the
+    # run a single Ctrl+Z rather than one per pass.
+    undo_in_session(session, operations[-1], image_root=root)
+    for picture_id in planted:
+        picture = session.get(Picture, picture_id)
+        assert picture.file_path == f"{planted.index(picture_id) + 1:04d}.png"
+        assert os.path.isfile(os.path.join(root, picture.file_path))
+
+
+def test_a_planned_file_that_could_not_be_moved_is_reported_not_dropped(
+    library, monkeypatch
+):
+    """Without this the picture is in neither `moved_picture_ids` nor `skipped`,
+    the pass still says `done`, and the only trace is a log line — a clean
+    finish reported over a file that never moved."""
+    session, root = library["session"], library["root"]
+    _settled(library)
+    vault = _StubVault(session, root)
+    stubborn = _plant(library, "0001.png")
+    monkeypatch.setattr(migration, "move_planned_files", lambda *a, **k: [])
+
+    result = migration.run_migration_pass(vault, after_id=0, limit=10)
+    assert result["moved_picture_ids"] == []
+    assert result["skipped"] == [{"picture_id": stubborn, "reason": "move_failed"}]
+
+
+# ---------------------------------------------------------------------------
+# The crash window: a file that moved and a row that did not follow
+# ---------------------------------------------------------------------------
+
+
+def _purge(library, picture_ids):
+    """Run one MissingFilePurgeTask over the named pictures."""
+    from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+
+    session, root = library["session"], library["root"]
+    pictures = [session.get(Picture, pid) for pid in picture_ids]
+    task = MissingFilePurgeTask(_StubVault(session, root), pictures)
+    result = task._run_task()
+    session.expire_all()
+    return result
+
+
+def test_a_move_that_crashed_before_the_row_was_written_is_repaired_not_purged(
+    library,
+):
+    """The blocking case. The engine journals the move, renames the file, and
+    the process dies before the row is repointed. The row names a path with no
+    file at it, which is exactly what the purge sweep deletes pictures over,
+    and the DeletedFileLog it writes carries file_removed=True, which restore
+    reads as *never resurrect*. The journal is what makes it a repair."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0001.png")
+
+    # The rename landed; the transaction that would have recorded it did not.
+    landed = os.path.join(root, "2024 Shoots", "Mira", "0001.png")
+    os.makedirs(os.path.dirname(landed), exist_ok=True)
+    os.replace(os.path.join(root, "0001.png"), landed)
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0001.png",
+            new_path="2024 Shoots/Mira/0001.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["repaired"] == 1
+    picture = session.get(Picture, picture_id)
+    assert picture is not None, "the picture must survive a crashed move"
+    assert picture.file_path == "2024 Shoots/Mira/0001.png"
+    assert session.exec(select(DeletedFileLog)).all() == []
+
+
+def test_an_undo_that_crashed_before_the_row_was_written_is_repaired_not_purged(
+    library,
+):
+    """The same window, entered from the other end. An undo puts the file back
+    at the path the move took it from, so the journal row that names the pair is
+    read backwards: the row's `old_path` is where the file now is."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "2024 Shoots/Mira/0002.png")
+
+    # The undo's rename landed; its transaction rolled back.
+    os.replace(
+        os.path.join(root, "2024 Shoots", "Mira", "0002.png"),
+        os.path.join(root, "0002.png"),
+    )
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0002.png",
+            new_path="2024 Shoots/Mira/0002.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["repaired"] == 1
+    assert session.get(Picture, picture_id).file_path == "0002.png"
+
+
+def test_a_file_the_owner_really_deleted_is_still_purged(library):
+    """The guard must not become a blanket exemption: with no journal row
+    naming the path, a missing file is a deletion and is recorded as one."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0003.png")
+    os.remove(os.path.join(root, "0003.png"))
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 1
+    assert result["repaired"] == 0
+    assert session.get(Picture, picture_id) is None
+    logged = session.exec(select(DeletedFileLog)).all()
+    assert [row.file_removed for row in logged] == [True]
+
+
+def test_another_pictures_journal_row_at_the_same_path_is_not_repair_evidence(
+    library,
+):
+    """Journal rows outlive their move by RETENTION_S, and a path can be reused
+    in that window: the engine moved picture A out of `0005.png`, a later
+    import put picture B at `0005.png`, and the owner then deleted B. Matched
+    on path alone, A's row would repoint B at A's file. B is a deletion."""
+    session, root = library["session"], library["root"]
+    earlier = _plant(library, "2024 Shoots/Mira/0005.png")
+    later = _plant(library, "0005.png")
+    os.remove(os.path.join(root, "0005.png"))
+    session.add(
+        PictureMove(
+            picture_id=earlier,
+            old_path="0005.png",
+            new_path="2024 Shoots/Mira/0005.png",
+            consumed=True,
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [later])
+
+    assert result["purged"] == 1
+    assert result["repaired"] == 0
+    assert session.get(Picture, later) is None
+    assert session.get(Picture, earlier).file_path == "2024 Shoots/Mira/0005.png"
+
+
+def test_a_move_still_in_flight_is_deferred_rather_than_purged(library):
+    """A journal row whose other end holds no file either. Something is mid
+    flight, or the move failed after the intent was committed; neither is a
+    deletion, and the row expires on its own if it never completes."""
+    session, root = library["session"], library["root"]
+    picture_id = _plant(library, "0004.png")
+    os.remove(os.path.join(root, "0004.png"))
+    session.add(
+        PictureMove(
+            picture_id=picture_id,
+            old_path="0004.png",
+            new_path="2024 Shoots/Mira/0004.png",
+        )
+    )
+    session.commit()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["deferred"] == 1
+    assert session.get(Picture, picture_id) is not None
+    assert session.exec(select(DeletedFileLog)).all() == []
