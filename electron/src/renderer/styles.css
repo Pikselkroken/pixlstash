@@ -711,10 +711,31 @@ input[type="text"]:focus-visible,
   line-height: 1.4;
 }
 
-/* Permission-recovery screen (permissions.html) */
+/* Permission-recovery screen (permissions.html).
+
+   It carries `setup` for the shared chrome, and `setup` is a two-column ROW -
+   which this screen is not: it is one centred column of art, title, what will
+   change, and the answer. Left as a row its 600px cap was shared out between
+   the header, the panel and the buttons, so the title ran off the left edge,
+   the paths wrapped a word at a time and "Fix it" was a green sliver. */
 .app.repair {
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  gap: 18px;
   max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.app.repair .setup-header {
+  width: 100%;
+  align-items: center;
+  text-align: center;
+}
+
+.app.repair .panel {
+  max-width: 100%;
 }
 
 /* Folder + open padlock. Strokes only, so it reads as line art at any size and
