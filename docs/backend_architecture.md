@@ -2736,6 +2736,22 @@ descriptor before their contents are processed. Every operation is idempotent,
 so a crash between copy, stamp, archive replacement, and marker update converges
 toward redundant sanitation rather than credential loss or reintroduction.
 
+**Vault loss is read-only-validated first, then recovered only from a folder
+with content in it.** Opening a vault creates the file, so the active library's
+fingerprint is checked read-only before anything opens it
+(`prevalidate_library_fingerprint`); a stamped registration whose `vault.db` is
+gone would otherwise become an unrecognisable vault on every later start. What
+happens next depends on the folder. A folder that still holds files (a restored
+or hand-copied picture folder) is treated as an import folder: startup logs a
+warning, `LibraryRegistry.forget_vault_fingerprint` clears `vault_uuid`, a
+fresh vault is created and stamped with the library's own uuid, and the app
+opens on an empty library whose folder is full of pictures, which is what makes
+the folder-mapping wizard offer them. An *empty* folder is refused as before,
+with the attached libraries that do open named in the error and offered in an
+interactive terminal: an unmounted external drive looks exactly like an empty
+folder, and a fresh vault inside the mount point would lock the real library
+out once the drive came back.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub

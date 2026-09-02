@@ -19,6 +19,7 @@ from pixlstash.hub.bootstrap import (
     finalize_opened_library,
     prepare_legacy_identity,
     prevalidate_library_fingerprint,
+    registered_vault_path,
 )
 from pixlstash.hub.db import HubDatabase, HubPermissionError
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
@@ -1340,6 +1341,36 @@ class TestAVanishedVault:
             assert LibraryRegistry(hub).active_library().path == gone
         finally:
             hub.close()
+
+    def test_a_populated_folder_without_its_vault_starts_fresh(self, two_libraries):
+        """A restored picture folder is an import folder, not a dead end.
+
+        The desktop has no terminal to offer alternatives in, and the folder
+        the owner restored their pictures into is the library they want: start
+        a fresh vault there, so the app opens on an empty library whose folder
+        is full of pictures to import. Contrast the empty folder above, which
+        is what an unmounted drive looks like and stays refused.
+        """
+        hub_path, kept, gone = two_libraries
+        with open(os.path.join(gone, "holiday.jpg"), "wb") as picture:
+            picture.write(b"not really a jpeg")
+
+        result = bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: None)
+        try:
+            assert result.library.path == gone
+            assert result.library.vault_uuid is None
+            with Vault(
+                registered_vault_path(result.hub, result.library, result),
+                disable_background_workers=True,
+            ):
+                pass
+            assert read_vault_uuid(gone) == result.library.uuid
+            assert LibraryRegistry(result.hub).by_uuid(
+                result.library.uuid
+            ).vault_uuid == (result.library.uuid)
+        finally:
+            result.engine.close()
+            result.hub.close()
 
     def test_an_unreadable_alternative_is_never_offered(self, two_libraries):
         hub_path, kept, gone = two_libraries
