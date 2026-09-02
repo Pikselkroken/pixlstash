@@ -1073,20 +1073,23 @@ class TagTask(BaseTask):
         # row per tag, so a plugin run would otherwise clear the built-in tagger's
         # confidences and silently zero the picture's anomaly_tag_uncertainty.
         writing_as_plugin = is_plugin_model_version(model_version)
-        stale_ids = [
-            row.id
+        stale_rows = [
+            row
             for row in existing_rows
             if row.model_version != model_version
             and row.model_version != "manual"
             and row.label_source != "human"
             and is_plugin_model_version(row.model_version) == writing_as_plugin
         ]
-        if stale_ids:
-            session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))
+        if stale_rows:
+            session.exec(
+                delete(TagPrediction).where(
+                    TagPrediction.id.in_([row.id for row in stale_rows])
+                )
+            )
             # Remove from map so they are not treated as existing below.
-            for row in existing_rows:
-                if row.id in set(stale_ids):
-                    existing_map.pop((row.picture_id, row.tag), None)
+            for row in stale_rows:
+                existing_map.pop((row.picture_id, row.tag), None)
 
         # --- Bulk fetch applied tags for anomaly uncertainty computation ---
         tag_rows = session.exec(

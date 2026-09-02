@@ -95,14 +95,20 @@ class TagPredictionBackfillTask(BaseTask):
         if not image_paths:
             return {"backfilled": 0, "pictures": 0}
 
-        # Make sure the tagger model is loaded before inference.
-        workflow.ensure_active_plugin_ready()
+        # Make sure the tagger model is loaded before inference. The override
+        # is explicit so the backfill stays PixlStash-tagger-only even if the
+        # enabled flag and active_tag_plugin ever drift apart.
+        workflow.ensure_active_plugin_ready(engine_override="pixlstash_tagger")
 
         # Single inference pass: we only want the raw scores, not the tags the
         # model would apply (the picture already has its tags).
         full_scores_by_path: dict = {}
         inference_start = time.perf_counter()
-        workflow.tag_images(image_paths, out_raw_scores=full_scores_by_path)
+        workflow.tag_images(
+            image_paths,
+            out_raw_scores=full_scores_by_path,
+            engine_override="pixlstash_tagger",
+        )
         inference_s = time.perf_counter() - inference_start
 
         label_scores_by_pic_id: dict[int, dict] = {}
@@ -127,7 +133,9 @@ class TagPredictionBackfillTask(BaseTask):
                 unscored,
             )
 
-        model_version = workflow.active_model_version()
+        model_version = workflow.active_model_version(
+            engine_override="pixlstash_tagger"
+        )
         written = self._db.run_task(
             self._backfill_predictions,
             label_scores_by_pic_id,
