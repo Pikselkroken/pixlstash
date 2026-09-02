@@ -1,77 +1,66 @@
 # Copilot and Claude Instructions for PixlStash
 
-## The repository layout: peer checkouts, no privileged one
+## The repository layout: work in `develop/`
 
-Several agent sessions run against this repository at once, and they used to
-collide: a session that started work on `develop` could find itself on someone
-else's branch mid-task, holding someone else's uncommitted files, with its own
-branch renamed out from under it. Nothing warned you, and the first symptom was
-usually a commit that picked up the wrong files.
-
-`~/Projects/pixlstash` is therefore **a container, not a checkout**:
+`~/Projects/pixlstash` is a container, not a checkout:
 
 ```
 ~/Projects/pixlstash/
-  .bare/         the git dir
-  .git           one line: gitdir: ./.bare
-  develop/       a worktree pinned to develop, never anything else
-  main/          a worktree pinned to main
-  worktrees/     one per session
+  develop/       the main checkout: all code work happens and is tested here
+  main/          a worktree pinned to main, the release rig, never edited
+  testing/       scratch rig for trying several PRs together, nothing leaves it
+  worktrees/     older per-session worktrees; make a new one only when asked
 ```
 
-**The layout is what enforces this, not the rule.** Git refuses to have one
-branch checked out in two worktrees, so once `develop/` holds `develop` no
-session can take it away, and no session can silently retarget it. That is a
-mechanical guarantee where the previous "never edit the shared checkout"
-instruction was a remembered one, and remembered ones are what failed.
+`develop/` holds the git dir. It is where branches are made, edited, tested,
+committed and pushed. It is not pinned to the `develop` branch: check out
+whatever branch the work is on.
 
-`develop/` and `main/` are **test rigs**. They are kept current and are never
-edited or branched off in place. All work happens in `worktrees/`.
+**Do not create a worktree on your own.** For a while every session made one,
+and the cost was real: fifty-odd checkouts, `node_modules` symlinks to set up
+in each, a different path to test every change at, and nothing ever where the
+person testing expected it. Use a worktree when instructed. If you think one
+is genuinely necessary (a second lane must run at the same time, a long bisect,
+a branch that must not disturb what is checked out) say so and let the person
+decide; do not decide it yourself.
 
 ### Starting work
 
-`EnterWorktree` creates under `<repo>/.claude/worktrees/`, which is not
-configurable, so a session started in `develop/` would put its worktree inside
-the test rig. Create it as a peer instead and enter it by path:
-
 ```
-git worktree add ~/Projects/pixlstash/worktrees/<name>
-# then: EnterWorktree with path: ~/Projects/pixlstash/worktrees/<name>
-git fetch origin && git checkout -B <branch> origin/<base>
-ln -s ~/Projects/pixlstash/develop/frontend/node_modules frontend/node_modules
-ln -s ~/Projects/pixlstash/develop/electron/node_modules electron/node_modules
+cd ~/Projects/pixlstash/develop
+git status && git branch --show-current
+git fetch origin && git checkout -b <branch> origin/<base>
 ```
 
-Set the base explicitly: the default is `origin/main` and feature work is
-almost always based on `develop`. The `node_modules` symlinks are what make the
-worktree actually runnable: without them `npm run dev` and `vitest` both fail on
-a fresh worktree, which is most of why worktrees were awkward to test in. Both
-are needed — `electron/` has its own tree, and without it `npm run dev` in
-`electron/` dies on `Cannot find module 'electron'` before it builds anything.
+Set the base explicitly: feature work is almost always based on `develop`,
+bugfixes on `main` (see the PR base rules). Look at `git status` first. If the
+tree holds uncommitted changes you did not make, or the current branch is
+another session's work in progress, say so and stop rather than switching
+branches under it. Several sessions can run against this repository at once
+and cannot see each other.
 
-**The hub and the vault live outside the repo** (platformdirs user data dir), so
-every checkout runs against the same library you already have configured. That
-is why any worktree is testable at all. Do not "fix" it into per-checkout data.
+**The hub and the vault live outside the repo** (platformdirs user data dir),
+so every checkout runs against the same library you already have configured.
+Do not "fix" it into per-checkout data.
 
-Commit and push from the worktree, open the PR, then remove the worktree when it
-merges. Never stage a file you did not write in this session: stage by name, not
-`git add -A`.
+Commit and push from `develop/`, open the PR, and when it merges
+`git checkout develop && git pull`. Never stage a file you did not write in
+this session: stage by name, not `git add -A`.
 
 Sessions that only read (questions, reviewing pushed code) can stay put.
 
 ### Say where the work can be tested
 
-A session that changes behaviour ends by stating the path and the commands,
-because the person testing is not in your worktree and cannot guess it:
+A session that changes behaviour ends by stating the branch and the commands:
 
 ```
-Test at: ~/Projects/pixlstash/worktrees/<name>   (branch <branch>, based on <base>)
-  backend:  cd ~/Projects/pixlstash/worktrees/<name> && python -m pixlstash.app
-  frontend: cd ~/Projects/pixlstash/worktrees/<name>/frontend && npm run dev
+Test at: ~/Projects/pixlstash/develop   (branch <branch>, based on <base>)
+  backend:  cd ~/Projects/pixlstash/develop && python -m pixlstash.app
+  frontend: cd ~/Projects/pixlstash/develop/frontend && npm run dev
 ```
 
-If the work is already merged, say `develop/` instead and say to pull. "It's on
-the branch" is not a test path.
+If the work is already merged, say so and say to pull. "It's on the branch" is
+not a test path; the branch name is what makes the path meaningful.
 
 ### Say what to test, not only where — and say it in the session, never in the PR
 
@@ -100,8 +89,8 @@ mechanism costs this much* and *here is what is on that person's disk*.
 **So end the session with the plan, and always name a folder to run it from.**
 Five parts, and the last two are the ones that get skipped:
 
-1. **Where** — the worktree block above, always, even when the answer is
-   `develop/`. Plus any step that has to happen first: *"restart the backend,
+1. **Where** — the test-at block above, always, even when the answer is
+   "the branch is merged". Plus any step that has to happen first: *"restart the backend,
    the declaration runs at start-up"* is the difference between a working
    feature and a bug report.
 2. **What to look at**, as numbered checks against a named screen or control.
