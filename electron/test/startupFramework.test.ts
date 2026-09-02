@@ -33,6 +33,13 @@ describe('the startup framework', () => {
     );
   });
 
+  it('keeps the install screen to one line however many packages pip fetches', () => {
+    // pip reports a line per download. Keying a row by message grew the screen
+    // a line at a time; the message is the note on the one line instead.
+    assert.match(script, /const progress = \{ name: '', note: '', fraction: -1 \}/);
+    assert.doesNotMatch(script, /PHASES\.push/);
+  });
+
   it('parks the privacy answer for the app instead of writing it itself', () => {
     // The answer belongs to the owner's record in a database that does not
     // exist yet, so a commit that wrote it there would have nowhere to write.

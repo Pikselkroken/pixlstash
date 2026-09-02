@@ -486,39 +486,40 @@ function privacyPatch() {
 
 // ---- the install step
 
-const PHASES = [];
+// The install screen is ONE line: what is happening, the installer's own last
+// word for a note, and a single bar. pip reports a line per package it fetches,
+// so anything that keys a row by message grows a list a screen long; this
+// replaces the line instead.
+const progress = { name: '', note: '', fraction: -1 };
 
-function renderPhases() {
+function renderProgress() {
   els.phases.innerHTML = '';
-  for (const phase of PHASES) {
-    const item = document.createElement('li');
-    item.className = 'phase';
-    item.dataset.state = phase.state;
-    item.innerHTML =
-      `<span class="pmark" aria-hidden="true">${phase.state === 'done' ? '&#10003;' : '&#9679;'}</span>` +
-      `<span class="pname"></span><span class="pnote"></span>`;
-    item.querySelector('.pname').textContent = phase.name;
-    item.querySelector('.pnote').textContent = phase.note || '';
-    if (phase.state === 'running') {
-      const bar = document.createElement('div');
-      bar.className = 'bar';
-      const fill = document.createElement('div');
-      fill.className = phase.fraction >= 0 ? 'barfill' : 'barfill indeterminate';
-      // A DOM style property, not a style attribute: the attribute is what the
-      // window's CSP refuses.
-      if (phase.fraction >= 0) fill.style.width = `${Math.round(phase.fraction * 100)}%`;
-      bar.appendChild(fill);
-      item.appendChild(bar);
-    }
-    els.phases.appendChild(item);
-  }
+  if (!progress.name) return;
+  const item = document.createElement('li');
+  item.className = 'phase';
+  item.dataset.state = 'running';
+  item.innerHTML =
+    '<span class="pmark" aria-hidden="true">&#9679;</span>' +
+    '<span class="pname"></span><span class="pnote"></span>';
+  item.querySelector('.pname').textContent = progress.name;
+  item.querySelector('.pnote').textContent = progress.note;
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('div');
+  // pip emits no byte-level progress over a pipe (its bar is TTY-only), so an
+  // unknown fraction gets the sliding chunk rather than a misleading full bar.
+  fill.className = progress.fraction >= 0 ? 'barfill' : 'barfill indeterminate';
+  // A DOM style property, not a style attribute: the attribute is what the
+  // window's CSP refuses.
+  if (progress.fraction >= 0) fill.style.width = `${Math.round(progress.fraction * 100)}%`;
+  bar.appendChild(fill);
+  item.appendChild(bar);
+  els.phases.appendChild(item);
 }
 
-function setPhase(name, patch) {
-  const existing = PHASES.find((p) => p.name === name);
-  if (existing) Object.assign(existing, patch);
-  else PHASES.push({ name, state: 'running', fraction: -1, note: '', ...patch });
-  renderPhases();
+function setProgress(patch) {
+  Object.assign(progress, patch);
+  renderProgress();
 }
 
 async function commit() {
@@ -527,11 +528,12 @@ async function commit() {
   hide(els.error);
   go(steps.indexOf('install'));
   els.next.disabled = true;
-  setPhase('Setting up PixlStash', { state: 'running', fraction: -1 });
+  const useGpu = gpu.available && selectedUseGpu();
+  setProgress({ name: 'Preparing your library', note: '', fraction: -1 });
   try {
     await api.commitSetup({
       imageRoot: els.folder.value.trim(),
-      useGpu: gpu.available && selectedUseGpu(),
+      useGpu,
       installLocation: els.installPath.value.trim(),
       importLegacyIdentity:
         !els.legacyIdentityPanel.classList.contains('hidden') && els.importLegacyIdentity.checked,
@@ -575,9 +577,26 @@ els.next.addEventListener('click', () => {
   else go(at + 1);
 });
 
+// Whatever the installer is doing right now, on the one line.
 api.onProgress((p) => {
-  const known = p.fraction >= 0;
-  setPhase(p.message || 'Working…', { state: 'running', fraction: known ? p.fraction : -1 });
+  if (!busy) return;
+  setProgress({
+    name: `Installing the ${gpu.label || 'GPU'} runtime`,
+    note: p.message || '',
+    fraction: p.fraction >= 0 ? p.fraction : -1,
+  });
+});
+
+// The shell's own start-up phases: by the time the backend is starting the
+// runtime is in place, and 'ready' means this window is about to become the
+// library.
+api.onPhase((p) => {
+  if (!busy) return;
+  if (p.phase === 'starting') {
+    setProgress({ name: 'Starting PixlStash', note: '', fraction: -1 });
+  } else if (p.phase === 'error' && p.message) {
+    showError(String(p.message));
+  }
 });
 
 let probeDefaults = {};

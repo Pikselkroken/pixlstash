@@ -1046,16 +1046,17 @@ input[type="text"]:focus-visible,
   color: var(--accent);
 }
 
+/* Three bars on every option, so the marks compare: how many are FILLED is how
+   much leaves the machine. An unfilled bar is drawn rather than hidden, in an
+   ink light enough to read against the panel it sits on. Heights are classes
+   because this window refuses inline styles (style-src 'self'), not for want of
+   three numbers in the markup. */
 .tele-mark i {
   width: 4px;
-  background: currentColor;
+  background: rgba(242, 229, 218, 0.28);
   border-radius: 1px;
-  opacity: 0.45;
 }
 
-/* How many of the three marks are lit says how much leaves the machine. Heights
-   are classes because this window refuses inline styles (script-src/style-src
-   'self'), not for want of three numbers in the markup. */
 .tele-mark i:nth-child(1) {
   height: 4px;
 }
@@ -1068,13 +1069,10 @@ input[type="text"]:focus-visible,
   height: 16px;
 }
 
-.tele-mark--1 i:nth-child(n + 2),
-.tele-mark--2 i:nth-child(n + 3) {
-  visibility: hidden;
-}
-
-.tele-opt[aria-checked='true'] .tele-mark i {
-  opacity: 1;
+.tele-mark--1 i:nth-child(-n + 1),
+.tele-mark--2 i:nth-child(-n + 2),
+.tele-mark--3 i:nth-child(-n + 3) {
+  background: var(--accent);
 }
 
 .tele-name {
@@ -1125,10 +1123,16 @@ input[type="text"]:focus-visible,
   font-size: 12px;
 }
 
+/* pip's own line, which can be long: one line, clipped, never a wrap that
+   would move the row below it. */
 .phase .pnote {
   font-size: 12px;
   color: rgba(242, 229, 218, 0.45);
   font-variant-numeric: tabular-nums;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .phase[data-state='done'] {
