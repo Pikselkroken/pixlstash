@@ -77,6 +77,9 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false
     },
+    "dmg": {
+      "size": "6g"
+    },
     "linux": {
       "target": [
         "AppImage",
