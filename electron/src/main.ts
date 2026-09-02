@@ -758,8 +758,20 @@ function deviceFor(accel: Accel | null): string | undefined {
   return 'cpu';
 }
 
-/** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
+/**
+ * Spawn the backend (bundled env + optional GPU overlay), inject the loopback
+ * session, load the UI.
+ *
+ * `navigate: false` starts the server and leaves the window where it is. That
+ * is what lets first-run setup read the library while a GPU runtime downloads:
+ * the reading is disk and CPU work with nothing to wait for, the download is
+ * network, and the window stays on the setup screen until both are done.
+ */
+async function startAndLoad(
+  accel: Accel | null,
+  repairPermissions = false,
+  navigate = true,
+): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -789,8 +801,9 @@ async function startAndLoad(accel: Accel | null, repairPermissions = false): Pro
     sameSite: 'lax',
   });
 
-  sendPhase({ phase: 'ready', url: running.url });
   currentUrl = running.url;
+  if (!navigate) return;
+  sendPhase({ phase: 'ready', url: running.url });
   await mainWindow?.loadURL(running.url);
 }
 
@@ -816,9 +829,10 @@ async function activeOverlayAccel(): Promise<Accel | null> {
 async function startWithOverlayFallback(
   accel: Accel | null,
   repairPermissions = false,
+  navigate = true,
 ): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: (candidate) => startAndLoad(candidate, repairPermissions),
+    start: (candidate) => startAndLoad(candidate, repairPermissions, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
     // Permission failures are unrelated to an accelerator. Preserve the active
@@ -1104,7 +1118,14 @@ function registerIpc(): void {
       importedFrom: imported ? stdPath : null,
       legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
-        imageRoot: importedImageRoot || defaultLibraryDir(),
+        // Two different answers need two different defaults. "Start empty" may
+        // name a folder that does not exist yet - that is the point of it. The
+        // "pictures I already have" answer must not: prefilling a path with
+        // nothing at it invites someone to accept it and open an empty
+        // library, so it is offered only when something is actually there.
+        existingRoot:
+          importedImageRoot && existsSync(importedImageRoot) ? importedImageRoot : null,
+        newRoot: defaultLibraryDir(),
         useGpu: Boolean(gpu),
         // Where the GPU runtime would install (only relevant when a GPU is
         // offered). On Windows this is inside the chosen install folder.
@@ -1215,16 +1236,27 @@ function registerIpc(): void {
 
       // The GPU choice maps onto the existing on-demand wheel-overlay system.
       const gpu = gpuUpgrade();
-      if (choices?.useGpu && gpu) {
-        await manager.installOverlay(gpu, runtime, (p) =>
-          mainWindow?.webContents.send('install:progress', p),
-        );
-        await manager.setActiveAccel(gpu);
-      } else {
+      if (!choices?.useGpu || !gpu) {
         await manager.setActiveAccel(null);
+        await startWithOverlayFallback(await activeOverlayAccel());
+        return;
       }
 
-      await startWithOverlayFallback(await activeOverlayAccel());
+      // A ~2.5 GB download and the first read of the library have nothing to
+      // say to each other: one is network, the other disk and CPU, and none of
+      // the reading wants a GPU. So the backend starts on the bundled runtime
+      // NOW - without navigating, so the setup screen keeps reporting - and
+      // hashes and thumbnails while the overlay downloads. The restart at the
+      // end is the only thing the GPU is actually needed for, and the work done
+      // in the meantime survives it: the task planner finds whatever is still
+      // outstanding when the new process comes up.
+      await manager.setActiveAccel(null);
+      await startWithOverlayFallback(null, false, false);
+      await manager.installOverlay(gpu, runtime, (p) =>
+        mainWindow?.webContents.send('install:progress', p),
+      );
+      await manager.setActiveAccel(gpu);
+      await startWithOverlayFallback(gpu);
     },
   );
 

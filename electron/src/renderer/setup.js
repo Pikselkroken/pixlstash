@@ -128,6 +128,9 @@ let inspection = null;
 let inspectSeq = 0;
 let privacyVariant = 'fresh';
 let privacyChoice = null;
+// True once the runtime install has reported anything, which is also when the
+// backend is already up reading the library behind it.
+let reading = false;
 
 function show(el) {
   el.classList.remove('hidden');
@@ -179,6 +182,9 @@ function renderSteps() {
       `<span class="dot">${i + 1}</span>` +
       `<span class="step-label">${STEP_LABELS[step] || step}</span>` +
       `<span class="step-value" id="value-${step}"></span>`;
+    if (step === 'library' && els.folder.value) {
+      row.querySelector('.step-value').title = els.folder.value;
+    }
     els.steps.appendChild(row);
   });
   questionSteps().forEach((step, i) => {
@@ -192,6 +198,9 @@ function answerFor(step) {
   if (step === 'library') {
     if (!mode) return '';
     const icon = mode === 'open' && inspection && inspection.isLibrary ? LOGO : FOLDER_ICON;
+    // The folder's own name, clipped by CSS when even that is long. The whole
+    // path is on the row, because the name alone cannot tell two "Pictures"
+    // apart.
     return `${icon}<span>${basename(els.folder.value)}</span>`;
   }
   if (step === 'compute') {
@@ -262,6 +271,22 @@ function renderLibrary() {
   els.hint.textContent = '';
   els.answerHw.textContent =
     mode === 'open' ? 'The folder your pictures are in' : 'Where the new library goes';
+
+  // Nothing suggested, nothing to say about it yet: ask for the folder rather
+  // than passing judgement on an empty field.
+  if (!els.folder.value) {
+    els.next.disabled = true;
+    els.hint.textContent = 'Choose the folder your pictures are in.';
+    setVerdict({
+      tone: 'ok',
+      mark: '&middot;',
+      title: 'No folder chosen yet',
+      sub: 'PixlStash says what it found there before anything is written.',
+      stats: [],
+    });
+    return;
+  }
+
   renderVerdict();
 }
 
@@ -384,10 +409,14 @@ async function inspect(path) {
 
 function chooseMode(next, defaults) {
   mode = next;
+  // Only "start empty" gets a path suggested for it. A folder someone already
+  // has is theirs to name, and a prefill nobody chose is how the wrong one gets
+  // accepted.
   els.folder.value =
     next === 'open'
-      ? detectedLegacyIdentitySource || defaults.imageRoot || ''
-      : defaults.imageRoot || '';
+      ? detectedLegacyIdentitySource || defaults.existingRoot || ''
+      : defaults.newRoot || '';
+  inspection = null;
   renderLibrary();
   if (els.folder.value) inspect(els.folder.value);
 }
@@ -598,23 +627,29 @@ els.next.addEventListener('click', () => {
   else go(at + 1);
 });
 
-// Whatever the installer is doing right now, on the one line.
+// Whatever the installer is doing right now, on the one line. The library is
+// being read at the same time - the shell starts the backend on the bundled
+// runtime before the download - so the line says both.
 api.onProgress((p) => {
   if (!busy) return;
+  reading = true;
   setProgress({
-    name: `Installing the ${gpu.label || 'GPU'} runtime`,
+    name: `Installing the ${gpu.label || 'GPU'} runtime, and reading your pictures`,
     note: p.message || '',
     fraction: p.fraction >= 0 ? p.fraction : -1,
   });
 });
 
-// The shell's own start-up phases: by the time the backend is starting the
-// runtime is in place, and 'ready' means this window is about to become the
-// library.
+// The shell's own start-up phases. The first 'starting' is the backend coming
+// up to read the library; a later one is the restart onto the GPU runtime.
 api.onPhase((p) => {
   if (!busy) return;
   if (p.phase === 'starting') {
-    setProgress({ name: 'Starting PixlStash', note: '', fraction: -1 });
+    setProgress({
+      name: reading ? 'Starting PixlStash on your GPU' : 'Starting PixlStash',
+      note: '',
+      fraction: -1,
+    });
   } else if (p.phase === 'error' && p.message) {
     showError(String(p.message));
   }

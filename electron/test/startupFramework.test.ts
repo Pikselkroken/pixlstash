@@ -48,6 +48,26 @@ describe('the startup framework', () => {
     assert.match(styles, /\.phase \.pnote \{[^}]*-webkit-line-clamp: 3/s);
   });
 
+  it('suggests a folder only for the answer that creates one', () => {
+    // A prefilled path with nothing at it is how someone accepts the wrong
+    // folder and opens an empty library; "start empty" is the only answer that
+    // may name a folder that does not exist yet.
+    assert.match(mainSrc, /existingRoot:\s*\n?\s*importedImageRoot && existsSync\(importedImageRoot\)/);
+    assert.match(mainSrc, /newRoot: defaultLibraryDir\(\)/);
+    assert.match(script, /detectedLegacyIdentitySource \|\| defaults\.existingRoot \|\| ''/);
+  });
+
+  it('reads the library while the GPU runtime downloads', () => {
+    // Network and disk have nothing to say to each other: the backend starts on
+    // the bundled runtime first, without navigating, so hashing and thumbnails
+    // run through the download instead of after it.
+    const commit = mainSrc.slice(mainSrc.indexOf("'setup:commit'"));
+    const startedFirst = commit.indexOf('startWithOverlayFallback(null, false, false)');
+    const installed = commit.indexOf('manager.installOverlay(gpu');
+    assert.ok(startedFirst > 0, 'the backend has to start before the download');
+    assert.ok(startedFirst < installed, 'starting must come first, or nothing overlaps');
+  });
+
   it('parks the privacy answer for the app instead of writing it itself', () => {
     // The answer belongs to the owner's record in a database that does not
     // exist yet, so a commit that wrote it there would have nowhere to write.
