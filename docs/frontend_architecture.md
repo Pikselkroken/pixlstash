@@ -436,6 +436,21 @@ same tick, and a second call that returned at once (already offered) settled
 the library before the path had even been inspected, so the dialog came up
 under the wizard anyway.
 
+**On desktop the privacy question is not this dialog's to ask.** The shell's
+startup framework (`electron/src/renderer/setup.html` / `setup.js`) asks it
+before the app loads, as one of the steps that launch needed, and parks the
+answer in `userData/pending-telemetry.json`. `useAppConfig` takes that answer
+(`window.pixlstashDesktop.takePendingTelemetry()`, read-and-delete so it cannot
+re-apply over a later change in Settings) and saves it, which also sets
+`telemetry_consent_prompted` and stops the dialog. A desktop launch that finds
+the question unanswered with nothing parked — an upgrade from a version that
+never asked — hands the window back with
+`askStartupQuestion("privacy")` rather than opening the dialog over a library
+that is already on screen; the shell shows that one step, parks the answer, and
+returns to the app. The in-app `TelemetryConsentDialog` remains the browser's
+path, and the desktop's last resort if the shell is too old to answer either
+call.
+
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import
 them automatically"* — which copies files in, and the button that reaches it

@@ -157,21 +157,53 @@ two ephemeral signals come from the launcher:
 
 Dev (`PIXLSTASH_DESKTOP_DEV=1`) keeps using the developer's default config/library.
 
-## First-run setup (UX)
-On first launch (no desktop config yet) the main window shows a **setup screen**
-(`renderer/setup.html`) before starting the backend:
-1. **Import** — if a standalone pip/Docker config is found (located via the backend's
-   own platformdirs, `setup:probe`), offer to copy its values as defaults — most
-   usefully the existing `image_root`, so an existing library is picked up automatically.
-2. **Library folder** — a folder picker (defaults to the imported `image_root`, else
-   `~/Pictures/PixlStash`).
-3. **CPU vs GPU** — shown only when a discrete GPU is detected; "GPU" routes through the
-   existing on-demand overlay install (`~2.5 GB`, progress UI). Mac = Metal (no choice),
-   no GPU = CPU (no choice).
-4. `setup:commit` writes the desktop config, installs/activates the chosen overlay, then
-   boots the backend and navigates the window into the library.
+## The startup framework (UX)
+`renderer/setup.html` is not only the first-run wizard: it is **the screen
+PixlStash puts in front of the app whenever it has to ask something before the
+library can be trusted to open.** A launch runs a **list of steps**, and the main
+process decides the list (`setup:probe` → `steps`). Anything new that must be
+settled before the app loads — a question, help, a repair — belongs here as
+another step id, not as a dialog thrown over a half-loaded library.
 
-Subsequent launches see the config exists → skip the wizard → straight into the library.
+The steps that exist today:
+
+1. **`library`** — *"Do you already have a picture library?"* Two illustrated
+   answers, nothing pre-selected: **pictures I already have** (any folder, read
+   where it sits) and **start empty**. Choosing one reveals the folder field,
+   which then says what is actually in the folder it names (`setup:inspect` →
+   `src/setup/InspectFolder.ts`, a bounded read-only walk): a PixlStash library
+   (a `vault.db` is there, and it is announced with the padlock and the
+   wordmark), a folder of pictures with its count and size, or nothing yet,
+   which refuses and points at "start empty". Free space is shown in every
+   state. If a standalone pip/Docker config is found (`setup:probe`, via the
+   backend's own platformdirs) its `image_root` is the default for the "already
+   have" answer, and its identity consent panel appears under the field when the
+   chosen folder is that library.
+2. **`compute`** — CPU vs GPU, and only on a machine that has something to
+   choose between: "GPU" routes through the on-demand overlay install (~2.5 GB).
+   Mac = Metal, no GPU = no step, and the rail does not show a step that never
+   comes.
+3. **`privacy`** — the telemetry question, asked here rather than in the app.
+   The answer belongs to the owner's record in a database that does not exist
+   yet, so `setup:commit` parks it in `userData/pending-telemetry.json` and the
+   app applies it on its first config load (read-and-delete, so it cannot
+   re-apply over a later change in Settings). A running app that finds the
+   question unanswered with nothing parked calls `startup:askQuestion`, which
+   brings the window back here for **that one step** and then returns it.
+4. **`install`** — not a question, so it has no rail row: the work the answers
+   cause, as named phases rather than one anonymous bar.
+
+The rail on the left is a two-column table of question and answer, so no later
+step has to repeat back what an earlier one settled. Back and Continue live in a
+footer outside the stacked steps and the steps share one grid cell, so **the
+window never changes size** as you move through it.
+
+`setup:commit` writes the desktop config, parks the privacy answer,
+installs/activates the chosen overlay, then boots the backend and navigates the
+window into the library.
+
+Subsequent launches see the config exists → no steps to run → straight into the
+library.
 
 ## Phase 2: LAN exposure + SSL (decided, not yet built)
 The desktop window **always** talks plain HTTP over a private, ephemeral loopback port —
