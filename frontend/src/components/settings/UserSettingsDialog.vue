@@ -25,7 +25,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   sidebarThumbnailSize: { type: Number, default: 32 },
   dateFormat: { type: String, default: "locale" },
-  themeMode: { type: String, default: "light" },
+  themeMode: { type: String, default: "dark" },
   checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },

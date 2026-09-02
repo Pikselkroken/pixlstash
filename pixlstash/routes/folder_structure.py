@@ -97,7 +97,25 @@ class FolderStructureAssignmentPayload(BaseModel):
 
 
 class FolderStructureCommitRequest(BaseModel):
-    task_id: str
+    task_id: Optional[str] = None
+    """The read to commit, when this server is the one that performed it."""
+
+    read_result: Optional[dict[str, Any]] = None
+    """A read's own result, for a caller that already holds one.
+
+    **A read lives in one server process's memory, and processes end.** The
+    desktop's first run reads the library folder while the GPU runtime
+    downloads and then restarts the backend onto that runtime, so by the time
+    the owner answers the mapping questions the task that produced the answer
+    is gone and ``task_id`` can only be "Task not found". The result is the
+    thing that matters, so a caller may hand it back instead.
+
+    Exactly one of ``task_id`` and ``read_result`` is required. A supplied
+    result reserves nothing (there is no server-side read to mark committed),
+    so it carries no protection against being committed twice - the caller owns
+    that, exactly as it owns the result.
+    """
+
     assignments: list[FolderStructureAssignmentPayload] = []
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
@@ -719,6 +737,12 @@ def create_router(server) -> APIRouter:
     def start_folder_structure_commit(
         request: Request, payload: FolderStructureCommitRequest
     ):
+        if bool(payload.task_id) == bool(payload.read_result):
+            raise HTTPException(
+                status_code=400,
+                detail="Send either task_id or read_result, not both and not neither.",
+            )
+
         def _check_read_settled():
             """Validate the named read exists and is settled; return its result.
 
@@ -726,7 +750,22 @@ def create_router(server) -> APIRouter:
             even parsed, so a 400 on malformed input never burns the read's
             one commit - the actual commit-reservation re-checks (and this
             time sets) `committed` again, right before the commit starts.
+
+            A caller-supplied result skips the lookup: there is no read in this
+            process to find. It is validated for the two fields the commit
+            actually reads, so a malformed body fails here with a 400 rather
+            than inside the task with a stack trace.
             """
+            if payload.read_result is not None:
+                supplied = payload.read_result
+                if not isinstance(supplied.get("root"), dict) or not isinstance(
+                    supplied["root"].get("path"), str
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="read_result is missing its root path.",
+                    )
+                return supplied
             with server.folder_structure_lock:
                 read_state = server.folder_structure_read
                 if not read_state or read_state["task_id"] != payload.task_id:
@@ -798,16 +837,20 @@ def create_router(server) -> APIRouter:
                     detail="A folder-structure commit is already running.",
                 )
 
-            with server.folder_structure_lock:
-                read_state = server.folder_structure_read
-                if not read_state or read_state["task_id"] != payload.task_id:
-                    raise HTTPException(status_code=404, detail="Task not found")
-                if read_state.get("committed"):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="This read has already been committed.",
-                    )
-                read_state["committed"] = True
+            # Only a read this process performed can be reserved. A supplied
+            # result has no slot to mark, which is stated on the field: the
+            # caller that kept the result owns the once-only-ness of it.
+            if payload.task_id:
+                with server.folder_structure_lock:
+                    read_state = server.folder_structure_read
+                    if not read_state or read_state["task_id"] != payload.task_id:
+                        raise HTTPException(status_code=404, detail="Task not found")
+                    if read_state.get("committed"):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="This read has already been committed.",
+                        )
+                    read_state["committed"] = True
 
             task_id = str(uuid.uuid4())
             server.folder_structure_commit = {

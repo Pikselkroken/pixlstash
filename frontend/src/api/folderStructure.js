@@ -29,8 +29,13 @@ const COMMIT_STATUS_URL = "/folder-structure/commit/status";
  *   library's entities.
  * @returns {Promise<Object>} `{ task_id }`.
  */
-export async function startFolderStructureRead(path, { matchExisting = true } = {}) {
-  return unwrap(apiClient.post(READ_URL, { path, match_existing: matchExisting }));
+export async function startFolderStructureRead(
+  path,
+  { matchExisting = true } = {},
+) {
+  return unwrap(
+    apiClient.post(READ_URL, { path, match_existing: matchExisting }),
+  );
 }
 
 /**
@@ -54,9 +59,7 @@ export async function getFolderStructureReadStatus(taskId) {
  * @returns {Promise<Object>} `{ status }`.
  */
 export async function cancelFolderStructureRead(taskId) {
-  return unwrap(
-    apiClient.delete(READ_URL, { params: { task_id: taskId } }),
-  );
+  return unwrap(apiClient.delete(READ_URL, { params: { task_id: taskId } }));
 }
 
 /**
@@ -75,6 +78,9 @@ export async function cancelFolderStructureRead(taskId) {
  *   pictures of the active library - only valid when the scanned root is
  *   inside that library's own image root (v1.11 Phase 3, "Bring them in" on
  *   a freshly created library).
+ * @param {Object|null} [readResult] - the read's own result, for a caller that
+ *   has one but no task the server still remembers. Exactly one of `taskId` and
+ *   `readResult` reaches the server.
  * @returns {Promise<Object>} `{ task_id }`.
  */
 export async function startFolderStructureCommit(
@@ -82,8 +88,16 @@ export async function startFolderStructureCommit(
   assignments,
   label,
   mode = "reference",
+  readResult = null,
 ) {
-  const body = { task_id: taskId, assignments, mode };
+  // A read lives in one server process's memory. The desktop's first run reads
+  // the library folder while the GPU runtime downloads and then restarts the
+  // backend onto it, so the task that produced the answer is gone by the time
+  // the owner answers the questions - "Task not found", with the result sitting
+  // right here. Send the result instead when that is all we have.
+  const body = taskId
+    ? { task_id: taskId, assignments, mode }
+    : { read_result: readResult, assignments, mode };
   if (label) body.label = label;
   return unwrap(apiClient.post(COMMIT_URL, body));
 }

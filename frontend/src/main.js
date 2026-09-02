@@ -8,6 +8,7 @@ import "./styles/context-menu.css";
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import { createVuetify } from "vuetify";
+import { readRememberedTheme } from "./utils/themeMemory";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import router from "./router/index.js";
@@ -256,7 +257,14 @@ const pixlStashDark = {
 
 const vuetify = createVuetify({
   theme: {
-    defaultTheme: "pixlStashLight",
+    // The first frame is the theme this browser used last, so nobody watches
+    // the app change its mind on the way in. With nothing remembered - a new
+    // setup, a new browser - it is dark: PixlStash is a picture app, a dark
+    // canvas is what a photograph is looked at against, and it matches the
+    // desktop shell the window opens from. The stored `theme_mode` still wins
+    // the moment the config lands.
+    defaultTheme:
+      readRememberedTheme() === "light" ? "pixlStashLight" : "pixlStashDark",
     themes: {
       pixlStashLight,
       pixlStashDark,

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  net,
   clipboard,
   ipcMain,
   Menu,
@@ -11,7 +12,7 @@ import {
   Tray,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -47,6 +48,9 @@ import {
   serverLogPath,
   setBackendsRoot,
 } from './config';
+import { inspectFolder } from './setup/InspectFolder';
+import { readLibraryFolder } from './setup/ReadLibraryFolder';
+import { runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -131,6 +135,13 @@ const pendingMediaSaves = new Map<
 // only to name the consent choice; setup:commit sends a boolean and can never
 // substitute a different vault for the privileged preparer invocation.
 let detectedLegacyIdentitySource: string | null = null;
+// Steps the RUNNING app asked the startup framework to put in front of it (an
+// upgrade's new privacy question today). Empty on a first run, which builds its
+// own list in `setup:probe`.
+let requestedStartupSteps: string[] = [];
+// The backend this launch started: its loopback URL and the pre-authenticated
+// session cookie. Setup uses it to read the library folder during the download.
+let runningServer: { url: string; sessionToken: string } | null = null;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -398,6 +409,92 @@ function saveDesktopPrefs(): void {
     );
   } catch (e) {
     console.warn('[desktop-prefs] could not persist preferences:', e);
+  }
+}
+
+/**
+ * Where the startup screen's privacy answer waits for the app.
+ *
+ * The answer belongs to the library owner's record in the database, which does
+ * not exist until the backend has started and the app has authenticated. So the
+ * startup framework parks it here and the app applies it on its first config
+ * load, which is also what stops the in-app dialog asking the same question a
+ * second time.
+ */
+function pendingTelemetryPath(): string {
+  return join(app.getPath('userData'), 'pending-telemetry.json');
+}
+
+/** Park a startup answer for the app, or clear a stale one when there is none. */
+function writePendingTelemetry(patch: Record<string, boolean> | null): void {
+  try {
+    if (!patch) {
+      if (existsSync(pendingTelemetryPath())) rmSync(pendingTelemetryPath());
+      return;
+    }
+    mkdirSync(dirname(pendingTelemetryPath()), { recursive: true });
+    writeFileSync(pendingTelemetryPath(), JSON.stringify(patch, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the privacy answer:', e);
+  }
+}
+
+/**
+ * Hand the parked answer to the app exactly once. Read-and-delete rather than
+ * read: a patch left behind would re-apply on every launch and quietly undo a
+ * later change made in Settings.
+ */
+function takePendingTelemetry(): Record<string, boolean> | null {
+  try {
+    if (!existsSync(pendingTelemetryPath())) return null;
+    const patch = readJsonFile(pendingTelemetryPath());
+    rmSync(pendingTelemetryPath());
+    return (patch as Record<string, boolean>) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked privacy answer:', e);
+    return null;
+  }
+}
+
+/** Where the folder read setup finished waits for the app to pick it up. */
+function pendingMappingPath(): string {
+  return join(app.getPath('userData'), 'pending-mapping.json');
+}
+
+/**
+ * Park a finished folder read for the app.
+ *
+ * The READ'S RESULT, not its task id. The task lives in the server process's
+ * memory, and the backend restarts onto the GPU runtime before the app loads,
+ * so a parked id resolved to "Task not found" and left the wizard spinning on
+ * work that had already been done. With the result in hand the wizard opens on
+ * its questions and asks the server nothing.
+ */
+function writePendingMapping(
+  entry: { path: string; result: Record<string, unknown> } | null,
+): void {
+  try {
+    if (!entry) {
+      if (existsSync(pendingMappingPath())) rmSync(pendingMappingPath());
+      return;
+    }
+    mkdirSync(dirname(pendingMappingPath()), { recursive: true });
+    writeFileSync(pendingMappingPath(), JSON.stringify(entry, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the folder read:', e);
+  }
+}
+
+/** Hand the parked read to the app exactly once. */
+function takePendingMapping(): { path: string; result: Record<string, unknown> } | null {
+  try {
+    if (!existsSync(pendingMappingPath())) return null;
+    const entry = readJsonFile(pendingMappingPath());
+    rmSync(pendingMappingPath());
+    return (entry as { path: string; result: Record<string, unknown> }) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked folder read:', e);
+    return null;
   }
 }
 
@@ -709,8 +806,20 @@ function deviceFor(accel: Accel | null): string | undefined {
   return 'cpu';
 }
 
-/** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
+/**
+ * Spawn the backend (bundled env + optional GPU overlay), inject the loopback
+ * session, load the UI.
+ *
+ * `navigate: false` starts the server and leaves the window where it is. That
+ * is what lets first-run setup read the library while a GPU runtime downloads:
+ * the reading is disk and CPU work with nothing to wait for, the download is
+ * network, and the window stays on the setup screen until both are done.
+ */
+async function startAndLoad(
+  accel: Accel | null,
+  repairPermissions = false,
+  navigate = true,
+): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -728,6 +837,9 @@ async function startAndLoad(accel: Accel | null, repairPermissions = false): Pro
     deviceFor(accel),
     repairPermissions,
   );
+  // Setup talks to this server while the GPU runtime downloads, so where it is
+  // and how to authenticate to it outlive this function.
+  runningServer = { url: running.url, sessionToken: running.sessionToken };
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -740,8 +852,9 @@ async function startAndLoad(accel: Accel | null, repairPermissions = false): Pro
     sameSite: 'lax',
   });
 
-  sendPhase({ phase: 'ready', url: running.url });
   currentUrl = running.url;
+  if (!navigate) return;
+  sendPhase({ phase: 'ready', url: running.url });
   await mainWindow?.loadURL(running.url);
 }
 
@@ -767,15 +880,44 @@ async function activeOverlayAccel(): Promise<Accel | null> {
 async function startWithOverlayFallback(
   accel: Accel | null,
   repairPermissions = false,
+  navigate = true,
 ): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: (candidate) => startAndLoad(candidate, repairPermissions),
+    start: (candidate) => startAndLoad(candidate, repairPermissions, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
     // Permission failures are unrelated to an accelerator. Preserve the active
     // overlay and let boot() offer the dedicated recovery dialog.
     shouldFallback: (error) => !isPermissionRepairRequired(error),
   });
+}
+
+/**
+ * Start the backend from first-run setup, offering the permission repair the
+ * way `boot()` does.
+ *
+ * Setup starts the backend itself, so without this a library folder the backend
+ * refuses (a group-writable one, mode 775) came back to the setup screen as a
+ * bare rejection: the repair the app knows how to offer was never offered, and
+ * the reason never reached the person choosing the folder. Declining puts the
+ * setup screen back rather than quitting - the answer to "I will not use that
+ * folder" is to choose another one.
+ */
+async function startFromSetup(accel: Accel | null, navigate: boolean): Promise<void> {
+  try {
+    await startWithOverlayFallback(accel, false, navigate);
+  } catch (caught) {
+    if (!isPermissionRepairRequired(caught)) throw caught;
+    if (!(await offerPermissionRepair(caught))) {
+      await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+      throw new Error(
+        'PixlStash will not open a library with those permissions. Choose another folder, or allow the repair.',
+      );
+    }
+    // Exactly one user-authorised retry, as boot() does. Python rechecks
+    // ownership, type and inode before changing any recorded path.
+    await startWithOverlayFallback(accel, true, navigate);
+  }
 }
 
 /**
@@ -1014,9 +1156,25 @@ function registerIpc(): void {
   // registered only while that screen is actually waiting for an answer.
   ipcMain.handle('permissions:request', () => pendingPermissionRepair);
 
-  // ---- First-run setup wizard ----
+  // ---- The startup framework ----
+  //
+  // One screen, a list of steps, and main decides the list. First run asks all
+  // of them; a launch that owes the user only the new privacy question asks
+  // only that. Anything else that has to be settled before the app loads gets
+  // a step id here rather than a dialog over a half-loaded library.
 
   ipcMain.handle('setup:probe', async () => {
+    // A question the running app asked us to put in front of it: exactly that
+    // question, no library or compute step, and no config is rewritten when it
+    // is answered.
+    if (requestedStartupSteps.length) {
+      return {
+        steps: [...requestedStartupSteps, 'install'],
+        privacyVariant: 'upgrade',
+        defaults: {},
+        gpu: { available: false },
+      };
+    }
     const stdPath = await standaloneConfigPath();
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
@@ -1027,11 +1185,26 @@ function registerIpc(): void {
         ? resolvedImportedRoot
         : null;
     const gpu = gpuUpgrade();
+    const steps = ['library'];
+    // The compute question only exists on a machine that has something to
+    // choose between; the rail must not show a step that never comes.
+    if (gpu) steps.push('compute');
+    steps.push('privacy');
+    steps.push('install');
     return {
+      steps,
+      privacyVariant: 'fresh',
       importedFrom: imported ? stdPath : null,
       legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
-        imageRoot: importedImageRoot || defaultLibraryDir(),
+        // Two different answers need two different defaults. "Start empty" may
+        // name a folder that does not exist yet - that is the point of it. The
+        // "pictures I already have" answer must not: prefilling a path with
+        // nothing at it invites someone to accept it and open an empty
+        // library, so it is offered only when something is actually there.
+        existingRoot:
+          importedImageRoot && existsSync(importedImageRoot) ? importedImageRoot : null,
+        newRoot: defaultLibraryDir(),
         useGpu: Boolean(gpu),
         // Where the GPU runtime would install (only relevant when a GPU is
         // offered). On Windows this is inside the chosen install folder.
@@ -1042,6 +1215,13 @@ function registerIpc(): void {
         : { available: false },
     };
   });
+
+  // What is in the folder someone picked, for the verdict under the field: a
+  // library PixlStash made before, a folder of pictures, or nothing yet. Read
+  // only, and bounded - see InspectFolder.
+  ipcMain.handle('setup:inspect', async (_e, path?: string) =>
+    inspectFolder(path || '', bundledInterpreter()),
+  );
 
   ipcMain.handle('setup:pickFolder', async (_e, current?: string) => {
     const res = await dialog.showOpenDialog({
@@ -1061,76 +1241,91 @@ function registerIpc(): void {
         useGpu: boolean;
         installLocation?: string;
         importLegacyIdentity?: boolean;
+        telemetry?: Record<string, boolean> | null;
       },
     ) => {
-      if (!runtime) throw new Error('No bundled runtime available');
-      const imageRoot = (choices?.imageRoot || '').trim();
-      if (!imageRoot) throw new Error('Please choose a library folder.');
-
-      // Record where the GPU runtime should install (clearing the override when
-      // it matches the default, so it keeps tracking the install dir). Done
-      // before the overlay install below so the download lands in the right place.
-      const installLocation = (choices?.installLocation || '').trim();
-      if (installLocation) {
-        setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
+      // Answering a question the app asked for changes nothing about the
+      // install: park the answer and hand the window back.
+      if (requestedStartupSteps.length) {
+        writePendingTelemetry(choices?.telemetry ?? null);
+        requestedStartupSteps = [];
+        if (currentUrl) await mainWindow?.loadURL(currentUrl);
+        return;
       }
+
+      if (!runtime) throw new Error('No bundled runtime available');
 
       const configDir = dirname(serverConfigPath());
       // New credential directories are private even under umask 0002. Existing
       // ones are left to the explicit recovery dialog, never silently changed.
       mkdirPrivateIfMissing(configDir);
 
-      if (choices?.importLegacyIdentity) {
-        if (!detectedLegacyIdentitySource) {
-          throw new Error('No existing standalone PixlStash library was detected.');
-        }
-        if (resolve(imageRoot) !== detectedLegacyIdentitySource) {
-          throw new Error(
-            'To import its login and share links, keep the detected existing library selected.',
-          );
-        }
-        // Fail closed before a live desktop config exists. A nonzero CLI exit
-        // leaves the vault untouched and this exception keeps the setup screen
-        // open instead of booting a server that looks migrated but is not.
-        await prepareLegacyIdentity(
-          bundledInterpreter(),
-          hubPath(),
-          detectedLegacyIdentitySource,
-        );
-      }
-
-      // Write the desktop's own config only after any requested preparation
-      // succeeds. Declining consent writes no provenance marker and therefore
-      // imports zero legacy identity. Loopback HTTP; the active runtime drives
-      // the device (default_device left as auto).
-      writeFileSync(
-        serverConfigPath(),
-        JSON.stringify(
-          {
-            host: '127.0.0.1',
-            require_ssl: false,
-            image_root: imageRoot,
-            default_device: 'auto',
-          },
-          null,
-          2,
-        ),
-      );
-
-      // The GPU choice maps onto the existing on-demand wheel-overlay system.
-      const gpu = gpuUpgrade();
-      if (choices?.useGpu && gpu) {
-        await manager.installOverlay(gpu, runtime, (p) =>
-          mainWindow?.webContents.send('install:progress', p),
-        );
-        await manager.setActiveAccel(gpu);
-      } else {
-        await manager.setActiveAccel(null);
-      }
-
-      await startWithOverlayFallback(await activeOverlayAccel());
+      // The order of everything below is `runFirstRunSetup`; this is the wiring
+      // that gives it the real collaborators.
+      await runFirstRunSetup(choices, {
+        gpu: gpuUpgrade() ?? null,
+        legacyIdentitySource: detectedLegacyIdentitySource,
+        resolvePath: (path) => resolve(path),
+        setBackendsRoot: (location) =>
+          setBackendsRoot(normalizeBackendsRoot(location, defaultBackendsRoot())),
+        prepareLegacyIdentity: (source) =>
+          prepareLegacyIdentity(bundledInterpreter(), hubPath(), source),
+        // Loopback HTTP; the active runtime drives the device (default_device
+        // left as auto).
+        writeConfig: (imageRoot) =>
+          writeFileSync(
+            serverConfigPath(),
+            JSON.stringify(
+              {
+                host: '127.0.0.1',
+                require_ssl: false,
+                image_root: imageRoot,
+                default_device: 'auto',
+              },
+              null,
+              2,
+            ),
+          ),
+        parkTelemetry: writePendingTelemetry,
+        parkMapping: writePendingMapping,
+        setActiveAccel: (accel) => manager.setActiveAccel(accel),
+        activeOverlayAccel,
+        startBackend: startFromSetup,
+        installOverlay: (accel) =>
+          manager.installOverlay(accel, runtime as RuntimeInfo, (p) =>
+            mainWindow?.webContents.send('install:progress', p),
+          ),
+        readFolder: async (imageRoot) =>
+          runningServer
+            ? readLibraryFolder(
+                (url, init) => net.fetch(url, init),
+                runningServer.url,
+                runningServer.sessionToken,
+                imageRoot,
+                (progress) => sendPhase({ phase: 'reading', ...progress }),
+              )
+            : null,
+        announceReading: () => sendPhase({ phase: 'reading' }),
+      });
     },
   );
+
+  ipcMain.handle('startup:takePendingTelemetry', () => takePendingTelemetry());
+
+  ipcMain.handle('startup:takePendingMapping', () => takePendingMapping());
+
+  // The app asking for a question it cannot answer itself. It hands the window
+  // back to the startup framework rather than opening a dialog over a library
+  // that is already on screen; `setup:commit` brings the window back.
+  ipcMain.handle('startup:askQuestion', async (_e, step?: string) => {
+    if (step !== 'privacy') {
+      console.warn(`[startup] refusing an unknown startup step: ${step}`);
+      return false;
+    }
+    requestedStartupSteps = [step];
+    await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+    return true;
+  });
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());

@@ -9,6 +9,7 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
+import { rememberTheme } from "./utils/themeMemory";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
@@ -67,20 +68,20 @@ import { toPx } from "./utils/floatingBottom.js";
 
 // These surfaces are mutually exclusive with the primary grid (or explicitly
 // opened on demand), so keep their heavier feature code out of app startup.
-const DuplicateQueue = defineAsyncComponent(() =>
-  import("./components/views/DuplicateQueue.vue"),
+const DuplicateQueue = defineAsyncComponent(
+  () => import("./components/views/DuplicateQueue.vue"),
 );
-const ModelShelf = defineAsyncComponent(() =>
-  import("./components/views/ModelShelf.vue"),
+const ModelShelf = defineAsyncComponent(
+  () => import("./components/views/ModelShelf.vue"),
 );
-const LibraryInsights = defineAsyncComponent(() =>
-  import("./components/views/LibraryInsights.vue"),
+const LibraryInsights = defineAsyncComponent(
+  () => import("./components/views/LibraryInsights.vue"),
 );
-const MovesReview = defineAsyncComponent(() =>
-  import("./components/views/MovesReview.vue"),
+const MovesReview = defineAsyncComponent(
+  () => import("./components/views/MovesReview.vue"),
 );
-const ReviewSessionsOverlay = defineAsyncComponent(() =>
-  import("./components/views/ReviewSessionsOverlay.vue"),
+const ReviewSessionsOverlay = defineAsyncComponent(
+  () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
 
 // --- Stores ---
@@ -445,6 +446,9 @@ watch(
   () => userPrefsStore.themeMode,
   (value) => {
     theme.global.name.value = resolveThemeName(value);
+    // Remember it for the next launch's first paint, which happens long before
+    // the config that decided this one can be asked for.
+    rememberTheme(value === "dark" ? "dark" : "light");
   },
   { immediate: true },
 );

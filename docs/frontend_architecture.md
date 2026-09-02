@@ -436,6 +436,34 @@ same tick, and a second call that returned at once (already offered) settled
 the library before the path had even been inspected, so the dialog came up
 under the wizard anyway.
 
+**The first frame's theme is remembered, not guessed.** The theme a person
+chose lives on their user record, a round trip away, so everything painted
+before that answer lands is painted in whatever `createVuetify`'s
+`defaultTheme` says. That default is **dark** - it matches the desktop shell the
+window opens from, and a picture is looked at against a dark canvas - which left
+someone who had chosen light watching one frame of dark first.
+`utils/themeMemory.js` closes it: App.vue's theme watcher writes the mode it
+just applied to `localStorage`, and `main.js` reads it back to pick
+`defaultTheme` before the app mounts. It is a cache of a decision made
+elsewhere and never the decision itself - a stale or unreadable value costs one
+repaint and nothing else - so a blocked `localStorage` simply falls back to the
+default, and the stored `theme_mode` still wins the moment the config arrives.
+
+**On desktop the privacy question is not this dialog's to ask.** The shell's
+startup framework (`electron/src/renderer/setup.html` / `setup.js`) asks it
+before the app loads, as one of the steps that launch needed, and parks the
+answer in `userData/pending-telemetry.json`. `useAppConfig` takes that answer
+(`window.pixlstashDesktop.takePendingTelemetry()`, read-and-delete so it cannot
+re-apply over a later change in Settings) and saves it, which also sets
+`telemetry_consent_prompted` and stops the dialog. A desktop launch that finds
+the question unanswered with nothing parked — an upgrade from a version that
+never asked — hands the window back with
+`askStartupQuestion("privacy")` rather than opening the dialog over a library
+that is already on screen; the shell shows that one step, parks the answer, and
+returns to the app. The in-app `TelemetryConsentDialog` remains the browser's
+path, and the desktop's last resort if the shell is too old to answer either
+call.
+
 **Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
 chooser's other option is an import folder — *"watch for new files and import
 them automatically"* — which copies files in, and the button that reaches it

@@ -29,6 +29,41 @@ import { useSidebarStore } from "../stores/useSidebarStore";
  * @param {Function} hooks.onTelemetryConsentRequired - the user has never
  *   answered the telemetry question, so App.vue should ask.
  */
+/**
+ * Hand the question back to the desktop startup screen rather than opening a
+ * dialog over a library that is already on screen. True when the shell took it,
+ * in which case this window is on its way to the startup screen and the answer
+ * arrives parked on the next load.
+ */
+async function askStartupScreenInstead() {
+  const desktop =
+    typeof window !== "undefined" ? window.pixlstashDesktop : null;
+  if (!desktop?.askStartupQuestion) return false;
+  try {
+    return Boolean(await desktop.askStartupQuestion("privacy"));
+  } catch (e) {
+    console.error("Failed to hand the privacy question to the shell:", e);
+    return false;
+  }
+}
+
+/**
+ * The privacy answer the desktop startup screen collected, handed over once.
+ * Null in a browser, and null on desktop when the question was never asked
+ * there (an older shell, or a launch that skipped the step).
+ */
+async function takeParkedTelemetryAnswer() {
+  const desktop =
+    typeof window !== "undefined" ? window.pixlstashDesktop : null;
+  if (!desktop?.takePendingTelemetry) return null;
+  try {
+    return (await desktop.takePendingTelemetry()) || null;
+  } catch (e) {
+    console.error("Failed to read the startup screen's privacy answer:", e);
+    return null;
+  }
+}
+
 export function useAppConfig({
   onThumbnailSizeChanged,
   onTelemetryConsentRequired,
@@ -52,7 +87,7 @@ export function useAppConfig({
     show_problem_icon: true,
     expand_all_stacks: true,
     date_format: "locale",
-    theme_mode: "light",
+    theme_mode: "dark",
     stack_strictness: 0.92,
   });
 
@@ -246,9 +281,16 @@ export function useAppConfig({
         cfu === true ? true : cfu === false ? false : null;
       userPrefsStore.hydrateTelemetry(cfg);
       if (!userPrefsStore.telemetryConsentPrompted) {
-        await onTelemetryConsentRequired?.({
-          isUpgrade: userPrefsStore.checkForUpdates !== null,
-        });
+        // On desktop the question is asked by the startup screen, before the
+        // app loads, and the answer waits for us here. Applying it is what
+        // stops the dialog asking a second time; only a desktop launch that
+        // somehow has no parked answer falls through to asking in-app.
+        const parked = await takeParkedTelemetryAnswer();
+        if (parked) await userPrefsStore.saveTelemetry(parked);
+        else if (!(await askStartupScreenInstead()))
+          await onTelemetryConsentRequired?.({
+            isUpgrade: userPrefsStore.checkForUpdates !== null,
+          });
       }
     } catch (e) {
       console.error("Failed to fetch user config:", e);

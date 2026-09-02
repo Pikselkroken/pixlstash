@@ -283,4 +283,60 @@ describe("the loose-pictures offer for an empty library", () => {
 
     wrapper.unmount();
   });
+  it("resumes the read the desktop startup screen already finished", async () => {
+    // The startup screen reads the folder while the GPU runtime downloads, so
+    // the wizard has a completed task to open on. Starting a second read here
+    // is what put a progress bar over an empty grid.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const readResult = { levels: [{ depth: 1, folders: [] }] };
+    const takePendingMapping = vi.fn(async () => ({ path, result: readResult }));
+    window.pixlstashDesktop = { takePendingMapping };
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(takePendingMapping).toHaveBeenCalledTimes(1);
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      result: readResult,
+      mode: "local_import",
+    });
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("ignores a parked read of some other folder", async () => {
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({
+        path: "/home/me/Elsewhere",
+        result: { levels: [] },
+      }),
+    };
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 12 } })
+        : Promise.resolve(respond(url)),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      mode: "local_import",
+    });
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
 });

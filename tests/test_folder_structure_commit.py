@@ -329,6 +329,69 @@ def test_a_second_commit_while_one_runs_is_a_409(owner_env, monkeypatch):
         _drain_commit(owner, first.json()["task_id"], timeout_s=60.0)
 
 
+def test_a_commit_can_be_given_the_read_s_own_result(owner_env):
+    """The desktop's first run reads the folder on one server process and
+    restarts the backend onto the GPU runtime before the owner answers the
+    mapping questions, so the task that produced the answer is gone. The
+    result is what survives, and it is enough to commit."""
+    owner = owner_env["owner"]
+    root = os.path.join(owner_env["tmp"], "handed-back-result")
+    _make_tree(root, {"2024 Shoots/mira": ["a.jpg", "b.jpg"]})
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    read_body = _drain_read(owner, read_task_id)
+    assert read_body["status"] == "completed", read_body
+    result = read_body["result"]
+
+    # The task is never named: this is the request a restarted server sees.
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "read_result": result,
+            "assignments": [
+                {"relative_path": "2024 Shoots", "kind": "project"},
+                {"relative_path": "2024 Shoots/mira", "kind": "person"},
+            ],
+        },
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    commit_body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert commit_body["status"] == "completed", commit_body
+    assert commit_body["result"]["projects_created"] == 1
+    assert commit_body["result"]["people_created"] == 1
+
+
+def test_a_commit_needs_exactly_one_of_the_two(owner_env):
+    owner = owner_env["owner"]
+
+    neither = owner.post(_COMMIT, json={"assignments": []})
+    assert neither.status_code == 400, neither.text
+    assert "either" in neither.json()["detail"].lower()
+
+    both = owner.post(
+        _COMMIT,
+        json={
+            "task_id": "read-1",
+            "read_result": {"root": {"path": "/tmp"}},
+            "assignments": [],
+        },
+    )
+    assert both.status_code == 400, both.text
+
+
+def test_a_handed_back_result_without_a_root_is_refused(owner_env):
+    """Refused here with a 400, rather than inside the task with a traceback."""
+    owner = owner_env["owner"]
+
+    response = owner.post(
+        _COMMIT, json={"read_result": {"picture_count": 3}, "assignments": []}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "root" in response.json()["detail"].lower()
+
+
 def test_an_unknown_read_task_id_is_a_404(owner_env):
     r = owner_env["owner"].post(_COMMIT, json={"task_id": "nope", "assignments": []})
     assert r.status_code == 404, r.text

@@ -6865,7 +6865,7 @@ const emptyStateImage = computed(() => {
 });
 
 const isDarkThemeActive = computed(() => {
-  const mode = String(userPrefsStore.themeMode || "light").toLowerCase();
+  const mode = String(userPrefsStore.themeMode || "dark").toLowerCase();
   if (mode === "dark") return true;
   if (mode === "light") return false;
   if (mode === "system") {

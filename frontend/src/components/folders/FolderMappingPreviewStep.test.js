@@ -107,6 +107,7 @@ describe("FolderMappingPreviewStep", () => {
       [],
       "",
       "reference",
+      null,
     );
   });
 });
