@@ -63,6 +63,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* A flex body so a child's top margin (the setup page's title-bar offset)
+   cannot collapse through it and push the document past the viewport. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 .app {
   height: 100%;
   display: flex;
@@ -353,28 +360,41 @@ input[type="text"]:focus-visible,
   overflow: hidden;
 }
 
-/* First-run setup wizard */
+/* First-run setup wizard: brand column on the left, the form on the right.
+   Two columns because the window is 1280x860 and a single 560px column of
+   panels (existing-library notice, identity consent, folder, compute with
+   the install location, progress, error) is taller than the window; side by
+   side, the whole worst case fits without a scrollbar. overflow-y stays as a
+   safety net for windows below the default size. */
 .app.setup {
-  justify-content: flex-start;
-  align-items: stretch;
-  gap: 16px;
-  max-width: 560px;
-  /* The page scrolls once the compute options and the install progress are
-     both showing. Start the scroll region below the fixed title bar so the
-     scrollbar is not clipped under it. */
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
   height: calc(100% - 34px);
-  margin: 34px auto 0;
-  padding: 6px 32px 40px;
+  margin: 34px 0 0;
+  padding: 16px 32px;
   overflow-y: auto;
 }
 
 .setup-header {
+  flex: 0 0 auto;
+  width: 260px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
   gap: 10px;
-  margin-bottom: 4px;
+}
+
+.setup-form {
+  flex: 0 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-form .panel {
+  padding: 16px;
 }
 
 .brand-logo {
@@ -391,7 +411,6 @@ input[type="text"]:focus-visible,
 
 .setup-intro {
   margin: 0;
-  max-width: 420px;
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
@@ -487,10 +506,10 @@ input[type="text"]:focus-visible,
   display: flex;
   align-items: flex-start;
   gap: 11px;
-  padding: 13px 15px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   cursor: pointer;
   transition:
     border-color 0.12s ease,
@@ -539,7 +558,8 @@ input[type="text"]:focus-visible,
   text-align: left;
   overflow-wrap: anywhere;
   max-width: 560px;
-  max-height: 280px;
+  /* Six lines; the rest scrolls inside the box so the page itself never does. */
+  max-height: 8.4em;
   overflow-y: auto;
   font-size: 12px;
   line-height: 1.4;
