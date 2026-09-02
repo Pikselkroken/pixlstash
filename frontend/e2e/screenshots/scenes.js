@@ -481,7 +481,7 @@ export const scenes = [
   },
   {
     id: 'stats-pictures',
-    assets: ['ScreenshotPictureStatistics.png'],
+    assets: ['ScreenshotPictureStatistics.jpg'],
     title: 'Statistics sidebar (pictures)',
     async setup({ grid, page }) {
       await readyGrid(grid)
@@ -493,7 +493,7 @@ export const scenes = [
   },
   {
     id: 'stats-tags',
-    assets: ['ScreenshotTagStatistics.png'],
+    assets: ['ScreenshotTagStatistics.jpg'],
     title: 'Statistics sidebar (tags)',
     async setup({ grid, page }) {
       await readyGrid(grid)
@@ -502,23 +502,6 @@ export const scenes = [
       const tagsTab = grid.statsTabs.filter({ hasText: 'Tags' }).first()
       if (await tagsTab.count()) await tagsTab.click()
       await page.waitForTimeout(700)
-      return grid.statsSidebar
-    },
-  },
-  {
-    id: 'task-manager',
-    assets: ['ScreenshotTaskManager.jpg'],
-    title: 'Task manager in the statistics sidebar',
-    async setup({ grid, page }) {
-      await readyGrid(grid)
-      await grid.statsToggle.click()
-      await expect(grid.statsSidebar).toBeVisible()
-      const tasksTab = grid.statsTabs.filter({ hasText: /Task/i }).first()
-      if (!(await tasksTab.count())) {
-        throw new Error('No "Tasks" tab in the statistics sidebar on this build')
-      }
-      await tasksTab.click()
-      await page.waitForTimeout(500)
       return grid.statsSidebar
     },
   },
@@ -634,6 +617,10 @@ export const scenes = [
 ]
 
 export const manual = {
+  // Dropped as a scene: the panel is empty by the time the captures run.
+  'ScreenshotTaskManager.jpg':
+    'Task manager throughput — demo-data is fully processed before the captures start, ' +
+    'so the panel reads "No active tasks"; needs work in flight to be worth a shot',
   // The 1.10 illustrations. They went onto the site without script.json being
   // regenerated, so the guardrail never saw them; the v1.11 regeneration is
   // what surfaced them. Classified here rather than left unaccounted.

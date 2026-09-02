@@ -553,7 +553,7 @@
   },
   {
     "page": "features.html",
-    "asset": "ScreenshotPictureStatistics.png",
+    "asset": "ScreenshotPictureStatistics.jpg",
     "label": "Statistics sidebar",
     "alt": "Picture statistics sidebar in PixlStash",
     "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
@@ -721,7 +721,7 @@
   },
   {
     "page": "features.html",
-    "asset": "ScreenshotTagStatistics.png",
+    "asset": "ScreenshotTagStatistics.jpg",
     "label": "Statistics sidebar",
     "alt": "Tag distribution and statistics sidebar in PixlStash",
     "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
