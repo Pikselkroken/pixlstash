@@ -296,6 +296,7 @@ function onCommitted(result) {
       v-else-if="step === 'preview'"
       :path="path"
       :read-task-id="readTaskId"
+      :read-result="readResult"
       :assignments="assignments"
       :label="label"
       mode="local_import"

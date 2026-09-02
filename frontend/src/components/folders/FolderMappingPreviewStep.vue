@@ -20,6 +20,13 @@ import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   path: { type: String, required: true },
   readTaskId: { type: String, required: true },
+  /**
+   * The read's own result, for a commit whose task no longer exists. The
+   * desktop's first run reads the folder on one server process and restarts
+   * onto the GPU runtime before the owner answers, so the task is gone and the
+   * result is all there is. Ignored whenever `readTaskId` is set.
+   */
+  readResult: { type: Object, default: null },
   assignments: { type: Array, required: true },
   label: { type: String, default: "" },
   pictureCount: { type: Number, default: 0 },
@@ -144,6 +151,7 @@ async function commit(assignments = props.assignments) {
       assignments,
       props.label,
       props.mode,
+      props.readResult,
     );
     commitTaskId.value = started.task_id;
     emit("commit-started", started.task_id);
@@ -203,13 +211,23 @@ onUnmounted(() => {
         <h2 class="preview-step__title">This is what your folders become</h2>
         <p class="preview-step__lead">nothing written yet</p>
       </div>
-      <AppButton variant="secondary" size="sm" :disabled="committing" @click="emit('back')">
+      <AppButton
+        variant="secondary"
+        size="sm"
+        :disabled="committing"
+        @click="emit('back')"
+      >
         Back to the mapping
       </AppButton>
     </div>
 
     <div class="preview-step__groups">
-      <div v-for="kind in FACET_KINDS" :key="kind.value" class="preview-step__group" :style="kindStyle(kind.value)">
+      <div
+        v-for="kind in FACET_KINDS"
+        :key="kind.value"
+        class="preview-step__group"
+        :style="kindStyle(kind.value)"
+      >
         <template v-if="grouped.get(kind.value)?.size">
           <div class="preview-step__group-title">
             <v-icon size="15">{{ kind.icon }}</v-icon>
@@ -217,10 +235,17 @@ onUnmounted(() => {
             {{ grouped.get(kind.value).size === 1 ? kind.label : kind.plural }}
           </div>
           <div class="preview-step__chips">
-            <span v-for="name in [...grouped.get(kind.value).keys()].slice(0, 24)" :key="name" class="preview-step__chip">
+            <span
+              v-for="name in [...grouped.get(kind.value).keys()].slice(0, 24)"
+              :key="name"
+              class="preview-step__chip"
+            >
               {{ name }}
             </span>
-            <span v-if="grouped.get(kind.value).size > 24" class="preview-step__chip preview-step__chip--muted">
+            <span
+              v-if="grouped.get(kind.value).size > 24"
+              class="preview-step__chip preview-step__chip--muted"
+            >
               {{ grouped.get(kind.value).size - 24 }} more
             </span>
           </div>
@@ -229,15 +254,23 @@ onUnmounted(() => {
     </div>
 
     <div class="preview-step__card">
-      <div class="preview-step__card-title">What happens when you press the button</div>
+      <div class="preview-step__card-title">
+        What happens when you press the button
+      </div>
       <div class="preview-step__facts">
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark preview-step__fact-mark--yes">✓</span>
-          {{ pictureCount.toLocaleString() }} picture(s) are indexed where they already are
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ pictureCount.toLocaleString() }} picture(s) are indexed where they
+          already are
         </div>
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark preview-step__fact-mark--yes">✓</span>
-          {{ ungroupedCount.size }} project(s), set(s) and people are created or matched
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ ungroupedCount.size }} project(s), set(s) and people are created or
+          matched
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark"> - </span>
@@ -250,14 +283,22 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <p v-if="commitError" class="preview-step__error" role="alert">{{ commitError }}</p>
+    <p v-if="commitError" class="preview-step__error" role="alert">
+      {{ commitError }}
+    </p>
 
     <div v-if="committing" class="preview-step__progress">
       <v-progress-circular indeterminate size="18" width="2" color="accent" />
       <span>
-        <template v-if="stage === 'indexing'">indexing pictures - {{ processed }} of {{ total }}</template>
-        <template v-else-if="stage === 'registering'">registering the folder…</template>
-        <template v-else-if="stage === 'assigning'">creating projects, people, sets and tags…</template>
+        <template v-if="stage === 'indexing'"
+          >indexing pictures - {{ processed }} of {{ total }}</template
+        >
+        <template v-else-if="stage === 'registering'"
+          >registering the folder…</template
+        >
+        <template v-else-if="stage === 'assigning'"
+          >creating projects, people, sets and tags…</template
+        >
         <template v-else>working…</template>
       </span>
     </div>
@@ -299,13 +340,13 @@ onUnmounted(() => {
     </div>
     <p class="preview-step__actions-note">
       <template v-if="committing">
-        Organise later keeps every picture indexed so far and leaves the
-        folder mapping for another day. Abort gives up on the import - nothing
-        already indexed is removed, and no file is touched either way.
+        Organise later keeps every picture indexed so far and leaves the folder
+        mapping for another day. Abort gives up on the import - nothing already
+        indexed is removed, and no file is touched either way.
       </template>
       <template v-else>
-        Organise later brings the pictures in now and leaves naming the
-        folders until later. Cancel brings nothing in at all.
+        Organise later brings the pictures in now and leaves naming the folders
+        until later. Cancel brings nothing in at all.
       </template>
     </p>
   </div>

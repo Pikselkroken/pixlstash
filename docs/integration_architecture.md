@@ -1964,7 +1964,9 @@ newly-indexed picture gets, exactly as any other import produces.
 
 ```jsonc
 {
+  // Exactly ONE of these two identifies the read being committed.
   "task_id": "…",              // the settled read's task_id (§20)
+  "read_result": { /* … */ },  // or the read's own result, from §20's status
   "label": "Generations",       // optional; defaults to the folder's own name
   "mode": "reference",          // "reference" (default) | "local_import"
   "assignments": [
@@ -1979,6 +1981,17 @@ newly-indexed picture gets, exactly as any other import produces.
   ]
 }
 ```
+
+**`read_result` exists because a read lives in one server process's memory and
+processes end.** The desktop's first run reads the library folder while the GPU
+runtime downloads and then restarts the backend onto that runtime, so by the
+time the owner answers the mapping questions the task that produced the answer
+is gone and `task_id` can only be `404 Task not found` — with the answer sitting
+in the dialog. Sending the result back is the same information by another route.
+Two consequences worth knowing: a supplied result reserves nothing, so it
+carries none of the one-commit protection a task-identified read gets (the
+caller holding the result owns that), and a body that names both or neither is a
+`400`.
 
 `relative_path` is the same handle §20's folder rows carry — POSIX-separated,
 relative to the read's root, `""` for the root itself. `kind` is one of

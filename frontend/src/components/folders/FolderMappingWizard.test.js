@@ -355,6 +355,7 @@ describe("resuming after the switch", () => {
       ASSIGNMENTS,
       "Generations",
       "local_import",
+      null,
     );
     expect(addLibrary).not.toHaveBeenCalled();
     expect(startFolderStructureRead).not.toHaveBeenCalled();
@@ -427,6 +428,7 @@ describe("the empty library's own folder", () => {
       [],
       "",
       "local_import",
+      READ_RESULT,
     );
   });
 });
@@ -595,6 +597,33 @@ describe("the branches nobody walks on purpose", () => {
     await settle();
 
     expect(useFolderMappingStore().pending).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("commits a parked read by its result, because its task no longer exists", async () => {
+    // The failure this replaces: the desktop's first run read the folder on
+    // one server process and restarted onto the GPU runtime before the owner
+    // answered, so "Yes, build this library" met "Task not found" with the
+    // answer sitting in the dialog.
+    const wrapper = mountWizard({
+      resume: { path: PATH, result: READ_RESULT, mode: "local_import" },
+    });
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+
+    expect(startFolderStructureCommit).toHaveBeenCalledWith(
+      "",
+      ASSIGNMENTS,
+      "",
+      "local_import",
+      READ_RESULT,
+    );
+    expect(addLibrary).not.toHaveBeenCalled();
 
     wrapper.unmount();
   });
