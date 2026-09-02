@@ -40,6 +40,14 @@ describe('the startup framework', () => {
     assert.doesNotMatch(script, /PHASES\.push/);
   });
 
+  it('reserves three lines for the installer’s own line, whatever its length', () => {
+    // pip's line runs from "numpy" to a wrapped wheel filename, and a row that
+    // grows with it walks the bar up and down the screen while you watch.
+    const styles = readFileSync(join(rendererDir, 'styles.css'), 'utf8');
+    assert.match(styles, /\.phase \.pnote \{[^}]*min-height: 4\.35em/s);
+    assert.match(styles, /\.phase \.pnote \{[^}]*-webkit-line-clamp: 3/s);
+  });
+
   it('parks the privacy answer for the app instead of writing it itself', () => {
     // The answer belongs to the owner's record in a database that does not
     // exist yet, so a commit that wrote it there would have nowhere to write.

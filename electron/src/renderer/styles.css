@@ -1098,62 +1098,49 @@ input[type="text"]:focus-visible,
   color: var(--fg);
 }
 
-/* ---- The install step: named phases, not one anonymous bar --------------- */
+/* ---- The install step: one line, and it never moves ---------------------- */
 
 .phases {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
 }
 
+/* The installer's own line is whatever length pip felt like: a package name can
+   run to three lines or fit in one, and a row that grows with it walks the bar
+   up and down the screen. Three lines are reserved whether they are used or
+   not, and anything longer is clipped. */
 .phase {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: 18px minmax(0, 1fr);
   column-gap: 10px;
+  row-gap: 6px;
+  align-items: center;
   font-size: 13.5px;
-  color: var(--muted);
-}
-
-.phase .pmark {
-  color: var(--border);
-  font-size: 12px;
-}
-
-/* pip's own line, which can be long: one line, clipped, never a wrap that
-   would move the row below it. */
-.phase .pnote {
-  font-size: 12px;
-  color: rgba(242, 229, 218, 0.45);
-  font-variant-numeric: tabular-nums;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.phase[data-state='done'] {
-  color: var(--fg);
-}
-
-.phase[data-state='done'] .pmark {
-  color: var(--primary);
-}
-
-.phase[data-state='running'] {
   color: var(--fg);
   font-weight: 600;
 }
 
-.phase[data-state='running'] .pmark {
+.phase .pmark {
   color: var(--accent);
+  font-size: 12px;
+}
+
+.phase .pnote {
+  grid-column: 2;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: rgba(242, 229, 218, 0.45);
+  min-height: 4.35em;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .phase .bar {
-  grid-column: 2 / 4;
-  margin-top: 8px;
+  grid-column: 2;
   height: 6px;
 }
