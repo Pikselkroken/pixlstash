@@ -210,7 +210,15 @@ a GPU runtime was chosen — **starts the backend on the bundled runtime before
 downloading it**. The ~2.5 GB download is network; the first read of the library
 is disk and CPU, and none of it wants a GPU, so `startAndLoad(accel, repair,
 navigate = false)` brings the server up without taking the window off the setup
-screen, and the library is hashed and thumbnailed through the download. When the
+screen, and the library is hashed and thumbnailed through the download. **The chosen folder is read at the same time**, through the app's own
+`/folder-structure/read` (`src/setup/ReadLibraryFolder.ts`, with the loopback
+session cookie): the read is disk work, the download is network, and the setup
+screen shows a line for each with a four-slide tour of the app between them. A
+completed read is parked in `userData/pending-mapping.json`; `SideBar`'s
+loose-picture offer takes it and opens the wizard on that task id, so the app
+arrives at the folder questions instead of at a second progress bar over an
+empty grid. A read that fails, stalls or cannot start costs the overlap and
+nothing else — the app reads the folder itself, exactly as before. When the
 overlay lands it is activated and the backend restarts onto it — the planner
 picks up whatever is still outstanding — and that start is the one that
 navigates the window into the library.

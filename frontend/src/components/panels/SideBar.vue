@@ -521,7 +521,9 @@ const pendingForThisLibrary = computed(() => {
   const entry = mappingStore.pending;
   if (!entry) return null;
   if (entry.mode !== "local_import") return entry;
-  return _samePath(entry.path, librariesStore.activeLibrary?.path) ? entry : null;
+  return _samePath(entry.path, librariesStore.activeLibrary?.path)
+    ? entry
+    : null;
 });
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
@@ -619,10 +621,41 @@ function offerLoosePictures() {
   return loosePicturesOffer;
 }
 
+/**
+ * A folder read the desktop startup screen finished while the GPU runtime
+ * downloaded. Null in a browser, and on a desktop launch that had nothing to
+ * read or could not finish.
+ */
+async function takeParkedFolderRead() {
+  const desktop =
+    typeof window !== "undefined" ? window.pixlstashDesktop : null;
+  if (!desktop?.takePendingMapping) return null;
+  try {
+    return (await desktop.takePendingMapping()) || null;
+  } catch (error) {
+    console.warn("Could not read the startup screen's folder read", { error });
+    return null;
+  }
+}
+
 async function _offerLoosePictures() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
+  // On desktop the startup screen may have read this very folder already,
+  // alongside the runtime download. Resuming that read is the whole point of
+  // doing it there: the wizard opens on its questions instead of on a second
+  // progress bar over an empty grid.
+  const parked = await takeParkedFolderRead();
+  if (parked?.taskId && parked.path === path) {
+    autoOpenedPendingMapping = true;
+    openFolderMappingWizard({
+      path,
+      taskId: parked.taskId,
+      mode: "local_import",
+    });
+    return;
+  }
   try {
     const verdict = await inspectLibraryPath(path);
     if (verdict?.picture_count > 0) {
@@ -1406,9 +1439,7 @@ function openProjectSubMenu(section, event, focusFirst = false) {
   projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
   projectMenuSection.value = section;
   if (focusFirst) {
-    nextTick(() =>
-      focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0),
-    );
+    nextTick(() => focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0));
   }
 }
 
@@ -4572,9 +4603,7 @@ defineExpose({
           class="sidebar-collapsed-project-submenu"
           role="menu"
           :aria-label="
-            projectMenuSection === 'projects'
-              ? 'Projects'
-              : 'Library folders'
+            projectMenuSection === 'projects' ? 'Projects' : 'Library folders'
           "
           :style="{
             top: projectMenuSubPos.top + 'px',
@@ -5917,7 +5946,10 @@ defineExpose({
                  it unseen (see hasAnyPending's own comment). The count only
                  ever names what needs a DECISION; an off_layout-only queue
                  shows the row with no number, not a "0" that reads as empty. -->
-            <div v-if="movesStore.hasAnyPending" class="sidebar-all-pictures-row">
+            <div
+              v-if="movesStore.hasAnyPending"
+              class="sidebar-all-pictures-row"
+            >
               <button
                 type="button"
                 :class="['sidebar-list-item', { active: isMovesView }]"
@@ -6009,8 +6041,9 @@ defineExpose({
                     aria-label="Edit selected character"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
-                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
+                    <v-icon size="16">mdi-pencil</v-icon>
+                  </button>
                   <button
                     v-if="
                       !isReadOnly &&
@@ -6025,8 +6058,9 @@ defineExpose({
                     aria-label="Delete selected character"
                     @click.stop="deleteCharacter"
                     title="Delete selected character"
-                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
+                    <v-icon size="16">mdi-trash-can-outline</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly"
                     type="button"
@@ -6034,8 +6068,9 @@ defineExpose({
                     aria-label="Add character"
                     @click.stop="createCharacter"
                     title="Add character"
-                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
+                    <v-icon size="16">mdi-plus</v-icon>
+                  </button>
                 </div>
               </div>
               <div
@@ -6208,8 +6243,9 @@ defineExpose({
                     aria-label="Edit selected set"
                     @click.stop="openSetEditor(selectedSetObj)"
                     title="Edit selected set"
-                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
+                    <v-icon size="16">mdi-pencil</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly && selectedSetIdSet.size > 0"
                     type="button"
@@ -6221,8 +6257,9 @@ defineExpose({
                         ? `Delete ${selectedSetIdSet.size} selected sets`
                         : 'Delete selected set'
                     "
-                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
+                    <v-icon size="16">mdi-trash-can-outline</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly"
                     type="button"
@@ -6230,8 +6267,9 @@ defineExpose({
                     aria-label="Create new set"
                     @click.stop="createSet"
                     title="Create new set"
-                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
+                    <v-icon size="16">mdi-plus</v-icon>
+                  </button>
                 </div>
               </div>
               <div v-if="!setsSectionCollapsed" class="sidebar-section-scroll">

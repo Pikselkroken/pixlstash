@@ -698,11 +698,24 @@ api.onPhase((p) => {
   if (!busy) return;
   if (p.phase === 'reading') {
     reading = true;
-    setLine('server', { name: 'Reading your pictures', state: 'running', fraction: -1 });
+    // The read reports folders as it walks them; before the first count lands
+    // there is only the fact that it started.
+    const counted = p.total ? `${count(p.processed)} of ${count(p.total)} folders` : '';
+    setLine('server', {
+      name: 'Reading your pictures',
+      state: 'running',
+      note: counted,
+      fraction: typeof p.fraction === 'number' && p.fraction >= 0 ? p.fraction : -1,
+    });
   } else if (p.phase === 'starting') {
     if (reading) {
       setLine('runtime', { state: 'done', note: 'Installed', fraction: 1 });
-      setLine('server', { name: 'Starting PixlStash on your GPU', state: 'running' });
+      setLine('server', {
+        name: 'Starting PixlStash on your GPU',
+        state: 'running',
+        note: '',
+        fraction: -1,
+      });
     } else {
       setLine('server', { name: 'Starting PixlStash', state: 'running' });
     }
@@ -741,6 +754,18 @@ async function init() {
   renderPrivacy();
   render();
 }
+
+// The tour advances on its own while the install runs. Four slides, four
+// seconds each: long enough to read a caption, short enough that a CUDA
+// download is never watching the same one twice in a row.
+const slides = document.querySelectorAll('.slide');
+const dots = document.querySelectorAll('.dots i');
+let slide = 0;
+setInterval(() => {
+  slide = (slide + 1) % slides.length;
+  slides.forEach((el, i) => el.classList.toggle('is-on', i === slide));
+  dots.forEach((el, i) => el.classList.toggle('is-on', i === slide));
+}, 4000);
 
 init().catch((e) => {
   steps = ['install'];

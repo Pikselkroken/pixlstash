@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  net,
   clipboard,
   ipcMain,
   Menu,
@@ -48,6 +49,7 @@ import {
   setBackendsRoot,
 } from './config';
 import { inspectFolder } from './setup/InspectFolder';
+import { readLibraryFolder } from './setup/ReadLibraryFolder';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -136,6 +138,9 @@ let detectedLegacyIdentitySource: string | null = null;
 // upgrade's new privacy question today). Empty on a first run, which builds its
 // own list in `setup:probe`.
 let requestedStartupSteps: string[] = [];
+// The backend this launch started: its loopback URL and the pre-authenticated
+// session cookie. Setup uses it to read the library folder during the download.
+let runningServer: { url: string; sessionToken: string } | null = null;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -446,6 +451,45 @@ function takePendingTelemetry(): Record<string, boolean> | null {
     return (patch as Record<string, boolean>) ?? null;
   } catch (e) {
     console.warn('[startup] could not read the parked privacy answer:', e);
+    return null;
+  }
+}
+
+/** Where the folder read setup finished waits for the app to pick it up. */
+function pendingMappingPath(): string {
+  return join(app.getPath('userData'), 'pending-mapping.json');
+}
+
+/**
+ * Park a finished folder read for the app.
+ *
+ * The wizard resumes from a task id, so a read done during the download means
+ * the app opens on the questions instead of on a progress bar. Written only
+ * when the read actually completed: a half-answer would send the wizard looking
+ * for a task that has nothing to give.
+ */
+function writePendingMapping(entry: { path: string; taskId: string } | null): void {
+  try {
+    if (!entry) {
+      if (existsSync(pendingMappingPath())) rmSync(pendingMappingPath());
+      return;
+    }
+    mkdirSync(dirname(pendingMappingPath()), { recursive: true });
+    writeFileSync(pendingMappingPath(), JSON.stringify(entry, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the folder read:', e);
+  }
+}
+
+/** Hand the parked read to the app exactly once. */
+function takePendingMapping(): { path: string; taskId: string } | null {
+  try {
+    if (!existsSync(pendingMappingPath())) return null;
+    const entry = readJsonFile(pendingMappingPath());
+    rmSync(pendingMappingPath());
+    return (entry as { path: string; taskId: string }) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked folder read:', e);
     return null;
   }
 }
@@ -789,6 +833,9 @@ async function startAndLoad(
     deviceFor(accel),
     repairPermissions,
   );
+  // Setup talks to this server while the GPU runtime downloads, so where it is
+  // and how to authenticate to it outlive this function.
+  runningServer = { url: running.url, sessionToken: running.sessionToken };
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -1280,19 +1327,36 @@ function registerIpc(): void {
       // outstanding when the new process comes up.
       await manager.setActiveAccel(null);
       await startFromSetup(null, false);
-      // The server is up, so the library is being read from here on. The setup
-      // screen has no other way to know: the reading is the backend's own work
-      // and reports nothing through the install channel.
+      // The server is up, so the reading can begin. Both run at once: the read
+      // is disk, the download is network, and the setup screen shows a line for
+      // each with the tour between them.
       sendPhase({ phase: 'reading' });
+      writePendingMapping(null);
+      const read = runningServer
+        ? readLibraryFolder(
+            (url, init) => net.fetch(url, init),
+            runningServer.url,
+            runningServer.sessionToken,
+            imageRoot,
+            (progress) => sendPhase({ phase: 'reading', ...progress }),
+          ).then((taskId) => {
+            if (taskId) writePendingMapping({ path: imageRoot, taskId });
+          })
+        : Promise.resolve();
       await manager.installOverlay(gpu, runtime, (p) =>
         mainWindow?.webContents.send('install:progress', p),
       );
+      // The download is the long pole, but a read that is still going gets to
+      // finish before the restart takes its server away.
+      await read;
       await manager.setActiveAccel(gpu);
       await startFromSetup(gpu, true);
     },
   );
 
   ipcMain.handle('startup:takePendingTelemetry', () => takePendingTelemetry());
+
+  ipcMain.handle('startup:takePendingMapping', () => takePendingMapping());
 
   // The app asking for a question it cannot answer itself. It hands the window
   // back to the startup framework rather than opening a dialog over a library

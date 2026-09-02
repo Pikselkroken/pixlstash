@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // The privacy answer the startup screen collected, handed over once so the
   // app can apply it instead of asking again.
   takePendingTelemetry: () => ipcRenderer.invoke('startup:takePendingTelemetry'),
+  // A folder read the startup screen finished during the runtime download, so
+  // the wizard opens on its questions instead of on a progress bar.
+  takePendingMapping: () => ipcRenderer.invoke('startup:takePendingMapping'),
   // Hand the window back to the startup framework for one question the app
   // cannot answer on its own (today: the upgrade's privacy question).
   askStartupQuestion: (step: string) => ipcRenderer.invoke('startup:askQuestion', step),

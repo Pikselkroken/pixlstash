@@ -1170,3 +1170,84 @@ input[type="text"]:focus-visible,
   grid-column: 2;
   height: 6px;
 }
+
+/* ---- The tour: what the wait is buying ---------------------------------- */
+
+/* The install step fills its cell, so the title sits at the top, the progress
+   at the bottom and every pixel between them belongs to the pictures. */
+#screenInstall {
+  align-self: stretch;
+}
+
+.carousel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.slides {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.slide.is-on {
+  opacity: 1;
+}
+
+.slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  display: block;
+}
+
+.slide figcaption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 16px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f7f1ea;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0));
+}
+
+.dots {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(242, 229, 218, 0.25);
+}
+
+.dots i.is-on {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide {
+    transition: none;
+  }
+}
