@@ -614,6 +614,38 @@ export const scenes = [
       return null
     },
   },
+  {
+    // LAST on purpose: it switches the active library, and every scene above
+    // wants demo-data. An empty folder is the one verdict POST /libraries
+    // attaches outright, with no mapping step in the way; the hub is per-run
+    // and thrown away with the work dir, so nothing outside the capture is
+    // registered.
+    id: 'empty-library',
+    assets: ['ScreenshotEmptyLibrary.jpg'],
+    title: 'The first screen of a new library (three ways in)',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      const root = join(tmpdir(), 'pixlstash-shots-empty-library')
+      rmSync(root, { recursive: true, force: true })
+      mkdirSync(root, { recursive: true })
+      const added = await page.request.post('/api/v1/libraries', {
+        data: { path: root, name: 'New library' },
+      })
+      expect(added.ok(), `could not add the empty library: ${added.status()}`).toBe(true)
+      const { uuid } = await added.json()
+      const switched = await page.request.post('/api/v1/libraries/active', {
+        data: { uuid },
+      })
+      expect(switched.ok(), `could not switch library: ${switched.status()}`).toBe(true)
+      // No reload here: the switch route tells every connected client to
+      // reload itself, and racing it with page.reload() aborts the navigation.
+      // The card is deliberately late (>=350ms after load) so it never flashes
+      // over a library that does have pictures.
+      await expect(page.locator('.library-empty')).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(600)
+      return null
+    },
+  },
 ]
 
 export const manual = {

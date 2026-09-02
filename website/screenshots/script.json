@@ -345,6 +345,14 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotEmptyLibrary.jpg",
+    "label": "The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI",
+    "alt": "The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotExportFolder.jpg",
     "label": "The export panel offering Export to Folder alongside the zip download",
     "alt": "The export panel offering Export to Folder alongside the zip download",
