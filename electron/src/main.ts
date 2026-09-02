@@ -11,7 +11,7 @@ import {
   Tray,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -47,6 +47,7 @@ import {
   serverLogPath,
   setBackendsRoot,
 } from './config';
+import { inspectFolder } from './setup/InspectFolder';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -131,6 +132,10 @@ const pendingMediaSaves = new Map<
 // only to name the consent choice; setup:commit sends a boolean and can never
 // substitute a different vault for the privileged preparer invocation.
 let detectedLegacyIdentitySource: string | null = null;
+// Steps the RUNNING app asked the startup framework to put in front of it (an
+// upgrade's new privacy question today). Empty on a first run, which builds its
+// own list in `setup:probe`.
+let requestedStartupSteps: string[] = [];
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -398,6 +403,50 @@ function saveDesktopPrefs(): void {
     );
   } catch (e) {
     console.warn('[desktop-prefs] could not persist preferences:', e);
+  }
+}
+
+/**
+ * Where the startup screen's privacy answer waits for the app.
+ *
+ * The answer belongs to the library owner's record in the database, which does
+ * not exist until the backend has started and the app has authenticated. So the
+ * startup framework parks it here and the app applies it on its first config
+ * load, which is also what stops the in-app dialog asking the same question a
+ * second time.
+ */
+function pendingTelemetryPath(): string {
+  return join(app.getPath('userData'), 'pending-telemetry.json');
+}
+
+/** Park a startup answer for the app, or clear a stale one when there is none. */
+function writePendingTelemetry(patch: Record<string, boolean> | null): void {
+  try {
+    if (!patch) {
+      if (existsSync(pendingTelemetryPath())) rmSync(pendingTelemetryPath());
+      return;
+    }
+    mkdirSync(dirname(pendingTelemetryPath()), { recursive: true });
+    writeFileSync(pendingTelemetryPath(), JSON.stringify(patch, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the privacy answer:', e);
+  }
+}
+
+/**
+ * Hand the parked answer to the app exactly once. Read-and-delete rather than
+ * read: a patch left behind would re-apply on every launch and quietly undo a
+ * later change made in Settings.
+ */
+function takePendingTelemetry(): Record<string, boolean> | null {
+  try {
+    if (!existsSync(pendingTelemetryPath())) return null;
+    const patch = readJsonFile(pendingTelemetryPath());
+    rmSync(pendingTelemetryPath());
+    return (patch as Record<string, boolean>) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked privacy answer:', e);
+    return null;
   }
 }
 
@@ -1014,9 +1063,25 @@ function registerIpc(): void {
   // registered only while that screen is actually waiting for an answer.
   ipcMain.handle('permissions:request', () => pendingPermissionRepair);
 
-  // ---- First-run setup wizard ----
+  // ---- The startup framework ----
+  //
+  // One screen, a list of steps, and main decides the list. First run asks all
+  // of them; a launch that owes the user only the new privacy question asks
+  // only that. Anything else that has to be settled before the app loads gets
+  // a step id here rather than a dialog over a half-loaded library.
 
   ipcMain.handle('setup:probe', async () => {
+    // A question the running app asked us to put in front of it: exactly that
+    // question, no library or compute step, and no config is rewritten when it
+    // is answered.
+    if (requestedStartupSteps.length) {
+      return {
+        steps: [...requestedStartupSteps, 'install'],
+        privacyVariant: 'upgrade',
+        defaults: {},
+        gpu: { available: false },
+      };
+    }
     const stdPath = await standaloneConfigPath();
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
@@ -1027,7 +1092,15 @@ function registerIpc(): void {
         ? resolvedImportedRoot
         : null;
     const gpu = gpuUpgrade();
+    const steps = ['library'];
+    // The compute question only exists on a machine that has something to
+    // choose between; the rail must not show a step that never comes.
+    if (gpu) steps.push('compute');
+    steps.push('privacy');
+    steps.push('install');
     return {
+      steps,
+      privacyVariant: 'fresh',
       importedFrom: imported ? stdPath : null,
       legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
@@ -1042,6 +1115,11 @@ function registerIpc(): void {
         : { available: false },
     };
   });
+
+  // What is in the folder someone picked, for the verdict under the field: a
+  // library PixlStash made before, a folder of pictures, or nothing yet. Read
+  // only, and bounded - see InspectFolder.
+  ipcMain.handle('setup:inspect', async (_e, path?: string) => inspectFolder(path || ''));
 
   ipcMain.handle('setup:pickFolder', async (_e, current?: string) => {
     const res = await dialog.showOpenDialog({
@@ -1061,8 +1139,18 @@ function registerIpc(): void {
         useGpu: boolean;
         installLocation?: string;
         importLegacyIdentity?: boolean;
+        telemetry?: Record<string, boolean> | null;
       },
     ) => {
+      // Answering a question the app asked for changes nothing about the
+      // install: park the answer and hand the window back.
+      if (requestedStartupSteps.length) {
+        writePendingTelemetry(choices?.telemetry ?? null);
+        requestedStartupSteps = [];
+        if (currentUrl) await mainWindow?.loadURL(currentUrl);
+        return;
+      }
+
       if (!runtime) throw new Error('No bundled runtime available');
       const imageRoot = (choices?.imageRoot || '').trim();
       if (!imageRoot) throw new Error('Please choose a library folder.');
@@ -1117,6 +1205,12 @@ function registerIpc(): void {
         ),
       );
 
+      // The privacy answer belongs to the library's owner record, which only
+      // exists once the backend has started, so it is parked here and applied
+      // by the app on its first config load. Written after the config so a
+      // failed setup leaves no answer to a question the user may re-answer.
+      writePendingTelemetry(choices?.telemetry ?? null);
+
       // The GPU choice maps onto the existing on-demand wheel-overlay system.
       const gpu = gpuUpgrade();
       if (choices?.useGpu && gpu) {
@@ -1131,6 +1225,21 @@ function registerIpc(): void {
       await startWithOverlayFallback(await activeOverlayAccel());
     },
   );
+
+  ipcMain.handle('startup:takePendingTelemetry', () => takePendingTelemetry());
+
+  // The app asking for a question it cannot answer itself. It hands the window
+  // back to the startup framework rather than opening a dialog over a library
+  // that is already on screen; `setup:commit` brings the window back.
+  ipcMain.handle('startup:askQuestion', async (_e, step?: string) => {
+    if (step !== 'privacy') {
+      console.warn(`[startup] refusing an unknown startup step: ${step}`);
+      return false;
+    }
+    requestedStartupSteps = [step];
+    await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+    return true;
+  });
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());

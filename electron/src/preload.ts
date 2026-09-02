@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // First-run setup wizard.
   probeSetup: () => ipcRenderer.invoke('setup:probe'),
   pickLibraryFolder: (current: string) => ipcRenderer.invoke('setup:pickFolder', current),
+  // What is in a folder, for the startup screen's verdict. Read-only.
+  inspectSetupPath: (path: string) => ipcRenderer.invoke('setup:inspect', path),
   commitSetup: (choices: unknown) => ipcRenderer.invoke('setup:commit', choices),
   // Startup permission recovery: main holds the backend's repair report and
   // waits for exactly one answer before retrying or quitting.
@@ -26,6 +28,12 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   pickBackendLocation: (current: string) => ipcRenderer.invoke('backend:pickLocation', current),
   setBackendLocation: (dir: string) => ipcRenderer.invoke('backend:setLocation', dir),
   // Desktop conveniences re-homed from the (removed) native menu.
+  // The privacy answer the startup screen collected, handed over once so the
+  // app can apply it instead of asking again.
+  takePendingTelemetry: () => ipcRenderer.invoke('startup:takePendingTelemetry'),
+  // Hand the window back to the startup framework for one question the app
+  // cannot answer on its own (today: the upgrade's privacy question).
+  askStartupQuestion: (step: string) => ipcRenderer.invoke('startup:askQuestion', step),
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
   // Narrow media operations for the web-app lightbox. The renderer supplies

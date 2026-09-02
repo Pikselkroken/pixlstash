@@ -11,6 +11,11 @@
   --muted: rgba(242, 229, 218, 0.7);
   --accent: #c47a1e; /* accent - the unified amber */
   --primary: #567309; /* primary - olive action fill */
+  /* The other two members of the action-fill tier, for the startup screen's
+     two answers. Same values as the web app's dark theme; spent as edges,
+     drawings and washes here, never as small text. */
+  --secondary: #bb3566; /* secondary - raspberry */
+  --tertiary: #46707a; /* tertiary - teal */
   --on-accent: #f7f1ea; /* on-accent / on-primary - warm near-white label */
   --border: #363d45; /* border */
   /* Red as a FOREGROUND on dark chrome, so it comes from the dark-surface-*
@@ -396,18 +401,69 @@ input[type="text"]:focus-visible,
 
 .setup-header {
   flex: 0 0 auto;
-  width: 260px;
+  width: 300px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.setup-form {
+/* The form column: every step stacked in ONE grid cell, so the tallest step
+   sets the height once and moving between steps moves nothing. Anything that
+   comes and goes inside a step reserves its space with visibility rather than
+   display, for the same reason. */
+.formcol {
   flex: 0 1 560px;
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.forms {
+  display: grid;
+  min-height: 500px;
+}
+
+.setup-form {
+  grid-area: 1 / 1;
+  align-self: center;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+
+.off {
+  visibility: hidden;
+}
+
+/* Back and Continue live outside the stack, so they hold one place for the
+   whole flow. One button width for "Continue" and "Get started" alike. */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.footer .sub {
+  flex: 1;
+  text-align: center;
+}
+
+.footer button {
+  min-width: 124px;
+  text-align: center;
+}
+
+.footer button.secondary {
+  font-weight: 600;
+}
+
+.ask {
+  margin: 0 0 2px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
 }
 
 .setup-form .panel {
@@ -431,6 +487,79 @@ input[type="text"]:focus-visible,
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
+}
+
+/* The rail names every question this launch will ask and, once answered,
+   carries the answer - which is why no later step has to repeat it back.
+   `display: contents` on a row is what lets all rows share one grid, so the
+   answers line up in a column of their own. */
+.steps {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 10px;
+  border-top: 1px solid rgba(242, 229, 218, 0.12);
+  padding-top: 14px;
+  font-size: 13px;
+}
+
+.step {
+  display: contents;
+  color: rgba(242, 229, 218, 0.45);
+}
+
+.step .dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.step[data-state='current'] {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.step[data-state='current'] .dot {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.step[data-state='done'] {
+  color: var(--muted);
+}
+
+.step[data-state='done'] .dot {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+  color: var(--fg);
+}
+
+.step-value {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-value img,
+.step-value svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
 }
 
 .imported {
@@ -665,4 +794,362 @@ input[type="text"]:focus-visible,
 .repair-actions button {
   min-width: 120px;
   padding: 11px 22px;
+}
+
+/* ---- The library step: two illustrated answers, then the folder ---------- */
+
+/* One card, one hue. The hue is spent on the border, the drawing and a wash,
+   never on the body copy, which stays on-background ink: `accent`, `primary`,
+   `secondary` and `tertiary` are icons, borders, rails and washes, not small
+   text (docs/design/visual-language.md §4). Amber is left to selection and
+   focus so a card that is merely offered cannot borrow it. */
+.picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.card {
+  --hue: var(--tertiary);
+  --art-fill: #232a2e;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--hue) 55%, var(--border));
+  background: color-mix(in srgb, var(--hue) 7%, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.card--new {
+  --hue: var(--secondary);
+  --art-fill: #2c2429;
+}
+
+.card:hover {
+  background: color-mix(in srgb, var(--hue) 13%, var(--panel));
+  border-color: color-mix(in srgb, var(--hue) 80%, var(--border));
+}
+
+.card[aria-pressed='true'] {
+  border-color: var(--hue);
+  background: color-mix(in srgb, var(--hue) 18%, var(--panel));
+}
+
+.card-art {
+  width: 100%;
+  height: 128px;
+  display: grid;
+  place-items: center;
+  color: var(--hue);
+}
+
+.card-art svg {
+  width: 152px;
+  height: 106px;
+  display: block;
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.card-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.card-tick {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--hue);
+  color: #fff;
+  display: none;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card[aria-pressed='true'] .card-tick {
+  display: grid;
+}
+
+/* The folder panel is always drawn: before a card is picked it waits, so its
+   space is never a hole that appears and pushes the footer down. Its height is
+   pinned for the same reason - no verdict, however long, can move the screen
+   the stack is sized on. */
+.answer {
+  --hue: var(--tertiary);
+}
+
+.answer[data-mode='new'] {
+  --hue: var(--secondary);
+}
+
+.answer .panel {
+  border-color: color-mix(in srgb, var(--hue) 70%, var(--border));
+  background: color-mix(in srgb, var(--hue) 10%, var(--panel));
+  height: 238px;
+}
+
+.answer.waiting .panel {
+  border-color: var(--border);
+  background: var(--panel);
+  opacity: 0.5;
+}
+
+.answer.waiting .verdict {
+  border-left-color: var(--border);
+}
+
+.answer .field input[type='text'] {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* What PixlStash found at the chosen path, said before anything is written. */
+.verdict {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-left: 3px solid var(--hue);
+  padding: 2px 0 2px 12px;
+}
+
+.verdict .vmark {
+  color: var(--hue);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.verdict .vmark img {
+  width: 18px;
+  height: 18px;
+  display: block;
+  margin-top: 1px;
+}
+
+.verdict strong {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+/* Two lines of verdict copy, always, whether the sentence needs them or not. */
+.verdict .sub {
+  margin-top: 2px;
+  min-height: 2.9em;
+}
+
+.verdict[data-tone='warn'] {
+  border-left-color: var(--err);
+}
+
+.verdict[data-tone='warn'] .vmark {
+  color: var(--err);
+}
+
+/* A folder PixlStash made announces itself in PixlStash's own marks. */
+.wm {
+  font-family: 'Tiny5', monospace;
+  font-size: 1.15em;
+  letter-spacing: 0.3px;
+  font-weight: 400;
+}
+
+.wm span {
+  color: var(--accent);
+}
+
+/* One line, always: a wrap here would grow the screen the window is sized on. */
+.stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: nowrap;
+  margin-top: 8px;
+  min-height: 46px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(242, 229, 218, 0.45);
+}
+
+/* ---- The privacy step --------------------------------------------------- */
+
+.tele {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tele.tele--two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.tele-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tele-opt:hover {
+  background: rgba(242, 229, 218, 0.04);
+}
+
+.tele-opt[aria-checked='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tele-mark {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 16px;
+  color: var(--accent);
+}
+
+.tele-mark i {
+  width: 4px;
+  background: currentColor;
+  border-radius: 1px;
+  opacity: 0.45;
+}
+
+/* How many of the three marks are lit says how much leaves the machine. Heights
+   are classes because this window refuses inline styles (script-src/style-src
+   'self'), not for want of three numbers in the markup. */
+.tele-mark i:nth-child(1) {
+  height: 4px;
+}
+
+.tele-mark i:nth-child(2) {
+  height: 10px;
+}
+
+.tele-mark i:nth-child(3) {
+  height: 16px;
+}
+
+.tele-mark--1 i:nth-child(n + 2),
+.tele-mark--2 i:nth-child(n + 3) {
+  visibility: hidden;
+}
+
+.tele-opt[aria-checked='true'] .tele-mark i {
+  opacity: 1;
+}
+
+.tele-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.tele-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.never {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 3px solid var(--primary);
+  padding-left: 12px;
+  margin: 0;
+}
+
+.never strong {
+  color: var(--fg);
+}
+
+/* ---- The install step: named phases, not one anonymous bar --------------- */
+
+.phases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.phase {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.phase .pmark {
+  color: var(--border);
+  font-size: 12px;
+}
+
+.phase .pnote {
+  font-size: 12px;
+  color: rgba(242, 229, 218, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+
+.phase[data-state='done'] {
+  color: var(--fg);
+}
+
+.phase[data-state='done'] .pmark {
+  color: var(--primary);
+}
+
+.phase[data-state='running'] {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.phase[data-state='running'] .pmark {
+  color: var(--accent);
+}
+
+.phase .bar {
+  grid-column: 2 / 4;
+  margin-top: 8px;
+  height: 6px;
 }
