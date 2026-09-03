@@ -7,7 +7,7 @@
     <title>What's New in PixlStash 1.11</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.11: add a library from Settings, import a folder of pictures where it sits with projects, people and sets read from the folder names, a folder layout for new pictures, export to a folder, and a faster first index."
+      content="What's new in PixlStash 1.11: import libraries in the GUI, create libraries from existing image folders and export to a folder."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -142,7 +142,7 @@
          height and each image takes half of it, cropped from the top. */
       .release-hero-media--stack {
         height: auto;
-        min-height: 380px;
+        min-height: 300px;
         display: grid;
         grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
       }
@@ -765,13 +765,13 @@
             </p>
             <ul class="release-bullets">
               <li>
-                Your folders are read and PixlStash determines from its content
+                Your folders are read and PixlStash suggests from its content
                 whether it is a project, picture set or a gallery of a person.
+                You make the final decision.
               </li>
-              <li>Change this how you please.</li>
               <li>
-                Every library row has a menu to open, rename or detaching it.
-                Detaching a library deletes no files
+                Every library row has a menu to open, rename or stop using it.
+                The latter does not delete anything.
               </li>
               <li>
                 A library can be given a folder layout, and new pictures are
@@ -785,6 +785,7 @@
                 Export straight into a folder on the machine running PixlStash,
                 with no zip in between
               </li>
+              <li>A first pass over a big folder is noticeably quicker</li>
             </ul>
           </div>
           <div class="release-hero-media release-hero-media--stack">

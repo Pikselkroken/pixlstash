@@ -15,7 +15,12 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <script>
+      try {
+        if (localStorage.getItem("pixlstash-theme") === "light")
+          document.documentElement.setAttribute("data-theme", "light");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── upgrade.html page-specific ── */
@@ -401,8 +406,8 @@
         folder somewhere safe while PixlStash is stopped. Opening a library with
         1.11 adds columns to its database. And if you are coming from 1.9 or
         earlier, the 1.10 library upgrade is not backwards compatible: once a
-        library has been opened by 1.10 or later, an older version cannot open it
-        again.
+        library has been opened by 1.10 or later, an older version cannot open
+        it again.
       </div>
 
       <a class="whatsnew-banner" href="whatsnew.html">
@@ -416,8 +421,7 @@
             PixlStash reads a folder of pictures where it sits and turns your
             folder names into projects, people and sets, without moving or
             renaming a file. Plus a folder layout for the pictures a library
-            writes next, export straight into a folder, and a quicker first pass
-            over a big library.
+            writes next and export straight into a folder.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
@@ -691,19 +695,21 @@
       // links and bold. Italics are deliberately left alone because release
       // text is full of literal asterisks (globs like *-win-x64.exe).
       function inlineMarkdown(escaped) {
-        return escaped
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          // Release notes link into the README by relative path, which resolves
-          // to nothing here. Send those to the file on GitHub.
-          .replace(
-            /\[([^\]]+)\]\((README\.md(?:#[^\s)]*)?)\)/g,
-            '<a href="https://github.com/pikselkroken/pixlstash/blob/main/$2" target="_blank" rel="noopener">$1</a>',
-          )
-          .replace(
-            /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-            '<a href="$2" target="_blank" rel="noopener">$1</a>',
-          )
-          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        return (
+          escaped
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            // Release notes link into the README by relative path, which resolves
+            // to nothing here. Send those to the file on GitHub.
+            .replace(
+              /\[([^\]]+)\]\((README\.md(?:#[^\s)]*)?)\)/g,
+              '<a href="https://github.com/pikselkroken/pixlstash/blob/main/$2" target="_blank" rel="noopener">$1</a>',
+            )
+            .replace(
+              /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener">$1</a>',
+            )
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        );
       }
 
       function formatItem(raw) {
