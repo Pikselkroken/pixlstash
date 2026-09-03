@@ -1,5 +1,6 @@
-# [1.11.0]
+# [1.11.0] [Security:High]
 
+- Several dependabot updates: transformers, xmldom, humanfs, fast-uri
 - Settings → Libraries adds, renames and removes libraries, so the command line
   is no longer the only way. `+ Add a library…` takes one folder and works out
   what it is: a library you already made is added as it is, with its tags,
