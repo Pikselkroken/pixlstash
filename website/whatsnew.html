@@ -870,47 +870,6 @@
         </article>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card">
-          <div class="update-card-body">
-            <h2>A faster first pass over a big folder</h2>
-            <p>
-              Indexing a folder runs several models in a row, and 1.11 stops
-              them queueing behind each other. Each picture moves to the next
-              stage as soon as its own rows land instead of waiting for the
-              whole batch. CLIP embeddings no longer wait on faces and tags.
-              Video frames are decoded and images resized off the GPU worker.
-              The models stay loaded for a whole pass instead of being loaded
-              and dropped per batch. The VRAM budget defaults to what your card
-              has rather than a fixed number.
-            </p>
-            <p>
-              The task manager reports this better too. A worker row stays
-              visible between batches instead of blinking out, a slow face batch
-              says why it was slow, and an out-of-memory notice names the
-              process holding the card. Things that were never problems, such as
-              a picture with no faces or a video with no readable last frame,
-              are no longer reported as warnings.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <div class="update-card-body">
-            <h2>Managing libraries is a local job</h2>
-            <p>
-              Adding, renaming and removing libraries points the server at
-              folders on the machine it runs on, so those controls are available
-              from that machine or from your own network or Tailscale. A session
-              from further away is told this rather than shown controls that
-              would fail. PixlStash also no longer indexes its own thumbnails and
-              caches as if they were your pictures, and a library's snapshots
-              folder is left out of the folder read.
-            </p>
-          </div>
-        </article>
-      </section>
-
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
           <h2>Upgrading to 1.11</h2>
