@@ -8,6 +8,15 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
     <title>PixlStash</title>
+    <!--
+      Substituted by the server with the install type it detected, so the
+      frontend knows the channel synchronously at page load. The version check
+      fires from a child component's onMounted, before GET /version can answer,
+      and stamps its 24h throttle before the request -- so a value that arrives
+      later is not reported that day. Left as the literal placeholder by the
+      Vite dev server, which `defaultInstallType` treats as absent.
+    -->
+    <meta name="pixlstash-install-type" content="__PIXLSTASH_INSTALL_TYPE__" />
   </head>
   <body>
     <div id="app"></div>

@@ -503,6 +503,7 @@ jobs:
           tests/test_image_embedding_worker.py
           tests/test_import_scrapheap_match.py
           tests/test_impossible_clear_authz.py
+          tests/test_index_install_type.py
           tests/test_inline_rotate.py
           tests/test_insightface_relocation.py
           tests/test_install_type_buckets.py

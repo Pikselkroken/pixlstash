@@ -8,6 +8,7 @@ import {
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useProjectStore } from "../stores/useProjectStore";
+import { resolveImportTarget } from "../utils/importTarget.js";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -196,12 +197,14 @@ export function useGridDragDrop(
     dragSource.value = null;
     // Trigger import directly in ImageGrid
     if (imageImporterRef.value && files.length) {
+      // `startImport` reads `setId` / `characterId` and nothing else. This
+      // used to pass `selectedCharacterId` (plus the two sentinel ids), none of
+      // which it looks at, so a drop into a character or set view was filed
+      // nowhere despite the comment above claiming it threaded the context.
       imageImporterRef.value.startImport(files, {
         backendUrl: props.backendUrl,
-        selectedCharacterId: selectionStore.selectedCharacter,
-        allPicturesId: "ALL",
-        unassignedPicturesId: "UNASSIGNED",
         projectId: projectStore.selectedProjectId ?? null,
+        ...resolveImportTarget(selectionStore),
       });
     }
   }

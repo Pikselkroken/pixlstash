@@ -243,15 +243,36 @@ describe("useGridRealtimeSync decision table", () => {
     expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([50]);
   });
 
-  it("own-origin import echo (matching id) is suppressed", () => {
+  // Expectation deliberately inverted. This asserted suppression, on the same
+  // assumption the `restored` branch already had to walk back: that an
+  // optimistic local op had applied the change. For an add there cannot have
+  // been one -- the grid cannot insert a picture whose id the server assigns on
+  // commit. A paste, or a drop outside the grid, goes through the sidebar
+  // importer, which reports no per-file results because the grid is supposed to
+  // refresh off this very broadcast. Suppressing it left a pasted picture
+  // invisible until the view was switched away and back.
+  it("own-origin import echo is applied, not suppressed", () => {
     const res = h.sync.handleMessage({
       type: "picture_imported",
       source: "ui",
       origin_client_id: MY_ID,
       picture_ids: [60],
     });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("own-origin-added");
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([60]);
+  });
+
+  it("still suppresses a genuine own-origin echo of an optimistic update", () => {
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [61],
+      change_kind: "updated",
+      fields: ["tags"],
+    });
     expect(res.action).toBe("suppressed");
-    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
   });
 
   it("does not refresh the sidebar for a view-irrelevant external update", () => {

@@ -2732,10 +2732,18 @@ function handleImportFinished(payload) {
   emit("import-finished", payload);
 }
 
-function startLocalImport(files, projectId = null) {
+function startLocalImport(files, projectId = null, target = null) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return;
-  const options = projectId != null ? { projectId } : {};
+  // `target` carries the set/character the caller was looking at. Only the
+  // keys `startImport` actually reads are forwarded -- it takes `setId` and
+  // `characterId` and ignores anything else, which is how the grid's
+  // `selectedCharacterId` used to go nowhere.
+  const options = {
+    ...(projectId != null ? { projectId } : {}),
+    ...(target?.setId != null ? { setId: target.setId } : {}),
+    ...(target?.characterId != null ? { characterId: target.characterId } : {}),
+  };
   imageImporterRef.value?.startImport(list, options);
 }
 

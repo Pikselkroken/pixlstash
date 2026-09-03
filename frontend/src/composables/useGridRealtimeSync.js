@@ -402,6 +402,27 @@ export function useGridRealtimeSync(deps) {
   // or that was never ghosted, because the undo came from the toolbar, the
   // lightbox or Ctrl+Z long after the fact - is fetched and re-inserted at its
   // sorted position. One path, both cases, no refetch flash for the live one.
+  /**
+   * Put newly-imported pictures into the grid, for own-origin and foreign-ui
+   * alike. Shared because an own-origin `added` is NOT a true echo: see
+   * `handleOwnOrigin`.
+   */
+  function applyAdded(originLabel, pictureIds) {
+    if (deferWhileOverlayOpen()) {
+      return {
+        action: TARGETED,
+        reason: `${originLabel}-added-overlay-deferred`,
+      };
+    }
+    if (grid.isImagesLoading?.()) {
+      // Streaming fetch owns allGridImages; defer to the pill.
+      enqueueAddPill(pictureIds);
+      return { action: PILL, reason: `${originLabel}-added-during-load` };
+    }
+    enqueueAdded(pictureIds);
+    return { action: TARGETED, reason: `${originLabel}-added` };
+  }
+
   function applyRestored(originLabel, pictureIds) {
     if (!pictureIds.length) {
       // "Restore everything" broadcasts no ids (see the restore endpoint), so
@@ -453,6 +474,18 @@ export function useGridRealtimeSync(deps) {
       for (const id of pictureIds) reconcileServerSortField(id, fields);
       return { action: TARGETED, reason: "own-origin-server-sort-reconcile" };
     }
+    // The second own-origin echo that must NOT be suppressed, and for the same
+    // reason as `restored` above: suppression assumes an optimistic local op
+    // already applied the change, and for an add there cannot have been one.
+    // The grid cannot insert a picture whose id the *server* assigns on commit.
+    // A paste, or a drop outside the grid, goes through the sidebar importer,
+    // which deliberately reports no per-file results because "the grid
+    // refreshes off the WS broadcast" (ImageImporter.vue). Suppressing that
+    // broadcast is exactly what left a pasted picture invisible until the view
+    // was switched away and back.
+    if (changeKind === "added") {
+      return applyAdded("own-origin", pictureIds);
+    }
     return { action: SUPPRESSED, reason: "own-origin-echo" };
   }
 
@@ -476,19 +509,7 @@ export function useGridRealtimeSync(deps) {
       return reloadOrDefer("foreign-ui-untargetable-empty-ids");
     }
     if (changeKind === "added") {
-      if (deferWhileOverlayOpen()) {
-        return {
-          action: TARGETED,
-          reason: "foreign-ui-added-overlay-deferred",
-        };
-      }
-      if (grid.isImagesLoading?.()) {
-        // Streaming fetch owns allGridImages; defer to the pill.
-        enqueueAddPill(pictureIds);
-        return { action: PILL, reason: "foreign-ui-added-during-load" };
-      }
-      enqueueAdded(pictureIds);
-      return { action: TARGETED, reason: "foreign-ui-added" };
+      return applyAdded("foreign-ui", pictureIds);
     }
     // updated
     if (!pictureChangeAffectsView(fields)) {

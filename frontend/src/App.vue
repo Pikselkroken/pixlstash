@@ -15,6 +15,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import { isReadOnly, sessionContext } from "./utils/apiClient";
 import { getInstallId } from "./api/telemetry";
+import { defaultInstallType } from "./utils/telemetryPayload";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
@@ -153,7 +154,11 @@ const telemetryConsentVisible = computed(
 );
 const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
-const installType = ref("pip");
+// Seeded from the marker the server substituted into the document, not from
+// "pip" -- see `defaultInstallType` for why the value held here before
+// `/version` answers is the one that actually gets reported. The fetch below
+// still refreshes it for everything else that reads this ref.
+const installType = ref(defaultInstallType());
 const appVersion = ref("");
 const dockerVariant = ref("gpu");
 const loading = ref(null);

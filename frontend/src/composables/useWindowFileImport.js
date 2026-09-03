@@ -11,6 +11,8 @@ import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
+import { resolveImportTarget } from "../utils/importTarget.js";
 
 /**
  * One notice key per DROP, never one for the verb.
@@ -42,6 +44,7 @@ let modelDropSeq = 0;
 export function useWindowFileImport({ sidebarRef }) {
   const reviewSessionsStore = useReviewSessionsStore();
   const noticeStore = useNoticeStore();
+  const selectionStore = useSelectionStore();
 
   function isInsideImageGrid(event) {
     const target = event?.target;
@@ -266,7 +269,13 @@ export function useWindowFileImport({ sidebarRef }) {
     if (!mediaFiles.length) return;
     event.preventDefault();
     const projectId = sidebarRef.value?.currentProjectId ?? null;
-    sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
+    // File it where you are looking. Unlike a drop, a paste has no target
+    // element to read context from, so it takes it from the selection.
+    sidebarRef.value?.startLocalImport?.(
+      mediaFiles,
+      projectId,
+      resolveImportTarget(selectionStore),
+    );
   }
 
   onMounted(() => {
