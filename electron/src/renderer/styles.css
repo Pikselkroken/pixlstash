@@ -832,7 +832,6 @@ input[type="text"]:focus-visible,
 
 .card {
   --hue: var(--tertiary);
-  --art-fill: #232a2e;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -853,7 +852,6 @@ input[type="text"]:focus-visible,
 
 .card--new {
   --hue: var(--secondary);
-  --art-fill: #2c2429;
 }
 
 .card:hover {
@@ -878,6 +876,10 @@ input[type="text"]:focus-visible,
   width: 152px;
   height: 106px;
   display: block;
+}
+
+.card-art .folder {
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.4));
 }
 
 .card-title {
