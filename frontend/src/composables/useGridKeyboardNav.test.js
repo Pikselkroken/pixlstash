@@ -71,7 +71,7 @@ function makeNav({
   };
 
   // The composable takes the column count from the grid store; size level 6
-  // ("huge") is the 3-column step these navigation cases are written against.
+  // ("huge") is the 4-column step these navigation cases are written against.
   useGridStore().sizeLevel = 6;
   // It also reads the text query from the search STORE now (App.vue slim-down,
   // #661), not from a prop, so the helper's `searchQuery` has to be seeded
@@ -229,7 +229,7 @@ describe("useGridKeyboardNav - justified vertical navigation", () => {
       justified: null, // square
     });
     handleKeyDown(keyEvent({ key: "ArrowDown" }));
-    expect(deps.cursorIdx.value).toBe(4); // 1 + columns(3)
+    expect(deps.cursorIdx.value).toBe(5); // 1 + columns(4)
     handleKeyDown(keyEvent({ key: "ArrowUp" }));
     expect(deps.cursorIdx.value).toBe(1);
   });

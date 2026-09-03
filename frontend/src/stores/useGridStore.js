@@ -12,11 +12,12 @@ export const useGridStore = defineStore("grid", () => {
   // single control that drives BOTH layouts: the square grid derives its
   // column count from it (see `columns` below) and the justified layout derives
   // its target row height from it. Persisted server-side as
-  // `thumbnail_size_level`. Read-only starts one notch denser (~5 columns).
+  // `thumbnail_size_level`. Read-only starts one notch denser (~7 columns,
+  // i.e. "large" on the current ladder in thumbnailSizes.js).
   const sizeLevel = ref(
-    isReadOnly.value ? nearestSizeLevelForColumns(5) : DEFAULT_THUMBNAIL_SIZE_LEVEL,
+    isReadOnly.value ? nearestSizeLevelForColumns(7) : DEFAULT_THUMBNAIL_SIZE_LEVEL,
   );
-  const thumbnailSize = ref(256);
+  const thumbnailSize = ref(192);
   // 'square' (uniform grid) or 'justified' (Google-Photos row layout). A
   // display preference persisted like `columns`; the justified path is driven
   // by useJustifiedLayout + useVirtualScroll and consumed by ImageGrid's

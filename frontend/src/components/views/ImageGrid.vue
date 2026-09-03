@@ -1428,8 +1428,9 @@ const props = defineProps({
 // ============================================================
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 // Per-column thumbnail width is now driven by `1fr` tracks that fill the grid;
-// the 384px upper bound is enforced via the column-count clamp in App.vue
-// (updateMaxColumns), so no fixed max is applied to the track itself here.
+// the 288px upper bound (useViewportLayout.js MAX_THUMBNAIL_SIZE) is enforced
+// via the column-count clamp (updateMaxColumns), so no fixed max is applied to
+// the track itself here.
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 
 const normalizedSelectedSetIds = computed(() => {

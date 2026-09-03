@@ -8,9 +8,10 @@ import {
 import { rowHeightForSizeLevel } from "../utils/thumbnailSizes";
 import { useGridStore } from "../stores/useGridStore";
 
-// Constants shared with ImageGrid.vue
-const MIN_THUMBNAIL_SIZE = 128;
-const MAX_THUMBNAIL_SIZE = 384;
+// Constants shared with ImageGrid.vue. Cut 25% alongside the ladder in
+// thumbnailSizes.js (owner call, 2026-09-03).
+const MIN_THUMBNAIL_SIZE = 96;
+const MAX_THUMBNAIL_SIZE = 288;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 const VIEW_WINDOW = 100;
 
