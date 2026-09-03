@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // The e2e backend (frontend/e2e/serve_e2e_backend.py) serves both the built
@@ -56,5 +57,9 @@ export default defineConfig({
     reuseExistingServer: false,
     stdout: 'pipe',
     stderr: 'pipe',
+    // Import pixlstash from THIS checkout. A shared venv with an editable
+    // install elsewhere otherwise wins (its finder resolves what cwd cannot),
+    // and the run silently serves another worktree's dist.
+    env: { PYTHONPATH: resolve(process.cwd(), '..') },
   },
 })

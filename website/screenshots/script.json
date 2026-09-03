@@ -201,6 +201,22 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotAddLibrary.jpg",
+    "label": "The Add a library dialog with a folder picked, PixlStash reporting what that folder is and what adding it would mean",
+    "alt": "The Add a library dialog with a folder picked, PixlStash reporting what that folder is and what adding it would mean",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotAiToolkitImport.jpg",
+    "label": "The PixlStash Training runs view with three discovered ai-toolkit runs selected for import",
+    "alt": "The PixlStash Training runs view with three discovered ai-toolkit runs selected for import",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotApp.jpg",
     "label": "PixlStash 1.6: the desktop app showing the library grid in a native window",
     "alt": "PixlStash 1.6: the desktop app showing the library grid in a native window",
@@ -256,6 +272,30 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotCli.jpg",
+    "label": "pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes",
+    "alt": "pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotCliLibraries.jpg",
+    "label": "pixlstash-cli libraries --help listing list, create, attach, detach, relocate, backup, restore, prepare-legacy-identity and rename",
+    "alt": "pixlstash-cli libraries --help listing list, create, attach, detach, relocate, backup, restore, prepare-legacy-identity and rename",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotCliPlugins.jpg",
+    "label": "pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences",
+    "alt": "pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "features.html",
     "asset": "ScreenshotComfyUi.jpg",
     "label": "ComfyUI Integration",
@@ -269,6 +309,14 @@
     "label": "Context menus",
     "alt": "Context menu in the PixlStash image grid",
     "caption": "Right-click anywhere in the grid or sidebar to rate, tag, assign, move, share, or delete without leaving your current view.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotDeleteLora.jpg",
+    "label": "The PixlStash model shelf's right-click menu with Move to Trash highlighted and a tooltip explaining Shift deletes permanently",
+    "alt": "The PixlStash model shelf's right-click menu with Move to Trash highlighted and a tooltip explaining Shift deletes permanently",
+    "caption": null,
     "kind": "image"
   },
   {
@@ -293,6 +341,22 @@
     "label": "Duplicate review",
     "alt": "PixlStash Duplicates view with likely copies grouped for review",
     "caption": "Compare likely copies, choose a cover, stack the group, keep it separate, and undo the decision when it was not right.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotEmptyLibrary.jpg",
+    "label": "The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI",
+    "alt": "The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotExportFolder.jpg",
+    "label": "The export panel offering Export to Folder alongside the zip download",
+    "alt": "The export panel offering Export to Folder alongside the zip download",
+    "caption": null,
     "kind": "image"
   },
   {
@@ -384,6 +448,22 @@
     "kind": "image"
   },
   {
+    "page": "features.html",
+    "asset": "ScreenshotLibraries.jpg",
+    "label": "Libraries",
+    "alt": "PixlStash Settings with two registered picture libraries and the active one marked",
+    "caption": "Switch between registered libraries from Settings. Each one keeps its own pictures, tags, scores and snapshots.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotLibrariesManage.jpg",
+    "label": "Settings with several libraries listed and one row's menu open, offering switch, rename and stop using",
+    "alt": "Settings with several libraries listed and one row's menu open, offering switch, rename and stop using",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "api.html",
     "asset": "ScreenshotLmStudio.jpg",
     "label": "LM-Studio configured to talk to a PixlStash server",
@@ -409,10 +489,34 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotMapPreview.jpg",
+    "label": "The review screen listing the projects, sets and people the folders will become, above a summary of what pressing the button does",
+    "alt": "The review screen listing the projects, sets and people the folders will become, above a summary of what pressing the button does",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
+    "asset": "ScreenshotMapTree.jpg",
+    "label": "PixlStash reading a folder of pictures, with each folder level labelled as a project, a person or a set",
+    "alt": "PixlStash reading a folder of pictures, with each folder level labelled as a project, a person or a set",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotMixedStacks.jpg",
     "label": "PixlStash Mixed stacks view showing stacks flagged for review",
     "alt": "PixlStash Mixed stacks view showing stacks flagged for review",
     "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotModelShelf.jpg",
+    "label": "Model shelf",
+    "alt": "The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns",
+    "caption": "See the checkpoints and LoRAs in the folders you register, grouped by kind, base model, folder or feature.",
     "kind": "image"
   },
   {
@@ -440,6 +544,14 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotPermissionRepair.jpg",
+    "label": "The PixlStash start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it",
+    "alt": "The PixlStash start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "api.html",
     "asset": "ScreenshotPhotographySaver.jpg",
     "label": "ComfyUI-PixlStash PhotographySaver node: saves outputs to a vault with metadata",
@@ -449,7 +561,7 @@
   },
   {
     "page": "features.html",
-    "asset": "ScreenshotPictureStatistics.png",
+    "asset": "ScreenshotPictureStatistics.jpg",
     "label": "Statistics sidebar",
     "alt": "Picture statistics sidebar in PixlStash",
     "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
@@ -617,7 +729,7 @@
   },
   {
     "page": "features.html",
-    "asset": "ScreenshotTagStatistics.png",
+    "asset": "ScreenshotTagStatistics.jpg",
     "label": "Statistics sidebar",
     "alt": "Tag distribution and statistics sidebar in PixlStash",
     "caption": "Get a rapid overview of your picture sets, tag distribution, tag prediction confidence, and picture statistics at a glance.",
