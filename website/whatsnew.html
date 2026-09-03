@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.10</title>
+    <title>What's New in PixlStash 1.11</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.10: several picture libraries in one installation, a model shelf for your checkpoints and LoRAs, ai-toolkit training run import, a pixlstash-cli command line for backups and plugins, and a start-up check on folder permissions."
+      content="What's new in PixlStash 1.11: add a library from Settings, import a folder of pictures where it sits with projects, people and sets read from the folder names, a folder layout for new pictures, export to a folder, and a faster first index."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -634,47 +634,46 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.11 ─────────────────────────────────────────── -->
+      <!-- PixlStash 1.11 -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
             <span class="release-kicker">PixlStash 1.11</span>
             <h1>Point it at the folders you already have</h1>
             <p>
-              PixlStash 1.11 adds a library from Settings instead of a terminal,
-              and <strong>the folder you point it at answers for itself</strong>.
-              A library you already made is attached as it is. A folder of
-              pictures is read where it sits: PixlStash works out what its levels
-              mean, you correct it, and your projects, people and sets come out
-              of the folder names you chose years ago. Nothing is moved, renamed
-              or copied.
+              PixlStash 1.11 is about getting started with the pictures you
+              already have, organised the way they already are.
+              <strong>Point it at a folder and it reads it where it sits.</strong>
+              Your projects, people and sets are created from the folder names
+              you already use, and nothing is moved, renamed or copied. Adding a
+              library now happens in Settings instead of the terminal.
             </p>
             <ul class="release-bullets">
               <li>
-                <code>+ Add a library…</code> takes one folder and works out what
-                it is — a library you already made, a folder of pictures, or an
-                empty folder to start in
+                <code>+ Add a library...</code> takes one folder and works out
+                whether it is a library you made earlier, a folder of pictures,
+                or an empty folder to start a new library in
               </li>
               <li>
-                A folder of pictures is read before anything is written:
-                PixlStash proposes what each level means and you correct it,
-                level by level or row by row
+                A folder of pictures is read before anything is written.
+                PixlStash proposes what each folder level means and you correct
+                it, level by level or row by row
               </li>
               <li>
-                Every row's ⋯ menu opens, renames or stops using that library.
-                Stopping using one removes no file
+                Every library row has a menu to open, rename or stop using it.
+                Stopping using a library deletes no files
               </li>
               <li>
-                A library can be given a folder layout, and PixlStash writes new
-                pictures where that layout says
+                A library can be given a folder layout, and new pictures are
+                written where the layout says
               </li>
               <li>
-                A picture only moves when its folder stops being true, and
-                <strong>Move to match</strong> is offered rather than taken
+                A picture is only moved when its folder no longer describes it,
+                and <strong>Move to match</strong> is offered, not done for you
               </li>
               <li>
                 Export straight into a folder on the machine running PixlStash,
-                with no zip in the middle
+                with no zip in between
               </li>
             </ul>
           </div>
@@ -697,17 +696,14 @@
             loading="lazy"
           />
           <div class="update-card-body">
-            <h2>One dialog, and the folder answers</h2>
+            <h2>One dialog for every case</h2>
             <p>
-              There is no mode to pick first, because "attach the library I
-              already made" and "start a new one here" are the same gesture with
-              a different consequence, and only the folder knows which. Point at
-              one and PixlStash says what it is: a library it recognises is added
-              with its tags, scores and people intact; a folder of pictures is
-              counted and offered; an empty folder starts a fresh library. A
-              folder already covered by another library is refused, and the
-              refusal names the library covering it rather than leaving you to
-              guess.
+              There is no mode to choose. You pick a folder and PixlStash tells
+              you what it found. A library it recognises is added with its tags,
+              scores and people intact. A folder of pictures is counted and
+              offered for import. An empty folder starts a new library. A folder
+              already covered by another library is refused, and the message
+              names which library covers it.
             </p>
           </div>
         </article>
@@ -722,15 +718,15 @@
           <div class="update-card-body">
             <h2>Your folders already say what they are</h2>
             <p>
-              PixlStash reads the folder tree and proposes what each level means
-              — <strong>Project</strong>, <strong>Set</strong>,
-              <strong>Person</strong>, <strong>Tag</strong>, or
-              <strong>Just a folder</strong> — from where the pictures sit, how
-              the names are shaped, when they were taken, and whose faces are in
-              them. Take a whole level from its band, or override one row where
-              two folders at the same depth mean two different things. A dated
-              folder is not read as a person, and a level it could not place says
-              so instead of guessing.
+              PixlStash reads the folder tree and proposes what each level means:
+              <strong>Project</strong>, <strong>Set</strong>,
+              <strong>Person</strong>, <strong>Tag</strong> or
+              <strong>Just a folder</strong>. It uses where the pictures sit, how
+              the names look, when the pictures were taken and whose faces are
+              in them. You can accept a whole level or override single rows where
+              two folders at the same depth mean different things. A dated
+              folder is not read as a person, and a level PixlStash cannot place
+              is left for you to decide rather than guessed.
             </p>
           </div>
         </article>
@@ -747,15 +743,15 @@
           <div class="update-card-body">
             <h2>Nothing is written until you say so</h2>
             <p>
-              The last screen names every project, set and person your folders
-              are about to become, and spells out what the button does: the
-              pictures are indexed where they already are, the projects, sets and
-              people are created or matched to ones you have, and
-              <em>no file is copied, moved or renamed</em>. Cancel at any point
-              before it and nothing exists. <strong>Organise later</strong>
-              brings the pictures in now and leaves naming the folders for
-              another day — and if the import is interrupted, PixlStash picks it
-              up where it stopped rather than starting again.
+              The last screen lists every project, set and person your folders
+              will become and states what the button does: the pictures are
+              indexed where they are, the projects, sets and people are created
+              or matched to ones you already have, and
+              <em>no file is copied, moved or renamed</em>. Cancel before that
+              and nothing has changed. <strong>Organise later</strong> imports
+              the pictures now and leaves the folder mapping for another day. If
+              an import is interrupted, it continues where it stopped instead of
+              starting over.
             </p>
           </div>
         </article>
@@ -770,15 +766,15 @@
           <div class="update-card-body">
             <h2>Rename it, switch to it, or stop using it</h2>
             <p>
-              Managing libraries used to be a lesson in the command line. The
-              terminal still works — it is what a cron job wants — but every verb
-              is now on the row's ⋯ menu. <strong>Stop using this</strong>
-              removes no file: PixlStash forgets the library, everything inside
-              the folder stays where it is, and adding the folder again brings
-              back its tags and its share links. The library you have open has no
-              Stop using this; switch away first. Two libraries can no longer be
-              given the same name, which used to break every command-line verb
-              that takes one.
+              Managing libraries used to need the command line. The terminal
+              still works and is still the right tool for a cron job, but every
+              action is now in the row's menu in Settings.
+              <strong>Stop using this</strong> deletes no files: PixlStash
+              forgets the library, the folder stays as it is, and adding it again
+              brings back its tags and share links. The library you have open
+              cannot be stopped; switch to another one first. Two libraries can
+              no longer have the same name, which used to break the command-line
+              tools that look a library up by name.
             </p>
           </div>
         </article>
@@ -795,12 +791,11 @@
           <div class="update-card-body">
             <h2>Three ways to fill a new library</h2>
             <p>
-              The first screen of a new library used to offer one route in. It
-              now offers three, and leads with the one that moves nothing: point
-              PixlStash at a folder you already have and it reads it where it
-              sits. Dropping pictures in and connecting ComfyUI are the other
-              two, and none of them is more official than the others. It no
-              longer talks about a "database".
+              The first screen of a new library used to offer one way in. It now
+              offers three: point PixlStash at a folder you already have, drop
+              pictures in, or connect ComfyUI. The folder option comes first
+              because it moves nothing. The screen also no longer talks about a
+              "database".
             </p>
           </div>
         </article>
@@ -812,14 +807,13 @@
           <div class="update-card-body">
             <h2>Your folders, laid out</h2>
             <p>
-              A library can be given a folder layout —
-              <code>Project / Person or Set</code> to begin with — and PixlStash
-              writes new pictures where that says. Choosing a layout moves
+              A library can be given a folder layout,
+              <code>Project / Person or Set</code> to begin with, and PixlStash
+              writes new pictures where the layout says. Choosing a layout moves
               nothing that is already there: the folders you have are where your
-              projects and people came from in the first place, so they are
-              already right. Renaming a project, a person or a set renames their
-              folder and moves no files at all. A library with no layout chosen
-              behaves exactly as it always has.
+              projects and people came from, so they already fit. Renaming a
+              project, person or set renames its folder without moving any
+              files. A library with no layout behaves exactly as before.
             </p>
           </div>
         </article>
@@ -830,27 +824,27 @@
           <div class="update-card-body">
             <h2>A picture only moves when its folder stops being true</h2>
             <p>
-              <code>Mira/</code> means "this is a Mira picture", and it stays
-              true while Mira is one of the people in it. So adding a second
-              project, or a second person, moves nothing. Removing the project a
-              picture's folder is named after is what moves it, and swapping one
-              project for another — and two changes in a row are one move rather
-              than a trip through an inbox folder and back. A move keeps the
-              folders you made underneath: a picture in
+              A folder called <code>Mira/</code> means the picture is of Mira,
+              and that stays true as long as Mira is one of the people in it.
+              Adding a second project or a second person moves nothing. Removing
+              the project a folder is named after, or swapping it for another,
+              is what moves the picture. Two changes in a row are one move rather
+              than a detour through an inbox folder. A move keeps the folders
+              underneath: a picture in
               <code>2024 Shoots / Mira / 2026-08</code> that changes project ends
-              up in <code>Client · Nordvik / Mira / 2026-08</code>, not flattened
-              into one folder.
+              up in <code>Nordvik / Mira / 2026-08</code>, not flattened into one
+              folder.
             </p>
             <p>
-              A folder that does not match the layout is never wrong. Drop
-              something into a folder of your own and PixlStash has nothing to
-              contradict, so it stays there — permanently, with no setting to
-              remember. Where a picture is filed truthfully but not where the
-              layout would put it today, <strong>Move to match</strong> is
-              available for it. It is offered, never automatic; every move is
-              counted before it happens, and the whole batch is one undo.
-              PixlStash records the moves it makes itself, so a folder you
-              reorganise by hand is read as your decision and not as drift.
+              A folder that does not match the layout is not treated as wrong.
+              Drop something into a folder of your own and it stays there, with
+              no setting to remember. When a picture is filed correctly but not
+              where the layout would put it today,
+              <strong>Move to match</strong> is available for it. It never runs
+              on its own, every move is counted before it happens, and the whole
+              batch is one undo. PixlStash records the moves it makes itself, so
+              a folder you reorganise by hand is read as your decision and not as
+              drift.
             </p>
           </div>
         </article>
@@ -865,13 +859,12 @@
           <div class="update-card-body">
             <h2>Export straight into a folder</h2>
             <p>
-              <strong>Export to Folder…</strong> writes the pictures you selected
-              into a folder on the machine running PixlStash and then opens that
-              folder in your file manager, instead of packaging a zip for you to
+              <strong>Export to Folder...</strong> writes the selected pictures
+              into a folder on the machine running PixlStash and opens that
+              folder in your file manager, instead of building a zip for you to
               download and unpack. Captions, resolution, bounding-box sidecars
-              and face crops come out exactly as the zip export produces them —
-              it is the same export, without the round trip through your
-              downloads folder.
+              and face crops come out exactly as in the zip export. It is the
+              same export without the trip through your downloads folder.
             </p>
           </div>
         </article>
@@ -882,22 +875,22 @@
           <div class="update-card-body">
             <h2>A faster first pass over a big folder</h2>
             <p>
-              Indexing a folder is several models in a row, and 1.11 stops them
-              queueing behind each other. Each picture now moves to the next
-              stage as soon as <em>its own</em> rows land rather than waiting for
-              the whole batch, CLIP embeddings no longer wait on faces and tags,
-              video frames are decoded and images resized off the GPU worker
-              instead of on it, and the models stay resident for a whole pass
-              rather than being loaded and dropped per batch. The VRAM budget now
-              defaults to your card rather than a fixed number.
+              Indexing a folder runs several models in a row, and 1.11 stops
+              them queueing behind each other. Each picture moves to the next
+              stage as soon as its own rows land instead of waiting for the
+              whole batch. CLIP embeddings no longer wait on faces and tags.
+              Video frames are decoded and images resized off the GPU worker.
+              The models stay loaded for a whole pass instead of being loaded
+              and dropped per batch. The VRAM budget defaults to what your card
+              has rather than a fixed number.
             </p>
             <p>
-              The task manager is more honest about it too: a worker row survives
-              the gap between its batches instead of blinking out, a slow face
-              batch says why it was slow, an out-of-memory notice names the
-              process holding the card, and things that were never problems — a
-              picture with no faces in it, a video with no readable last frame —
-              have stopped being reported as warnings.
+              The task manager reports this better too. A worker row stays
+              visible between batches instead of blinking out, a slow face batch
+              says why it was slow, and an out-of-memory notice names the
+              process holding the card. Things that were never problems, such as
+              a picture with no faces or a video with no readable last frame,
+              are no longer reported as warnings.
             </p>
           </div>
         </article>
@@ -907,12 +900,12 @@
             <h2>Managing libraries is a local job</h2>
             <p>
               Adding, renaming and removing libraries points the server at
-              folders on the machine it is running on, so those controls are
-              available from that machine, or across your own network or
-              Tailscale. A session from further away is told so, rather than
-              shown controls that would fail. PixlStash also no longer indexes
-              its own thumbnails and caches as if they were your pictures, and a
-              library's own snapshots folder is kept out of the folder read.
+              folders on the machine it runs on, so those controls are available
+              from that machine or from your own network or Tailscale. A session
+              from further away is told this rather than shown controls that
+              would fail. PixlStash also no longer indexes its own thumbnails and
+              caches as if they were your pictures, and a library's snapshots
+              folder is left out of the folder read.
             </p>
           </div>
         </article>
@@ -922,10 +915,10 @@
         <div class="update-card-body">
           <h2>Upgrading to 1.11</h2>
           <p>
-            Opening a library with 1.11 adds columns to its database, so back the
-            library folder up first by copying it somewhere safe while PixlStash
-            is stopped — the same precaution every upgrade deserves. Your API
-            tokens and share links are left alone. See the
+            Opening a library with 1.11 adds columns to its database. Back up
+            the library folder first by copying it somewhere safe while
+            PixlStash is stopped, as with every upgrade. API tokens and share
+            links are left alone. See the
             <a href="upgrade.html">upgrade guide</a> for the steps for your
             install type.
           </p>
