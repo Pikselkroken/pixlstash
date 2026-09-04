@@ -21,6 +21,7 @@ The file also holds the password hash and every token hash, so it is created
 from __future__ import annotations
 
 import os
+import shlex
 import sqlite3
 import stat
 import threading
@@ -224,12 +225,12 @@ def check_file_mode(path: str, *, repair: bool) -> None:
 
     logger.warning(
         "Hub file %s has mode %o; it holds the password hash and every token "
-        "hash and should be %o. Fix it with `chmod %o %s`.",
+        "hash and should be %o. Fix it with chmod %o %s",
         path,
         mode,
         HUB_FILE_MODE,
         HUB_FILE_MODE,
-        path,
+        shlex.quote(path),
     )
 
 
