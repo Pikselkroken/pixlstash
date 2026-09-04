@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
-import { mkdir, rm, readFile, writeFile, access } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readdir, rm, rmdir, readFile, writeFile, access } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 import {
   Accel,
   ACCEL_LABELS,
@@ -66,6 +66,23 @@ export interface OverlayMeta {
   accel: Accel;
   torch: string;
   installedAt: string;
+  /**
+   * The app version whose bundled env this overlay was pruned against. The
+   * bundled site-packages only ever changes with an app update, so a mismatch
+   * means the prune below has not been re-run against the current bundle - see
+   * {@link BackendManager.repairIfStale}. Absent on overlays written before
+   * pruning existed, which is exactly the state that needs repairing.
+   */
+  appVersion?: string;
+}
+
+/** One distribution found in an overlay, read from its `<name>-<version>.dist-info`. */
+export interface DistInfo {
+  /** Distribution name as the directory spells it, e.g. "typing_extensions". */
+  name: string;
+  version: string;
+  /** The `.dist-info` directory name, relative to the overlay root. */
+  dirName: string;
 }
 
 /** GPU accelerators that can be layered on top of the bundled CPU/Metal env. */
@@ -164,6 +181,121 @@ export function filterConstraintsFreeze(frozen: string): string {
         l && !l.startsWith('-') && !l.startsWith('#') && !l.includes(' @ ') && !drop.test(l),
     );
   return kept.join('\n') + '\n';
+}
+
+/**
+ * The bundled env's installed versions, keyed by normalized distribution name,
+ * read from the same `pip freeze` that produces the install constraints. Used to
+ * decide which of the overlay's packages are duplicates of the bundle's - see
+ * {@link planOverlayPrune}. Direct references (`pkg @ url`) carry no comparable
+ * version and are skipped.
+ */
+export function parseFreezeVersions(frozen: string): Map<string, string> {
+  const versions = new Map<string, string>();
+  for (const raw of frozen.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('-') || line.startsWith('#')) continue;
+    const match = line.match(/^([A-Za-z0-9._-]+)==(.+)$/);
+    if (match) versions.set(normalizeDistName(match[1]), match[2].trim());
+  }
+  return versions;
+}
+
+/** PEP 503 name normalization: case-folded, runs of -_. collapsed to "-". */
+export function normalizeDistName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/g, '-');
+}
+
+/**
+ * The distributions an overlay exists to provide. Everything else pip puts in
+ * there is a dependency the bundled env already ships, and is deleted - see
+ * {@link planOverlayPrune} for why that matters.
+ *
+ * Prefix-matched rather than exact, because the CUDA stack is one wheel per
+ * library (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, ...) and its membership
+ * changes with every torch release.
+ */
+export const OVERLAY_OWNED_PREFIXES = [
+  'torch',
+  'torchvision',
+  'onnxruntime-gpu',
+  'nvidia-',
+  'triton',
+  'pytorch-triton',
+];
+
+/** True when `name` is a distribution the overlay is *for*, not a duplicate. */
+export function overlayOwns(name: string): boolean {
+  const key = normalizeDistName(name);
+  return OVERLAY_OWNED_PREFIXES.some((p) => key === p || key.startsWith(p));
+}
+
+/**
+ * Decide which of an overlay's distributions must be deleted.
+ *
+ * `pip install --target` writes the *whole* dependency closure into the overlay,
+ * not just the GPU wheels: torch alone drags in typing_extensions, numpy, sympy,
+ * networkx, jinja2, filelock, fsspec and more. ServerProcess then prepends the
+ * overlay to PYTHONPATH, so every one of those copies shadows the bundled env's
+ * own - for no benefit, since the constraints file pinned them to the bundle's
+ * versions in the first place.
+ *
+ * The moment the two disagree, the bundle's own code imports the overlay's copy
+ * and dies before the server starts. Seen live on Windows 2026-09-03: an overlay
+ * carrying typing_extensions 4.15 over a bundle holding 4.16 made the bundle's
+ * anyio raise `ImportError: cannot import name 'sentinel'`, killing the backend
+ * in the fastapi import chain. `sentinel` exists only in 4.16+.
+ *
+ * So: keep what the overlay owns (torch and the GPU stack), keep anything the
+ * bundle does not have at all, delete the rest. That is the state the overlay
+ * would have if pip could install *only* the wheels we asked it for.
+ *
+ * Pure (no I/O) so the rule is unit-testable without a filesystem.
+ */
+export function planOverlayPrune(
+  overlayDists: readonly DistInfo[],
+  bundled: ReadonlyMap<string, string>,
+): { remove: DistInfo[]; keep: DistInfo[] } {
+  const remove: DistInfo[] = [];
+  const keep: DistInfo[] = [];
+  for (const dist of overlayDists) {
+    const key = normalizeDistName(dist.name);
+    if (overlayOwns(key) || !bundled.has(key)) keep.push(dist);
+    else remove.push(dist);
+  }
+  return { remove, keep };
+}
+
+/** Parse a "typing_extensions-4.15.0.dist-info" directory name, or null. */
+export function parseDistInfoDir(dirName: string): DistInfo | null {
+  if (!dirName.endsWith('.dist-info')) return null;
+  const stem = dirName.slice(0, -'.dist-info'.length);
+  const dash = stem.lastIndexOf('-');
+  if (dash < 1) return null;
+  return { name: stem.slice(0, dash), version: stem.slice(dash + 1), dirName };
+}
+
+/**
+ * The files a distribution's RECORD lists, resolved against `dir` and filtered
+ * to those that genuinely live inside it.
+ *
+ * RECORD paths are relative to the install root but may point outside it
+ * (`../../Scripts/foo.exe` for console entry points). An overlay is a plain
+ * `--target` directory with no siblings we own, so anything escaping it is not
+ * ours to delete - and following one would let a crafted RECORD reach the rest
+ * of the install. Pure so that containment is testable directly.
+ */
+export function recordedFilesWithin(dir: string, record: string): string[] {
+  const root = resolve(dir);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  const files: string[] = [];
+  for (const line of record.split(/\r?\n/)) {
+    const rel = line.split(',')[0]?.trim();
+    if (!rel) continue;
+    const full = resolve(dir, rel);
+    if (full.startsWith(prefix)) files.push(full);
+  }
+  return files;
 }
 
 /** The message shown when a broken GPU overlay is bypassed at launch. */
@@ -283,6 +415,7 @@ export class BackendManager {
     accel: Accel,
     info: RuntimeInfo,
     onProgress: (p: InstallProgress) => void,
+    appVersion: string,
   ): Promise<OverlayMeta> {
     if (!OVERLAY_ACCELS.includes(accel)) {
       throw new Error(`${accel} is provided by the bundled runtime, not an overlay`);
@@ -299,7 +432,8 @@ export class BackendManager {
       bytesTotal: 0,
     });
     const constraints = join(dir, 'constraints.txt');
-    await writeFile(constraints, await this.bundledConstraints());
+    const bundled = await this.bundledFreeze();
+    await writeFile(constraints, bundled.constraints);
 
     const index = TORCH_INDEX[accel];
     const available = index ? await this.indexVersions('torch', index) : [];
@@ -323,7 +457,21 @@ export class BackendManager {
 
     await this.runPip(args, onProgress);
 
-    const meta: OverlayMeta = { accel, torch: info.torch, installedAt: new Date().toISOString() };
+    onProgress({
+      phase: 'install',
+      message: 'Removing duplicate packages…',
+      fraction: -1,
+      bytesDone: 0,
+      bytesTotal: 0,
+    });
+    await this.pruneOverlay(dir, bundled.versions);
+
+    const meta: OverlayMeta = {
+      accel,
+      torch: info.torch,
+      installedAt: new Date().toISOString(),
+      appVersion,
+    };
     await writeFile(overlayMarkerPath(accel), JSON.stringify(meta, null, 2));
     await this.setActiveAccel(accel);
     onProgress({
@@ -337,13 +485,130 @@ export class BackendManager {
   }
 
   /**
-   * `pip freeze` of the bundled env, minus the torch/onnx packages (those are
-   * overridden per accelerator). Used as install constraints so overlay deps
-   * resolve to the exact versions already in the bundled env.
+   * Delete every package in the overlay that duplicates one the bundled env
+   * already provides, keeping the GPU wheels the overlay exists for and anything
+   * the bundle lacks. See {@link planOverlayPrune} for why the duplicates are
+   * actively harmful rather than merely wasteful.
+   *
+   * Driven by each distribution's own RECORD, so a package's files go with its
+   * metadata and nothing is left half-deleted. Returns the names removed.
    */
-  private async bundledConstraints(): Promise<string> {
+  async pruneOverlay(dir: string, bundled: ReadonlyMap<string, string>): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch (e) {
+      console.warn(`[overlay] cannot read ${dir} to prune it: ${(e as Error).message}`);
+      return [];
+    }
+    const dists = entries
+      .map(parseDistInfoDir)
+      .filter((d): d is DistInfo => d !== null);
+    const { remove } = planOverlayPrune(dists, bundled);
+
+    const removed: string[] = [];
+    // Directories the deletions may have emptied, deepest first. They cannot be
+    // left behind: an empty directory on sys.path is an implicit namespace
+    // package (PEP 420), so an emptied `numpy/` still shadows the bundle's real
+    // numpy - the very failure this prune exists to remove, in a quieter form.
+    const emptied = new Set<string>();
+    for (const dist of remove) {
+      const distInfo = join(dir, dist.dirName);
+      try {
+        const record = await readFile(join(distInfo, 'RECORD'), 'utf8');
+        for (const file of recordedFilesWithin(dir, record)) {
+          await rm(file, { force: true });
+          for (let d = dirname(file); d.startsWith(dir) && d !== dir; d = dirname(d)) {
+            emptied.add(d);
+          }
+        }
+      } catch (e) {
+        // No RECORD (or an unreadable one) means we cannot know which files are
+        // this distribution's. Leaving the dist-info in place keeps the overlay
+        // describing itself honestly, so a later prune can retry.
+        console.warn(
+          `[overlay] skipping ${dist.name} ${dist.version}: RECORD unreadable (${(e as Error).message})`,
+        );
+        continue;
+      }
+      await rm(distInfo, { recursive: true, force: true });
+      removed.push(`${dist.name} ${dist.version}`);
+    }
+    // Deepest first, so a directory is retried only after its children are gone.
+    // rmdir refuses a non-empty one, which is exactly the wanted behaviour: a
+    // directory still holding a kept package's files must survive.
+    for (const d of [...emptied].sort((a, b) => b.length - a.length)) {
+      try {
+        await rmdir(d);
+      } catch {
+        // Non-empty (or already gone): another distribution still lives here.
+      }
+    }
+    if (removed.length) {
+      console.log(`[overlay] pruned ${removed.length} bundled duplicates: ${removed.join(', ')}`);
+    }
+    return removed;
+  }
+
+  /**
+   * Re-prune an overlay that was built against a different app version.
+   *
+   * The bundled site-packages is replaced wholesale by an app update, so an
+   * overlay's duplicates stop matching what the bundle now holds - which is the
+   * shadowing failure in {@link planOverlayPrune}, arriving without anyone
+   * touching the overlay. Pruning against the *current* bundle repairs it in
+   * place, with no re-download: the duplicates are what break, and the bundle
+   * already has correct copies of every one of them.
+   *
+   * An overlay whose marker predates pruning has no `appVersion` at all, which
+   * reads as stale and gets the same repair - that is how already-installed
+   * overlays are fixed.
+   *
+   * Never throws: a failed repair must not stop the app from launching, since a
+   * broken overlay still falls back to the bundled env.
+   */
+  async repairIfStale(accel: Accel, appVersion: string): Promise<boolean> {
+    let meta: OverlayMeta;
+    try {
+      meta = JSON.parse(await readFile(overlayMarkerPath(accel), 'utf8')) as OverlayMeta;
+    } catch {
+      return false; // not installed
+    }
+    if (meta.appVersion === appVersion) return false;
+    try {
+      const { versions } = await this.bundledFreeze();
+      const removed = await this.pruneOverlay(overlayDir(accel), versions);
+      await writeFile(
+        overlayMarkerPath(accel),
+        JSON.stringify({ ...meta, appVersion }, null, 2),
+      );
+      console.log(
+        `[overlay] ${accel} rebuilt for app ${appVersion} (was ${meta.appVersion ?? 'unpruned'}), ` +
+          `${removed.length} duplicates removed`,
+      );
+      return true;
+    } catch (e) {
+      console.warn(`[overlay] could not re-prune ${accel}: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * `pip freeze` of the bundled env, as both the install constraints (minus the
+   * torch/onnx packages, which are overridden per accelerator) and the version
+   * map the post-install prune compares against. One capture serves both, so the
+   * pins and the prune can never disagree about what the bundle holds.
+   */
+  private async bundledFreeze(): Promise<{ constraints: string; versions: Map<string, string> }> {
     const frozen = await this.capture(bundledInterpreter(), ['-m', 'pip', 'freeze']);
-    return filterConstraintsFreeze(frozen);
+    const versions = parseFreezeVersions(frozen);
+    if (versions.size === 0) {
+      // Every bundled env has dependencies; an empty freeze means we did not read
+      // one. Installing on it would pin nothing and prune nothing, which is the
+      // silent-wrong-versions failure this whole path exists to prevent.
+      throw new Error('Could not read the bundled environment (pip freeze returned nothing)');
+    }
+    return { constraints: filterConstraintsFreeze(frozen), versions };
   }
 
   /** Public (local-tag-stripped) versions of `pkg` on `index`, newest first. */
@@ -370,15 +635,36 @@ export class BackendManager {
     }
   }
 
+  /**
+   * Run `cmd` and return its complete stdout.
+   *
+   * Resolves on 'close', NOT on 'exit'. 'exit' fires when the process ends,
+   * which can precede its stdout pipe being drained - so resolving there can
+   * return a *truncated* capture with no error of any kind. The one caller that
+   * matters is `pip freeze`, whose output feeds the install constraints file,
+   * and whose output is alphabetically sorted: a truncated capture silently
+   * drops the tail of the alphabet, leaving exactly those packages unpinned
+   * while every earlier one looks correctly constrained. 'close' fires only
+   * once all stdio streams are closed, so the capture is whole.
+   */
   private capture(cmd: string, args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
+      let err = '';
+      let exitCode: number | null = null;
       child.stdout.on('data', (d) => (out += d.toString()));
+      child.stderr.on('data', (d) => (err += d.toString()));
       child.on('error', reject);
-      child.on('exit', (code) =>
-        code === 0 ? resolve(out) : reject(new Error(`${cmd} pip freeze exited ${code}`)),
-      );
+      child.on('exit', (code) => (exitCode = code));
+      child.on('close', () => {
+        if (exitCode === 0) {
+          resolve(out);
+          return;
+        }
+        const detail = err.trim() ? `: ${err.trim().slice(-500)}` : '';
+        reject(new Error(`${cmd} ${args.join(' ')} exited ${exitCode}${detail}`));
+      });
     });
   }
 

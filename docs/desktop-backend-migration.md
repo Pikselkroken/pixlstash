@@ -59,6 +59,41 @@ proves fragile for torch/onnxruntime — to be validated during implementation.)
 installer pins to those same versions (just swapping the `+cpu` build for `+cu128`/
 `+rocm`), guaranteeing torch/torchvision ABI compatibility.
 
+**`--target` shadowing did prove fragile — but not for torch.** The fallback
+above anticipated the wrong package. `pip install --target` writes the *whole
+dependency closure* into the overlay, not just the wheels named on the command
+line: torch alone brings `typing_extensions`, `numpy`, `sympy`, `networkx`,
+`jinja2`, `filelock` and `fsspec`. Every one of those then precedes the bundled
+env on `PYTHONPATH` and shadows the bundle's own copy — for no benefit, since the
+constraints file pinned them to the bundle's versions in the first place.
+
+They only have to disagree once. Windows, 2026-09-03: an overlay carrying
+`typing_extensions` 4.15.0 over a bundle holding 4.16.0 made the *bundle's* anyio
+raise `ImportError: cannot import name 'sentinel'` (4.16 added it), killing the
+backend inside the `fastapi` import chain before the server existed. The
+overlay-fallback path caught it and ran on CPU, so the symptom was silent loss of
+GPU acceleration rather than a dead app.
+
+So the install **prunes** (`BackendManager.pruneOverlay`): after pip finishes,
+every distribution the bundled env also provides is deleted from the overlay,
+keeping only what the overlay exists for (`torch`, `torchvision`,
+`onnxruntime-gpu`, `nvidia-*`, `triton`) plus anything the bundle lacks. That is
+the state the overlay would have had if pip could install *only* the wheels we
+asked for. Deletion is driven by each distribution's own `RECORD`, and
+directories the deletions empty are removed too — an empty directory on
+`sys.path` is an implicit namespace package (PEP 420) and shadows just as
+effectively as a populated one.
+
+**Overlays are re-pruned after an app update.** An app update replaces the
+bundled `site-packages` wholesale, so an overlay pruned against the *previous*
+bundle can start shadowing again without anyone touching it. `OVERLAY.json`
+therefore records the `appVersion` it was pruned against, and
+`BackendManager.repairIfStale` re-prunes on a mismatch at launch. This is a
+repair, not a reinstall: the duplicates are exactly what breaks, and the bundle
+already holds a correct copy of every one of them, so nothing is re-downloaded.
+An overlay whose marker predates pruning has no `appVersion` at all, which reads
+as stale and gets the same repair — that is how already-installed overlays heal.
+
 ## Overlay install location (issue #472)
 
 The GPU overlay is a multi-GB download, so *where* it lands matters. Originally it

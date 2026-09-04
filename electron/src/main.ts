@@ -861,7 +861,15 @@ async function startAndLoad(
 /** Which accelerator overlay (if any) should we launch with right now? */
 async function activeOverlayAccel(): Promise<Accel | null> {
   const active = await manager.getActiveAccel();
-  if (active && (await manager.isInstalled(active))) return active;
+  if (active && (await manager.isInstalled(active))) {
+    // An app update replaces the bundled site-packages wholesale, leaving the
+    // overlay's copies of shared dependencies shadowing versions they were never
+    // resolved against - which kills the backend on import, without anyone having
+    // touched the overlay. Re-pruning against the current bundle repairs that in
+    // place; it is a no-op once the marker matches this app version.
+    await manager.repairIfStale(active, app.getVersion());
+    return active;
+  }
   if (active) await manager.setActiveAccel(null); // stale (overlay removed/app moved)
   return null;
 }
@@ -1292,8 +1300,11 @@ function registerIpc(): void {
         activeOverlayAccel,
         startBackend: startFromSetup,
         installOverlay: (accel) =>
-          manager.installOverlay(accel, runtime as RuntimeInfo, (p) =>
-            mainWindow?.webContents.send('install:progress', p),
+          manager.installOverlay(
+            accel,
+            runtime as RuntimeInfo,
+            (p) => mainWindow?.webContents.send('install:progress', p),
+            app.getVersion(),
           ),
         readFolder: async (imageRoot) =>
           runningServer
@@ -1494,8 +1505,18 @@ function registerIpc(): void {
 
   ipcMain.handle('accel:install', async (_e, accel: Accel) => {
     if (!runtime) throw new Error('No bundled runtime available');
-    await manager.installOverlay(accel, runtime, (p) =>
-      mainWindow?.webContents.send('install:progress', p),
+    // installOverlay wipes the target directory first, and a backend running on
+    // this overlay holds its DLLs open - on Windows that wipe fails outright.
+    // Await teardown for the same reason changeBackendsLocation does.
+    if ((await manager.getActiveAccel()) === accel) {
+      await serverProcess?.stop();
+      serverProcess = null;
+    }
+    await manager.installOverlay(
+      accel,
+      runtime,
+      (p) => mainWindow?.webContents.send('install:progress', p),
+      app.getVersion(),
     );
     // If the freshly-installed overlay fails to start, fall back to CPU - the
     // just-downloaded dir is kept (only the active state is cleared), and the
