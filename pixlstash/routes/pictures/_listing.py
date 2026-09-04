@@ -182,6 +182,16 @@ class GridPicture(BaseModel):
         ),
         examples=["locked"],
     )
+    character_likeness: float | None = Field(
+        None,
+        description=(
+            "`sort=CHARACTER_LIKENESS` only. Softmax-weighted cosine similarity "
+            "of the picture's best face to `reference_character_id`'s reference "
+            "faces, 0.0-1.0, the value the rows are ordered by. `null` for "
+            "every other sort."
+        ),
+        examples=[0.83],
+    )
 
 
 class StreamPicturesResponse(BaseModel):
