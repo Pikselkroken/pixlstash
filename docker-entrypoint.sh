@@ -36,7 +36,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
     # os.path.join(config_dir, "images")
     DEFAULT_IMAGE_ROOT="$(dirname "$CONFIG_PATH")/images"
     IMAGE_ROOT="${PIXLSTASH_IMAGE_ROOT:-$DEFAULT_IMAGE_ROOT}"
-    mkdir -p "$IMAGE_ROOT"
+    mkdir -p -m 700 "$IMAGE_ROOT"
     cat > "$CONFIG_PATH" <<EOF
 {
   "host": "$HOST",
