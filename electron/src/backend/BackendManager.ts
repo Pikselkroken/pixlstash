@@ -498,8 +498,15 @@ export class BackendManager {
     try {
       entries = await readdir(dir);
     } catch (e) {
-      console.warn(`[overlay] cannot read ${dir} to prune it: ${(e as Error).message}`);
-      return [];
+      // No overlay directory means there is nothing to prune - that is the
+      // not-installed case repairIfStale asks about, not a failure.
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      // Anything else (unreadable, not a directory, permissions) means we cannot
+      // tell whether duplicates are present. Reporting success here would let
+      // installOverlay mark and activate an unpruned overlay, which is exactly
+      // the shadowing this method exists to prevent - so it fails the install.
+      // repairIfStale catches it separately so a launch is never blocked.
+      throw new Error(`Cannot prune the overlay at ${dir}: ${(e as Error).message}`);
     }
     const dists = entries
       .map(parseDistInfoDir)
@@ -652,18 +659,19 @@ export class BackendManager {
       const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
       let err = '';
-      let exitCode: number | null = null;
       child.stdout.on('data', (d) => (out += d.toString()));
       child.stderr.on('data', (d) => (err += d.toString()));
       child.on('error', reject);
-      child.on('exit', (code) => (exitCode = code));
-      child.on('close', () => {
-        if (exitCode === 0) {
+      child.on('close', (code, signal) => {
+        if (code === 0) {
           resolve(out);
           return;
         }
+        // A signalled child reports code null, so name the signal instead of
+        // rejecting with "exited null".
+        const how = code === null ? `was killed by ${signal}` : `exited ${code}`;
         const detail = err.trim() ? `: ${err.trim().slice(-500)}` : '';
-        reject(new Error(`${cmd} ${args.join(' ')} exited ${exitCode}${detail}`));
+        reject(new Error(`${cmd} ${args.join(' ')} ${how}${detail}`));
       });
     });
   }

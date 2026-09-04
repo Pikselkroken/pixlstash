@@ -284,11 +284,24 @@ describe('BackendManager.pruneOverlay', () => {
   });
 
   it('reports nothing for a directory that does not exist', async () => {
+    // The not-installed case repairIfStale asks about, not a failure.
     const removed = await new BackendManager().pruneOverlay(
       join(tmpdir(), 'pixlstash-overlay-does-not-exist'),
       new Map([['numpy', '2.5.2']]),
     );
     assert.deepEqual(removed, []);
+  });
+
+  it('throws when the overlay cannot be read at all', async () => {
+    // Returning [] here would let installOverlay mark and activate an overlay
+    // that was never pruned - the shadowing this whole path exists to prevent.
+    const notADir = join(await mkdtemp(join(tmpdir(), 'pixlstash-overlay-')), 'file');
+    await writeFile(notADir, 'not a directory\n');
+
+    await assert.rejects(
+      () => new BackendManager().pruneOverlay(notADir, new Map([['numpy', '2.5.2']])),
+      /Cannot prune the overlay/,
+    );
   });
 
   it('ignores non-distribution entries, and leaves no empty package directory', async () => {
