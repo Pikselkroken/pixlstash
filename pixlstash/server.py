@@ -10,7 +10,9 @@ import threading
 import time
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
+from alembic.util.exc import CommandError as AlembicCommandError
 from platformdirs import user_config_dir
+from sqlalchemy.exc import SQLAlchemyError
 
 
 from contextlib import asynccontextmanager
@@ -51,8 +53,11 @@ from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.hub.bootstrap import (
+    VAULT_RECREATE_ENV,
     bootstrap_hub,
     registered_vault_path,
+    set_aside_unusable_vault,
+    unusable_vault_from_open_failure,
 )
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
@@ -573,13 +578,7 @@ class Server(
                 self.hub.path,
             )
 
-        self.vault = self.build_vault(
-            registered_vault_path(
-                self.hub,
-                self._hub_bootstrap.library,
-                self._hub_bootstrap,
-            )
-        )
+        self.vault = self._open_registered_vault()
         self._hub_bootstrap.library = (
             self.library_registry.by_uuid(self._hub_bootstrap.library.uuid)
             or self._hub_bootstrap.library
@@ -907,6 +906,44 @@ class Server(
                 "Could not reconcile the settings fingerprint for library %s",
                 library.name,
             )
+
+    def _open_registered_vault(self) -> Vault:
+        """Open the active library, turning a dead end into an answerable question.
+
+        ``validate_vault_folder`` reads ``sqlite_master`` and nothing else, so a
+        vault can pass registration and still be one no migration path reaches -
+        a schema stamped at a baseline it predates dies here, on a table it
+        never had. Before this, that was a SQLAlchemy traceback on the desktop
+        splash screen with no way forward. Now it is the same offer an
+        unreadable file gets: start over with an empty database, keeping the old
+        one. Environmental failures (locked, full, unreadable) are re-raised
+        untouched - see :func:`unusable_vault_from_open_failure` - and the
+        original exception is logged in full either way.
+        """
+        library = self._hub_bootstrap.library
+        try:
+            return self.build_vault(
+                registered_vault_path(self.hub, library, self._hub_bootstrap)
+            )
+        except (SQLAlchemyError, AlembicCommandError) as exc:
+            unusable = unusable_vault_from_open_failure(library, exc)
+            if unusable is None:
+                raise
+            logger.exception(
+                "Could not open the library database at %s", library.vault_path
+            )
+            if os.environ.get(VAULT_RECREATE_ENV) != "1":
+                raise unusable from exc
+
+        # Authorised by a human on the launch that failed. The half-built vault
+        # above is unreachable and its engine is collected with it; nothing here
+        # can reuse a connection that was mid-migration when it raised.
+        set_aside_unusable_vault(library.vault_path)
+        library = self.library_registry.forget_vault_fingerprint(library)
+        self._hub_bootstrap.library = library
+        return self.build_vault(
+            registered_vault_path(self.hub, library, self._hub_bootstrap)
+        )
 
     def build_vault(self, image_root: str) -> Vault:
         """Construct (but do not start) a Vault over *image_root*.

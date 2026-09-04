@@ -11,10 +11,14 @@ from platformdirs import user_config_dir
 from passlib.hash import bcrypt
 
 
-from pixlstash.pixl_logging import setup_logging, get_logger
+from pixlstash.pixl_logging import setup_logging, get_logger, hold_log_output
 from pixlstash.server import Server
 from pixlstash.startup_checks import StartupCheckError
-from pixlstash.hub.bootstrap import HubBootstrapError
+from pixlstash.hub.bootstrap import (
+    HubBootstrapError,
+    UnusableVaultError,
+    VAULT_RECREATE_ENV,
+)
 from pixlstash.hub.db import HubPermissionError
 from pixlstash.startup_permissions import (
     PERMISSION_REPAIR_ENV,
@@ -152,6 +156,72 @@ def _prepare_startup_permissions(
     return False
 
 
+VAULT_UNUSABLE_PREFIX = "PIXLSTASH_VAULT_UNUSABLE="
+
+
+def _vault_unusable_signal(exc: UnusableVaultError) -> str:
+    """The single-line record the desktop shell parses out of our output."""
+
+    return VAULT_UNUSABLE_PREFIX + json.dumps(
+        {
+            "version": 1,
+            "folder": exc.folder,
+            "vault_path": exc.vault_path,
+            "reason": exc.reason,
+        },
+        separators=(",", ":"),
+    )
+
+
+def _format_unusable_vault(exc: UnusableVaultError) -> str:
+    """Say what is wrong, what the offer is, and what it costs - in that order."""
+
+    return (
+        f"PixlStash could not open the library database in {exc.folder}:\n"
+        f"- {exc.reason}\n\n"
+        "PixlStash can start over with a new, empty library database in that "
+        "folder. The pictures are untouched and are offered for import again, "
+        f"but the tags, scores, characters and history recorded in "
+        f"{os.path.basename(exc.vault_path)} are not carried over.\n"
+        "The old file is renamed, never deleted, so it can still be recovered."
+    )
+
+
+def _offer_vault_recreation(exc: UnusableVaultError) -> bool:
+    """Ask whether the unopenable vault may be set aside, as this launch can ask.
+
+    Returns True only when a human said yes to this process; the desktop shell
+    answers by relaunching with ``PIXLSTASH_RECREATE_VAULT=1`` instead, exactly
+    as it does for a permission repair, because Electron has no usable stdin.
+    """
+
+    with hold_log_output():
+        print(_format_unusable_vault(exc), file=sys.stderr)
+
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").lower() == "electron":
+            # Human text stays in the log; the JSON line is the stable protocol.
+            print(_vault_unusable_signal(exc), file=sys.stderr)
+            return False
+
+        if getattr(sys.stdin, "isatty", lambda: False)():
+            try:
+                answer = input("\nStart over with an empty library database? [y/N] ")
+            except EOFError:
+                answer = "n"
+            if answer.strip().lower() in {"y", "yes"}:
+                return True
+            print("The library database was left alone.", file=sys.stderr)
+            return False
+
+    print(
+        "\nStart PixlStash again with "
+        f"{VAULT_RECREATE_ENV}=1 to accept that, or point image_root at "
+        "another folder.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _prompt_legacy_identity_migration(library) -> bool:
     """Offer, at startup, what `pixlstash-cli libraries prepare-legacy-identity`
     otherwise requires as a separate manual step.
@@ -182,21 +252,23 @@ def _prompt_legacy_identity_migration(library) -> bool:
         )
         return False
 
-    print(
-        f"\n{library.path} still holds an owner account and API tokens from "
-        "before PixlStash introduced its hub. PixlStash can move them into "
-        "the hub now, after which this library will no longer be readable "
-        "as an owner/token store by versions of PixlStash older than the hub.",
-        file=sys.stderr,
-    )
-    try:
-        answer = (
-            input("Migrate this library's identity into the hub now? [y/N] ")
-            .strip()
-            .lower()
+    # Asked from inside `Server.__init__`, between two boot log lines.
+    with hold_log_output():
+        print(
+            f"\n{library.path} still holds an owner account and API tokens from "
+            "before PixlStash introduced its hub. PixlStash can move them into "
+            "the hub now, after which this library will no longer be readable "
+            "as an owner/token store by versions of PixlStash older than the hub.",
+            file=sys.stderr,
         )
-    except EOFError:
-        answer = "n"
+        try:
+            answer = (
+                input("Migrate this library's identity into the hub now? [y/N] ")
+                .strip()
+                .lower()
+            )
+        except EOFError:
+            answer = "n"
     return answer in {"y", "yes"}
 
 
@@ -217,17 +289,20 @@ def _prompt_library_switch(library, reason: str, alternatives: list):
     if is_electron or not getattr(sys.stdin, "isatty", lambda: False)():
         return None
 
-    print(
-        f"\nPixlStash cannot open its library {library.name} ({library.path}):"
-        f"\n  {reason}\n\nThese attached libraries do open:",
-        file=sys.stderr,
-    )
-    for index, candidate in enumerate(alternatives, start=1):
-        print(f"  {index}. {candidate.name} ({candidate.path})", file=sys.stderr)
-    try:
-        answer = input("Open which one instead? [number, or Enter to stop] ").strip()
-    except EOFError:
-        return None
+    with hold_log_output():
+        print(
+            f"\nPixlStash cannot open its library {library.name} ({library.path}):"
+            f"\n  {reason}\n\nThese attached libraries do open:",
+            file=sys.stderr,
+        )
+        for index, candidate in enumerate(alternatives, start=1):
+            print(f"  {index}. {candidate.name} ({candidate.path})", file=sys.stderr)
+        try:
+            answer = input(
+                "Open which one instead? [number, or Enter to stop] "
+            ).strip()
+        except EOFError:
+            return None
     if not answer.isdigit() or not 1 <= int(answer) <= len(alternatives):
         return None
     return alternatives[int(answer) - 1]
@@ -305,55 +380,65 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
 
 
 def _prompt_bootstrap_credentials(server) -> None:
+    """Ask for the owner's credentials, on a screen the boot log is not writing to.
+
+    This runs after ``Server.__init__``, so the whole boot log and the first
+    background tasks are already going past. Held output and a heading of its
+    own are what make it a question rather than another line of start-up.
+    """
     if not sys.stdin.isatty():
         return
 
     user = server.auth.user or server.auth.ensure_user()
     has_existing_credentials = bool(user and user.username and user.password_hash)
 
-    if has_existing_credentials:
-        keep_input = input("Keep existing username/password? [Y/n]: ").strip()
-        keep_existing = _parse_yes_no(keep_input, True)
-        if keep_existing:
-            return
-    else:
-        setup_input = input("Set username/password now before launch? [Y/n]: ").strip()
-        should_setup = _parse_yes_no(setup_input, True)
-        if not should_setup:
-            return
+    with hold_log_output():
+        print("\nPixlStash first-run credentials")
+        if has_existing_credentials:
+            keep_input = input("Keep existing username/password? [Y/n]: ").strip()
+            keep_existing = _parse_yes_no(keep_input, True)
+            if keep_existing:
+                return
+        else:
+            setup_input = input(
+                "Set username/password now before launch? [Y/n]: "
+            ).strip()
+            should_setup = _parse_yes_no(setup_input, True)
+            if not should_setup:
+                return
 
-    existing_username = str(user.username).strip() if user and user.username else ""
-    username = existing_username
-    while True:
-        prompt_suffix = f" [{existing_username}]" if existing_username else ""
-        username_input = input(f"Username{prompt_suffix}: ").strip()
-        if username_input:
-            username = username_input
-        if username:
+        existing_username = str(user.username).strip() if user and user.username else ""
+        username = existing_username
+        while True:
+            prompt_suffix = f" [{existing_username}]" if existing_username else ""
+            username_input = input(f"Username{prompt_suffix}: ").strip()
+            if username_input:
+                username = username_input
+            if username:
+                break
+            print("Username cannot be empty.")
+
+        while True:
+            password = getpass.getpass("Password (min 8 chars): ")
+            if len(password) < 8:
+                print("Password must be at least 8 characters.")
+                continue
+            try:
+                password_bytes = len(password.encode("utf-8"))
+            except Exception:
+                password_bytes = len(password)
+            if password_bytes > 72:
+                print("Password cannot exceed 72 bytes.")
+                continue
+            password_confirm = getpass.getpass("Confirm password: ")
+            if password != password_confirm:
+                print("Passwords do not match.")
+                continue
             break
-        print("Username cannot be empty.")
 
-    while True:
-        password = getpass.getpass("Password (min 8 chars): ")
-        if len(password) < 8:
-            print("Password must be at least 8 characters.")
-            continue
-        try:
-            password_bytes = len(password.encode("utf-8"))
-        except Exception:
-            password_bytes = len(password)
-        if password_bytes > 72:
-            print("Password cannot exceed 72 bytes.")
-            continue
-        password_confirm = getpass.getpass("Confirm password: ")
-        if password != password_confirm:
-            print("Passwords do not match.")
-            continue
-        break
-
-    server.auth.set_username(username)
-    server.auth.set_password_hash(bcrypt.hash(password))
-    print("Bootstrap credentials saved.\n")
+        server.auth.set_username(username)
+        server.auth.set_password_hash(bcrypt.hash(password))
+        print("Bootstrap credentials saved.\n")
 
 
 def _force_utf8_streams():
@@ -494,13 +579,25 @@ def main():
     else:
         setup_logging(log_level=log_level)
 
-    try:
-        server = Server(
+    def build_server() -> Server:
+        return Server(
             server_config_path=args.server_config,
             path_map=path_map,
             legacy_identity_prompt=_prompt_legacy_identity_migration,
             library_switch_prompt=_prompt_library_switch,
         )
+
+    try:
+        try:
+            server = build_server()
+        except UnusableVaultError as exc:
+            # Exactly one authorised retry, as the permission repair does. A
+            # second UnusableVaultError falls through to the HubBootstrapError
+            # clause below and is reported rather than looping.
+            if not _offer_vault_recreation(exc):
+                return 1
+            os.environ[VAULT_RECREATE_ENV] = "1"
+            server = build_server()
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:

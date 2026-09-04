@@ -11,6 +11,19 @@ import {
   parsePermissionRepairRequest,
   PermissionRepairRequiredError,
 } from './StartupPermissions';
+import { parseUnusableVaultReport, VaultUnusableError } from './VaultRecovery';
+
+/**
+ * One-shot authorisations carried into a relaunch, each standing for a native
+ * dialog the user has already answered "yes" to. Never defaulted on: a launch
+ * that sets neither is the ordinary one.
+ */
+export interface StartupRecovery {
+  /** Tighten the file modes the backend refused to start with. */
+  repairPermissions?: boolean;
+  /** Set the unopenable library database aside and start with a new one. */
+  recreateVault?: boolean;
+}
 
 export interface RunningServer {
   url: string;
@@ -152,16 +165,17 @@ function startupFailureMessage(
   );
 }
 
-/** Preserve repairable permission failures as a typed desktop-shell event. */
+/** Preserve recoverable startup failures as typed desktop-shell events. */
 export function startupFailureError(
   code: number | null,
   signal: NodeJS.Signals | null,
   tail: string,
 ): Error {
   const request = parsePermissionRepairRequest(tail);
-  return request
-    ? new PermissionRepairRequiredError(request)
-    : new Error(startupFailureMessage(code, signal, tail));
+  if (request) return new PermissionRepairRequiredError(request);
+  const unusableVault = parseUnusableVaultReport(tail);
+  if (unusableVault) return new VaultUnusableError(unusableVault);
+  return new Error(startupFailureMessage(code, signal, tail));
 }
 
 /**
@@ -261,7 +275,7 @@ export class ServerProcess {
   async start(
     overlayDir: string | null,
     device?: string,
-    repairPermissions = false,
+    recovery: StartupRecovery = {},
   ): Promise<RunningServer> {
     const python = isDevBackend() ? devInterpreter() : bundledInterpreter();
     if (!existsSync(python)) {
@@ -300,7 +314,11 @@ export class ServerProcess {
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
       // Set only after the user accepts the native repair dialog. An explicit
       // value prevents a parent-shell variable from authorising it accidentally.
-      PIXLSTASH_REPAIR_PERMISSIONS: repairPermissions ? '1' : '0',
+      PIXLSTASH_REPAIR_PERMISSIONS: recovery.repairPermissions ? '1' : '0',
+      // Likewise: only after the user has been shown what starting over costs
+      // and has agreed. The backend renames the old database rather than
+      // deleting it, but this is still the one flag that abandons a library.
+      PIXLSTASH_RECREATE_VAULT: recovery.recreateVault ? '1' : '0',
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),

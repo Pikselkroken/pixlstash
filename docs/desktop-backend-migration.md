@@ -246,6 +246,22 @@ change an answer and Try again to re-run the commit. It must never drop the user
 at the first question: the message lives on the install step, so a screen change
 is also a message that vanishes.
 
+**The second recoverable failure is a library database that will not open.**
+Same shape as the permission repair, and for the same reason: Electron has no
+usable stdin, so the backend prints a one-line record
+(`PIXLSTASH_VAULT_UNUSABLE=`), exits, and the shell turns it into a typed
+`VaultUnusableError` rather than a startup message
+(`backend/VaultRecovery.ts`). The offer is a native box — one file, one
+sentence of consequence, one decision — and it names what starting over costs
+*and* that the old file is renamed rather than deleted, which is the line that
+stops somebody deleting it themselves. Accepting relaunches with
+`PIXLSTASH_RECREATE_VAULT=1`; the backend does the renaming, so a dismissed
+dialog changes nothing on disk. The decline button differs by where it happens:
+from setup it is **Choose Another Folder** and returns to the picker, from
+`boot()` there is no picker to return to, so it is **Quit**. Neither path falls
+back to the CPU overlay first — the database has nothing to do with the
+accelerator, and retrying there would throw the typed error away.
+
 Subsequent launches see the config exists → no steps to run → straight into the
 library.
 

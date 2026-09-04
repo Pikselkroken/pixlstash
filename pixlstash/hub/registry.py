@@ -44,6 +44,26 @@ _LIBRARY_COLUMNS = (
 # PixlStash-managed SQLite file. Checked read-only, without importing the ORM.
 _VAULT_MARKER_TABLES = ("alembic_version", "picture")
 
+# A vault written before PixlStash adopted Alembic has no ``alembic_version``,
+# so the lineage has to be recognised from the schema itself. This is the
+# ``0001_baseline`` table set minus the tables a later migration added, and
+# ``VaultDatabase`` already knows what to do with such a file: it stamps the
+# baseline and upgrades it to head (see ``database.py``'s "Existing database
+# without Alembic version table" branch). Refusing it here would make that
+# branch unreachable for every library the hub owns, which is what turned an
+# upgradable December-2025 vault into a backend that exited during first-run
+# setup. The set is deliberately wide: one stray table named ``picture`` must
+# still not be mistaken for a library.
+_LEGACY_VAULT_MARKER_TABLES = (
+    "picture",
+    "character",
+    "face",
+    "tag",
+    "quality",
+    "metadata",
+    "pictureset",
+)
+
 
 class LibraryError(RuntimeError):
     """Base class for registry errors that carry a user-facing message."""
@@ -125,6 +145,10 @@ def validate_vault_folder(folder: str) -> str:
     migrate, write to, or otherwise touch a foreign vault, and it must not read
     its identity tables.
 
+    "Usable" means a vault ``VaultDatabase`` can open, which includes a
+    pre-Alembic one it will stamp and upgrade - see
+    :data:`_LEGACY_VAULT_MARKER_TABLES`.
+
     Raises:
         NotAVaultError: No folder, no ``vault.db``, unreadable, or missing the
             marker tables.
@@ -160,9 +184,25 @@ def validate_vault_folder(folder: str) -> str:
     tables = {row[0] for row in rows}
     missing = [table for table in _VAULT_MARKER_TABLES if table not in tables]
     if missing:
-        raise NotAVaultError(
-            f"{vault_path} does not look like a PixlStash vault (missing "
-            f"{', '.join(missing)})."
+        legacy_missing = [
+            table for table in _LEGACY_VAULT_MARKER_TABLES if table not in tables
+        ]
+        if legacy_missing:
+            # Both sets, not just the modern one. A database holding nothing
+            # but a `picture` table is missing only `alembic_version` by the
+            # modern reckoning, and saying so alone reads as "an old vault we
+            # could upgrade" - the opposite of the truth. The reason is
+            # surfaced verbatim by the recovery dialog, so it has to carry
+            # which of the two it failed to be.
+            raise NotAVaultError(
+                f"{vault_path} does not look like a PixlStash vault (missing "
+                f"{', '.join(missing)}), and not a pre-Alembic one either "
+                f"(missing {', '.join(legacy_missing)})."
+            )
+        logger.info(
+            "%s is a PixlStash vault from before Alembic (no alembic_version); "
+            "it will be stamped at the baseline and upgraded when it is opened.",
+            vault_path,
         )
 
     return vault_path

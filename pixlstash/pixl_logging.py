@@ -1,4 +1,7 @@
 import logging as logging_
+import threading
+from contextlib import contextmanager
+
 from uvicorn.logging import ColourizedFormatter as ColourisedFormatter
 
 LOG_FORMAT = "%(asctime)s %(levelprefix)s %(name)s: %(message)s"
@@ -56,6 +59,56 @@ def setup_logging(log_file=None, log_level=LOG_LEVEL):
     logging_.getLogger("alembic.runtime.migration").setLevel(logging_.WARNING)
     # Suppress repetitive uvicorn lifecycle/connection messages
     logging_.getLogger("uvicorn.error").addFilter(_SuppressFilter())
+
+
+class _HoldingHandler(logging_.Handler):
+    """Collect records instead of emitting them, so a prompt owns the screen."""
+
+    def __init__(self):
+        super().__init__()
+        self._records = []
+        self._records_lock = threading.Lock()
+
+    def emit(self, record: logging_.LogRecord) -> None:
+        with self._records_lock:
+            self._records.append(record)
+
+    def take(self) -> list:
+        with self._records_lock:
+            held, self._records = self._records, []
+        return held
+
+
+@contextmanager
+def hold_log_output():
+    """Buffer log output while an interactive question is on screen.
+
+    Start-up asks its questions after the server has been built and its
+    background workers are already running, so the answer to "did anyone see
+    the question?" used to be no: a first-run credentials prompt was written
+    between two INFO lines, and a snapshot task logged its progress onto the
+    same line as the prompt while it waited for an answer. Nothing is dropped -
+    every held record is emitted, in order, once the question has been
+    answered.
+
+    Only the logging path is held. A bare ``print`` from another thread still
+    reaches the terminal, so this narrows the window rather than sealing it.
+    """
+    root = logging_.getLogger()
+    held = _HoldingHandler()
+    previous = list(root.handlers)
+    # Assigning a new list rather than mutating: a logging call on another
+    # thread sees either the old handlers or the holder, never a half-empty
+    # list it would silently drop a record into.
+    root.handlers = [held]
+    try:
+        yield
+    finally:
+        root.handlers = previous
+        for record in held.take():
+            for handler in previous:
+                if record.levelno >= handler.level:
+                    handler.handle(record)
 
 
 def get_logger(name=None):
