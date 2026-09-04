@@ -1946,6 +1946,12 @@ class TestAVaultThatRegistersButWillNotMigrate:
             "attempt to write a readonly database",
             "disk I/O error",
             "database disk image is malformed",
+            # SQLITE_FULL says it in SQLite's words, ENOSPC in the OS's. A
+            # full disk answered by abandoning the library is the worst
+            # outcome this classification exists to prevent.
+            "database or disk is full",
+            "no space left on device",
+            "out of memory",
         ],
     )
     def test_a_failure_about_the_machine_is_never_offered_a_recreate(
@@ -1960,6 +1966,18 @@ class TestAVaultThatRegistersButWillNotMigrate:
             )
             is None
         )
+
+    def test_a_file_that_is_not_a_database_is_still_offered_the_recovery(
+        self, tmp_path
+    ):
+        """SQLITE_NOTADB is a statement about the file, not about the machine."""
+        library = self._library(tmp_path)
+
+        unusable = unusable_vault_from_open_failure(
+            library, sqlalchemy_operational_error("file is not a database")
+        )
+
+        assert unusable is not None
 
 
 class TestOpeningTheRegisteredVault:

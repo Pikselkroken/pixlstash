@@ -188,9 +188,16 @@ def validate_vault_folder(folder: str) -> str:
             table for table in _LEGACY_VAULT_MARKER_TABLES if table not in tables
         ]
         if legacy_missing:
+            # Both sets, not just the modern one. A database holding nothing
+            # but a `picture` table is missing only `alembic_version` by the
+            # modern reckoning, and saying so alone reads as "an old vault we
+            # could upgrade" - the opposite of the truth. The reason is
+            # surfaced verbatim by the recovery dialog, so it has to carry
+            # which of the two it failed to be.
             raise NotAVaultError(
                 f"{vault_path} does not look like a PixlStash vault (missing "
-                f"{', '.join(missing)})."
+                f"{', '.join(missing)}), and not a pre-Alembic one either "
+                f"(missing {', '.join(legacy_missing)})."
             )
         logger.info(
             "%s is a PixlStash vault from before Alembic (no alembic_version); "

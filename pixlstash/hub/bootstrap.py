@@ -74,14 +74,18 @@ class UnusableVaultError(HubBootstrapError):
 # dressed as a recovery, so these keep their own traceback and are never turned
 # into the question.
 _ENVIRONMENTAL_SQLITE_FAILURES = (
-    "database is locked",
-    "disk i/o error",
-    "unable to open database file",
-    "no space left",
-    "readonly database",
-    "permission denied",
-    "database disk image is malformed",
+    "database is locked",  # SQLITE_BUSY
+    "disk i/o error",  # SQLITE_IOERR
+    "unable to open database file",  # SQLITE_CANTOPEN
+    "database or disk is full",  # SQLITE_FULL - SQLite's own wording
+    "no space left",  # ...and the OS's, for a write that never reached SQLite
+    "readonly database",  # SQLITE_READONLY
+    "permission denied",  # SQLITE_PERM
+    "database disk image is malformed",  # SQLITE_CORRUPT
+    "out of memory",  # SQLITE_NOMEM
 )
+# Deliberately absent: SQLITE_NOTADB ("file is not a database"). That one is a
+# statement about the file, which is exactly what the offer is for.
 
 
 def unusable_vault_from_open_failure(

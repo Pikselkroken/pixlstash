@@ -244,8 +244,13 @@ class TestVaultValidation:
         conn.commit()
         conn.close()
 
-        with pytest.raises(NotAVaultError):
+        with pytest.raises(NotAVaultError) as caught:
             validate_vault_folder(str(folder))
+
+        # "missing alembic_version" on its own reads as an old vault we could
+        # upgrade, and the recovery dialog shows this text verbatim.
+        assert "not a pre-Alembic one either" in str(caught.value)
+        assert "character" in str(caught.value)
 
     def test_rejects_a_missing_folder(self, tmp_path):
         with pytest.raises(NotAVaultError):
