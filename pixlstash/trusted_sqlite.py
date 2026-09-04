@@ -6,6 +6,14 @@ Instead, require a namespace in which another OS principal cannot replace the
 main file or pre-position a sidecar, hold a no-follow guard, open SQLite by the
 canonical path, and compare identities before doing decisive work.
 
+**Mode bits warn; everything else refuses.** Ownership, symlinks, junctions and
+non-regular files are refused outright. A loose mode (group/world-writable
+directory or file, a credential file wider than 0600) is logged as a WARNING
+with the ``chmod`` that fixes it, and the open goes ahead. Refusing on mode
+alone took the app down twice for nobody's benefit (a 0775 directory under a
+stock Ubuntu umask, then a 0755 library made by the Docker entrypoint), and a
+loose mode on the owner's own files has never been an observed attack.
+
 **What these checks actually cover: the moment of open, not "the database".**
 ``TrustedSQLiteLocation.open`` validates the main file and any pre-existing
 sidecar before SQLite touches the path, and ``verify_after_open`` re-checks the
@@ -51,12 +59,12 @@ account a group of its own and default to umask 002, so a directory this app
 created before it started passing 0700 is 0775 with a one-member group - no
 other principal at all, and the blanket test refused it and exited 1 with no way
 back except a manual ``chmod``. ``_is_private_group`` names the actor instead of
-the bit: group-write is tolerated only when the group is the owner's own,
-same-named, and has no other member, on a directory this user owns. World-write
-is refused as before, root-owned ancestors are refused as before, and the two
-limits of the group answer - supplementary members only, and NSS resolved in
-this process - are recorded as accepted risk beside W17 in
-``docs/backend_architecture.md`` §13.
+the bit: group-write is not even warned about when the group is the owner's
+own, same-named, and has no other member, on a directory this user owns.
+World-write and root-owned group-writable ancestors warn, and the two limits of
+the group answer - supplementary members only, and NSS resolved in this process
+- are recorded as accepted risk beside W17 in ``docs/backend_architecture.md``
+§13.
 
 **Windows, and what this cannot check.** Python exposes neither owner SID nor
 directory DACL portably, so the "another principal cannot write this directory"
@@ -197,11 +205,17 @@ def _require_owned_directory(path: str, *, immediate: bool) -> os.stat_result:
             f"chmod g-w {shlex.quote(path)}",
         )
         exposed = 0
+    # Mode bits warn rather than refuse: a loose mode on the owner's own
+    # directory has never been an observed attack, and refusing it took the
+    # app down on stock umasks and in Docker for nobody's benefit. Ownership,
+    # symlink and type checks above still refuse.
     if exposed and (immediate or not (info.st_mode & stat.S_ISVTX)):
-        raise TrustedSQLiteLocationError(
-            f"SQLite directory {path} is group/world-writable; another account "
+        logger.warning(
+            "SQLite directory %s is group/world-writable; another account "
             "could replace the database or its WAL/SHM files. Tighten it with "
-            f"chmod g-w,o-w {shlex.quote(path)}"
+            "chmod g-w,o-w %s",
+            path,
+            shlex.quote(path),
         )
     return info
 
@@ -378,13 +392,20 @@ def _validate_file(path: str, *, private: bool) -> os.stat_result:
         raise TrustedSQLiteLocationError(
             f"SQLite file {path} is owned by uid {info.st_uid}, not this user."
         )
+    # Mode bits warn rather than refuse (see _require_owned_directory).
     if private and stat.S_IMODE(info.st_mode) & 0o077:
-        raise TrustedSQLiteLocationError(
-            f"SQLite credential file {path} must be mode 600."
+        logger.warning(
+            "SQLite credential file %s should be mode 600; other accounts can "
+            "read it. Tighten it with chmod 600 %s",
+            path,
+            shlex.quote(path),
         )
-    if stat.S_IMODE(info.st_mode) & 0o022:
-        raise TrustedSQLiteLocationError(
-            f"SQLite file {path} is group/world-writable; refusing to open it."
+    elif stat.S_IMODE(info.st_mode) & 0o022:
+        logger.warning(
+            "SQLite file %s is group/world-writable; another account could "
+            "modify it. Tighten it with chmod g-w,o-w %s",
+            path,
+            shlex.quote(path),
         )
     return info
 

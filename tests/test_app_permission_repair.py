@@ -11,7 +11,6 @@ import pytest
 from pixlstash import app
 from pixlstash.pixl_logging import hold_log_output
 import pixlstash.startup_permissions as startup_permissions
-from pixlstash.startup_permissions import PERMISSION_REPAIR_PREFIX
 
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
@@ -52,11 +51,9 @@ def test_terminal_default_yes_repairs_and_continues(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(app.sys, "stdin", TerminalInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: "")
 
-    assert app._prepare_startup_permissions(
-        str(config_path), {"image_root": str(library)}
-    )
+    app._prepare_startup_permissions(str(config_path), {"image_root": str(library)})
     assert mode(config_path.parent) == 0o700
-    assert mode(library) == 0o700
+    assert mode(library) == 0o755
     assert "Permissions fixed" in capsys.readouterr().err
 
 
@@ -67,24 +64,9 @@ def test_terminal_no_leaves_permissions_unchanged(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(app.sys, "stdin", TerminalInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: "n")
 
-    assert not app._prepare_startup_permissions(
-        str(config_path), {"image_root": str(library)}
-    )
+    app._prepare_startup_permissions(str(config_path), {"image_root": str(library)})
     assert mode(config_path.parent) == 0o775
     assert "Permissions were not changed" in capsys.readouterr().err
-
-
-def test_electron_emits_signal_without_changing_anything(tmp_path, monkeypatch, capsys):
-    config_path, library = loose_config(tmp_path)
-    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
-    monkeypatch.delenv("PIXLSTASH_REPAIR_PERMISSIONS", raising=False)
-
-    assert not app._prepare_startup_permissions(
-        str(config_path), {"image_root": str(library)}
-    )
-    stderr = capsys.readouterr().err
-    assert PERMISSION_REPAIR_PREFIX in stderr
-    assert mode(config_path.parent) == 0o775
 
 
 def test_noninteractive_launch_prints_copyable_commands(tmp_path, monkeypatch, capsys):
@@ -93,12 +75,12 @@ def test_noninteractive_launch_prints_copyable_commands(tmp_path, monkeypatch, c
     monkeypatch.delenv("PIXLSTASH_REPAIR_PERMISSIONS", raising=False)
     monkeypatch.setattr(app.sys, "stdin", io.StringIO())
 
-    assert not app._prepare_startup_permissions(
-        str(config_path), {"image_root": str(library)}
-    )
+    app._prepare_startup_permissions(str(config_path), {"image_root": str(library)})
     stderr = capsys.readouterr().err
+    assert "PixlStash will start anyway" in stderr
     assert f"chmod 700 {config_path.parent}" in stderr
-    assert f"chmod 700 {library}" in stderr
+    assert f"chmod 755 {library}" in stderr
+    assert mode(config_path.parent) == 0o775
 
 
 class RecordingHandler(logging.Handler):

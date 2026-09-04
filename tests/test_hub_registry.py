@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase, HubPermissionError
+from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase
 from pixlstash.hub.registry import (
     ActiveLibraryError,
     LibraryError,
@@ -142,13 +142,17 @@ class TestHubDatabase:
         HubDatabase(path).close()
         assert stat.S_IMODE(os.stat(path).st_mode) == HUB_FILE_MODE
 
-    def test_server_refuses_a_group_readable_hub(self, tmp_path):
+    def test_server_warns_about_a_group_readable_hub(self, tmp_path, caplog):
         path = str(tmp_path / "hub.db")
         HubDatabase(path).close()
         os.chmod(path, 0o640)
 
-        with pytest.raises(HubPermissionError):
-            HubDatabase(path)
+        HubDatabase(path).close()
+        assert any(
+            "should be 600" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
 
     def test_cli_repairs_a_group_readable_hub(self, tmp_path):
         path = str(tmp_path / "hub.db")
