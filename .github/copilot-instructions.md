@@ -115,8 +115,7 @@ Use the architecture documents according to the scope of the task.
 you have looked at a line of code, almost all of it about subsystems you are not
 touching. Read the Table of Contents at the top, then only the sections covering
 the code you are about to change plus any section they point you to, and widen
-only when that turns out to be insufficient. `grep -n '^## '
-docs/backend_architecture.md` gives the section map; `sed -n 'START,ENDp'`
+only when that turns out to be insufficient. `grep -n '^## ' docs/backend_architecture.md` gives the section map; `sed -n 'START,ENDp'`
 reads one section. A whole-file read is a mistake unless you are auditing the
 document itself.
 
