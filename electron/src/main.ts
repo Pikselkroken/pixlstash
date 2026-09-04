@@ -861,15 +861,7 @@ async function startAndLoad(
 /** Which accelerator overlay (if any) should we launch with right now? */
 async function activeOverlayAccel(): Promise<Accel | null> {
   const active = await manager.getActiveAccel();
-  if (active && (await manager.isInstalled(active))) {
-    // An app update replaces the bundled site-packages wholesale, leaving the
-    // overlay's copies of shared dependencies shadowing versions they were never
-    // resolved against - which kills the backend on import, without anyone having
-    // touched the overlay. Re-pruning against the current bundle repairs that in
-    // place; it is a no-op once the marker matches this app version.
-    await manager.repairIfStale(active, app.getVersion());
-    return active;
-  }
+  if (active && (await manager.isInstalled(active))) return active;
   if (active) await manager.setActiveAccel(null); // stale (overlay removed/app moved)
   return null;
 }
@@ -890,6 +882,17 @@ async function startWithOverlayFallback(
   repairPermissions = false,
   navigate = true,
 ): Promise<void> {
+  // An app update replaces the bundled site-packages wholesale, leaving an
+  // overlay's copies of shared dependencies shadowing versions they were never
+  // resolved against - which kills the backend on import without anyone having
+  // touched the overlay. Re-prune against the current bundle first; it is a
+  // no-op once the marker matches this app version, and it never throws.
+  //
+  // Here rather than in activeOverlayAccel() because this is the chokepoint
+  // EVERY overlay launch passes through, including `accel:use` - which is the
+  // path a user takes to re-enable an accelerator the fallback just turned off,
+  // i.e. precisely the overlay most likely to need repairing.
+  if (accel) await manager.repairIfStale(accel, app.getVersion());
   await launchWithOverlayFallback(accel, {
     start: (candidate) => startAndLoad(candidate, repairPermissions, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
