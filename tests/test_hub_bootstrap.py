@@ -26,10 +26,10 @@ from pixlstash.hub.bootstrap import (
     registered_vault_path,
     unusable_vault_from_open_failure,
 )
-from pixlstash.hub.db import HubDatabase, HubPermissionError
+from pixlstash.hub.db import HubDatabase
 from pixlstash.server import Server
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
-from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.vault import Vault
 
 
@@ -328,13 +328,14 @@ class TestFreshInstall:
         TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_a_loose_existing_ancestor_is_kept_and_still_refused(self, tmp_path):
+    def test_a_loose_existing_ancestor_is_kept_and_still_reported(
+        self, tmp_path, caplog
+    ):
         """Creation only: the fix never chmods a directory the owner already had.
 
         The loose ancestor keeps its mode (owner's folder, owner's business),
-        and the guarded open goes on refusing the namespace - that refusal is
-        pre-existing behaviour, asserted here so the fix cannot drift into
-        repairing directories it did not create.
+        and the guarded open goes on warning about the namespace, asserted here
+        so the fix cannot drift into repairing directories it did not create.
 
         World-writable, not the 0775 this asserted originally: group-write alone
         is no longer an exposure when the group is the owner's own one-member
@@ -357,16 +358,19 @@ class TestFreshInstall:
 
         assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o777
         assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(image_root / "vault.db"))
+        TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
+        assert any(
+            "group/world-writable" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
 
     def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
-        self, tmp_path
+        self, tmp_path, caplog
     ):
         """A permission someone else loosened is an event the operator must see.
 
         Same rule ``check_file_mode`` follows for the hub file: the server
-        raises rather than tightening in place, because silently fixing it hides
+        warns rather than tightening in place, because silently fixing it hides
         that it ever happened.
         """
         os.chmod(tmp_path, 0o700)
@@ -384,9 +388,12 @@ class TestFreshInstall:
         # would make this pass there and fail nothing.
         os.chmod(parent, 0o777)
 
-        with pytest.raises(HubPermissionError, match="group/world-writable"):
-            HubDatabase(str(parent / "hub.db"))
+        HubDatabase(str(parent / "hub.db")).close()
 
+        assert any(
+            "group/world-writable" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
         assert stat.S_IMODE(parent.stat().st_mode) == 0o777
 
     def test_existing_foreign_vault_is_not_an_implicit_identity_source(self, tmp_path):

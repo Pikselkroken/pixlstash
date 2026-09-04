@@ -102,18 +102,21 @@ class TestWhatIsInTheArchive:
         assert manifest["vault_revision"] == "0100_add_pending_score_invalidation"
         assert manifest["contains_hub"] is True
 
-    def test_a_prepositioned_writable_wal_sidecar_is_refused(
-        self, registry, library, tmp_path
+    def test_a_prepositioned_writable_wal_sidecar_is_reported(
+        self, registry, library, tmp_path, caplog
     ):
-        """Another account must not be able to choose SQLite's WAL contents."""
+        """A loose-mode sidecar is warned about; the backup still runs."""
         open(os.path.join(library.path, "vault.db-wal"), "wb").write(b"junk")
         os.chmod(os.path.join(library.path, "vault.db-wal"), 0o666)
         destination = tmp_path / "out.tar.zst"
 
-        with pytest.raises(BackupError, match="group/world-writable"):
-            create_backup(library, str(destination), registry.hub_path)
+        create_backup(library, str(destination), registry.hub_path)
 
-        assert not destination.exists()
+        assert any(
+            "group/world-writable" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
+        assert destination.exists()
 
     def test_a_real_live_wal_is_captured_but_not_archived_raw(
         self, registry, library, tmp_path

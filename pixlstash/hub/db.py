@@ -21,6 +21,7 @@ The file also holds the password hash and every token hash, so it is created
 from __future__ import annotations
 
 import os
+import shlex
 import sqlite3
 import stat
 import threading
@@ -185,13 +186,10 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         path: The hub file. A missing file is not an error (it is about to be
             created 0600).
         repair: When True, tighten the mode in place and log it, which is what
-            the CLI does. When False, raise instead, which is what the server
-            does: a hub whose permissions were loosened by something else is a
-            credential-exposure event the operator must see, and silently
-            fixing it hides that it happened.
-
-    Raises:
-        HubPermissionError: ``repair`` is False and the mode is too permissive.
+            the CLI does. When False, warn and carry on, which is what the
+            server does: a hub whose permissions were loosened by something
+            else is worth telling the operator about, but not worth refusing
+            to start over.
     """
     if os.name == "nt":
         # Windows has no mode bits to check: `st_mode` is synthesised from the
@@ -225,10 +223,14 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         os.chmod(path, HUB_FILE_MODE)
         return
 
-    raise HubPermissionError(
-        f"Hub file {path} has mode {mode:o}; it holds the password hash and "
-        f"every token hash and must be {HUB_FILE_MODE:o}. Fix it with "
-        f"`chmod {HUB_FILE_MODE:o} {path}` and restart."
+    logger.warning(
+        "Hub file %s has mode %o; it holds the password hash and every token "
+        "hash and should be %o. Fix it with chmod %o %s",
+        path,
+        mode,
+        HUB_FILE_MODE,
+        HUB_FILE_MODE,
+        shlex.quote(path),
     )
 
 
