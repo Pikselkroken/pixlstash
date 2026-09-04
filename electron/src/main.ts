@@ -883,6 +883,17 @@ async function startWithOverlayFallback(
   recovery: StartupRecovery = {},
   navigate = true,
 ): Promise<void> {
+  // An app update replaces the bundled site-packages wholesale, leaving an
+  // overlay's copies of shared dependencies shadowing versions they were never
+  // resolved against - which kills the backend on import without anyone having
+  // touched the overlay. Re-prune against the current bundle first; it is a
+  // no-op once the marker matches this app version, and it never throws.
+  //
+  // Here rather than in activeOverlayAccel() because this is the chokepoint
+  // EVERY overlay launch passes through, including `accel:use` - which is the
+  // path a user takes to re-enable an accelerator the fallback just turned off,
+  // i.e. precisely the overlay most likely to need repairing.
+  if (accel) await manager.repairIfStale(accel, app.getVersion());
   await launchWithOverlayFallback(accel, {
     start: (candidate) => startAndLoad(candidate, recovery, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
@@ -1353,8 +1364,11 @@ function registerIpc(): void {
         activeOverlayAccel,
         startBackend: startFromSetup,
         installOverlay: (accel) =>
-          manager.installOverlay(accel, runtime as RuntimeInfo, (p) =>
-            mainWindow?.webContents.send('install:progress', p),
+          manager.installOverlay(
+            accel,
+            runtime as RuntimeInfo,
+            (p) => mainWindow?.webContents.send('install:progress', p),
+            app.getVersion(),
           ),
         readFolder: async (imageRoot) =>
           runningServer
@@ -1555,8 +1569,18 @@ function registerIpc(): void {
 
   ipcMain.handle('accel:install', async (_e, accel: Accel) => {
     if (!runtime) throw new Error('No bundled runtime available');
-    await manager.installOverlay(accel, runtime, (p) =>
-      mainWindow?.webContents.send('install:progress', p),
+    // installOverlay wipes the target directory first, and a backend running on
+    // this overlay holds its DLLs open - on Windows that wipe fails outright.
+    // Await teardown for the same reason changeBackendsLocation does.
+    if ((await manager.getActiveAccel()) === accel) {
+      await serverProcess?.stop();
+      serverProcess = null;
+    }
+    await manager.installOverlay(
+      accel,
+      runtime,
+      (p) => mainWindow?.webContents.send('install:progress', p),
+      app.getVersion(),
     );
     // If the freshly-installed overlay fails to start, fall back to CPU - the
     // just-downloaded dir is kept (only the active state is cleared), and the
