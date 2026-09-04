@@ -14,7 +14,11 @@ from passlib.hash import bcrypt
 from pixlstash.pixl_logging import setup_logging, get_logger
 from pixlstash.server import Server
 from pixlstash.startup_checks import StartupCheckError
-from pixlstash.hub.bootstrap import HubBootstrapError
+from pixlstash.hub.bootstrap import (
+    HubBootstrapError,
+    UnusableVaultError,
+    VAULT_RECREATE_ENV,
+)
 from pixlstash.hub.db import HubPermissionError
 from pixlstash.startup_permissions import (
     PERMISSION_REPAIR_ENV,
@@ -147,6 +151,72 @@ def _prepare_startup_permissions(
 
     print(
         "PixlStash still found unsafe permissions after attempting the repair.",
+        file=sys.stderr,
+    )
+    return False
+
+
+VAULT_UNUSABLE_PREFIX = "PIXLSTASH_VAULT_UNUSABLE="
+
+
+def _vault_unusable_signal(exc: UnusableVaultError) -> str:
+    """The single-line record the desktop shell parses out of our output."""
+
+    return VAULT_UNUSABLE_PREFIX + json.dumps(
+        {
+            "version": 1,
+            "folder": exc.folder,
+            "vault_path": exc.vault_path,
+            "reason": exc.reason,
+        },
+        separators=(",", ":"),
+    )
+
+
+def _format_unusable_vault(exc: UnusableVaultError) -> str:
+    """Say what is wrong, what the offer is, and what it costs - in that order."""
+
+    return (
+        f"PixlStash could not open the library database in {exc.folder}:\n"
+        f"- {exc.reason}\n\n"
+        "PixlStash can start over with a new, empty library database in that "
+        "folder. The pictures are untouched and are offered for import again, "
+        f"but the tags, scores, characters and history recorded in "
+        f"{os.path.basename(exc.vault_path)} are not carried over.\n"
+        "The old file is renamed, never deleted, so it can still be recovered."
+    )
+
+
+def _offer_vault_recreation(exc: UnusableVaultError) -> bool:
+    """Ask whether the unopenable vault may be set aside, as this launch can ask.
+
+    Returns True only when a human said yes to this process; the desktop shell
+    answers by relaunching with ``PIXLSTASH_RECREATE_VAULT=1`` instead, exactly
+    as it does for a permission repair, because Electron has no usable stdin.
+    """
+
+    message = _format_unusable_vault(exc)
+    print(message, file=sys.stderr)
+
+    if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").lower() == "electron":
+        # Human text stays in the log; the JSON line is the stable protocol.
+        print(_vault_unusable_signal(exc), file=sys.stderr)
+        return False
+
+    if getattr(sys.stdin, "isatty", lambda: False)():
+        try:
+            answer = input("\nStart over with an empty library database? [y/N] ")
+        except EOFError:
+            answer = "n"
+        if answer.strip().lower() in {"y", "yes"}:
+            return True
+        print("The library database was left alone.", file=sys.stderr)
+        return False
+
+    print(
+        "\nStart PixlStash again with "
+        f"{VAULT_RECREATE_ENV}=1 to accept that, or point image_root at "
+        "another folder.",
         file=sys.stderr,
     )
     return False
@@ -494,13 +564,25 @@ def main():
     else:
         setup_logging(log_level=log_level)
 
-    try:
-        server = Server(
+    def build_server() -> Server:
+        return Server(
             server_config_path=args.server_config,
             path_map=path_map,
             legacy_identity_prompt=_prompt_legacy_identity_migration,
             library_switch_prompt=_prompt_library_switch,
         )
+
+    try:
+        try:
+            server = build_server()
+        except UnusableVaultError as exc:
+            # Exactly one authorised retry, as the permission repair does. A
+            # second UnusableVaultError falls through to the HubBootstrapError
+            # clause below and is reported rather than looping.
+            if not _offer_vault_recreation(exc):
+                return 1
+            os.environ[VAULT_RECREATE_ENV] = "1"
+            server = build_server()
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:

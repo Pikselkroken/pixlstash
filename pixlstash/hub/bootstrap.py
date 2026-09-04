@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -25,6 +26,7 @@ from pixlstash.hub.registry import (
     Library,
     LibraryError,
     LibraryRegistry,
+    NotAVaultError,
     VAULT_FILENAME,
     validate_vault_folder,
 )
@@ -37,6 +39,122 @@ logger = get_logger(__name__)
 
 class HubBootstrapError(RuntimeError):
     """Startup cannot safely establish a consistent hub/vault pair."""
+
+
+# Set to "1" by the caller that has already asked a human whether the
+# unopenable vault may be moved aside. An explicit value, checked here and
+# nowhere else, so an inherited shell variable cannot authorise it by accident.
+VAULT_RECREATE_ENV = "PIXLSTASH_RECREATE_VAULT"
+
+# SQLite keeps these beside the database. A vault moved aside without them
+# would leave a stale journal for the replacement to be opened against.
+_VAULT_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+class UnusableVaultError(HubBootstrapError):
+    """The configured folder holds a ``vault.db`` this build cannot open.
+
+    Carries the folder, the file and the reason so a caller can offer the one
+    recovery that exists - start over with an empty database, keeping the old
+    file - instead of printing a traceback at somebody who has just installed
+    the app. See :func:`set_aside_unusable_vault`.
+    """
+
+    def __init__(self, folder: str, vault_path: str, reason: str):
+        super().__init__(
+            f"{vault_path} cannot be opened as a PixlStash library ({reason})"
+        )
+        self.folder = folder
+        self.vault_path = vault_path
+        self.reason = reason
+
+
+# Failures that are about the machine rather than the database. Offering to
+# start a library over because the disk filled up would be a catastrophe
+# dressed as a recovery, so these keep their own traceback and are never turned
+# into the question.
+_ENVIRONMENTAL_SQLITE_FAILURES = (
+    "database is locked",
+    "disk i/o error",
+    "unable to open database file",
+    "no space left",
+    "readonly database",
+    "permission denied",
+    "database disk image is malformed",
+)
+
+
+def unusable_vault_from_open_failure(
+    library: Library, exc: BaseException
+) -> "UnusableVaultError | None":
+    """Classify a failure to open or migrate a registered vault.
+
+    Validation only reads ``sqlite_master``, so a vault can pass it and still
+    be one no migration path reaches: the December-2025 schema is stamped at
+    the baseline it predates, and the chain dies on a table it never had. That
+    is the same dead end as a file that will not open at all, and it deserves
+    the same question rather than a traceback on the splash screen.
+
+    Nothing is masked: the caller logs the original exception in full, the
+    reason quotes it, and the recovery renames rather than deletes. Returns
+    None for a failure that is about the machine - those must keep failing.
+    """
+    lowered = str(exc).lower()
+    if any(marker in lowered for marker in _ENVIRONMENTAL_SQLITE_FAILURES):
+        return None
+    # SQLAlchemy's own message is often a bare identifier - `NoSuchTableError:
+    # user` reads as "user" on its own - so the reason says what the failure
+    # means before it quotes what raised it.
+    reason = (
+        "The library database could not be upgraded to this version of "
+        f"PixlStash ({type(exc).__name__}: {exc})"
+    )
+    return UnusableVaultError(library.path, library.vault_path, reason)
+
+
+def set_aside_unusable_vault(vault_path: str) -> str:
+    """Rename an unopenable vault and its sidecars out of the way.
+
+    Renamed, never deleted, and never by this function's own decision: the
+    caller has to have been told "yes" by a human first. A vault we cannot read
+    is not a vault that holds nothing, and the file is the only copy of
+    whatever catalogue it does hold - somebody who deletes it to get the app
+    started has thrown away work they could still have recovered.
+
+    Returns:
+        The path the vault was renamed to.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = f"{vault_path}.unusable-{stamp}"
+    attempt = 0
+    while os.path.exists(target):
+        attempt += 1
+        target = f"{vault_path}.unusable-{stamp}-{attempt}"
+
+    os.rename(vault_path, target)
+    logger.warning(
+        "Moved the unopenable vault %s to %s and will start with a new, empty "
+        "library database. The old file is kept; nothing was deleted.",
+        vault_path,
+        target,
+    )
+    for suffix in _VAULT_SIDECAR_SUFFIXES:
+        sidecar = f"{vault_path}{suffix}"
+        if not os.path.exists(sidecar):
+            continue
+        try:
+            os.rename(sidecar, f"{target}{suffix}")
+        except OSError as exc:
+            # Not fatal: SQLite recreates its own sidecars. Worth recording,
+            # because a leftover -wal beside a new vault is confusing enough on
+            # its own that the next reader should know where it came from.
+            logger.warning(
+                "Could not move the sidecar %s beside the vault it belongs to "
+                "(%s); it is stale and can be removed.",
+                sidecar,
+                exc,
+            )
+    return target
 
 
 class RegisteredVaultPath(str):
@@ -244,7 +362,23 @@ def _register_first_library(
             "only an explicit durable preparation operation can authorize import",
             image_root,
         )
-        return registry.attach(image_root, "Library 1")
+        try:
+            return registry.attach(image_root, "Library 1")
+        except NotAVaultError as exc:
+            # The file is there and is not something we can open. That is a
+            # decision for a human - the only way forward loses whatever the
+            # file holds - so raise a typed error the caller can put a question
+            # behind, rather than letting an exception out of a constructor and
+            # ending first-run setup on a traceback.
+            if os.environ.get(VAULT_RECREATE_ENV) != "1":
+                raise UnusableVaultError(image_root, vault_path, str(exc)) from exc
+            logger.warning(
+                "Recreating the library database at %s was authorised: %s",
+                image_root,
+                exc,
+            )
+            set_aside_unusable_vault(vault_path)
+            return registry.register_pending(image_root, "Library 1")
 
     # This process is creating the SQLite namespace, so establish the trust
     # boundary now instead of inheriting a permissive umask-created directory.
@@ -418,6 +552,20 @@ def prevalidate_library_fingerprint(library: Library) -> None:
         )
 
 
+def _vault_is_loadable(library: Library) -> bool:
+    """True when the file at ``vault_path`` is one this build could open.
+
+    Read-only, and about the file rather than the registration: a vault that
+    passes here but still fails to open is a different problem with a different
+    answer, and must not be offered the recreate-it recovery.
+    """
+    try:
+        validate_vault_folder(library.path)
+    except NotAVaultError:
+        return False
+    return True
+
+
 def _library_opens(library: Library) -> bool:
     """True when this library's vault is present and still the one recorded."""
     if not library.is_reachable:
@@ -503,6 +651,17 @@ def _offer_a_usable_library(
     ]
     chosen = prompt(library, reason, alternatives) if prompt and alternatives else None
     if chosen is None:
+        # A file that is there and will not open is the one failure with a
+        # recovery: start over with an empty database and keep the old file.
+        # Offered here as well as on the first run, because a library that
+        # opened yesterday is exactly where an unreadable vault shows up.
+        # A fingerprint conflict is not this case - that vault loads fine, and
+        # the answer is to put the right one back, not to start over.
+        if os.path.isfile(library.vault_path) and not _vault_is_loadable(library):
+            if os.environ.get(VAULT_RECREATE_ENV) == "1":
+                set_aside_unusable_vault(library.vault_path)
+                return registry.forget_vault_fingerprint(library)
+            raise UnusableVaultError(library.path, library.vault_path, reason)
         raise HubBootstrapError(f"{reason}{_alternatives_note(alternatives)}")
     logger.warning(
         "%s could not be opened (%s); the active library is now %s at %s, as "

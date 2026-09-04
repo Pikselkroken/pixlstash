@@ -57,6 +57,35 @@ def make_vault_folder(root, name="library", *, with_credentials=False):
     return folder
 
 
+def make_legacy_vault_folder(root, name="legacy"):
+    """A vault from before PixlStash adopted Alembic: no ``alembic_version``.
+
+    This is the ``0001_baseline`` table set as a December-2025 install left it.
+    ``VaultDatabase`` opens exactly this by stamping the baseline and upgrading,
+    so the registry has to let it through - refusing it is what exited the
+    backend during first-run setup instead.
+    """
+    folder = os.path.join(str(root), name)
+    os.makedirs(folder, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+    for table in (
+        "picture",
+        "character",
+        "face",
+        "tag",
+        "quality",
+        "metadata",
+        "pictureset",
+        "picturesetmember",
+        "conversation",
+        "message",
+    ):
+        conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    return folder
+
+
 def set_vault_uuid(folder, value):
     """Give a test vault the ``library_settings`` fingerprint row."""
     conn = sqlite3.connect(os.path.join(folder, "vault.db"))
@@ -194,6 +223,24 @@ class TestVaultValidation:
         folder.mkdir()
         conn = sqlite3.connect(str(folder / "vault.db"))
         conn.execute("CREATE TABLE something_else (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(NotAVaultError):
+            validate_vault_folder(str(folder))
+
+    def test_accepts_a_vault_from_before_alembic(self, tmp_path):
+        """The opener stamps and upgrades these; the registry must not refuse them."""
+        folder = make_legacy_vault_folder(tmp_path)
+
+        assert validate_vault_folder(folder).endswith("vault.db")
+
+    def test_a_lone_picture_table_is_still_not_a_vault(self, tmp_path):
+        """The pre-Alembic allowance is a whole schema, not one familiar name."""
+        folder = tmp_path / "impostor-with-pictures"
+        folder.mkdir()
+        conn = sqlite3.connect(str(folder / "vault.db"))
+        conn.execute("CREATE TABLE picture (id INTEGER PRIMARY KEY)")
         conn.commit()
         conn.close()
 

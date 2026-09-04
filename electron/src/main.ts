@@ -24,13 +24,18 @@ import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './bac
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { isAllowedNavigation, redactUrl } from './urlPolicy';
-import { ServerProcess, devInterpreter } from './backend/ServerProcess';
+import { ServerProcess, StartupRecovery, devInterpreter } from './backend/ServerProcess';
 import {
   isPermissionRepairRequired,
   mkdirPrivateIfMissing,
   permissionRepairDialogDetail,
   PermissionRepairRequiredError,
 } from './backend/StartupPermissions';
+import {
+  isVaultUnusable,
+  vaultRecoveryDialogDetail,
+  VaultUnusableError,
+} from './backend/VaultRecovery';
 import {
   Accel,
   ACCEL_LABELS,
@@ -817,7 +822,7 @@ function deviceFor(accel: Accel | null): string | undefined {
  */
 async function startAndLoad(
   accel: Accel | null,
-  repairPermissions = false,
+  recovery: StartupRecovery = {},
   navigate = true,
 ): Promise<void> {
   sendPhase({ phase: 'starting' });
@@ -832,11 +837,7 @@ async function startAndLoad(
       );
     }
   });
-  const running = await serverProcess.start(
-    overlayFor(accel),
-    deviceFor(accel),
-    repairPermissions,
-  );
+  const running = await serverProcess.start(overlayFor(accel), deviceFor(accel), recovery);
   // Setup talks to this server while the GPU runtime downloads, so where it is
   // and how to authenticate to it outlive this function.
   runningServer = { url: running.url, sessionToken: running.sessionToken };
@@ -879,16 +880,18 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  */
 async function startWithOverlayFallback(
   accel: Accel | null,
-  repairPermissions = false,
+  recovery: StartupRecovery = {},
   navigate = true,
 ): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: (candidate) => startAndLoad(candidate, repairPermissions, navigate),
+    start: (candidate) => startAndLoad(candidate, recovery, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
-    // Permission failures are unrelated to an accelerator. Preserve the active
-    // overlay and let boot() offer the dedicated recovery dialog.
-    shouldFallback: (error) => !isPermissionRepairRequired(error),
+    // Permission failures and an unopenable library database are unrelated to
+    // an accelerator: retrying on the CPU env fails identically and throws the
+    // typed error away. Preserve the active overlay and let the caller offer
+    // the dedicated recovery dialog.
+    shouldFallback: (error) => !isPermissionRepairRequired(error) && !isVaultUnusable(error),
   });
 }
 
@@ -905,8 +908,21 @@ async function startWithOverlayFallback(
  */
 async function startFromSetup(accel: Accel | null, navigate: boolean): Promise<void> {
   try {
-    await startWithOverlayFallback(accel, false, navigate);
+    await startWithOverlayFallback(accel, {}, navigate);
   } catch (caught) {
+    // A folder holding a database we cannot open is a folder choice, so the
+    // refusal returns to the picker rather than quitting: "choose another
+    // folder" is the answer, and here it is one click away.
+    if (isVaultUnusable(caught)) {
+      if (!(await offerVaultRecreation(caught, 'Choose Another Folder'))) {
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+        throw new Error(
+          'PixlStash could not open the library database in that folder. Choose another folder, or let PixlStash start a new one there.',
+        );
+      }
+      await startWithOverlayFallback(accel, { recreateVault: true }, navigate);
+      return;
+    }
     if (!isPermissionRepairRequired(caught)) throw caught;
     if (!(await offerPermissionRepair(caught))) {
       await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
@@ -916,8 +932,34 @@ async function startFromSetup(accel: Accel | null, navigate: boolean): Promise<v
     }
     // Exactly one user-authorised retry, as boot() does. Python rechecks
     // ownership, type and inode before changing any recorded path.
-    await startWithOverlayFallback(accel, true, navigate);
+    await startWithOverlayFallback(accel, { repairPermissions: true }, navigate);
   }
+}
+
+/**
+ * Ask whether the library database that will not open may be set aside.
+ *
+ * A native box rather than a styled screen: unlike the permission repair this
+ * is one file, one sentence of consequence and one decision, and it can appear
+ * over the setup window the user is already looking at. The backend does the
+ * renaming - and only when the relaunch carries the flag this returning true
+ * sets - so a dismissed dialog changes nothing on disk.
+ */
+async function offerVaultRecreation(
+  error: VaultUnusableError,
+  declineLabel: string,
+): Promise<boolean> {
+  const result = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'PixlStash',
+    message: 'PixlStash could not open the library database',
+    detail: vaultRecoveryDialogDetail(error.report),
+    buttons: ['Start a New Library Database', declineLabel],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  return result.response === 0;
 }
 
 /**
@@ -1020,11 +1062,7 @@ async function boot(): Promise<void> {
       try {
         // Exactly one user-authorised retry. Python rechecks ownership, type,
         // and inode before changing any recorded path.
-        if (isDevBackend()) {
-          await startAndLoad(null, true);
-        } else {
-          await startWithOverlayFallback(await activeOverlayAccel(), true);
-        }
+        await retryLaunch({ repairPermissions: true });
         return;
       } catch (retryError) {
         error = retryError;
@@ -1033,9 +1071,32 @@ async function boot(): Promise<void> {
         // failed repair leaves the offer on screen with nothing happening.
         await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
       }
+    } else if (isVaultUnusable(error)) {
+      // Not first-run: there is no folder picker to send them back to, so the
+      // choice is starting over or quitting. Either way it is a question, not
+      // a traceback on the splash screen.
+      if (!(await offerVaultRecreation(error, 'Quit'))) {
+        app.quit();
+        return;
+      }
+      try {
+        await retryLaunch({ recreateVault: true });
+        return;
+      } catch (retryError) {
+        error = retryError;
+      }
     }
     sendPhase({ phase: 'error', message: (error as Error).message });
   }
+}
+
+/** The one authorised relaunch a recovery dialog buys, dev passthrough included. */
+async function retryLaunch(recovery: StartupRecovery): Promise<void> {
+  if (isDevBackend()) {
+    await startAndLoad(null, recovery);
+    return;
+  }
+  await startWithOverlayFallback(await activeOverlayAccel(), recovery);
 }
 
 /**

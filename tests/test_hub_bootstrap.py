@@ -10,18 +10,24 @@ import sqlite3
 import stat
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from sqlalchemy.exc import NoSuchTableError, OperationalError
+
 from pixlstash.hub.bootstrap import (
     HubBootstrapError,
+    UnusableVaultError,
     bootstrap_hub,
     finalize_opened_library,
     prepare_legacy_identity,
     prevalidate_library_fingerprint,
     registered_vault_path,
+    unusable_vault_from_open_failure,
 )
 from pixlstash.hub.db import HubDatabase, HubPermissionError
+from pixlstash.server import Server
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
 from pixlstash.vault import Vault
@@ -1788,3 +1794,232 @@ class TestPortableIdentityScrub:
         ) == [(1,)]
         result.engine.close()
         result.hub.close()
+
+
+def make_unopenable_vault(folder):
+    """A ``vault.db`` that is present and is not a database we can open.
+
+    The shape that ended a first run on a traceback: the file exists, so
+    ``register_pending`` is not used, and it does not validate, so ``attach``
+    refuses. Bytes rather than SQLite, because "unopenable" has to cover a
+    truncated or foreign file and not only an old schema.
+    """
+    os.makedirs(folder, exist_ok=True)
+    vault = os.path.join(folder, "vault.db")
+    with open(vault, "wb") as handle:
+        handle.write(b"not a database, not even close")
+    return vault
+
+
+def make_pre_alembic_vault(folder):
+    """A real vault from before Alembic: openable, upgradable, no version table."""
+    os.makedirs(folder, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+    for table in (
+        "picture",
+        "character",
+        "face",
+        "tag",
+        "quality",
+        "metadata",
+        "pictureset",
+    ):
+        conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    return os.path.join(folder, "vault.db")
+
+
+class TestAVaultThatWillNotOpen:
+    """Start-up asks a question about it rather than dying on it."""
+
+    def test_bootstrap_raises_a_typed_error_and_touches_nothing(self, tmp_path):
+        folder = str(tmp_path / "library")
+        vault = make_unopenable_vault(folder)
+        before = open(vault, "rb").read()
+
+        with pytest.raises(UnusableVaultError) as caught:
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+        assert caught.value.folder == os.path.realpath(folder)
+        assert caught.value.vault_path == vault
+        assert "vault.db" in caught.value.reason
+        assert open(vault, "rb").read() == before, "refusing must not edit the file"
+
+    def test_it_is_a_hub_bootstrap_error_so_existing_callers_report_it(self, tmp_path):
+        """`app.main` already prints HubBootstrapError concisely; inherit that."""
+        folder = str(tmp_path / "library")
+        make_unopenable_vault(folder)
+
+        with pytest.raises(HubBootstrapError):
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+    def test_recreation_moves_the_old_file_aside_rather_than_deleting_it(
+        self, tmp_path, monkeypatch
+    ):
+        folder = str(tmp_path / "library")
+        vault = make_unopenable_vault(folder)
+        before = open(vault, "rb").read()
+        # Sidecars travel with the database; a stale -wal beside a new vault is
+        # its own bug report.
+        for suffix in ("-wal", "-shm"):
+            with open(f"{vault}{suffix}", "wb") as handle:
+                handle.write(b"stale")
+        monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
+
+        result = bootstrap_hub(folder, str(tmp_path / "hub.db"))
+        try:
+            assert result.library.path == os.path.realpath(folder)
+            assert not os.path.exists(vault), "the new vault is created on open"
+
+            moved = [
+                name
+                for name in os.listdir(folder)
+                if name.startswith("vault.db.unusable-")
+            ]
+            assert len(moved) == 3, f"database and both sidecars, got {sorted(moved)}"
+            kept = next(name for name in moved if not name.endswith(("-wal", "-shm")))
+            assert open(os.path.join(folder, kept), "rb").read() == before
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_nothing_is_moved_without_the_explicit_authorisation(self, tmp_path):
+        """An inherited '0' - or no variable at all - is not a yes."""
+        folder = str(tmp_path / "library")
+        make_unopenable_vault(folder)
+
+        with pytest.raises(UnusableVaultError):
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+        assert os.listdir(folder) == ["vault.db"]
+
+    def test_a_pre_alembic_vault_is_opened_rather_than_recreated(self, tmp_path):
+        """The regression itself: this vault upgrades, so it must never be offered
+        the recovery that abandons it."""
+        folder = str(tmp_path / "library")
+        vault = make_pre_alembic_vault(folder)
+        before = open(vault, "rb").read()
+
+        result = bootstrap_hub(folder, str(tmp_path / "hub.db"))
+        try:
+            assert result.library.path == os.path.realpath(folder)
+            assert open(vault, "rb").read() == before, "registration must not migrate"
+            assert not any(
+                name.startswith("vault.db.unusable-") for name in os.listdir(folder)
+            )
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+
+def sqlalchemy_operational_error(message):
+    """An OperationalError shaped the way SQLAlchemy actually raises one."""
+    return OperationalError("SELECT 1", {}, sqlite3.OperationalError(message))
+
+
+class TestAVaultThatRegistersButWillNotMigrate:
+    """Validation reads `sqlite_master`; the migration chain reads much more."""
+
+    def _library(self, tmp_path):
+        folder = str(tmp_path / "library")
+        make_pre_alembic_vault(folder)
+        registry = LibraryRegistry(HubDatabase(str(tmp_path / "hub.db")))
+        return registry.attach(folder, "Library 1")
+
+    def test_a_schema_failure_becomes_the_same_offer(self, tmp_path):
+        library = self._library(tmp_path)
+
+        unusable = unusable_vault_from_open_failure(library, NoSuchTableError("user"))
+
+        assert unusable is not None
+        assert unusable.vault_path == library.vault_path
+        # "NoSuchTableError: user" alone reads as the word "user".
+        assert "could not be upgraded" in unusable.reason
+        assert "NoSuchTableError" in unusable.reason
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "database is locked",
+            "unable to open database file",
+            "attempt to write a readonly database",
+            "disk I/O error",
+            "database disk image is malformed",
+        ],
+    )
+    def test_a_failure_about_the_machine_is_never_offered_a_recreate(
+        self, tmp_path, message
+    ):
+        """A full disk must not be answered by abandoning a good library."""
+        library = self._library(tmp_path)
+
+        assert (
+            unusable_vault_from_open_failure(
+                library, sqlalchemy_operational_error(message)
+            )
+            is None
+        )
+
+
+class TestOpeningTheRegisteredVault:
+    """`Server._open_registered_vault`'s branches, without standing up a Server."""
+
+    def _server_double(self, tmp_path, failure, *, opened=None):
+        folder = str(tmp_path / "library")
+        make_pre_alembic_vault(folder)
+        hub = HubDatabase(str(tmp_path / "hub.db"))
+        registry = LibraryRegistry(hub)
+        library = registry.attach(folder, "Library 1")
+        attempts = []
+
+        def build_vault(image_root):
+            attempts.append(image_root)
+            if len(attempts) == 1:
+                raise failure
+            return opened
+
+        return SimpleNamespace(
+            hub=hub,
+            library_registry=registry,
+            _hub_bootstrap=SimpleNamespace(library=library),
+            build_vault=build_vault,
+        ), attempts
+
+    def test_a_schema_failure_raises_the_typed_error(self, tmp_path):
+        double, attempts = self._server_double(tmp_path, NoSuchTableError("user"))
+
+        with pytest.raises(UnusableVaultError):
+            Server._open_registered_vault(double)
+
+        assert len(attempts) == 1, "nothing is retried without authorisation"
+
+    def test_an_environmental_failure_is_re_raised_untouched(self, tmp_path):
+        double, _ = self._server_double(
+            tmp_path, sqlalchemy_operational_error("database is locked")
+        )
+
+        with pytest.raises(OperationalError):
+            Server._open_registered_vault(double)
+
+    def test_an_authorised_retry_sets_the_old_file_aside_and_reopens(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
+        sentinel = object()
+        double, attempts = self._server_double(
+            tmp_path, NoSuchTableError("user"), opened=sentinel
+        )
+        vault_path = double._hub_bootstrap.library.vault_path
+        before = open(vault_path, "rb").read()
+
+        assert Server._open_registered_vault(double) is sentinel
+        assert len(attempts) == 2
+
+        folder = os.path.dirname(vault_path)
+        moved = [n for n in os.listdir(folder) if n.startswith("vault.db.unusable-")]
+        assert len(moved) == 1
+        assert open(os.path.join(folder, moved[0]), "rb").read() == before
+        assert not os.path.exists(vault_path), "the replacement is made by the open"
+        # Without this the new vault would be refused for carrying no fingerprint.
+        assert double._hub_bootstrap.library.vault_uuid is None

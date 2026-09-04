@@ -2764,6 +2764,34 @@ interactive terminal: an unmounted external drive looks exactly like an empty
 folder, and a fresh vault inside the mount point would lock the real library
 out once the drive came back.
 
+**A vault that is present but will not open is a question, not a crash.** It is
+the third case beside "gone" and "fine", and it used to be neither: `attach`
+raised `NotAVaultError` out of `Server.__init__`, `app.main` had no clause for
+it, and the desktop shell showed a Python traceback over the first-run setup
+window. Two things fix it.
+
+*What counts as a vault.* `validate_vault_folder` accepts a pre-Alembic vault —
+`_LEGACY_VAULT_MARKER_TABLES`, the `0001_baseline` table set — as well as one
+carrying `alembic_version`. `VaultDatabase` has always known how to open that
+file (it stamps the baseline and upgrades to head), so refusing it in the
+registry made that branch unreachable for every library the hub owns, and a
+December-2025 folder read as "not a PixlStash vault". The legacy set is
+deliberately wide: one stray table named `picture` is still not a library.
+
+*What happens when it genuinely will not open.* `_register_first_library` and
+`_offer_a_usable_library` raise `UnusableVaultError` (a `HubBootstrapError`)
+carrying the folder, the file and the reason. `app.main` catches it, explains
+what starting over costs, and asks — inline on a TTY, and for Electron by
+printing the single-line `PIXLSTASH_VAULT_UNUSABLE=` record the shell parses
+(`electron/src/backend/VaultRecovery.ts`), exactly as the permission repair
+does. A yes relaunches with `PIXLSTASH_RECREATE_VAULT=1`, the only value
+`set_aside_unusable_vault` acts on; it **renames** `vault.db` and its sidecars
+to `vault.db.unusable-<timestamp>` and never deletes them. A vault we cannot
+read is not a vault that holds nothing, and somebody who is shown a traceback
+instead of an offer deletes the file by hand to get the app started. A
+*fingerprint conflict* is not this case — that vault loads fine, and the answer
+is to put the right one back.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub
