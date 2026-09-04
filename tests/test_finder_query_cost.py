@@ -253,6 +253,58 @@ def test_character_features_rollup_is_served_by_its_partial_index(tmp_path):
         )
 
 
+def test_likeness_stack_leader_sibling_lookup_uses_the_stack_index(tmp_path):
+    """The scoped-leader clause's correlated sibling lookup is keyed on stack_id.
+
+    The sibling row is narrowed by ``stack_id`` and by ``deleted``. Written as
+    two equality terms, ``ix_picture_stack_id`` and ``ix_picture_deleted`` tie
+    (no ``sqlite_stat1``) and creation order decides. When ``ix_picture_deleted``
+    won, each face row walked every live picture: one CHARACTER_LIKENESS page
+    cost 6.5 s on a 12k-picture library against 0.13 s. The clause now writes
+    the deleted test as ``deleted IS NOT 1``, which no index can serve, so the
+    only candidates left are the stack_id indexes and the plan cannot flip.
+
+    ``metadata.create_all()`` builds the indexes in set order, so a single
+    fresh database is a coin flip and would pass half the time without the
+    fix. The two competing indexes are therefore rebuilt in BOTH orders and
+    the plan asserted after each.
+    """
+    from sqlmodel import select
+
+    from pixlstash.scoring.character_likeness import _scoped_stack_leader_clause
+
+    def rebuild(session: Session, *ddl: str):
+        for statement in ddl:
+            session.connection().exec_driver_sql(statement)
+        session.commit()
+
+    deleted_last = (
+        "DROP INDEX ix_picture_deleted",
+        "CREATE INDEX ix_picture_deleted ON picture (deleted)",
+    )
+    stack_last = (
+        "DROP INDEX ix_picture_stack_id",
+        "CREATE INDEX ix_picture_stack_id ON picture (stack_id)",
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        _seed(vault, tmp_path, count=4, with_faces=True)
+        statement = (
+            select(Picture.id)
+            .where(Picture.deleted.is_(False))
+            .where(_scoped_stack_leader_clause("ALL", None))
+            .compile(vault.db._engine, compile_kwargs={"literal_binds": True})
+        )
+        for order in (deleted_last, stack_last):
+            vault.db.run_task(rebuild, *order)
+            plan = _explain(vault, str(statement), ())
+            sibling_lines = [line for line in plan if "picture_1" in line]
+            assert sibling_lines, f"no sibling lookup in plan {plan}"
+            assert all("ix_picture_stack_id" in line for line in sibling_lines), (
+                f"sibling lookup is not keyed on stack_id; plan was {plan}"
+            )
+
+
 # ── column width ────────────────────────────────────────────────────────────
 
 

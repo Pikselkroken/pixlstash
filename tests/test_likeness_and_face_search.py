@@ -312,7 +312,12 @@ def test_character_likeness_stack_scoped_leader_listing_and_count():
                 },
             )
             assert resp.status_code == 200, resp.text
-            listed_ids = [row["id"] for row in resp.json()]
+            rows = resp.json()
+            listed_ids = [row["id"] for row in rows]
+            # The grid's likeness pill reads this field. ``GridPicture`` is the
+            # enforced response model and drops any key it does not declare,
+            # which is how the pill went missing.
+            assert all(isinstance(row.get("character_likeness"), float) for row in rows)
 
             # Stack 1 is represented by exactly its in-scope member b (the
             # stack must not be dropped), stack 2 by its actual leader d, and
@@ -367,6 +372,10 @@ def test_pictures_count_character_likeness_matches_stream():
             stream = resp.json()
             assert stream["done"] is True
             assert len(stream["pictures"]) == likeness_count == 3
+            assert all(
+                isinstance(row.get("character_likeness"), float)
+                for row in stream["pictures"]
+            )
 
             # The normal (sort-less) count the frontend grid uses must agree
             # with the likeness count for the same character view.

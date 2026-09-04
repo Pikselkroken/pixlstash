@@ -494,9 +494,19 @@ def _scoped_stack_leader_clause(character_id, candidate_ids: list[int] | None):
             select(sib_face.id).where(sib_face.picture_id == sibling.id)
         )
 
+    # ``deleted IS NOT 1`` rather than ``deleted IS 0`` on purpose. As an
+    # equality term ``deleted`` lets the planner serve the sibling lookup from
+    # ``ix_picture_deleted``, which ties on cost with ``ix_picture_stack_id``
+    # (no ``sqlite_stat1``, see ``Picture.__table_args__``) and wins or loses
+    # on index-creation order. When it won, every face row walked every live
+    # picture: 6.5 s for one page on a 12k-picture library, 0.13 s the other
+    # way. ``IS NOT`` is not an indexable term, so only the stack_id indexes
+    # can answer the correlated lookup, whichever order the indexes were built
+    # in. (``~sibling.deleted`` does not do this: SQLAlchemy compiles it to
+    # ``deleted = 0`` for SQLite, which is indexable again.)
     conditions = [
         sibling.stack_id == Picture.stack_id,
-        sibling.deleted.is_(False),
+        sibling.deleted.is_not(True),
         sibling_in_scope,
     ]
     if candidate_ids is not None:
