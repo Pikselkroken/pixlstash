@@ -3187,6 +3187,19 @@ ambiguity here resolves towards *not* moving a file.
     - Instantiates `Vault` (opens `VaultDatabase` and runs Alembic), then stamps/validates `library_settings.library_uuid` and completes crash-safe legacy blanking before authentication starts.
     - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
+**Every interactive start-up question holds the log while it is on screen**
+(`pixl_logging.hold_log_output`). Three of the four are asked from inside
+`Server.__init__` and the fourth (`_prompt_bootstrap_credentials`) after it
+returns, so by then the boot log is running and the background workers have
+started: the first-run credentials prompt was written between two INFO lines,
+and a snapshot task logged its progress onto the same line while the prompt
+waited for an answer. The context manager swaps the root handlers for a
+buffering one and replays every held record, in order, once the question has
+been answered - held, never dropped. It only covers the logging path, so a bare
+`print` from another thread can still reach the terminal; that narrows the
+window rather than sealing it. The credentials prompt also prints its own
+heading, so it reads as a question rather than as one more line of start-up.
+
 4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
