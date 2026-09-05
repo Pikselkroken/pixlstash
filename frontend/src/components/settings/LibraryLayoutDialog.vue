@@ -306,6 +306,8 @@ const previewing = ref(false);
 /** The count on the bar no longer describes the layout on screen. */
 const countStale = ref(true);
 const migrating = ref(false);
+/** Undo is one request with no per-pass progress, so its bar is indeterminate. */
+const undoing = ref(false);
 const migrationError = ref("");
 /** `{movedCount, batchId}` once a run finishes, so Undo has something to undo. */
 const lastRun = ref(null);
@@ -527,6 +529,7 @@ async function undoMigration() {
   const batchId = lastRun.value?.batchId;
   if (!batchId) return;
   migrating.value = true;
+  undoing.value = true;
   try {
     // `undoBatchById` answers `null` rather than throwing when it refuses - a
     // read-only session, another operation already in flight, or a failure it
@@ -543,6 +546,7 @@ async function undoMigration() {
     }
   } finally {
     migrating.value = false;
+    undoing.value = false;
     countStale.value = true;
     await refreshPreview();
   }
@@ -768,17 +772,26 @@ function netDelta(row) {
             role="status"
             aria-live="polite"
           >
-            <div class="layout-consequence__num">
-              Moving… {{ movedSoFar.toLocaleString() }} of
-              {{ wouldMove.toLocaleString() }}
-            </div>
-            <progress
-              class="layout-consequence__bar"
-              :max="wouldMove || 1"
-              :value="movedSoFar"
-            />
+            <template v-if="undoing">
+              <div class="layout-consequence__num">
+                Undoing… {{ lastRun.movedCount.toLocaleString() }}
+                {{ lastRun.movedCount === 1 ? "picture" : "pictures" }}
+              </div>
+              <progress class="layout-consequence__bar" />
+            </template>
+            <template v-else>
+              <div class="layout-consequence__num">
+                Moving… {{ movedSoFar.toLocaleString() }} of
+                {{ wouldMove.toLocaleString() }}
+              </div>
+              <progress
+                class="layout-consequence__bar"
+                :max="wouldMove || 1"
+                :value="movedSoFar"
+              />
+            </template>
           </div>
-          <div class="layout-consequence__buttons">
+          <div v-if="!undoing" class="layout-consequence__buttons">
             <AppButton
               variant="danger"
               size="sm"
