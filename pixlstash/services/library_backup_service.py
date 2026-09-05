@@ -176,7 +176,8 @@ def _validate_vault_connection(
         required_tables={"picture", "alembic_version"},
     )
     rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
-    unknown = [row[0] for row in rows if row[0] not in known_vault_revisions()]
+    known = known_vault_revisions()
+    unknown = [row[0] for row in rows if row[0] and row[0] not in known]
     if unknown:
         raise BackupError(newer_library_message(unknown, library=label))
     if library.vault_uuid is not None:
