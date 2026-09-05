@@ -4080,10 +4080,23 @@ and updates `file_path` on the existing row instead.
   followed at once. Both the scan and the local-import commit also re-check the
   path inside their insert transaction, the one place their check-then-insert
   cannot interleave, so whichever lands first owns the row.
-  `MissingFilePurgeFinder` takes `is_ready=ReferenceFolderScanFinder.root_scan_complete`
-  and queues nothing until the first root scan has finished, because a file
-  renamed while the app was closed is a vanished path to both and the scan must
-  read it first.
+  Removals are only ever believed for a subtree the walk actually read: a
+  directory it could not list, a directory symlink it would not follow, a pruned
+  folder and another reference folder's root all go into `unscanned_roots`, and
+  rows beneath any of them are kept. A pass that finds no files at all while rows
+  exist deletes nothing — an unmounted drive is an empty directory, and
+  `Vault.__init__` will have recreated the mount point. `delete_removed` then
+  consults the `PictureMove` journal through
+  `MissingFilePurgeTask._separate_our_own_moves` before it deletes anything, so a
+  scan overlapping the move engine's rename-then-repoint window repoints the row
+  instead of destroying it.
+  `MissingFilePurgeFinder` leaves the root's rows to the scan entirely: it takes
+  `is_ready=ReferenceFolderScanFinder.root_scan_complete` so it queues nothing
+  before the first root scan, and its sweep then skips `reference_folder_id IS
+  NULL` rows for good. The gate used to lift once that first scan finished, which
+  put two deleters on the same rows — the hourly sweep pairs renames from the
+  journal alone, so a rename the scan had deliberately deferred was purged before
+  the next scan could follow it. Exactly one of the two may delete a root row.
 - **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
   `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
   alongside the picture rather than abandoned: nothing sweeps
@@ -4099,11 +4112,14 @@ and updates `file_path` on the existing row instead.
   was deleted would otherwise swallow an unrelated new file of the same content,
   and the user would get a picture they cannot see instead of a new one. They do
   still count as unchanged files *blocking* a match, since their file is on disk.
-- **A present file with a NULL `pixel_sha` blocks matching for the whole pass.**
-  The column is nullable and `MissingPixelShaFinder` backfills it, so an
-  un-hashed unchanged file is invisible to the ambiguity count — and it is
-  exactly the file whose existence would have refused the match. NULL there
-  means "unknown", not "no collision".
+- **A present file with a NULL `pixel_sha` blocks matching at its own size only.**
+  The column is nullable, so an un-hashed unchanged file is invisible to the
+  ambiguity count — and it is exactly the file whose existence would have refused
+  the match. NULL there means "unknown", not "no collision", so it still refuses,
+  but only for candidates whose size it could collide with. It used to veto the
+  whole pass, and since `MissingPixelShaFinder` never backfills `deleted` rows
+  (`tasks/pixel_sha_task.py`), one un-hashed scrapheap row made that veto
+  permanent: every rename in the library became a delete plus a re-import.
 - **A followed move emits `CHANGED_PICTURES`** (`moved_picture_ids` in the task
   result, `Vault._on_task_completed`), and deliberately not `PICTURE_IMPORTED`:
   `file_path` changed on a row an open grid may already be showing, but nothing
@@ -4114,7 +4130,8 @@ and updates `file_path` on the existing row instead.
   are marked at the helper: `os.walk` is not atomic, and `MissingFilePurgeTask`
   can delete the row in the up-to-`_RESCAN_INTERVAL_S` window before the
   rescuing scan runs. Both degrade to the old delete-and-re-add; the second logs
-  a warning when it is observed.
+  a warning when it is observed, and is closed for the library's own root, whose
+  rows the sweep no longer touches.
 
 ---
 
