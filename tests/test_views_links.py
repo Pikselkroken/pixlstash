@@ -720,6 +720,38 @@ def test_an_ordinary_folder_beside_the_library_is_allowed(tmp_path, library):
     views_service.check_views_root(str(tmp_path / "_PixlStash Views"), vault)
 
 
+def test_a_views_root_in_a_restricted_system_directory_is_refused(tmp_path, library):
+    """Every refusal here used to be relative to the library, so anywhere else passed.
+
+    A root that is not inside the library, not inside a reference folder and not
+    synced was accepted anywhere on the disk, and `_prepare_root` then created
+    the folder and wrote the marker into it.
+    """
+    image_root, _paths = library
+    vault = _FakeVault(image_root)
+
+    with pytest.raises(views_service.ViewsError, match="restricted system directory"):
+        views_service.check_views_root("/etc/pixlstash-views", vault)
+
+
+def test_a_symlink_into_a_restricted_directory_is_refused_as_a_views_root(
+    tmp_path, library
+):
+    """The blocklist is literal, so the root is resolved before it is compared."""
+    image_root, _paths = library
+    vault = _FakeVault(image_root)
+    link = tmp_path / "looks-ordinary"
+    try:
+        link.symlink_to("/etc", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    if not os.path.isdir("/etc"):
+        pytest.skip("no /etc on this platform")
+
+    with pytest.raises(views_service.ViewsError, match="restricted system directory"):
+        views_service.check_views_root(str(link / "pixlstash-views"), vault)
+
+
 def test_a_relative_views_root_is_refused(tmp_path, library):
     image_root, _paths = library
     vault = _FakeVault(image_root)
@@ -856,6 +888,30 @@ def test_patch_publishes_the_tree_and_get_reports_it(_env, _seeded, tmp_path):
     assert os.path.isdir(os.path.join(views_root, "People", "Mira"))
     assert os.path.isdir(os.path.join(views_root, "Projects", "Editorial"))
     assert client.get(f"{API}/server-config/views").json()["views_root"] == views_root
+
+
+def test_a_views_root_outside_the_configured_filesystem_roots_is_refused(
+    _env, _seeded, tmp_path, monkeypatch
+):
+    """An operator who confined the picker did not exempt the route that makes links."""
+    client, server, _tmp = _env
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    monkeypatch.setitem(server._server_config, "filesystem_roots", [str(allowed)])
+
+    outside = client.patch(
+        f"{API}/server-config/views",
+        json={"views_root": str(tmp_path / "outside"), "kinds": ["sets"]},
+    )
+    assert outside.status_code == 403, outside.text
+    assert not os.path.exists(str(tmp_path / "outside"))
+
+    # Over-blocking is its own regression: inside the root still publishes.
+    inside = client.patch(
+        f"{API}/server-config/views",
+        json={"views_root": str(allowed / "views"), "kinds": ["sets"]},
+    )
+    assert inside.status_code == 200, inside.text
 
 
 def test_a_refused_folder_never_becomes_the_recorded_one(_env, _seeded, tmp_path):

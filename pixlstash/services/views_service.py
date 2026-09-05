@@ -52,6 +52,9 @@ from pixlstash.db_models.project import Project
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
+from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_path,
+)
 
 logger = get_logger(__name__)
 
@@ -291,6 +294,8 @@ def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) 
       second time under its view path.
     * **Containing the library.** The same two problems, reached from the other
       side, plus a rebuild that would delete into the library.
+    * **A restricted system directory**, by the shared blocklist, resolved first
+      so a symlink cannot launder one past it.
     * **A cloud-sync folder.** The client follows links and uploads the content,
       which duplicates the library rather than referencing it. This one is a
       **precaution, not a measurement**: no sync client was available to test
@@ -300,6 +305,21 @@ def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) 
     """
     if not root or not os.path.isabs(root):
         raise ViewsError("Choose a full path for the views folder.")
+
+    # The same blocklist every other path-taking route applies, on the resolved
+    # path. Without it this function's refusals were all *relative* - inside the
+    # library, inside a reference folder, a sync folder - and a root that was
+    # none of those was accepted anywhere on the disk, including a system
+    # directory the rest of the app refuses outright. `_prepare_root` then
+    # creates the folder and writes the marker into it.
+    # `os.path.realpath`, not this module's `_resolved`: that one applies
+    # `normcase`, which lowercases on Windows, and the blocklist entries are
+    # spelled `C:\Windows`. Passing a case-folded path made the check match
+    # nothing on Windows - a refusal that never fires is worse than none,
+    # because the coverage matrix records it as present.
+    blocked = validate_reference_folder_path(os.path.realpath(os.path.abspath(root)))
+    if blocked:
+        raise ViewsError(blocked)
 
     image_root = getattr(vault, "image_root", None)
     if image_root:
