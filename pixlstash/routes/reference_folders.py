@@ -662,6 +662,12 @@ def create_router(server) -> APIRouter:
         error = validate_reference_folder_path(folder)
         if error:
             raise HTTPException(status_code=400, detail=error)
+        # Stored resolved, because the check above resolves. Keeping the link's
+        # own name would leave the row naming one directory and the scan walking
+        # another, and repointing the link afterwards would silently move the
+        # folder somewhere the blocklist never saw. `model_folders.py` already
+        # does this and its comment says this route did too; it did not.
+        folder = os.path.realpath(folder)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 
@@ -768,6 +774,10 @@ def create_router(server) -> APIRouter:
                 error = validate_reference_folder_path(new_folder)
                 if error:
                     raise HTTPException(status_code=400, detail=error)
+                # Resolved for the same reason the create route resolves: this
+                # is where an existing folder is repointed, so a link accepted
+                # here would name one directory in the row and walk another.
+                new_folder = os.path.realpath(new_folder)
                 _validate_reference_folder_conflicts(
                     session, new_folder, exclude_id=folder_id
                 )
