@@ -2384,6 +2384,13 @@ defineExpose({ focusTasksTab });
   outline: none;
   appearance: none;
 }
+/* The popup list is native chrome: without an explicit fill it paints the
+   OS default (white) under the select's on-surface text in dark mode. */
+.conf-tag-select option,
+.conf-tag-select optgroup {
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+}
 .conf-tag-select:hover {
   border-color: rgba(var(--v-theme-on-surface), 0.3);
 }
