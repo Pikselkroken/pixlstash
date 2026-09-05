@@ -43,6 +43,7 @@ import zstandard
 from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME, Library
+from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.system_utils import space_shortfall
 from pixlstash.hub.bootstrap import known_vault_revisions, newer_library_message
@@ -105,6 +106,10 @@ class BackupResult:
     file_count: int
     metadata_only: bool
     reference_folders: list[str] = field(default_factory=list)
+    #: Picture files under the library root that no catalogue row names.
+    orphan_count: int = 0
+    #: Whether those files went into the archive (see ``create_backup``).
+    orphans_included: bool = True
 
     @property
     def has_external_folders(self) -> bool:
@@ -330,6 +335,31 @@ def _required_internal_picture_files(
     return required
 
 
+def _orphaned_media(
+    library_root: str, payload: list[tuple[str, str]], required: set[str]
+) -> set[str]:
+    """Picture files in *payload* that no catalogue row references.
+
+    The reverse of :func:`_verify_required_files`: that proves every catalogued
+    picture is in the archive, this counts the pictures in the archive that the
+    catalogue never heard of - copies left by a library split, files whose row
+    was deleted while the file stayed. Thumbnails, PixlStash's own folders and
+    non-media files are not pictures and are not counted.
+    """
+    orphans: set[str] = set()
+    for absolute, _arcname in payload:
+        relative = os.path.relpath(absolute, library_root)
+        top = relative.split(os.sep, 1)[0]
+        if top.startswith(".") or top in ("snapshots", "tmp"):
+            continue
+        if not is_supported_media_file(absolute):
+            continue
+        if os.path.normcase(os.path.abspath(absolute)) in required:
+            continue
+        orphans.add(absolute)
+    return orphans
+
+
 def _verify_required_files(required: set[str], payload: list[tuple[str, str]]) -> None:
     """Prove that every copied internal reference is present in the payload."""
     included = {os.path.normcase(os.path.abspath(path)) for path, _ in payload}
@@ -409,6 +439,8 @@ def create_backup(
     compress: bool = True,
     tool_version: str = "unknown",
     confirm: Optional[ConfirmCallback] = None,
+    include_orphans: Optional[bool] = None,
+    ask_orphans: Optional[ConfirmCallback] = None,
 ) -> BackupResult:
     """Write *library* and the hub to a ``.tar.zst`` (or ``.tar``) at *destination*.
 
@@ -426,6 +458,12 @@ def create_backup(
         confirm: Asked, with a message, when the destination looks too small to
             hold the archive. ``None`` declines - a scripted caller gets a
             refusal rather than a prompt it cannot answer.
+        include_orphans: Whether picture files no catalogue row names go into
+            the archive. ``None`` asks *ask_orphans* when there are any.
+        ask_orphans: Asked, with a message naming the count, when
+            *include_orphans* is ``None`` and the library holds such files.
+            ``None`` includes them: a scripted backup must not quietly leave
+            files out, and nothing is lost by carrying them.
 
     Returns:
         A :class:`BackupResult` describing what was written.
@@ -468,6 +506,8 @@ def create_backup(
     picture_count = 0
     references: list[str] = []
     required_files: set[str] = set()
+    orphan_count = 0
+    orphans_included = True
     try:
         # Databases first: the archived catalogue then names only images that
         # already exist, and the file pass below collects them.
@@ -509,6 +549,37 @@ def create_backup(
         finally:
             hub_copy_conn.close()
 
+        # The file pass comes before the manifest so the manifest can say what
+        # was decided about orphans.
+        library_payload: list[tuple[str, str]] = []
+        if not metadata_only:
+            library_payload = _library_files(library.path)
+            _verify_required_files(required_files, library_payload)
+            orphans = _orphaned_media(library.path, library_payload, required_files)
+            orphan_count = len(orphans)
+            if orphans:
+                if include_orphans is None:
+                    include_orphans = (
+                        ask_orphans(
+                            f"{orphan_count} picture file(s) in the library folder "
+                            "are not in the catalogue (no PixlStash record). "
+                            "Include them in the backup?"
+                        )
+                        if ask_orphans is not None
+                        else True
+                    )
+                orphans_included = bool(include_orphans)
+                if not orphans_included:
+                    library_payload = [
+                        entry for entry in library_payload if entry[0] not in orphans
+                    ]
+                    logger.info(
+                        "Backup of %s leaves out %d orphaned picture file(s) at the "
+                        "owner's request.",
+                        library.name,
+                        orphan_count,
+                    )
+
         manifest = {
             "library_uuid": library.uuid,
             "library_name": library.name,
@@ -520,6 +591,8 @@ def create_backup(
             "metadata_only": metadata_only,
             "reference_folders": references,
             "contains_hub": True,
+            "orphan_count": orphan_count,
+            "orphans_included": orphans_included,
         }
 
         manifest_copy = os.path.join(scratch, "manifest.json")
@@ -528,10 +601,7 @@ def create_backup(
 
         payload = [(manifest_copy, "manifest.json"), (vault_copy, VAULT_FILENAME)]
         payload.append((hub_copy, "hub.db"))
-        if not metadata_only:
-            library_payload = _library_files(library.path)
-            _verify_required_files(required_files, library_payload)
-            payload.extend(library_payload)
+        payload.extend(library_payload)
         file_count = len(payload)
 
         payload_bytes = _payload_bytes(payload)
@@ -561,6 +631,8 @@ def create_backup(
         file_count=file_count,
         metadata_only=metadata_only,
         reference_folders=references,
+        orphan_count=orphan_count,
+        orphans_included=orphans_included,
     )
 
 

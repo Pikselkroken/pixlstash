@@ -267,9 +267,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help=(
-            "Do not ask for confirmation. Only asked when the destination looks "
-            "too small; a cron job wants this so it cannot hang on the question."
+            "Do not ask for confirmation. Asked when the destination looks too "
+            "small, and when the library folder holds picture files that are not "
+            "in the catalogue (those are then included); a cron job wants this "
+            "so it cannot hang on a question."
         ),
+    )
+    backup_parser.add_argument(
+        "--skip-orphans",
+        dest="include_orphans",
+        action="store_false",
+        default=None,
+        help="Leave those files out of the archive, without asking.",
     )
     backup_parser.set_defaults(handler=_cmd_backup)
 
@@ -908,6 +917,12 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
             # the scripted answer; without it a cron job would hang on a
             # question nobody is there to read.
             confirm=(lambda message: True) if args.yes else _confirm,
+            include_orphans=args.include_orphans,
+            # Enter keeps them: a backup that silently drops files is the
+            # worse mistake, and the count is printed either way.
+            ask_orphans=(lambda message: True)
+            if args.yes
+            else (lambda message: _confirm(message, default=True)),
         )
     except BackupError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -920,6 +935,13 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
         print(
             "This is a metadata-only archive: it holds the database, not your "
             "images. It can only restore a library whose picture files still exist."
+        )
+    if result.orphan_count:
+        verb = "included" if result.orphans_included else "NOT included"
+        print(
+            f"note: {result.orphan_count} picture file(s) in the library folder "
+            f"have no PixlStash record; they are {verb} in the archive.",
+            file=sys.stderr,
         )
     if result.has_external_folders:
         # Said at the top of the output, with the count, because users assume
