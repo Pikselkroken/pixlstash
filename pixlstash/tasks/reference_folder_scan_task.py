@@ -42,6 +42,7 @@ from pixlstash.services.layout_move_service import (
 from pixlstash.services.move_reconciliation_service import record_pending_reviews
 from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
 from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
+from pixlstash.utils.reference_folder_watcher import ROOT_INTERNAL_DIRS
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -50,11 +51,10 @@ _BUILD_CHUNK_SIZE = 128
 _MAX_BUILD_WORKERS = 8
 
 # Top-level directories PixlStash itself writes under the library root, and so
-# must never be indexed by a root scan: snapshots (snapshot_service), tmp (set
-# and face thumbnail caches). Dot-directories (.ref_thumbs, .staging) are
-# pruned by name shape. vault.db and friends are not media and fall out on
-# extension.
-_ROOT_INTERNAL_DIRS = frozenset({"snapshots", "tmp"})
+# must never be indexed by a root scan; the watcher ignores the same set.
+# Dot-directories (.pixlstash-thumbnails, .staging) are pruned by name shape.
+# vault.db and friends are not media and fall out on extension.
+_ROOT_INTERNAL_DIRS = ROOT_INTERNAL_DIRS
 
 # A file in the library root younger than this is left alone by a root scan.
 # PixlStash's own imports write the file first and insert the row a moment

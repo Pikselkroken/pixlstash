@@ -30,6 +30,13 @@ _IMAGE_EXTS: frozenset[str] = frozenset(
 )
 _WATCHED_EXTS: frozenset[str] = _SIDECAR_EXTS | _IMAGE_EXTS
 
+# Top-level directories under the library root that PixlStash writes itself
+# (snapshots, the set/face thumbnail caches under tmp). A change there is never
+# the owner reorganising pictures, so the root watch ignores it, as does the
+# root scan's walk; dot-directories (.pixlstash-thumbnails, .staging) likewise.
+# Shared with the scan task so the two cannot disagree about what is internal.
+ROOT_INTERNAL_DIRS: frozenset[str] = frozenset({"snapshots", "tmp"})
+
 # Seconds to wait after the last filesystem event before triggering a rescan.
 # Coalesces rapid event bursts (editor saves, atomic renames, etc.).
 _DEBOUNCE_S: float = 2.0
@@ -94,7 +101,12 @@ class ReferenceFolderWatcher:
                 return
             # Reserve the id so a concurrent caller cannot schedule it twice.
             self._watches[folder_id] = None
-        handler = _ChangeHandler(folder_id, self._schedule_rescan)
+        handler = _ChangeHandler(
+            folder_id,
+            self._schedule_rescan,
+            # Only the library root has internal folders of ours to ignore.
+            root=resolved_path if folder_id is None else None,
+        )
         # Never call into the observer while holding `self._lock`: watchdog
         # dispatches events to handlers while holding ITS lock, and
         # `_schedule_rescan` takes ours from inside that dispatch, so scheduling
@@ -172,9 +184,25 @@ class ReferenceFolderWatcher:
 class _ChangeHandler(FileSystemEventHandler):
     """Handles filesystem events for a single reference folder directory."""
 
-    def __init__(self, folder_id: int | None, callback) -> None:
+    def __init__(
+        self, folder_id: int | None, callback, root: str | None = None
+    ) -> None:
         self._folder_id = folder_id
         self._callback = callback
+        self._root = root
+
+    def _is_internal(self, path: str) -> bool:
+        """Whether *path* lies in a folder PixlStash writes itself (root only).
+
+        Every thumbnail write lands under ``.pixlstash-thumbnails``, so without
+        this a face pass or an import would wake a root rescan every couple of
+        seconds for nothing the owner did.
+        """
+        if self._root is None:
+            return False
+        relative = os.path.relpath(path, self._root)
+        top = relative.split(os.sep, 1)[0]
+        return top.startswith(".") or top in ROOT_INTERNAL_DIRS
 
     def dispatch(self, event) -> None:
         if event.is_directory:
@@ -183,5 +211,5 @@ class _ChangeHandler(FileSystemEventHandler):
         # moved *into* the watched directory also triggers a rescan.
         path: str = getattr(event, "dest_path", None) or event.src_path
         ext = os.path.splitext(path)[1].lower()
-        if ext in _WATCHED_EXTS:
+        if ext in _WATCHED_EXTS and not self._is_internal(path):
             self._callback(self._folder_id)

@@ -120,3 +120,37 @@ def test_unwatch_releases_the_lock_before_calling_the_observer(tmp_path):
     assert not dispatcher.is_alive()
     assert len(observer.unscheduled) == 1
     assert module is not None
+
+
+def test_the_root_watch_ignores_what_pixlstash_writes_itself(tmp_path):
+    """Every thumbnail lands under ``.pixlstash-thumbnails`` inside the library
+    root, and the set/face caches under ``tmp``; a face pass would otherwise
+    wake a root rescan every couple of seconds. A reference-folder watch has
+    no such folders and keeps reporting everything."""
+    from types import SimpleNamespace
+
+    seen: list = []
+    root_handler = module._ChangeHandler(None, seen.append, root=str(tmp_path))
+    for relative in (
+        ".pixlstash-thumbnails/a_0123_thumb.webp",
+        ".staging/b.png",
+        "snapshots/2026/c.png",
+        "tmp/set_thumbnails/d.webp",
+    ):
+        root_handler.dispatch(
+            SimpleNamespace(is_directory=False, src_path=str(tmp_path / relative))
+        )
+    assert seen == [], "internal folders must not wake the root scan"
+
+    root_handler.dispatch(
+        SimpleNamespace(is_directory=False, src_path=str(tmp_path / "Mira" / "e.png"))
+    )
+    assert seen == [None], "the owner's folders still do"
+
+    ref_handler = module._ChangeHandler(7, seen.append)
+    ref_handler.dispatch(
+        SimpleNamespace(
+            is_directory=False, src_path=str(tmp_path / ".hidden" / "f.png")
+        )
+    )
+    assert seen == [None, 7], "a reference folder has no internal folders to skip"
