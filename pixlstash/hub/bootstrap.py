@@ -721,13 +721,17 @@ def newer_library_message(unknown: list[str], *, library: str) -> str:
         this = f"This version ({package_version('pixlstash')})"
     except PackageNotFoundError:
         this = "This version"
-    latest = max(known_vault_revisions(), default="none")
+
+    def number(rev: str) -> str:
+        return rev.split("_", 1)[0]  # "0113_reset_..." -> "0113"
+
+    latest = number(max(known_vault_revisions(), default="none"))
     return (
         f"{library} was last opened by a newer PixlStash. {this} cannot "
         "read it; nothing has been changed.\n"
         f"  Update PixlStash and try again: {RELEASES_URL}\n"
-        f"  (Library revision {', '.join(unknown)}; this version knows up to "
-        f"{latest}.)"
+        f"  (Library revision {', '.join(map(number, unknown))}; this version "
+        f"knows up to {latest}.)"
     )
 
 
