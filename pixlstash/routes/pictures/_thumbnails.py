@@ -169,18 +169,24 @@ def register_routes(router, server):
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        thumb_path = ImageUtils.find_thumbnail(vault.image_root, pic.file_path)
-        if thumb_path:
-            if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
+        # Where the bitmap belongs, kept for the in-lock re-check below: a
+        # concurrent request that generated it while this one waited writes
+        # exactly here. `find_thumbnail` is the read that also brings a
+        # pre-#1164 bitmap home, and may answer a legacy path if that move
+        # failed, so the two are deliberately separate variables.
+        thumb_path = ImageUtils.get_thumbnail_path(vault.image_root, pic.file_path)
+        existing = ImageUtils.find_thumbnail(vault.image_root, pic.file_path)
+        if existing:
+            if not discard_stale_thumbnail(id, pic.file_path, existing):
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
                     id,
-                    thumb_path,
+                    existing,
                     elapsed_ms,
                 )
                 return FileResponse(
-                    thumb_path,
+                    existing,
                     media_type="image/webp",
                     headers=_THUMBNAIL_CACHE_HEADERS,
                 )
