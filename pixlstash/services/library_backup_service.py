@@ -45,7 +45,7 @@ from tqdm import tqdm
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.system_utils import space_shortfall
-from pixlstash.services.library_switch_service import known_vault_revisions
+from pixlstash.hub.bootstrap import known_vault_revisions, newer_library_message
 from pixlstash.services.portable_identity import (
     PortableIdentityScrubError,
     sanitize_historical_snapshots,
@@ -178,9 +178,7 @@ def _validate_vault_connection(
     rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
     unknown = [row[0] for row in rows if row[0] not in known_vault_revisions()]
     if unknown:
-        raise BackupError(
-            f"{label} has an unsupported schema revision: {', '.join(unknown)}."
-        )
+        raise BackupError(newer_library_message(unknown, library=label))
     if library.vault_uuid is not None:
         try:
             row = conn.execute(

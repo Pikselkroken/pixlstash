@@ -294,7 +294,9 @@ class TestFailingToSwitch:
         with pytest.raises(LibrarySwitchError) as excinfo:
             server.library_switch.switch_to(library.uuid)
 
-        assert "newer version of PixlStash" in str(excinfo.value)
+        assert "newer PixlStash" in str(excinfo.value)
+        assert "releases/latest" in str(excinfo.value)
+        assert "9999_from_the_future" in str(excinfo.value)
         assert server.vault is before_vault
         assert server.library_switch.state is SwitchState.READY
 
