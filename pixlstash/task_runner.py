@@ -541,6 +541,13 @@ class TaskRunner:
         with self._active_task_lock:
             return [t for t in self._active_tasks.values() if t.type == task_type]
 
+    def has_active_gpu_tasks(self) -> bool:
+        """True while the GPU worker is executing a task."""
+        with self._active_task_lock:
+            return any(
+                t.queue_type == QueueType.GPU for t in self._active_tasks.values()
+            )
+
     def start(self):
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]

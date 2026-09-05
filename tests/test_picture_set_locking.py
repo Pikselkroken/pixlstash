@@ -789,6 +789,9 @@ def test_reset_tags_and_description_blocked_on_locked_pic():
 
         assert client.post(f"/pictures/{pic}/reset_tags").status_code == 423
         assert client.post(f"/pictures/{pic}/reset_description").status_code == 423
+        bulk = {"picture_ids": [pic]}
+        assert client.post("/pictures/reset_tags", json=bulk).status_code == 423
+        assert client.post("/pictures/reset_description", json=bulk).status_code == 423
 
         # The confirmed tag survived the refused reset.
         tags = client.get(f"/pictures/{pic}/tags").json()["tags"]

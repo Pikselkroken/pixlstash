@@ -312,6 +312,8 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 |---|---|---|---|---|
 | POST | `/api/v1/pictures/{id}/reset_description` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/reset_tags` | picture_scoped | id=id |  |
+| POST | `/api/v1/pictures/reset_description` | picture_scoped | body=picture_ids |  |
+| POST | `/api/v1/pictures/reset_tags` | picture_scoped | body=picture_ids |  |
 | GET | `/api/v1/pictures/{id}/tag_predictions` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/delete` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/{tag}/confirm` | picture_scoped | id=id |  |

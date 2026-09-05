@@ -969,6 +969,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/{id}/reset_description"): RoutePolicy(
         _PIC, id_param="id"
     ),
+    ("POST", "/api/v1/pictures/reset_tags"): RoutePolicy(_PIC, body_ids="picture_ids"),
+    ("POST", "/api/v1/pictures/reset_description"): RoutePolicy(
+        _PIC, body_ids="picture_ids"
+    ),
     ("GET", "/api/v1/tagger/label-thresholds"): RoutePolicy(_ANY),
     # ── stacks.py ───────────────────────────────────────────────────────────
     (

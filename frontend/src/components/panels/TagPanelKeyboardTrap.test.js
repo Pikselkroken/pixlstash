@@ -27,7 +27,7 @@ const tagsApi = vi.hoisted(() => ({
 
 vi.mock("../../api/tags", () => tagsApi);
 vi.mock("../../api/pictures", () => ({
-  resetPictureTags: vi.fn(async () => ({})),
+  resetPicturesTags: vi.fn(async () => ({})),
 }));
 vi.mock("../../api/taggers", () => ({
   listTaggers: vi.fn(async () => ({ plugins: [] })),

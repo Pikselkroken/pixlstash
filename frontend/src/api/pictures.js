@@ -553,6 +553,33 @@ export async function resetPictureDescription(
 }
 
 /**
+ * Re-run tagging on many pictures in one request. The backend marks them and
+ * the background tagger batches them; nothing is queued per picture.
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [body] - `{ model }` to pick a tagger.
+ * @returns {Promise<Object>} the response body: `count` marked.
+ */
+export async function resetPicturesTags(pictureIds, body = {}) {
+  return unwrap(apiClient.post(
+    "/pictures/reset_tags",
+    { ...body, picture_ids: pictureIds },
+  ));
+}
+
+/**
+ * Re-run captioning on many pictures in one request; see `resetPicturesTags`.
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [body] - `{ model }` to pick a captioner.
+ * @returns {Promise<Object>} the response body: `count` marked.
+ */
+export async function resetPicturesDescriptions(pictureIds, body = {}) {
+  return unwrap(apiClient.post(
+    "/pictures/reset_description",
+    { ...body, picture_ids: pictureIds },
+  ));
+}
+
+/**
  * Remove tags the model could not possibly be right about.
  * @param {Array<number|string>} pictureIds
  * @param {Object} filters - the scope the caller is viewing.

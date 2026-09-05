@@ -1142,7 +1142,7 @@
           @create-stacks-from-groups="createStacksFromSelectedGroups"
           @run-plugin="handlePluginRunRequest"
           @comfyui-run="handleComfyuiRun"
-          @tags-applied="debouncedFetchAllGridImages({ force: true })"
+          @tags-applied="handleTagsApplied"
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
@@ -1267,8 +1267,8 @@ import {
   detectPictures,
   listPicturePlugins,
   runPicturePlugin,
-  resetPictureTags,
-  resetPictureDescription,
+  resetPicturesTags,
+  resetPicturesDescriptions,
   clearImpossibleTags,
   restoreImpossibleTags,
   startExport,
@@ -1782,19 +1782,25 @@ async function fetchTaggerPlugins() {
   }
 }
 
+function handleTagsApplied(payload) {
+  // A reset only marks pictures for the background tagger; the grid shows
+  // nothing of that until the tagger's own tags_changed event lands, so the
+  // reload that blanked the grid buys nothing here (#1162).
+  if (payload?.action === "reset") return;
+  debouncedFetchAllGridImages({ force: true });
+}
+
 async function handleAutoTag({ model } = {}) {
   const ids = selectedImageIds.value
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || !props.backendUrl) return;
   try {
-    const body = model ? { model } : {};
-    await Promise.all(
-      ids.map((id) =>
-        resetPictureTags(id, body),
-      ),
-    );
-    debouncedFetchAllGridImages({ force: true });
+    // One request marks the whole selection. No grid reload: the backend's
+    // origin-stamped tags_changed event already refreshes a tag-filtered grid,
+    // and reloading every card for a change that touches none of their
+    // thumbnails is what blanked the grid (#1162).
+    await resetPicturesTags(ids, model ? { model } : {});
   } catch (err) {
     console.error("Auto-tag failed:", err);
   }
@@ -1806,13 +1812,10 @@ async function handleGenerateDescription({ model } = {}) {
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || !props.backendUrl) return;
   try {
-    const body = model ? { model } : {};
-    await Promise.all(
-      ids.map((id) =>
-        resetPictureDescription(id, body),
-      ),
-    );
-    debouncedFetchAllGridImages({ force: true });
+    // One request marks the whole selection; each finished caption arrives
+    // over descriptions_changed and refreshes its own card. No grid reload:
+    // that is what blanked the grid (#1162).
+    await resetPicturesDescriptions(ids, model ? { model } : {});
   } catch (err) {
     console.error("Generate description failed:", err);
   }
