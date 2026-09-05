@@ -202,6 +202,16 @@ export const useTasksStore = defineStore("tasks", () => {
   const activeCount = computed(() => activeEntries.value.length);
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
+  // The tagger's worker key is its TaskType value. While it is running, a
+  // tag-filtered grid would otherwise be offered a "View changed externally"
+  // pill after every eight-picture batch; readers hold theirs until this
+  // goes false. Same grace window as the Tasks tab row, so a pass idling
+  // between batches still counts as running.
+  const TAGGER_WORKER_KEY = "TagTask";
+  const taggingActive = computed(() =>
+    activeWorkerEntries.value.some((entry) => entry.key === TAGGER_WORKER_KEY),
+  );
+
   // ── Rate helpers (read by the Tasks tab for sparklines / "/s" labels) ──────
   // Progress made across the window divided by the time it took, which is the
   // throughput the label claims to show.
@@ -391,6 +401,7 @@ export const useTasksStore = defineStore("tasks", () => {
     activeWorkerEntries,
     activeCount,
     hasActiveTasks,
+    taggingActive,
     // rate helpers
     getLatestRate,
     // polling lifecycle

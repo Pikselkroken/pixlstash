@@ -17,6 +17,7 @@ import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { useTasksStore } from "../stores/useTasksStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -133,6 +134,7 @@ export function useUpdatesSocket({
   refreshSidebarPicturesDebounced,
 }) {
   const wsStore = useWsStore();
+  const tasksStore = useTasksStore();
   const gridStore = useGridStore();
   const sortStore = useSortStore();
   const filterStore = useFilterStore();
@@ -235,8 +237,7 @@ export function useUpdatesSocket({
     refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
     refreshThumbnailUrls: (ids) =>
       gridContainer.value?.refreshThumbnailUrls?.(ids),
-    applyRotatedCards: (ids) =>
-      gridContainer.value?.applyRotatedCards?.(ids),
+    applyRotatedCards: (ids) => gridContainer.value?.applyRotatedCards?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
@@ -576,12 +577,34 @@ export function useUpdatesSocket({
   // tag change under an active tag filter (instead of reshuffling the filtered
   // grid under the user). Skip ids already queued in the "new pictures" pill so a
   // just-imported batch being tagged doesn't double-pill.
+  //
+  // While the tagger is running the ids are held instead: a pass over a
+  // library changes tags in eight-picture batches, and raising the pill per
+  // batch had it back on screen seconds after every refresh for as long as the
+  // run lasted. One pill when the run ends says the same thing once.
+  let heldSortChangedIds = [];
   function onFlagSortChanged(ids) {
     if (!Array.isArray(ids) || !ids.length) return;
+    if (tasksStore.taggingActive) {
+      const held = new Set(heldSortChangedIds);
+      for (const id of ids) held.add(id);
+      heldSortChangedIds = Array.from(held);
+      return;
+    }
     const pending = new Set(wsStore.pendingExternalImportIds);
     const fresh = ids.filter((id) => !pending.has(id));
     if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
   }
+
+  watch(
+    () => tasksStore.taggingActive,
+    (active) => {
+      if (active || !heldSortChangedIds.length) return;
+      const ids = heldSortChangedIds;
+      heldSortChangedIds = [];
+      onFlagSortChanged(ids);
+    },
+  );
 
   // The backend only sends events this client's current view could care about,
   // so any change to what the view is has to be re-announced.
@@ -604,6 +627,7 @@ export function useUpdatesSocket({
     () => {
       wsStore.clearPendingExternalImportIds();
       wsStore.clearSortChangedExternalIds();
+      heldSortChangedIds = [];
     },
   );
 
