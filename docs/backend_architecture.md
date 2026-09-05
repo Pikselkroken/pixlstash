@@ -4060,6 +4060,30 @@ and updates `file_path` on the existing row instead.
   `maintenance.py` looks for every one, and `remove_thumbnail` deletes at every
   location a picture's bitmap could be. `is_pixlstash_thumbnail` keeps excluding
   the old siblings from every walk until they have all moved.
+- **The library's own root is scanned by the same task, under `folder_id=None`.**
+  A laid-out root is a folder tree the owner reorganises in their file manager,
+  and until this scan existed a rename there was a row `MissingFilePurgeFinder`
+  deleted within the hour. `ReferenceFolderScanFinder` keeps the root's schedule
+  itself (no `ReferenceFolder` row to stamp): due at boot, then every
+  `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
+  watches `image_root` under the id `None` — reports a change. Root mode differs
+  from a reference folder exactly where `layout_move_service.LayoutRoot` says it
+  does: pictures are the `reference_folder_id IS NULL` rows, `file_path` is
+  written root-relative (`_stored`), the layout comes from `LibrarySettings`,
+  and there is no status, sidecar sync or suffix detection. The walk prunes
+  dot-directories and `_ROOT_INTERNAL_DIRS` (`snapshots`, `tmp`), the same set
+  `folder_structure_commit_service.LIBRARY_OWN_FOLDERS` refuses to import. A file
+  younger than `_ROOT_SETTLE_S` is on disk but neither new nor removed: PixlStash's
+  own imports write the file before the row, so a young file belongs to whoever
+  is writing it, and a removal seen alongside young files is deferred a scan so
+  a copy-then-delete can still be paired. A rename keeps the mtime and is
+  followed at once. Both the scan and the local-import commit also re-check the
+  path inside their insert transaction, the one place their check-then-insert
+  cannot interleave, so whichever lands first owns the row.
+  `MissingFilePurgeFinder` takes `is_ready=ReferenceFolderScanFinder.root_scan_complete`
+  and queues nothing until the first root scan has finished, because a file
+  renamed while the app was closed is a vanished path to both and the scan must
+  read it first.
 - **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
   `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
   alongside the picture rather than abandoned: nothing sweeps
@@ -6672,10 +6696,14 @@ the Moves artboard in `design/1.11-existing-library/`.
 new_path, detected_at)` — the raw fact a move happened, nothing derived.
 `ReferenceFolderScanTask.apply_moves` writes one row per picture in its
 `external` list, in the same transaction that updates `Picture.file_path`, and
-only when the reference folder's own `layout` column is set
-(`record_pending_reviews`): a root with no layout has no vocabulary a folder
-name could contradict, so queuing for the rest would grow the table for
-nothing ever readable off it. The task's result carries
+only when the root has a layout — the reference folder's own `layout` column,
+or `LibrarySettings.layout` for the library's own root, which the same task
+scans under `folder_id=None` (`record_pending_reviews`): a root with no layout
+has no vocabulary a folder name could contradict, so queuing for the rest would
+grow the table for nothing ever readable off it. Review paths are in
+`Picture.file_path`'s stored form, so `_classify` joins them onto the root
+before reading folders, and `layout_roots` is handed `image_root` so the
+library root is found under `None`. The task's result carries
 `external_moves_queued_for_review`, a subset of `external_moved_picture_ids`
 for exactly this reason — the two differ whenever the move happened in a root
 with no layout.

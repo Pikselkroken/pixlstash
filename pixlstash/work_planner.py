@@ -103,6 +103,11 @@ class WorkPlanner:
         from pixlstash.utils.path_mapper import PathMapper
 
         effective_path_mapper = path_mapper if path_mapper is not None else PathMapper()
+        reference_folder_scan_finder = ReferenceFolderScanFinder(
+            database=database,
+            path_mapper=effective_path_mapper,
+            image_root=image_root,
+        )
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
@@ -158,14 +163,12 @@ class WorkPlanner:
             ),
             TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
                 database=database,
+                is_ready=reference_folder_scan_finder.root_scan_complete,
             ),
             TaskType.SNAPSHOT_IDENTITY_SCRUB: MissingSnapshotIdentityScrubFinder(
                 database=database,
             ),
-            TaskType.REFERENCE_FOLDER_SCAN: ReferenceFolderScanFinder(
-                database=database,
-                path_mapper=effective_path_mapper,
-            ),
+            TaskType.REFERENCE_FOLDER_SCAN: reference_folder_scan_finder,
             TaskType.TEXT_SCORE: MissingTextScoreFinder(
                 database=database,
             ),

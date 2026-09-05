@@ -28,6 +28,7 @@ builder that can actually select it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
 from typing import TYPE_CHECKING, Iterable, Optional
 
 from sqlmodel import Session, select
@@ -93,7 +94,9 @@ def record_pending_reviews(
 # ---------------------------------------------------------------------------
 
 
-def _reconciliation_context(session: Session, picture_ids: Iterable[int]) -> dict:
+def _reconciliation_context(
+    session: Session, picture_ids: Iterable[int], image_root: Optional[str] = None
+) -> dict:
     """Return ``{picture_id: (root, vocabulary, facets)}`` for *picture_ids*.
 
     A picture is absent from the result when it no longer exists (deleted
@@ -114,10 +117,9 @@ def _reconciliation_context(session: Session, picture_ids: Iterable[int]) -> dic
                 pictures[int(pic.id)] = pic
     if not pictures:
         return {}
-    # image_root is the library's own root, irrelevant here: every review row
-    # is written for a reference-folder move (record_pending_reviews's only
-    # caller), never the library's own root.
-    roots = layout_move_service.layout_roots(session, None)
+    # image_root keys the library's own root under None: the root scan queues
+    # the owner's moves there exactly as a reference-folder scan does.
+    roots = layout_move_service.layout_roots(session, image_root)
     vocabulary = (
         layout_move_service.library_vocabulary(
             session, [r.layout for r in roots.values()]
@@ -138,14 +140,18 @@ def _reconciliation_context(session: Session, picture_ids: Iterable[int]) -> dic
 
 
 def _classify(
-    session: Session, reviews: list[ExternalMoveReview]
+    session: Session,
+    reviews: list[ExternalMoveReview],
+    image_root: Optional[str] = None,
 ) -> dict[int, tuple[Optional[ReconciledMove], dict]]:
     """Return ``{review.id: (reconciled_or_None, current_facets)}``.
 
     ``reconciled`` is ``None`` when the picture or its layout is gone - the
     caller's cue to drop the row rather than show or act on it.
     """
-    context = _reconciliation_context(session, (r.picture_id for r in reviews))
+    context = _reconciliation_context(
+        session, (r.picture_id for r in reviews), image_root
+    )
     result: dict = {}
     for review in reviews:
         entry = context.get(review.picture_id)
@@ -153,8 +159,14 @@ def _classify(
             result[review.id] = (None, {})
             continue
         root, vocabulary, facets = entry
-        old_folder = layout_move_service.relative_folder(review.old_path, root)
-        new_folder = layout_move_service.relative_folder(review.new_path, root)
+        # Review paths are in Picture.file_path's stored form: absolute for a
+        # reference folder, root-relative for the library's own root.
+        old_folder = layout_move_service.relative_folder(
+            os.path.join(root.path, review.old_path), root
+        )
+        new_folder = layout_move_service.relative_folder(
+            os.path.join(root.path, review.new_path), root
+        )
         reconciled = reconcile_move(
             old_folder, new_folder, facets, root.layout, vocabulary
         )
@@ -166,7 +178,9 @@ def _serialize_pairs(pairs: tuple[tuple[Facet, str], ...]) -> list[dict]:
     return [{"facet": facet.value, "name": name} for facet, name in pairs]
 
 
-def pending_summary_in_session(session: Session) -> dict:
+def pending_summary_in_session(
+    session: Session, image_root: Optional[str] = None
+) -> dict:
     """Return the reconciliation queue, bucketed and ready for the review screen.
 
     Every row is reclassified against current state on every call - there is
@@ -187,7 +201,7 @@ def pending_summary_in_session(session: Session) -> dict:
     if not reviews:
         return buckets
 
-    classified = _classify(session, reviews)
+    classified = _classify(session, reviews, image_root)
     off_layout_cutoff = datetime.utcnow() - timedelta(seconds=RETENTION_S)
     stale: list[ExternalMoveReview] = []
     for review in reviews:
@@ -232,7 +246,7 @@ def pending_summary_in_session(session: Session) -> dict:
 
 def pending_moves(vault: "Vault") -> dict:
     """Vault wrapper for :func:`pending_summary_in_session`."""
-    return vault.db.run_task(pending_summary_in_session)
+    return vault.db.run_task(pending_summary_in_session, vault.image_root)
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +468,10 @@ def _resolve_review_picture_ids(session: Session, review_ids: list[int]) -> list
 
 
 def _apply_or_dismiss(
-    session: Session, review_ids: list[int], apply_changes: bool
+    session: Session,
+    review_ids: list[int],
+    apply_changes: bool,
+    image_root: Optional[str] = None,
 ) -> tuple[list[int], list[int]]:
     """The recorded work: reconcile fresh, optionally apply, always clear the rows.
 
@@ -479,7 +496,7 @@ def _apply_or_dismiss(
     changed_ids: list[int] = []
     skipped_ids: list[int] = []
     if apply_changes and reviews:
-        classified = _classify(session, reviews)
+        classified = _classify(session, reviews, image_root)
         pictures: dict = {}
         for chunk in chunked(sorted({r.picture_id for r in reviews})):
             for pic in session.exec(select(Picture).where(Picture.id.in_(chunk))).all():
@@ -516,7 +533,9 @@ def apply_reviews(vault: "Vault", review_ids: list[int], **request_context) -> d
         return {"applied_picture_ids": [], "skipped_review_ids": []}
 
     def work(session: Session) -> tuple[list[int], list[int]]:
-        return _apply_or_dismiss(session, ids, apply_changes=True)
+        return _apply_or_dismiss(
+            session, ids, apply_changes=True, image_root=vault.image_root
+        )
 
     (changed_ids, skipped_ids), _operation = (
         operation_log_service.run_recorded_metadata_task(

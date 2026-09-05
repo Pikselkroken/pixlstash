@@ -21,14 +21,22 @@ class MissingFilePurgeFinder(BaseTaskFinder):
 
     SCAN_COOLDOWN_S: float = 3600.0  # one full pass at most once per hour
 
-    def __init__(self, database):
+    def __init__(self, database, is_ready=None):
         """Initialise the finder.
 
         Args:
             database: The application database instance.
+            is_ready: Optional zero-argument callable; while it returns
+                ``False`` no purge task is queued. The library-root scan
+                follows a file the owner renamed while the app was closed by
+                matching the vanished path with the new one, and this sweep
+                sees the same vanished path as a deletion. Whichever runs
+                first wins, so the sweep waits for the scan
+                (``ReferenceFolderScanFinder.root_scan_complete``).
         """
         super().__init__()
         self._db = database
+        self._is_ready = is_ready
         self._cursor_id: int = 0
         self._cooldown_start: float = 0.0
 
@@ -39,6 +47,8 @@ class MissingFilePurgeFinder(BaseTaskFinder):
         return 1
 
     def find_task(self):
+        if self._is_ready is not None and not self._is_ready():
+            return None
         # If we completed a full pass, wait for the cooldown to expire.
         if self._cooldown_start > 0:
             if time.monotonic() - self._cooldown_start < self.SCAN_COOLDOWN_S:
