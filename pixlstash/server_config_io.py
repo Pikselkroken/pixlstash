@@ -9,8 +9,8 @@ without the variable (a developer's own env, a Docker deploy) read it as the
 owner's choice and ran CPU inference on a CUDA machine.
 
 So the decided value lives under a ``_``-prefixed key that this writer never
-persists, and ``default_device`` goes back to the file as the owner had it.
-Every writer of the file goes through :func:`persist_server_config`.
+persists, and ``default_device`` goes back to disk as the owner had it.
+Writers that rewrite an existing config file should use :func:`persist_server_config`.
 """
 
 from pixlstash.utils.atomic_write import write_json_atomic
