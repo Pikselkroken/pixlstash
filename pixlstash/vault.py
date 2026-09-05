@@ -13,7 +13,7 @@ from typing import Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_, update
 
 
 from .database import DBPriority, VaultDatabase
@@ -27,6 +27,9 @@ from .db_models import (
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
+    DESCRIPTION_SENTINEL_LIKE_PATTERN,
+    DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+    make_description_sentinel,
 )
 from .pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
@@ -51,7 +54,11 @@ from pixlstash.tagger_plugins.registry import (
     get_tagger_plugin_manager,
     unload_loaded_tagger_plugins,
 )
-from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_picture_id_subquery,
+)
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
@@ -866,8 +873,6 @@ class Vault:
         Returns:
             ``True`` if the picture was found and updated, ``False`` otherwise.
         """
-        from pixlstash.db_models import make_description_sentinel
-
         sentinel = make_description_sentinel(engine_name)
 
         def _set_sentinel(session: Session) -> bool:
@@ -896,6 +901,69 @@ class Vault:
         )
         self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
+
+    def reset_descriptions(
+        self,
+        picture_ids: list[int],
+        engine_name: str | None = None,
+        origin_client_id: str | None = None,
+    ) -> int:
+        """Queue a fresh description pass for many pictures in one write.
+
+        Writes the ``__description::<engine>`` sentinel on every picture in one
+        transaction and wakes the planner; ``MissingDescriptionFinder`` then
+        captions them in properly sized batches. Unlike
+        :meth:`reset_description_interactive` no per-picture task is submitted:
+        one urgent single-image task per picture ran the captioner N times at
+        batch size 1 while the finder, which cannot tell those sentinels from
+        its own, captioned the same pictures a second time (#1162).
+
+        Args:
+            picture_ids: Primary keys of the pictures to reset.
+            engine_name: Optional plugin name to embed in the sentinel.
+            origin_client_id: Opaque ``X-Client-Id`` of the originating tab.
+
+        Returns:
+            How many pictures were found and reset.
+        """
+        ids = sorted({int(pid) for pid in picture_ids})
+        if not ids:
+            return 0
+        sentinel = make_description_sentinel(engine_name)
+
+        def _set_sentinels(session: Session) -> list[int]:
+            found: list[int] = []
+            # Chunked: "all pictures" can exceed SQLite's bound-parameter cap.
+            for chunk in chunked(ids):
+                enforce_pictures_not_locked(
+                    session, chunk, "reset the description of a locked picture"
+                )
+                present = list(
+                    session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
+                )
+                if not present:
+                    continue
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(present))
+                    .values(description=sentinel)
+                )
+                found.extend(present)
+            session.commit()
+            return found
+
+        reset_ids = self.db.run_task(_set_sentinels)
+        if not reset_ids:
+            return 0
+        self.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": reset_ids,
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
+        return len(reset_ids)
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -1692,10 +1760,23 @@ class Vault:
 
     @staticmethod
     def _count_missing_descriptions(session: Session) -> int:
+        # The same predicate MissingDescriptionFinder selects on: NULL or a
+        # ``__description::`` sentinel, and never a picture frozen by a locked
+        # set. A reset writes the sentinel, not NULL, so counting NULL alone
+        # read "N / N" through an entire regeneration (#1162).
         result = session.exec(
             select(func.count())
             .select_from(Picture)
-            .where(Picture.description.is_(None))
+            .where(
+                or_(
+                    Picture.description.is_(None),
+                    Picture.description.like(
+                        DESCRIPTION_SENTINEL_LIKE_PATTERN,
+                        escape=DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+                    ),
+                ),
+                ~Picture.id.in_(locked_picture_id_subquery()),
+            )
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
@@ -1846,6 +1927,13 @@ class Vault:
                 any_busy = True
                 break
         if any_busy:
+            return
+        # The snapshot only sees planner in-flight counts. A task submitted
+        # straight to the runner (an interactive retag or redescribe) is
+        # invisible to it, and unloading the model under a running caption
+        # batch makes the captioner return nothing for every picture in it.
+        # GPU-queue tasks only: a dedup scan or an import holds no model.
+        if self._task_runner is not None and self._task_runner.has_active_gpu_tasks():
             return
 
         logger.warning("All workers idle; aggressively unloading models.")

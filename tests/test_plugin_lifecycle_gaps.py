@@ -330,12 +330,21 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
         _last_aggressive_unload_at=0.0,
         AGGRESSIVE_UNLOAD_INTERVAL=Vault.AGGRESSIVE_UNLOAD_INTERVAL,
         _disable_background_workers=True,
+        _task_runner=types.SimpleNamespace(has_active_gpu_tasks=lambda: False),
     )
     busy = {"tagging": {"running": True, "status": "running", "remaining": 5}}
 
     Vault._maybe_aggressive_unload(fake_vault, busy)
     assert captioner.unload_calls == 0, "a busy worker must not lose its model"
 
+    # An interactive task runs outside the planner's in-flight counts, so the
+    # snapshot reads idle while a caption batch is executing; the runner's own
+    # active set is what keeps the model under it (#1162).
+    fake_vault._task_runner = types.SimpleNamespace(has_active_gpu_tasks=lambda: True)
+    Vault._maybe_aggressive_unload(fake_vault, {})
+    assert captioner.unload_calls == 0, "a running task must not lose its model"
+
+    fake_vault._task_runner = types.SimpleNamespace(has_active_gpu_tasks=lambda: False)
     Vault._maybe_aggressive_unload(fake_vault, {})
     assert captioner.unload_calls == 1
 

@@ -339,7 +339,7 @@ import {
   confirmTagPrediction,
   rejectTagPrediction,
 } from "../../api/tags";
-import { resetPictureTags } from "../../api/pictures";
+import { resetPicturesTags } from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
@@ -762,12 +762,7 @@ async function generateTagsForAll(model = null) {
   generateTagsError.value = "";
   generateTagsSuccess.value = "";
   try {
-    const body = model ? { model } : {};
-    await Promise.all(
-      ids.map((id) =>
-        resetPictureTags(id, body),
-      ),
-    );
+    await resetPicturesTags(ids, model ? { model } : {});
     const suffix = model ? ` with ${model}` : "";
     generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });

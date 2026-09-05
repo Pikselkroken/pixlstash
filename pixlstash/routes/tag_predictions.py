@@ -21,6 +21,20 @@ class ResetTagsRequest(BaseModel):
     model: str | None = None
 
 
+class BulkResetRequest(BaseModel):
+    """Request body for the multi-picture reset_tags / reset_description endpoints."""
+
+    picture_ids: list[int]
+    model: str | None = None
+
+
+class BulkResetResponse(BaseModel):
+    """How many pictures a bulk reset queued."""
+
+    status: str
+    count: int
+
+
 class TagPredictionItemResponse(BaseModel):
     """A single stored tag prediction."""
 
@@ -346,6 +360,58 @@ def create_router(server) -> APIRouter:
         if not found:
             raise HTTPException(status_code=404, detail="Picture not found")
         return {"status": "reset"}
+
+    @router.post(
+        "/pictures/reset_tags",
+        summary="Reset tags for many pictures",
+        description=(
+            "The multi-picture form of /pictures/{id}/reset_tags: one transaction "
+            "drops every listed picture's non-manual predictions and tags and "
+            "restores the pending-retag sentinel. The background tagger then "
+            "processes them in batches; no per-picture task is queued."
+        ),
+        response_model=BulkResetResponse,
+    )
+    def reset_pictures_tags(request: Request, payload: BulkResetRequest):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        ids = sorted({int(pid) for pid in payload.picture_ids if int(pid) > 0})
+        if not ids:
+            return {"status": "reset", "count": 0}
+        reset_ids = tag_prediction_service.reset_pictures_tags(
+            server.vault,
+            ids,
+            engine_name=payload.model,
+            origin_client_id=origin_client_id,
+        )
+        if reset_ids:
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": reset_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+        return {"status": "reset", "count": len(reset_ids)}
+
+    @router.post(
+        "/pictures/reset_description",
+        summary="Reset descriptions for many pictures",
+        description=(
+            "The multi-picture form of /pictures/{id}/reset_description: one "
+            "transaction marks every listed picture for re-captioning, and the "
+            "background captioner processes them in batches. Pass 'model' to "
+            "pick the description plugin."
+        ),
+        response_model=BulkResetResponse,
+    )
+    def reset_pictures_descriptions(request: Request, payload: BulkResetRequest):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        ids = [int(pid) for pid in payload.picture_ids if int(pid) > 0]
+        count = server.vault.reset_descriptions(
+            ids, engine_name=payload.model, origin_client_id=origin_client_id
+        )
+        return {"status": "reset", "count": count}
 
     @router.get(
         "/tagger/label-thresholds",
