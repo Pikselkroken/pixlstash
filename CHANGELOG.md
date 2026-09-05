@@ -49,7 +49,7 @@
 - Fixed: the Libraries CLI dialog did not list the backup command.
 - Fixed: the macOS DMG volume size.
 - Dependency updates: transformers 5.12.1 (a high-severity path traversal in a
-  writer PixlStash does not call), xmldom, humanfs, fast-uri.
+  writer that PixlStash does not call), xmldom, humanfs, fast-uri.
 
 # [1.10.2]
 
