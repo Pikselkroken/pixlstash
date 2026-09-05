@@ -722,6 +722,64 @@ def test_a_picture_frozen_by_a_locked_set_is_skipped_not_filed(owner_env):
     assert frozen_id not in tagged, "a picture frozen by a locked set must be skipped"
 
 
+def test_a_folder_tag_survives_the_tagger_reaching_the_picture(owner_env):
+    """The commit runs while the tagger is still draining the import.
+
+    Every freshly indexed picture carries TAG_PENDING_SENTINEL, and when
+    `TagTask` reaches one it deletes the picture's whole Tag set and rewrites
+    it from `model_tags | human_POS - human_NEG`. A folder tag the owner just
+    accepted is not a model tag, so unless the commit records it in the human
+    label ledger the tagger silently deletes it minutes later. Without the
+    `record_human_label` call in `_link_pictures` this test fails on the
+    "gallery" assertion: only the model's own tag comes back.
+    """
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        CommitResult,
+        _link_pictures,
+    )
+    from pixlstash.tasks.tag_task import TagTask
+    from sqlmodel import select
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+
+    def scenario(session):
+        pic = Picture(file_path="tag-survives-tagger/gallery/kept.jpg")
+        session.add(pic)
+        session.flush()
+        # Exactly what the indexing step leaves behind for the tagger.
+        session.add(Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL))
+        session.flush()
+
+        _link_pictures(
+            session,
+            [pic],
+            [Assignment(relative_path="gallery", kind="tag")],
+            os.path.join(image_root, "tag-survives-tagger"),
+            image_root,
+            CommitResult(),
+        )
+        session.commit()
+
+        # The tagger reaching this picture, with a model call that knows
+        # nothing about the folder the owner filed it under.
+        TagTask._add_tags_bulk(session, [{"pic_id": pic.id, "tags": ["outdoor"]}])
+
+        return pic.id, set(
+            session.exec(select(Tag.tag).where(Tag.picture_id == pic.id)).all()
+        )
+
+    pic_id, tags = server.vault.db.run_task(scenario)
+    assert "gallery" in tags, f"the tagger erased the folder tag on {pic_id}: {tags}"
+    assert "outdoor" in tags, "the tagger's own tag must still be applied"
+    assert TAG_PENDING_SENTINEL not in tags, (
+        "the tagger clears the sentinel it acted on"
+    )
+
+
 def test_a_person_lands_on_faces_extracted_before_the_mapping(owner_env):
     """Workers start while the import is still indexing, so a picture's faces
     routinely exist BEFORE the mapping assigns its folder to a person. The

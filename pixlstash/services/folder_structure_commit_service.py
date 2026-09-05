@@ -77,6 +77,7 @@ from pixlstash.services.project_membership_service import (
     set_picture_set_projects,
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
+from pixlstash.utils.service.label_ledger import POS, record_human_label
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -999,6 +1000,15 @@ def _link_pictures(
                 existing_sets.add((set_id, pic.id))
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic.id))
             for tag_name in tag_names:
+                # The owner accepted this folder as a tag, so it is a human POS
+                # and belongs in the label ledger. Without it the tag does not
+                # survive: these pictures still carry TAG_PENDING_SENTINEL, and
+                # when TagTask reaches one it deletes every Tag row and rewrites
+                # the picture from `model_tags | human_POS - human_NEG`. The
+                # general upsert, not `record_human_label_if_relevant`: a folder
+                # tag is usually outside the tagger's anomaly vocabulary, which
+                # is exactly the case that variant declines to record.
+                record_human_label(session, pic.id, tag_name, POS)
                 if (pic.id, tag_name) in existing_tags:
                     continue
                 existing_tags.add((pic.id, tag_name))
