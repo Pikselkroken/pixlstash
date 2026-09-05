@@ -56,6 +56,14 @@ _MAX_BUILD_WORKERS = 8
 # extension.
 _ROOT_INTERNAL_DIRS = frozenset({"snapshots", "tmp"})
 
+# A file in the library root younger than this is left alone by a root scan.
+# PixlStash's own imports write the file first and insert the row a moment
+# later (longer under load), and a scan landing in between would index the
+# file as the owner's and leave the import to insert a second row. A file the
+# owner drops in is picked up once it has settled, on the next scan. A rename
+# keeps the mtime, so a moved file is followed at once.
+_ROOT_SETTLE_S = 60.0
+
 
 def _is_supported_file(file_path: str) -> bool:
     return is_supported_media_file(file_path)
@@ -232,6 +240,10 @@ class ReferenceFolderScanTask(BaseTask):
         _thumb_suffix = f"_thumb{THUMBNAIL_EXTENSION}"
         other_roots = self._other_resolved_paths
         disk_paths: set[str] = set()
+        # Root mode: files too young to be anyone's but the writer's. On disk,
+        # so never "removed"; not indexed, so never "new" - see _ROOT_SETTLE_S.
+        settling: set[str] = set()
+        settle_before = time.time() - _ROOT_SETTLE_S
         views_roots: list[str] = []
         for root, dirs, files in os.walk(resolved, topdown=True):
             # Prune subdirectories that are roots of other reference folders so
@@ -268,6 +280,16 @@ class ReferenceFolderScanTask(BaseTask):
                 full_path = os.path.join(root, file_name)
                 if _is_supported_file(full_path):
                     disk_paths.add(full_path)
+                    if self._is_root:
+                        try:
+                            if os.stat(full_path).st_mtime > settle_before:
+                                settling.add(full_path)
+                        except OSError as exc:
+                            # Gone between listing and stat - the next scan
+                            # sees whatever is true then.
+                            logger.debug(
+                                "Root scan: could not stat %s: %s", full_path, exc
+                            )
 
         # Fetch all picture paths already indexed for this reference folder,
         # including scrapheap (deleted=True) pictures.  Scrapheap pictures must
@@ -316,7 +338,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         # Determine what is new and what has been removed.  A disk path is new
         # only if it is not already indexed.
-        candidate_new = disk_paths - set(existing_by_path.keys())
+        candidate_new = disk_paths - set(existing_by_path.keys()) - settling
 
         # An *explicit* (re-)import overrides the ledger; a routine background
         # sync does not.  The signal is the dedicated ``pending_reimport`` flag,
@@ -529,6 +551,19 @@ class ReferenceFolderScanTask(BaseTask):
             new_paths -= set(moved_paths.values())
 
         # --- Handle removed files ---
+        if removed_paths and settling:
+            # After move matching, so a rename is still followed: what is
+            # deferred is only the delete. A file copied across filesystems
+            # inside the root is a removal plus a young file, and deleting the
+            # row now would lose the pairing the next scan makes once the copy
+            # has settled.
+            logger.info(
+                "Library root: %d indexed path(s) vanished while %d file(s) are "
+                "still settling; keeping their records until the next scan.",
+                len(removed_paths),
+                len(settling),
+            )
+            removed_paths = set()
         if removed_paths:
             removed_ids = [
                 existing_by_path[p].id
@@ -1012,6 +1047,28 @@ class ReferenceFolderScanTask(BaseTask):
         def insert_pictures(
             session: Session, pictures_batch: list[Picture]
         ) -> list[int]:
+            # Re-check inside the write transaction. The root scan and a
+            # folder-structure commit into the same root both walk the disk,
+            # compare against the table and insert, and the single writer is
+            # the only place their check-then-insert cannot interleave. Whoever
+            # got here first owns the row; the other's build is dropped.
+            taken = set(
+                session.exec(
+                    select(Picture.file_path).where(
+                        Picture.file_path.in_([p.file_path for p in pictures_batch])
+                    )
+                ).all()
+            )
+            if taken:
+                logger.info(
+                    "Reference folder %s: %d file(s) were indexed by another "
+                    "writer while this scan built them; keeping theirs.",
+                    self._folder_path,
+                    len(taken),
+                )
+                pictures_batch = [p for p in pictures_batch if p.file_path not in taken]
+                if not pictures_batch:
+                    return []
             session.add_all(pictures_batch)
             session.commit()
             for pic in pictures_batch:

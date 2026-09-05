@@ -4072,7 +4072,14 @@ and updates `file_path` on the existing row instead.
   written root-relative (`_stored`), the layout comes from `LibrarySettings`,
   and there is no status, sidecar sync or suffix detection. The walk prunes
   dot-directories and `_ROOT_INTERNAL_DIRS` (`snapshots`, `tmp`), the same set
-  `folder_structure_commit_service.LIBRARY_OWN_FOLDERS` refuses to import.
+  `folder_structure_commit_service.LIBRARY_OWN_FOLDERS` refuses to import. A file
+  younger than `_ROOT_SETTLE_S` is on disk but neither new nor removed: PixlStash's
+  own imports write the file before the row, so a young file belongs to whoever
+  is writing it, and a removal seen alongside young files is deferred a scan so
+  a copy-then-delete can still be paired. A rename keeps the mtime and is
+  followed at once. Both the scan and the local-import commit also re-check the
+  path inside their insert transaction, the one place their check-then-insert
+  cannot interleave, so whichever lands first owns the row.
   `MissingFilePurgeFinder` takes `is_ready=ReferenceFolderScanFinder.root_scan_complete`
   and queues nothing until the first root scan has finished, because a file
   renamed while the app was closed is a vanished path to both and the scan must

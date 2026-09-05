@@ -50,9 +50,14 @@ def server():
             yield srv
 
 
-def _make_image(path, color):
+def _make_image(path, color, *, settled=True):
+    """A flat image at *path*, backdated past the root scan's settle window
+    unless ``settled=False`` - a fresh file is left to whoever is writing it."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     Image.new("RGB", (8, 8), color=color).save(path, format="PNG")
+    if settled:
+        old = time.time() - 600
+        os.utime(path, (old, old))
     return path
 
 
@@ -149,6 +154,43 @@ def test_a_file_deleted_from_the_root_drops_its_row(server):
 
     assert result["removed_count"] == 1
     assert _managed(server, "gone/") == []
+
+
+def test_a_freshly_written_file_is_left_to_its_writer(server):
+    """PixlStash's own import writes the file, then the row. A scan in between
+    must not claim the file; the owner's drop is picked up once it settles."""
+    root = server.vault.image_root
+    path = _make_image(os.path.join(root, "fresh", "f.png"), (3, 3, 3), settled=False)
+
+    result = _run_root_scan(server)
+    assert result["new_count"] == 0
+    assert _managed(server, "fresh/") == []
+
+    old = time.time() - 600
+    os.utime(path, (old, old))
+    result = _run_root_scan(server)
+    assert result["new_count"] == 1
+    assert [p.file_path for p in _managed(server, "fresh/")] == ["fresh/f.png"]
+
+
+def test_a_removal_waits_while_a_copy_is_still_settling(server):
+    """Copy-then-delete across filesystems is a removal plus a young file; the
+    row is kept so the next scan can pair them."""
+    root = server.vault.image_root
+    original = _make_image(os.path.join(root, "cp", "g.png"), (5, 6, 7))
+    _run_root_scan(server)
+    (pic,) = _managed(server, "cp/")
+
+    with open(original, "rb") as fh:
+        payload = fh.read()
+    os.remove(original)
+    with open(os.path.join(root, "cp", "g-copy.png"), "wb") as fh:
+        fh.write(payload)  # fresh mtime: settling
+
+    result = _run_root_scan(server)
+    assert result["removed_count"] == 0
+    assert result["new_count"] == 0
+    assert [p.id for p in _managed(server, "cp/")] == [pic.id]
 
 
 def test_the_root_scan_never_indexes_what_pixlstash_writes_itself(server):
