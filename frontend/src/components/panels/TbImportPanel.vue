@@ -99,7 +99,7 @@
         class="tb-import-file-input"
         type="file"
         multiple
-        accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain"
+        :accept="IMPORT_FILE_ACCEPT"
         @change="onLocalChange"
       />
       <div class="tb-import-actions">
@@ -161,6 +161,7 @@ import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
+  IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 
 const props = defineProps({
@@ -179,7 +180,7 @@ const IMPORT_TABS = [
   { id: "flickr", icon: "mdi-flickr", label: "Flickr" },
 ];
 
-// Manual export/import guidance per cloud supplier — PixlStash does not connect
+// Manual export/import guidance per cloud supplier - PixlStash does not connect
 // to these services; users export a zip and drop it in. (See the connect-to
 // suppliers plan for why there is no live connection.)
 const CLOUD_GUIDANCE = {
@@ -418,7 +419,7 @@ function triggerLocalImport(files) {
   box-shadow: var(--focus-ring);
 }
 
-/* Tabs — accent underline on the active tab. */
+/* Tabs - accent underline on the active tab. */
 .tb-import-tabs {
   display: flex;
   gap: var(--space-6);

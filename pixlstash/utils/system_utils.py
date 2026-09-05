@@ -4,10 +4,11 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Optional
+
+from pixlstash.utils.vram_utils import query_total_vram_mb
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,10 @@ _RAM_FSTYPES = frozenset({"ramfs", "tmpfs"})
 # it is running on.
 TRASH_NAME = "Recycle Bin" if sys.platform == "win32" else "Trash"
 
-# Hard upper bound for the VRAM budget setting. Applies both to the UI slider
-# maximum and to backend validation. Keep in sync with the frontend constant.
+# Upper bound for the VRAM budget setting when the card cannot be read (no
+# nvidia-smi, a CPU-only host). With a card present the bound is the card: see
+# `max_vram_budget_gb`. This used to be the bound for every card, which meant
+# a 32 GB card was offered a 16 GB default it could never be set back to.
 MAX_VRAM_BUDGET_GB: float = 12.0
 
 
@@ -138,8 +141,8 @@ def _unescape_mount_field(field: str) -> str:
 def _linux_mounts() -> dict[str, tuple[str, str]]:
     """``/proc/mounts`` as mount point → (device node, filesystem type).
 
-    One parse for the two questions the drive band asks — what this volume is
-    called, and what kind of storage it is — because both answers are in the
+    One parse for the two questions the drive band asks - what this volume is
+    called, and what kind of storage it is - because both answers are in the
     same three fields of the same line. Reading the file twice for them would
     be two syscalls to learn what one already said.
 
@@ -225,7 +228,7 @@ def _windows_volume_label(mount_point: str) -> Optional[str]:
         logger.debug("GetVolumeInformationW failed for %r (%s).", mount_point, exc)
         return None
     # Parenthesised: `or` binds tighter than the conditional, so the bare
-    # expression already returned None on failure — but it reads as though it
+    # expression already returned None on failure - but it reads as though it
     # might not, and a reviewer should not have to check the grammar to see
     # that a failed call cannot leak a stale buffer.
     return (buffer.value or None) if ok else None
@@ -267,7 +270,7 @@ def _linux_is_removable(device_name: str) -> bool:
 
     A ``False`` here is weaker than a ``True``: an SSD in a USB enclosure
     reports 0, so the band calls it a local disk. That is the direction to be
-    wrong in — it makes no claim about speed rather than a false one.
+    wrong in - it makes no claim about speed rather than a false one.
     """
     candidates = (
         os.path.join(_SYS_BLOCK_CLASS, device_name, "removable"),
@@ -329,8 +332,8 @@ def device_kind(mount_point: str) -> Optional[str]:
     plain disk glyph. The band must never print "Unknown" for this.
 
     What is deliberately NOT here is the SSD-versus-platter question the speed
-    of a disk actually turns on. Linux will answer it —
-    ``/sys/block/<dev>/queue/rotational`` is one more one-byte read — but it
+    of a disk actually turns on. Linux will answer it -
+    ``/sys/block/<dev>/queue/rotational`` is one more one-byte read - but it
     answers wrongly in exactly the setups where being wrong costs most: a VM's
     virtio disk reports rotational on an NVMe host, an LVM or LUKS mapper
     reports its own default rather than the disk underneath, and a SATA SSD in
@@ -403,35 +406,28 @@ def describe_storage_device(path: str) -> Optional[StorageDevice]:
 
 
 def default_max_vram_gb() -> float:
-    """Return default VRAM budget in GB: min(6GB, 50% of available VRAM).
+    """Return default VRAM budget in GB: max(4GB, 50% of total VRAM).
 
-    Falls back to 6GB when VRAM cannot be detected.
+    Card-aware so a large card is not starved: 16GB on a 32GB card, 6GB on
+    12GB, 4GB on 8GB. Falls back to 6GB when VRAM cannot be detected.
     """
-    try:
-        output = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        totals_mb = []
-        for line in output.splitlines():
-            value = line.strip()
-            if not value:
-                continue
-            totals_mb.append(int(float(value)))
-        total_mb = sum(totals_mb)
-        if total_mb <= 0:
-            return 6.0
-        half_gb = (total_mb / 1024.0) / 2.0
-        return round(min(6.0, half_gb), 2)
-    except Exception:
-        # nvidia-smi absent/failing is normal on CPU-only hosts; the documented
-        # 6GB default IS the answer, so logging it would be routine noise.
+    total_gb = query_total_vram_mb() / 1024.0
+    if total_gb <= 0:
         return 6.0
+    return round(max(4.0, total_gb / 2.0), 2)
+
+
+def max_vram_budget_gb() -> float:
+    """Return the largest budget a user may set: the card itself.
+
+    The TaskRunner already clamps a budget to the installed total, so the
+    validator refusing less than that only ever refused a value the runtime
+    would have honoured. Falls back to `MAX_VRAM_BUDGET_GB` without a card.
+    """
+    total_gb = query_total_vram_mb() / 1024.0
+    if total_gb <= 0:
+        return MAX_VRAM_BUDGET_GB
+    return round(total_gb, 2)
 
 
 # The same 10 % as ``model_mover._SPACE_HEADROOM``, and deliberately the same
@@ -445,8 +441,8 @@ def space_shortfall(path: str, needed_bytes: int) -> Optional[tuple[int, int]]:
 
     A sanity check, not a guarantee: free space can change under us, and a
     caller working from an estimate is only ever approximately right. It exists
-    to catch the case worth catching — a 200 GB library aimed at a disk with
-    2 GB left — before an hour of copying ends in ENOSPC half-written.
+    to catch the case worth catching - a 200 GB library aimed at a disk with
+    2 GB left - before an hour of copying ends in ENOSPC half-written.
 
     An unreadable path is reported as a shortfall of ``(needed, 0)`` rather than
     passed silently: not being able to measure is a reason to ask, given the

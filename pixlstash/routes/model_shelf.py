@@ -6,14 +6,14 @@ because their **addressing** differs. An adapter always carries a sha256 (the
 hub's ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)`` makes that an
 invariant, not a hope), so it is addressable as ``/adapters/{sha256}``. A
 checkpoint may be 24 GB and registers instantly with ``sha256`` NULL, so until
-``MissingCheckpointHashFinder`` has read it there is no hash to address it by —
+``MissingCheckpointHashFinder`` has read it there is no hash to address it by -
 hence a list route and no by-hash detail route on that side. Every row carries
 its hub ``model.id`` for that reason: it is AUTOINCREMENT, never recycled, and it
 is the only identifier an unhashed checkpoint has.
 
 **One route on this block serves bytes rather than rows.**
 ``GET /adapters/{sha256}/file`` streams the adapter itself, so a generator on
-another machine can *use* what this one catalogues — the locations the detail
+another machine can *use* what this one catalogues - the locations the detail
 route returns are this host's paths and mean nothing over there. It is the only
 shelf read off the ``OWNER_ONLY`` tier: raw bytes out of a registered model
 folder is the ``.../runs/{run_name}/samples/{filename}`` authority class, so it
@@ -40,7 +40,7 @@ made of text encoders, and *"which of these can I delete"* had no answer at all.
 ``base_model_folded`` beside its raw ``base_model``. That is where the fold
 belongs: ``base_model`` is free text by rule, and the shelf sorts, filters,
 groups and builds its facets **client-side** (one request per selected block,
-concatenated — see ``useModelShelfStore``), so a canonical column or a SQLite
+concatenated - see ``useModelShelfStore``), so a canonical column or a SQLite
 collation would fold the one path the shelf does not use and leave the other
 four unfolded. One computed field serves all of them, costs a dict lookup per
 row, and needs no migration.
@@ -64,7 +64,7 @@ looked up per row.
 model and Set kind write one curated hub column each and differ in nothing else,
 so they share ``PATCH /models``, which writes only the fields the body actually
 carries. Forget is ``POST /models/forget`` and is the one that destroys
-curation, so it is the one with a confirmation in front of it — and it is gated
+curation, so it is the one with a confirmation in front of it - and it is gated
 on the row's *state* (no ``present`` and no ``unreachable`` copy), never on how
 many rows were selected. There is **no undo** and no operation-log half for any
 of this: ruled 2026-08-09, reaffirmed 2026-08-10.
@@ -78,7 +78,7 @@ otherwise be the one row on the shelf that cannot be corrected.
 manager of the machine PixlStash runs on, which is the same host-shell authority
 as ``POST /pictures/{id}/open-location`` and carries the same red-line tier
 (``LOOPBACK_OWNER_ONLY``, §16.3.1): loopback only, and ``allow_remote_host_ops``
-cannot loosen it. It is a *sixth* verb next to the five below, not one of them —
+cannot loosen it. It is a *sixth* verb next to the five below, not one of them -
 it changes nothing at all, which is why it needs no confirmation.
 
 Authorization is declared, never inline: every route here but the download and
@@ -146,7 +146,7 @@ logger = get_logger(__name__)
 # own: they are hashed by the scanner unless they are large, so they are
 # hash-addressable exactly as an adapter and an ``unknown`` are, which is the
 # property this block's routes are built on. They are emphatically NOT folded
-# into ``/checkpoints`` — filing a text encoder as a base model is the defect
+# into ``/checkpoints`` - filing a text encoder as a base model is the defect
 # this whole kind exists to end.
 ADAPTER_BLOCK_FILE_KINDS = (
     FILE_ADAPTER,
@@ -250,7 +250,7 @@ class ModelResponse(BaseModel):
         default=None,
         description=(
             "Adapter algorithm (``lora``, ``lokr``, …). Null for a checkpoint. "
-            "For an engine it is the PRIMARY entry of `capabilities` — the one "
+            "For an engine it is the PRIMARY entry of `capabilities` - the one "
             "word to show where there is room for one."
         ),
     )
@@ -262,7 +262,7 @@ class ModelResponse(BaseModel):
             "`checkpoint`, `other`.\n\n"
             "A list because a model can genuinely serve several and filing it "
             "under one heading answers 'what breaks if I delete this' wrongly "
-            "— Florence-2 both captions and detects, and the CLIP the embedder "
+            " - Florence-2 both captions and detects, and the CLIP the embedder "
             "loads is both the search encoder and the aesthetic scorer's "
             "backbone. The shelf lists such a model under **each** feature.\n\n"
             "Empty for a scanned adapter or checkpoint: `kind` there is an "
@@ -276,7 +276,7 @@ class ModelResponse(BaseModel):
         default=None,
         description=(
             "What the trainer said this was trained against, verbatim. Null for "
-            "the large minority of real adapters that record nothing — shown as "
+            "the large minority of real adapters that record nothing - shown as "
             "'Not set', never dropped, and selectable with base_model=UNASSIGNED."
         ),
     )
@@ -307,7 +307,7 @@ class ModelResponse(BaseModel):
     stack_position: Optional[int] = None
     run_key: Optional[str] = None
     added_at: Optional[str] = Field(
-        default=None, description="``model.created_at`` — when the shelf first saw it."
+        default=None, description="``model.created_at`` - when the shelf first saw it."
     )
     newest_file_mtime: Optional[int] = Field(
         default=None,
@@ -344,7 +344,7 @@ class ModelResponse(BaseModel):
     icon_sha256: Optional[str] = Field(
         default=None,
         description=(
-            "The model's authored mark, if it has one — fetch it from "
+            "The model's authored mark, if it has one - fetch it from "
             "`GET /model-icons/{sha256}`. Null means no icon, which the client "
             "draws as a generated mark rather than as a blank cell. A hash "
             "rather than a URL so several rows sharing a logo are visibly the "
@@ -439,14 +439,14 @@ class ModelEditRequest(BaseModel):
         default=None,
         description=(
             "What these weights are FOR, from "
-            f"{list(CURATABLE_CAPABILITIES)} — the shelf's `Feature` axis. The "
+            f"{list(CURATABLE_CAPABILITIES)} - the shelf's `Feature` axis. The "
             "**complete** set for every id sent, so `[]` clears it; sets are "
             "small and closed, and a merge would leave no way to remove one.\n\n"
             "A different question from `file_kind`, which is what the file *is*: "
             "one repo can caption AND detect, which is why this is a list and "
             "why it lives in its own table. PixlStash classifies what it "
             "declares, and a guess it got wrong about a model it does not load "
-            "is the owner's to correct — a repo they downloaded themselves is "
+            "is the owner's to correct - a repo they downloaded themselves is "
             "not something we get the last word on. `checkpoint` and `other` "
             "are not offered: the first is a `file_kind` and the second is the "
             "classifier's shrug, which an empty list already says."
@@ -559,7 +559,7 @@ def _present_copy(locations: list[dict]) -> Optional[str]:
 
     ``present`` only. ``missing`` says the scan looked and the file was gone,
     ``unreachable`` says its drive is unplugged, and a forgotten folder leaves
-    its rows tombstoned rather than deleted — serving from any of those three
+    its rows tombstoned rather than deleted - serving from any of those three
     would hand out bytes from a location the shelf does not consider live.
 
     The join is contained even though **neither half is caller-supplied**:
@@ -812,7 +812,7 @@ def create_router(server) -> APIRouter:
             "the machine that asked.\n\n"
             "Addressed by content hash and by nothing else: the caller names no "
             "path, and the only files reachable here are the ones the scanner "
-            "registered. The copy served is a `present` one — a hash the shelf "
+            "registered. The copy served is a `present` one - a hash the shelf "
             "knows but has no reachable copy of is a 409, not a 404, because "
             "the adapter exists and the file does not.\n\n"
             "**The digest is the caller's to verify.** The bytes are streamed "
@@ -901,7 +901,7 @@ def create_router(server) -> APIRouter:
         summary="Completion targets for the base-model field",
         description=(
             "`base_model` is free text and stays that way, so this constrains "
-            "nothing — it is what the *Set base model* field completes against. "
+            "nothing - it is what the *Set base model* field completes against. "
             "The list is the canonical labels `known_base_models` ships (so the "
             "field is useful on a fresh install) plus every distinct string "
             "already recorded here that folds to none of them, deduplicated so "
@@ -952,8 +952,8 @@ def create_router(server) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=404, detail="No such adapter.")
         if row["file_kind"] == FILE_ENGINE:
-            # Unreachable today — nothing hashes an engine, so it has no
-            # sha256 to be addressed by — but the rule should not rest on
+            # Unreachable today - nothing hashes an engine, so it has no
+            # sha256 to be addressed by - but the rule should not rest on
             # that staying true.
             raise HTTPException(
                 status_code=409,
@@ -1088,8 +1088,8 @@ def create_router(server) -> APIRouter:
     def _refuse_builtin_engines(ids: list[int]) -> None:
         """Refuse any verb aimed at a model PixlStash downloaded for itself.
 
-        Engines are on the shelf for completeness — so the owner can see what is
-        on their disk and what it costs — not to be curated. Renaming our own
+        Engines are on the shelf for completeness - so the owner can see what is
+        on their disk and what it costs - not to be curated. Renaming our own
         tagger would make the shelf lie about it, correcting its kind would
         overrule a fact we declared, assigning a tagger to a character means
         nothing, and forgetting one only makes the next start-up declare it
@@ -1184,7 +1184,7 @@ def create_router(server) -> APIRouter:
             "is why that needs no prompt and this one does.\n\n"
             "**Gated on the row's state, never on how many were selected.** A "
             "model is forgettable only when no copy of it is `present` or "
-            "`unreachable` — the second is the "
+            "`unreachable` - the second is the "
             "we-could-not-look state, and acting on it would let one call wipe "
             "the curation for a drive that is merely unplugged. Ids that fail "
             "the gate come back under `refused` with a reason rather than "
@@ -1213,15 +1213,15 @@ def create_router(server) -> APIRouter:
         summary="Open a model's folder in the host file manager",
         description=(
             "Opens the folder holding a `present` copy of the model in the "
-            "file manager of the machine PixlStash runs on — the same gesture "
+            "file manager of the machine PixlStash runs on - the same gesture "
             "as `POST /pictures/{id}/open-location`, and the same red line: it "
             "drives the server's own shell, so it is `LOOPBACK_OWNER_ONLY` "
             "(§16.3.1) and no configuration flag loosens it.\n\n"
             "The folder rather than the file, because that is what every "
             "platform can be asked for in one call. The copy is chosen exactly "
-            "as `GET /adapters/{sha256}/file` chooses one — the first "
+            "as `GET /adapters/{sha256}/file` chooses one - the first "
             "`present` copy that is really on disk, through the same "
-            "`_present_copy` — so a model whose only copies are `missing` or "
+            "`_present_copy` - so a model whose only copies are `missing` or "
             "on an unplugged drive is a 409: there is a shelf row, and nothing "
             "on this disk to show for it. Unlike that route this one takes an "
             "id rather than a hash, so it answers for a checkpoint and for an "

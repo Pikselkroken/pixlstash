@@ -1,11 +1,11 @@
-"""Add ``usertoken.public_id`` — a stable, never-reused identity for a token.
+"""Add ``usertoken.public_id`` - a stable, never-reused identity for a token.
 
 ``usertoken.id`` is a plain SQLite ``INTEGER PRIMARY KEY``: a rowid alias with
 no ``AUTOINCREMENT``, so SQLite hands out the lowest free value and an id is
 recycled once its row is deleted. With tokens 1..5 present, deleting all five
-and creating one more yields id 1 again. Anything that stored that id — the
+and creating one more yields id 1 again. Anything that stored that id - the
 in-memory session-to-token maps in ``AuthService``, ``guest_session.token_id``,
-``guest_score.token_id`` — then names a *different* token than the one it was
+``guest_score.token_id`` - then names a *different* token than the one it was
 given, silently. Revoking the right token does not end the session it created,
 and revoking an unrelated one ends the wrong session. That is fail-open, and it
 is what this column closes.
@@ -24,7 +24,7 @@ would go on to reissue ids that in-memory state still remembers. It does not
 fix the case this is actually about. It would also require rebuilding the table
 (SQLite cannot add ``AUTOINCREMENT`` in place), re-declaring the ``user_id``
 foreign key and re-creating all three of ``ix_usertoken_user_id`` /
-``ix_usertoken_token_hash`` / ``ix_usertoken_token_prefix`` — a dropped table
+``ix_usertoken_token_hash`` / ``ix_usertoken_token_prefix`` - a dropped table
 takes its indexes with it silently, and losing the prefix index would
 deoptimise the token lookup path rather than fail visibly. This change is
 purely additive, so none of that applies.
@@ -82,7 +82,7 @@ def upgrade() -> None:
 
     # Backfill every row that has no value yet, one random id each. Guarded by
     # ``IS NULL`` so a replay over an already-migrated database cannot reissue
-    # identities to tokens that already have one — that would be exactly the
+    # identities to tokens that already have one - that would be exactly the
     # bug this migration exists to remove.
     op.execute(
         sa.text(

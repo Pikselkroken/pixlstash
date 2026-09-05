@@ -133,7 +133,7 @@ def classify_sidecar(path: str) -> str | None:
     if _DESCRIPTION_NAME_RE.search(name):
         return SIDECAR_TYPE_DESCRIPTION
 
-    # Ambiguous (bare ``.txt`` or unknown) — decide by content.
+    # Ambiguous (bare ``.txt`` or unknown) - decide by content.
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
@@ -258,7 +258,7 @@ def write_sidecar(path: str, content: str) -> float | None:
             if fh.read() == content:
                 return get_sidecar_mtime(path)
     except OSError as exc:
-        # Missing or unreadable — fall through and (re)write it. Logged at DEBUG
+        # Missing or unreadable - fall through and (re)write it. Logged at DEBUG
         # so it satisfies the no-silent-failure policy without noising up a
         # normal first-time write (there is nothing to read yet).
         logger.debug(
@@ -367,7 +367,7 @@ def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | N
 
     Only stems in the sidecar's *own directory* are considered. ``os.walk``
     spans subdirectories, so a bare prefix match would let image ``/root/a.png``
-    claim sidecar ``/root/ab/c.txt`` and yield the suffix ``"b/c.txt"`` — a
+    claim sidecar ``/root/ab/c.txt`` and yield the suffix ``"b/c.txt"`` - a
     separator-bearing value that must never reach the folder's configuration.
     The result is validated for the same reason before it is returned.
     """

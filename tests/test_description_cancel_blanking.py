@@ -5,7 +5,7 @@ Cancelling mid-batch makes the workflow return early with a partial result. If
 caption, those pictures are permanently uncaptionable: ``MissingDescriptionFinder``
 selects only ``NULL`` or a ``__description::`` sentinel, and an empty string is
 neither. So a cancel must persist nothing for the pictures it skipped, while a
-genuine failure must still blank — that is what stops an uncaptionable picture
+genuine failure must still blank - that is what stops an uncaptionable picture
 being retried for ever.
 
 Three tests cover the routing rather than the writes: the cancel event is the
@@ -80,7 +80,7 @@ class _CancelledMidBatchWorkflow:
         self.stop_event = stop_event
         return {first.id: "captioned-before-the-cancel"}
 
-    def estimate_vram_mb(self, image_count):
+    def estimate_vram_mb(self, image_count, plugin_name=None):
         return 0
 
 
@@ -148,7 +148,7 @@ def test_cancelled_batch_does_not_destroy_a_pending_recaption_request():
         session.commit()
 
     db.run_task(set_sentinel)
-    # One picture, and the workflow cancels after captioning pictures[0] — so the
+    # One picture, and the workflow cancels after captioning pictures[0] - so the
     # batch that carries only this picture returns a caption for it. Give it a
     # second, unrelated picture so this one is the skipped half.
     (filler,) = _seed(db, 1)
@@ -162,8 +162,8 @@ def test_cancelled_batch_does_not_destroy_a_pending_recaption_request():
 
 
 def test_a_genuine_failure_still_clears_the_description():
-    """Guard against over-correcting. Blanking on a real failure is deliberate —
-    it is what stops a picture the model cannot caption being retried for ever —
+    """Guard against over-correcting. Blanking on a real failure is deliberate -
+    it is what stops a picture the model cannot caption being retried for ever -
     so the fix must key on cancellation, not on 'no caption came back'."""
     db = _StubDB()
     (failed,) = _seed(db, 1)
@@ -172,7 +172,7 @@ def test_a_genuine_failure_still_clears_the_description():
         def generate_batch(self, pictures, engine_override=None, stop_event=None):
             return {}
 
-        def estimate_vram_mb(self, image_count):
+        def estimate_vram_mb(self, image_count, plugin_name=None):
             return 0
 
     pics = [types.SimpleNamespace(id=failed, description=None)]
@@ -185,7 +185,7 @@ def test_a_genuine_failure_still_clears_the_description():
 
 def test_a_cancel_stops_the_florence_video_loop_before_the_next_video():
     """Videos are captioned one at a time in ``_generate_batch_florence``'s first
-    loop, and a video is the slowest single item there is — so the check has to
+    loop, and a video is the slowest single item there is - so the check has to
     be in that loop, not only on the still-image chunks after it."""
     stop = threading.Event()
     captioned: list[str] = []
@@ -252,7 +252,7 @@ def test_run_refuses_a_task_cancelled_before_it_started():
 def test_a_cancel_landing_after_the_work_still_reports_completed():
     """The cancel event is set by the shutdown thread and can land at any
     instant, including after ``_run_task`` has committed its rows. Reporting
-    CANCELLED there would race a finished task — and ``Vault._on_task_complete``
+    CANCELLED there would race a finished task - and ``Vault._on_task_complete``
     fires only for COMPLETED, so it would swallow the notification for work that
     is already in the database."""
 

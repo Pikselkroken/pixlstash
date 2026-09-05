@@ -121,7 +121,7 @@ class InferenceEngine:
                     },
                 },
             }
-        # Legacy private flags — kept so existing setters don't break.
+        # Legacy private flags - kept so existing setters don't break.
         self._wd14_enabled = bool(wd14_enabled)
         self._pixlstash_tagger_enabled = bool(pixlstash_tagger_enabled)
         self._pixlstash_tagger_threshold_offset = float(
@@ -363,10 +363,6 @@ class InferenceEngine:
             pixlstash_tagger_service=self.pixlstash_tagger_service,
         )
 
-    def unload_tagger_session(self) -> None:
-        """Release the WD14 ONNX inference session to free VRAM."""
-        self.lifecycle.unload_wd14_session(self.wd14_service)
-
     # ------------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------------
@@ -420,8 +416,8 @@ class InferenceEngine:
         """Apply the configured Florence-2 variant, then load it if needed.
 
         This is the single chokepoint for the Florence-native paths (captions
-        and Segment). Applying the variant here — rather than only in
-        ``Florence2Plugin.init`` — is what keeps the two in step, because
+        and Segment). Applying the variant here - rather than only in
+        ``Florence2Plugin.init`` - is what keeps the two in step, because
         ``DescriptionWorkflow`` and :meth:`detect_objects` reach the service
         directly and never run the plugin's ``init``. Switching variants
         unloads the resident checkpoint, so the load below picks up the new one.
@@ -547,6 +543,9 @@ class InferenceEngine:
                 pixlstash_tagger_service._model_path,
             )
 
+        vram_budget = VramBudget(device)
+        vram_budget.set_budget_gb(max_vram_gb)
+
         wd14_service = WD14Service(
             device=device,
             model_dir=model_dir,
@@ -556,6 +555,7 @@ class InferenceEngine:
                 else 1
             ),
             silent=True,
+            vram_budget=vram_budget,
         )
         if wd14_service.needs_download():
             # Best-effort, mirroring the PixlStash tagger above: a transient
@@ -571,8 +571,6 @@ class InferenceEngine:
             logger.warning("WD14 tagger model not found in %s, disabling.", model_dir)
             wd14_enabled = False
 
-        vram_budget = VramBudget(device)
-        vram_budget.set_budget_gb(max_vram_gb)
         lifecycle = ModelLifecycleManager(device)
 
         # Create engine without florence_service first (chicken-and-egg: Florence

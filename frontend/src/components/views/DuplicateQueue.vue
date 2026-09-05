@@ -64,7 +64,7 @@
         <!-- The flip side of the queue: review what was already decided and
              clear a decision. -->
         <!-- Folds into the ⋯ at ≤1180 (amendment #4), where it keeps its label
-             — icon-only, `mdi-history` says nothing on its own. The exception
+             - icon-only, `mdi-history` says nothing on its own. The exception
              is the way BACK: while the Decided page is showing, this button is
              the visible exit from a sub-page, so it stays on the bar and
              compresses to its arrow, which needs no label. -->
@@ -125,7 +125,7 @@
         <!-- The ⋯, and it stands where the controls it collapses stood: at the
              end of the toggle run, inside the group it serves (amendment #2's
              principle, amendment #4's measurement). It holds the two page
-             toggles and nothing else — the tier gate, the scope pill, the
+             toggles and nothing else - the tier gate, the scope pill, the
              count and the app-wide tail all stay on the bar at every width.
              Fold = CSS both ways: a row and its bar button carry the same
              condition, and the container query at ≤1180 flips which of the
@@ -143,7 +143,7 @@
                name-from-content would otherwise reduce Mixed stacks to its
                label and count, and the sentence saying what a mixed stack IS
                is the whole reason that button has a tooltip. The count is
-               aria-hidden on both forms for the same reason — it is already
+               aria-hidden on both forms for the same reason - it is already
                in the sentence. -->
           <template #default="{ close }">
             <button
@@ -184,7 +184,7 @@
         </TbOverflowMenu>
 
         <!-- Separator D-S1: renders at ALL widths (amendment #2). Its left
-             flank is always populated — by the toggles above 1180, by the ⋯
+             flank is always populated - by the toggles above 1180, by the ⋯
              below it, and on an empty queue by whichever of the two is
              showing. The tail's D-S2 stays at every width too. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
@@ -200,7 +200,7 @@
           <!-- The label ellipsizes under pressure and hides at ≤1180 (the
                compressed form is [filter icon][chevron], the grid Filter
                trigger's grammar), so the button carries its own accessible
-               name at every width — without it the hidden span would leave
+               name at every width - without it the hidden span would leave
                the name empty (WCAG 4.1.2). -->
           <button
             ref="tierButtonEl"
@@ -217,8 +217,8 @@
             <v-icon size="16">mdi-menu-down</v-icon>
           </button>
           <!-- Two menus behind one button. The tier gate says nothing about a
-               decision already made — the server ignores it on the decided
-               page entirely — so what a user reviewing decisions wants to
+               decision already made - the server ignores it on the decided
+               page entirely - so what a user reviewing decisions wants to
                narrow by is the DECISION (owner call, 2026-07-30). -->
           <DedupVerdictMenu
             v-if="tierMenuOpen && store.showingDecided"
@@ -300,7 +300,7 @@
 
         <!-- The app-wide chrome, the same components the grid's toolbar
              mounts: Duplicates replaces the grid (and with it that toolbar),
-             but undo/redo, Settings and the stats rail are not the grid's —
+             but undo/redo, Settings and the stats rail are not the grid's -
              they must not vanish with it. One separator divides the queue's
              own controls from the app-wide cluster. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
@@ -497,12 +497,12 @@
     <div v-else-if="store.hasGroups" class="queue">
       <!-- The bulk-scope statement: while ≥2 groups are selected, a verdict on
            any of them takes all of them. The only thing left on a second bar,
-           and it appears WITH the selection and goes with it — live state, not
+           and it appears WITH the selection and goes with it - live state, not
            a standing explanation. -->
       <div v-if="store.selectionCount > 1" class="qselbar">
         <span class="qselchip" role="status">
           <v-icon size="14">mdi-checkbox-multiple-marked-outline</v-icon>
-          {{ store.selectionCount }} groups selected —
+          {{ store.selectionCount }} groups selected -
           {{
             store.showingDecided
               ? "Clear decision applies to all"
@@ -630,8 +630,8 @@
       <v-icon size="48">mdi-history</v-icon>
       <h3>No decided groups</h3>
       <p>
-        Groups you stack or keep separate land here — from any session, not just
-        this one — and every decision can be reviewed and cleared until you do.
+        Groups you stack or keep separate land here - from any session, not just
+        this one - and every decision can be reviewed and cleared until you do.
       </p>
       <button type="button" class="qdecided" @click="onToggleDecided">
         <v-icon size="15">mdi-arrow-left</v-icon>
@@ -815,7 +815,7 @@ import ActionReceipt from "../widgets/ActionReceipt.vue";
  *
  * The window is anchored to BOTH the keyboard focus and the scroll position:
  * anchoring to the focus alone renders a fixed dozen rows and leaves a mouse
- * user scrolling into blank spacer — a 327-group queue that appears to hold 9.
+ * user scrolling into blank spacer - a 327-group queue that appears to hold 9.
  * Enough margin that neither a page of arrow presses nor a flick of the wheel
  * lands on an empty viewport; small enough that the mounted row count stays a
  * constant rather than a function of the queue's length.
@@ -826,7 +826,7 @@ const WINDOW_AFTER = 8;
 /**
  * What a row costs beyond its pictures: 8px of padding top and bottom, a 1px
  * border on each edge, and the 8px gap to the next row. Measured, and the
- * reason the estimate is a function of the size level rather than a constant —
+ * reason the estimate is a function of the size level rather than a constant -
  * the whole scroll track is sized from it, so it has to move when the size
  * control does.
  */
@@ -901,7 +901,7 @@ const noticeStore = useNoticeStore();
 // suppressed like any other echo, and only the COUNTS refresh through the
 // sidebar path. So the queue subscribes to the shared operation store's own
 // actions and reloads itself after an undo/redo that touched a dedup
-// operation — the same reload reopen() performs, through the same store, not
+// operation - the same reload reopen() performs, through the same store, not
 // a new mechanism. Scoped to dedup op types so undoing an unrelated tag edit
 // does not yank a triage in progress back to the top. The subscription is
 // made in setup, so Pinia removes it when the view unmounts.
@@ -1166,7 +1166,7 @@ const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
  * Whether the two page toggles are the kind that folds into the ⋯ at ≤1180.
  * They are, on the review queue, where both are forward navigation. On the
  * Decided and Mixed pages the surviving toggle reads "Back to review" and is
- * the visible way out of a sub-page, so it stays on the bar (amendment #4) —
+ * the visible way out of a sub-page, so it stays on the bar (amendment #4) -
  * and the ⋯ would then hold nothing, which is why the same flag mounts it.
  */
 const pageTogglesFold = computed(
@@ -1426,7 +1426,7 @@ const focusAnchor = computed(() =>
 
 /**
  * A rebase (windowStart moving FORWARD: the End jump) relocates the held span
- * wholesale, but `scrollIndex` still reflects the last scroll event — load
+ * wholesale, but `scrollIndex` still reflects the last scroll event - load
  * decisions made from that stale value would immediately backfill the very
  * pages the jump skipped. Snap it to the focus the jump just set; the real
  * scrollbar follows through scrollFocusIntoView in the same breath. Created
@@ -1443,7 +1443,7 @@ watch(
 /**
  * Whether Enter/S would genuinely take the whole selection: two or more
  * groups selected AND the keyboard cursor inside it. Only then may every
- * selected row wear the Enter/S chips — a chip on a row the key will not hit
+ * selected row wear the Enter/S chips - a chip on a row the key will not hit
  * is a lie.
  */
 const bulkKeysActive = computed(() => {
@@ -1461,7 +1461,7 @@ const bulkKeysActive = computed(() => {
 // scrollFocusIntoView drags the scroll (and thus this window) to the cursor.
 //
 // Everything here is in ABSOLUTE queue indices, clamped to the span the store
-// actually HOLDS ([windowStart, windowStart + groups.length]) — after an End
+// actually HOLDS ([windowStart, windowStart + groups.length]) - after an End
 // jump that span hangs off the queue's tail, and a scroll position outside it
 // renders spacer alone while the backfill catches up.
 function clampToHeld(index) {
@@ -1481,7 +1481,7 @@ const renderEnd = computed(() =>
  * just the pages fetched so far.
  *
  * Sizing the spacers to the loaded rows alone made the scrollbar grow under the
- * user's hand — the thumb shrank and jumped on every page, and the track never
+ * user's hand - the thumb shrank and jumped on every page, and the track never
  * meant anything, because "the bottom" moved each time it was reached. The
  * server's total is the only number that does not move as paging proceeds.
  * Once `hasMore` goes false AND the window is anchored at the top, the loaded
@@ -1498,7 +1498,7 @@ const totalRows = computed(() => {
 // Absolute spacers: the top one covers every row above the render window,
 // including rows above windowStart that are not held at all, so the track
 // keeps its full height (and the thumb its position) across a tail jump and
-// the upward backfill — a prepended page fills spacer, it never moves the
+// the upward backfill - a prepended page fills spacer, it never moves the
 // scroll.
 const topSpacer = computed(() => renderStart.value * rowPitchPx.value);
 const bottomSpacer = computed(() =>
@@ -1554,7 +1554,7 @@ watch(
  * already stand for every unloaded row (the track is sized from the server
  * total), so the track's bottom exists before its rows do. The store keeps
  * paging behind the pin and lands the focus on the real last group when the
- * chase completes — or the chase dies the moment the user moves the focus
+ * chase completes - or the chase dies the moment the user moves the focus
  * (store-side) or scrolls away from the tail (onListScroll above).
  */
 watch(
@@ -1583,7 +1583,7 @@ watch(
  * On the QUEUE it names the loosest tier that is on, because that is the one
  * that decides how speculative the list is. On the DECIDED page the tier gate
  * is not in force at all (the server ignores it there), so the button names the
- * verdict filter instead — a button reading "Exact only" over a page that is
+ * verdict filter instead - a button reading "Exact only" over a page that is
  * showing every decision would be a plain lie. Both are built from the server's
  * own rows, so a tier or verdict added later names itself here rather than
  * falling through to a wrong label.
@@ -1614,7 +1614,7 @@ function prefetchNextGroup() {
   if (!next || typeof Image === "undefined") return;
   for (const candidate of next.candidates ?? []) {
     const img = new Image();
-    // candidateId, not .id — the server calls the field picture_id — and the
+    // candidateId, not .id - the server calls the field picture_id - and the
     // backend origin, or the warmed URL is not the one the row will render.
     img.src = pictureThumbnailUrl(candidateId(candidate), {
       version: candidate.thumbnail_version,
@@ -1679,7 +1679,7 @@ watch(
     // band the same click had just opened.
     keepExpansionOnFocusedRow(group?.signature ?? "");
     if (!group) {
-      // The queue ran out from under Compare — the last verdict, whichever
+      // The queue ran out from under Compare - the last verdict, whichever
       // path gave it (footer buttons, Enter/S), or a reload that emptied the
       // list. Nothing is left to compare, so the dialog closes back to the
       // queue's done state. This is the ONLY way a verdict closes Compare:
@@ -2003,11 +2003,11 @@ function flashLockedPictures(pictureIds, scopeKey = "") {
  * A verdict given from inside Compare STAYS in Compare (owner requirement,
  * 2026-07-30): the store's auto-advance lands the focus on the next open
  * group and the dialog, which renders `store.focusedGroup`, flips to it in
- * place — the next decision starts without reopening anything, which is the
+ * place - the next decision starts without reopening anything, which is the
  * whole point of comparing a run of groups. The dialog closes only when the
  * verdict emptied the queue (the focusedGroup watcher above), and a FAILED
  * verdict changes nothing: the same group stays on screen with the failure
- * notice over it. The zoom needs no handling here — the dialog resets it on
+ * notice over it. The zoom needs no handling here - the dialog resets it on
  * every group signature change.
  */
 function onCompareStack() {
@@ -2051,7 +2051,7 @@ let thresholdPointerTuning = false;
  * By default the focus goes back to the control that opened it (Escape, and
  * any dismissal that is *about the popover*), so the keyboard never has to
  * hunt for where it went. A dismissal caused by a COMMITTED change passes
- * `focusTrigger: false` and hands the focus to the queue instead — the
+ * `focusTrigger: false` and hands the focus to the queue instead - the
  * popover session is over and the next keys are for the rows.
  */
 function closeTierMenu({ focusTrigger = true } = {}) {
@@ -2080,7 +2080,7 @@ function onDocumentPointerDown(event) {
  * The popover blocks only the keys pressed INSIDE itself: once a committed
  * change has handed focus back to the queue, the keys must work the rows even
  * while the popover stays open showing its live counts. (The auto-stack
- * dialog, a true modal, still blocks everything — see the isBlocked dep.)
+ * dialog, a true modal, still blocks everything - see the isBlocked dep.)
  *
  * @param {KeyboardEvent} [event]
  * @returns {boolean}
@@ -2093,7 +2093,7 @@ function tierMenuOwnsEvent(event) {
  * The same rule for the ⋯ overflow, and the same shape: only an OPEN panel
  * owns the keys pressed inside it. With the panel closed the trigger is an
  * ordinary toolbar button, so the queue's keys keep working while it holds
- * focus — exactly as they do on the tier trigger beside it. Escape never
+ * focus - exactly as they do on the tier trigger beside it. Escape never
  * reaches here: the menu stops it on its own wrap and closes back to the
  * trigger.
  *
@@ -2138,7 +2138,7 @@ function onEscape() {
   }
   // The Decided flip is an Escape layer of its own: one press returns to the
   // review queue, exactly as the Back-to-review toggle does (same reload
-  // semantics — the queue reopens at its top, which is what toggleDecided has
+  // semantics - the queue reopens at its top, which is what toggleDecided has
   // always meant), with the keyboard handed straight back to the list.
   if (store.showingDecided) {
     onToggleDecided();
@@ -2152,7 +2152,7 @@ function onEscape() {
  *
  * Ctrl (or Cmd) toggles the group in and out of the multi-selection,
  * Shift extends the range from the anchor, and a plain click focuses the row
- * and drops any selection — exactly the grid's own conventions, so nothing
+ * and drops any selection - exactly the grid's own conventions, so nothing
  * new has to be learned here.
  *
  * @param {number} index
@@ -2181,7 +2181,7 @@ function onRowFocus(index, event) {
  * Move the tier gate. The store reloads the queue, so the menu closes: leaving
  * it open over a list that just changed underneath reads as a glitch. The
  * COMMIT ends the popover session, so the focus goes to the queue, not back
- * to the trigger — the user changed the lens and expects Enter/S/arrows to
+ * to the trigger - the user changed the lens and expects Enter/S/arrows to
  * work the rows now, without a click first (Escape, by contrast, still
  * returns to the trigger).
  */
@@ -2197,7 +2197,7 @@ async function onTierToggle(id, on) {
  * The menu STAYS open, unlike a tier toggle: with only two verdicts, hiding one
  * is usually followed by hiding or restoring the other, and a popover that shut
  * after every press would make a two-press adjustment a four-press one. The
- * keyboard still goes back to the list, so the rows are workable underneath —
+ * keyboard still goes back to the list, so the rows are workable underneath -
  * the same split the threshold slider already uses.
  */
 async function onVerdictToggle(id, on) {
@@ -2217,7 +2217,7 @@ async function onVerdictToggle(id, on) {
  * against the count next to it, unlike a tier switch, which is a decision they
  * make once and then want to see the result of.
  *
- * A POINTER-committed change (drag released — `change` fires once) hands the
+ * A POINTER-committed change (drag released - `change` fires once) hands the
  * keyboard back to the queue while the popover stays up with its live count.
  * A KEYBOARD-committed one keeps focus on the slider: every arrow press fires
  * its own `change`, and yanking focus after the first would turn the rest of
@@ -2239,7 +2239,7 @@ async function onThresholdChange(value) {
 /**
  * A pointer-committed size change hands the keyboard back to the queue.
  * Vuetify's `end` fires on drag/track release only, so keyboard sizing keeps
- * focus on the thumb — whose arrow keys the queue's model already leaves
+ * focus on the thumb - whose arrow keys the queue's model already leaves
  * alone (`role="slider"` is a typing target).
  */
 function onSizeCommitted() {
@@ -2623,7 +2623,7 @@ async function onSelectAll() {
 }
 
 /**
- * A dialog the queue did NOT open is on screen — Settings, Share, anything the
+ * A dialog the queue did NOT open is on screen - Settings, Share, anything the
  * sidebar raised over us.
  *
  * The handler is bound at the document (see below), so without this the queue
@@ -2639,7 +2639,7 @@ function foreignDialogOpen() {
   // Two signals, because the app has two kinds of modal: Vuetify's scrim (every
   // AppDialog) and the review overlay, which paints its own. Both are stated on
   // the DOM rather than on listener order, for the reason App.vue records at
-  // `handleGlobalKeydown` — a remount silently reorders listeners.
+  // `handleGlobalKeydown` - a remount silently reorders listeners.
   return (
     document.querySelector(".v-overlay--active .v-overlay__scrim") != null ||
     document.querySelector(".rs-overlay") != null
@@ -2796,7 +2796,7 @@ const handleMixedKeydown = createDedupKeyHandler({
  * They used to be bound on the queue root, which meant they only worked while
  * the DOM focus was inside it: one click on a sidebar row and every shortcut
  * went dead, with nothing on screen to say why or how to get them back. The
- * queue is a whole destination, not a widget — while it is the view, the keys
+ * queue is a whole destination, not a widget - while it is the view, the keys
  * are the view's.
  *
  * Two things keep that from being greedy. `isTypingTarget` still declines to a
@@ -2869,7 +2869,7 @@ function filtersFromRoute() {
 }
 
 // The filter selection is part of the ADDRESS: a full refresh (or a shared
-// link) must restore it. Mirrored with replace(), never push() — tuning the
+// link) must restore it. Mirrored with replace(), never push() - tuning the
 // tier gate is not a history step the Back button should have to unwind.
 // Non-default tier/threshold values are written explicitly (near=0 included):
 // "absent" always means "the server's default", never "whatever it was".
@@ -2893,7 +2893,7 @@ watch(
     // filter params. By the time the store adopted the params and the mirror
     // re-ran, `route.query` still showed the old query (the stripping
     // navigation was async and in flight), the `same` check passed, no
-    // corrective write happened — and the params were gone for good. The gate
+    // corrective write happened - and the params were gone for good. The gate
     // keeps the mirror silent until the store has actually adopted the URL.
     if (
       route.name !== "duplicates" ||
@@ -2960,7 +2960,7 @@ function syncQueueToRoute() {
 //
 // An ARRAY of getters, never a getter returning an array: the latter builds a
 // fresh array each run, Vue compares it by identity, and the watcher fires on
-// EVERY route.query write — including the filter mirror's own replace() above.
+// EVERY route.query write - including the filter mirror's own replace() above.
 // On an empty queue that refire fell through syncQueueToRoute's fast path
 // (which requires held rows) into a full openQueue, which force-reset the
 // Decided flip the mirror was in the middle of recording: the decided rows
@@ -3024,19 +3024,19 @@ defineExpose({ windowedGroups, tierLabel });
      1px bottom border sits INSIDE the 36) + zero vertical padding, with
      `align-items: center` doing the vertical work. The previous recipe here
      (`min-height: 36px` + `var(--space-2)` vertical padding, content-box)
-     rendered 41px once the 32px app-wide tail buttons landed — the bars
+     rendered 41px once the 32px app-wide tail buttons landed - the bars
      visibly stepped. Guardrail: Toolbar.test.js asserts both bars carry the
      same recipe. This is NOT `--bar-height` (48px): that token is the design
      manual's target for the band, and unifying the shipped 34/36/40/48/56
      onto it (or tokenising the shipped 36) is the open, UI/UX-gated
-     reconciliation item in visual-language.md §5 — a bar that jumped there
+     reconciliation item in visual-language.md §5 - a bar that jumped there
      alone would just be drift in the other direction. */
   height: 36px;
   box-sizing: border-box;
   /* Split inset, each side anchored to what it must align WITH. RIGHT is
      --space-3, the grid bar's inset: the app-wide tail ([sep][Undo][Global])
      is a stable anchor only if its icons land at the identical distance from
-     the edge in every view — a uniform --space-5 here put them 8px further
+     the edge in every view - a uniform --space-5 here put them 8px further
      left than the grid's and the tail jumped on view switches (guardrail in
      Toolbar.test.js pins the right insets equal). LEFT stays --space-5, the
      queue's own content gutter: the count headline sits flush over the
@@ -3066,8 +3066,8 @@ defineExpose({ windowedGroups, tierLabel });
    shrink: the surplus left through the right edge and took the last children
    in DOM order with it, which is exactly Settings and Stats. The left group
    yields first and its text members ellipsize; the right group never shrinks,
-   so no content the left group can hold — a scope named by the user, a
-   seven-digit count — can push the app-wide tail off the bar.
+   so no content the left group can hold - a scope named by the user, a
+   seven-digit count - can push the app-wide tail off the bar.
 
    NOT `overflow: hidden` on the bar: the tier popover and the ⋯ panel are
    absolutely positioned inside it and would be clipped away. */
@@ -3130,7 +3130,7 @@ defineExpose({ windowedGroups, tierLabel });
   position: relative;
   /* Part of the tier button's shrink chain: without this the flex default
      (min-width: auto) refuses to shrink and the label wraps instead.
-     `display: flex` is the other half — as a block the wrap could shrink to
+     `display: flex` is the other half - as a block the wrap could shrink to
      nothing while the inline-flex button inside kept its full width and drew
      straight over its neighbours (amendment #4). */
   display: flex;
@@ -3200,7 +3200,7 @@ defineExpose({ windowedGroups, tierLabel });
   /* The FIRST thing to give between two rungs, and it gives from the RIGHT:
      the count leads the string, so the ellipsis eats "groups to review" and
      never the number (amendment #4). The full sentence stays in the DOM for a
-     screen reader and in the tooltip. The weight buys the order — the give is
+     screen reader and in the tooltip. The weight buys the order - the give is
      shared out in proportion to `flex-shrink × width`, and a clipped tail on a
      sentence reads better than "Mixed stac…" on a button. */
   min-width: 0;
@@ -3280,7 +3280,7 @@ defineExpose({ windowedGroups, tierLabel });
   padding: var(--space-2) var(--space-5) 0;
 }
 
-/* The bulk-scope chip: accent-washed so it reads as state, not decoration —
+/* The bulk-scope chip: accent-washed so it reads as state, not decoration -
    while it shows, a verdict on any selected row takes the whole selection. */
 .qselchip {
   display: inline-flex;
@@ -3484,7 +3484,7 @@ defineExpose({ windowedGroups, tierLabel });
    what each one COSTS). ─────────────────────────────────────────────────
 
    Measured against the full bar (1408px, typical content), one item at a
-   time — this is the table the order is derived from, not an argument:
+   time - this is the table the order is derived from, not an argument:
 
      48 done this session            122px   a readout
      the size value (Very Large)      84px   a readout the slider already shows
@@ -3496,7 +3496,7 @@ defineExpose({ windowedGroups, tierLabel });
    **Cheapest loss first, and the size control is never spent.** It was being
    dropped fourth, which is what #8 fixes: it is the one thing on this bar
    with no fold destination and no tooltip standing in for it, and the queue's
-   whole business is looking at pictures — a control that changes the thing
+   whole business is looking at pictures - a control that changes the thing
    you are looking at is not what you sell to buy 128px. Spending Auto-stack's
    sentence instead (91px, and the button still shows its count) reaches a
    NARROWER floor than the old ladder did while dropping the slider, because
@@ -3513,7 +3513,7 @@ defineExpose({ windowedGroups, tierLabel });
 
    Below 706px the shrink chain (amendment #4: `.dq-tb-left { min-width: 0;
    flex: 0 1 auto }`) ellipsizes the count headline, which carries the bar to
-   ~380px with nothing leaving it — narrower than the 586px floor the ladder
+   ~380px with nothing leaving it - narrower than the 586px floor the ladder
    reached by dropping the slider.
 
    Tuned to typical content on purpose: the same chain answers a pathological
@@ -3523,7 +3523,7 @@ defineExpose({ windowedGroups, tierLabel });
    The queries are 24px under the widths the rungs are named for:
    `container-type: inline-size` queries the CONTENT box and this bar's inset
    is `0 var(--space-3) 0 var(--space-5)`. Re-measure by stepping the
-   container, never by reasoning about it — both times this ladder was wrong,
+   container, never by reasoning about it - both times this ladder was wrong,
    a number had been argued rather than read. ───────────────────────────── */
 .dq-auto-short,
 .dq-auto-count {
@@ -3555,7 +3555,7 @@ defineExpose({ windowedGroups, tierLabel });
   }
 }
 
-/* Rung 2. Auto-stack drops its sentence for "Auto-stack N" — the cheapest
+/* Rung 2. Auto-stack drops its sentence for "Auto-stack N" - the cheapest
    word on the bar, because the count it keeps IS the sentence's subject and
    the full form survives as the tooltip and the accessible name. Buys 91px,
    and spending it here is what keeps the tier label and both toggle labels
@@ -3613,7 +3613,7 @@ defineExpose({ windowedGroups, tierLabel });
    auto-stack) still fits with nothing leaving the bar.
 
    The groups only: `.dq-toolbar` IS the query's container, and a container
-   query styles a container's DESCENDANTS, never the container itself — a rule
+   query styles a container's DESCENDANTS, never the container itself - a rule
    for the bar's own gap or inset here would be dead. Its 36px band and its
    insets are pinned to the grid bar's anyway (guardrail in Toolbar.test.js),
    so they are not this ladder's to spend. */

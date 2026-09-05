@@ -708,7 +708,7 @@ class TestProgressReporting:
         self, hub, scanner, tmp_path
     ):
         """A caller cannot draw a progress bar without a total, and hashing is
-        what makes the scan minutes long — so the walk is materialised and the
+        what makes the scan minutes long - so the walk is materialised and the
         count is handed over *before* the first file is described, not
         discovered as the generator drains. Only model files are counted: the
         denominator has to match what the loop will actually work through.
@@ -766,7 +766,7 @@ class TestWriteCadence:
         folder = self._folder_with(tmp_path, 4)
         folder_id = register_folder(hub, folder)
 
-        # What a reader in another thread — the work planner — would have seen.
+        # What a reader in another thread - the work planner - would have seen.
         visible: list[int] = []
         scanner.scan_folder(
             folder_id,
@@ -787,7 +787,7 @@ class TestWriteCadence:
         self, hub, scanner, tmp_path, monkeypatch
     ):
         """The positive control. Files that cost nothing to read must not each
-        earn their own commit — the flush is a latency ceiling, not a per-file
+        earn their own commit - the flush is a latency ceiling, not a per-file
         write policy, and turning it into one is its own regression."""
         commits = []
         original = ModelFolderScanner._write_batch

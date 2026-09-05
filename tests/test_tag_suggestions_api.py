@@ -479,7 +479,7 @@ def test_bulk_accept_skips_when_tagger_contradicts_neighbour():
     """remove + tagger says BOTH have it → the two signals disagree, so bulk leaves it.
 
     This is the case the old confidence-only path got wrong: it placed the pair in the
-    "both" corner and *added* the tag to the twin — for a suggestion that asked to
+    "both" corner and *added* the tag to the twin - for a suggestion that asked to
     *remove* it. The blend now requires the tagger to land in the neighbour's corner.
     """
     temp_dir, client, server = _setup()
@@ -630,13 +630,13 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
     try:
         # Three pictures. A is the tagged suspect. C is A's CLIP-nearest opposite (highest
         # cosine). B is the perceptual near-duplicate of A (tiny dhash hamming) but a
-        # LOWER cosine than C — without the override A's twin would be C, with it B wins.
+        # LOWER cosine than C - without the override A's twin would be C, with it B wins.
         a = _upload_picture(client)  # Bad1.png
         b = _upload_named(client)  # distinct in-memory PNG
         c = _upload_named(client)  # distinct in-memory PNG
 
         # A points along axis 0. C is nearly parallel (cosine ~0.9999). B is further
-        # off at cosine ~0.85 — deliberately BETWEEN the current 0.8 display floor
+        # off at cosine ~0.85 - deliberately BETWEEN the current 0.8 display floor
         # and the old, too-strict 0.9 one, pinning the eased threshold: a heavily
         # edited copy in this band must still be shown as the perceptual twin.
         _set_embedding(server, a, [1.0] + [0.0] * 511)
@@ -670,7 +670,7 @@ def test_scan_tag_prefers_perceptual_near_duplicate_twin():
 
 def test_scan_tag_rejects_low_similarity_perceptual_override():
     """A dhash-near "perceptual duplicate" whose actual CLIP similarity is low is a likely
-    hash collision, not a real "same shot" pair — the override must not fire, and the
+    hash collision, not a real "same shot" pair - the override must not fire, and the
     CLIP-nearest twin (with its higher, corroborated similarity) stays displayed."""
     from pixlstash.services import tag_scan_service
 
@@ -679,7 +679,7 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
         # Three pictures. A is the tagged suspect. C is A's CLIP-nearest opposite (cosine
         # 0.95, comfortably above both min_twin_sim and min_display_twin_sim). B has a
         # tiny dhash hamming distance to A (would trigger the perceptual-twin override)
-        # but only a 0.55 cosine similarity to A — too low to trust as "same shot", so the
+        # but only a 0.55 cosine similarity to A - too low to trust as "same shot", so the
         # override must be rejected and C must stay the displayed twin.
         a = _upload_picture(client)  # Bad1.png
         b = _upload_named(client)  # distinct in-memory PNG
@@ -703,7 +703,7 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
         pair_rows = [r for r in rows if a in {r["picture_id"], r["twin_picture_id"]}]
         assert pair_rows, "expected a suggestion involving the tagged picture A"
         row = pair_rows[0]
-        # The displayed twin stays the CLIP-nearest C — the low-similarity perceptual
+        # The displayed twin stays the CLIP-nearest C - the low-similarity perceptual
         # "near-duplicate" B is rejected despite its tiny dhash hamming distance.
         assert {row["picture_id"], row["twin_picture_id"]} == {a, c}
         assert b not in {row["picture_id"], row["twin_picture_id"]}
@@ -717,7 +717,7 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
 
 # ---------------------------------------------------------------------------
 # Fix 1 (confidence fallback) / Fix 2 (base-rate-relative thresholds)
-# regression coverage — see docs/reviews and tag_scan_service.py's module
+# regression coverage - see docs/reviews and tag_scan_service.py's module
 # constants for the bug reports and empirical tuning these guard against.
 # ---------------------------------------------------------------------------
 
@@ -726,7 +726,7 @@ def test_scan_tag_confidence_fallback_for_new_tag():
     """Fix 1 regression: the exact reported bug. A brand-new tag with zero
     ``Tag`` rows produced ZERO suspects (not just few) because the kNN vote's
     ``has_concept`` mask is all-False, making pos_frac identically 0.0 for
-    every picture vault-wide — add_threshold could never be met no matter how
+    every picture vault-wide - add_threshold could never be met no matter how
     confident the model is. Below MIN_GROUND_TRUTH_FOR_VOTE ground-truth
     positives, scan_tag must fall back to TagPrediction confidence directly.
     """
@@ -740,7 +740,7 @@ def test_scan_tag_confidence_fallback_for_new_tag():
             b = upload_pictures_and_wait(
                 client, [("file", ("Bad2.png", f, "image/png"))]
             )["results"][0]["picture_id"]
-        # Embeddings are only needed to clear scan_tag's len(ids) < 2 guard —
+        # Embeddings are only needed to clear scan_tag's len(ids) < 2 guard -
         # the fallback path doesn't vote on them.
         _set_embedding(server, a, [1.0] + [0.0] * 511)
         _set_embedding(server, b, [0.0, 1.0] + [0.0] * 510)
@@ -776,7 +776,7 @@ def test_scan_tag_confidence_fallback_for_new_tag():
 
 def test_scan_tag_confidence_fallback_ignores_stale_model_version():
     """The fallback pins to the current (most recent non-"manual") model
-    version, exactly like tag_health_service's est_missing — a confident
+    version, exactly like tag_health_service's est_missing - a confident
     prediction from a superseded model version must not produce a suspect."""
     from pixlstash.services import tag_scan_service
 
@@ -824,7 +824,7 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
     """The cold-start fallback must not re-propose a tag a human already
     REJECTED via the tag-prediction reject endpoint. That reject writes a ledger
     NEG (``label_state="NEG"``) but keeps the tagger's high confidence and adds no
-    ``Tag`` row and no ``TagSuggestion`` row — so ``scan_tag._write``'s
+    ``Tag`` row and no ``TagSuggestion`` row - so ``scan_tag._write``'s
     suggestion-level dedup can't suppress it. Only the ``label_state == "UNKNOWN"``
     filter (mirroring est_missing) does: pre-fix, the rejected picture was
     re-surfaced as a PENDING "add" suspect; it must now be excluded, while an
@@ -850,7 +850,7 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
         _seed_prediction(server, b, "compression artifacts", 0.93)
 
         # Human rejects the tag on B via the ledger (keeps conf 0.93, no Tag row,
-        # no TagSuggestion) — the exact shape the suggestion-dedup can't catch.
+        # no TagSuggestion) - the exact shape the suggestion-dedup can't catch.
         def reject_b(session):
             record_human_label(session, b, "compression artifacts", NEG)
             session.commit()
@@ -860,7 +860,7 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
         res = tag_scan_service.scan_tag(
             server.vault, "compression artifacts", project=None
         )
-        # Pre-fix this was 2 (both A and B proposed) — B is the re-proposal bug.
+        # Pre-fix this was 2 (both A and B proposed) - B is the re-proposal bug.
         assert res["added"] == 1
         assert res["count"] == 1
 
@@ -882,13 +882,13 @@ def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
 
     Twenty pictures, hand-constructed embeddings with exactly known pairwise
     cosine similarities (verified against the real kernel before being
-    transcribed here — see the PR notes): one probe picture (``u``) whose
-    kNN-vote positive fraction is 0.4722 — below the OLD fixed add_threshold
+    transcribed here - see the PR notes): one probe picture (``u``) whose
+    kNN-vote positive fraction is 0.4722 - below the OLD fixed add_threshold
     (0.55) so the old code could never flag it, but above the NEW base-rate
     default (p + 0.15 = 0.40) so it should. A second picture (``t1``) is
-    tagged with pos_frac 0.259 — above the NEW default remove_threshold
+    tagged with pos_frac 0.259 - above the NEW default remove_threshold
     (p - 0.15 = 0.10, so NOT flagged) but below the OLD fixed 0.45 (so an
-    explicit legacy-threshold caller WOULD flag it) — exercising acceptance
+    explicit legacy-threshold caller WOULD flag it) - exercising acceptance
     criterion (c): explicit overrides bypass the base-rate computation.
     """
     import io
@@ -999,7 +999,7 @@ def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
 def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
     """Fix 2 majority-tag regression: the naive symmetric ``p ± margin`` formula
     shifts *every* tag uniformly by its own base rate, which helps minority
-    tags (the population Fix 2 targeted) but actively hurts a majority tag —
+    tags (the population Fix 2 targeted) but actively hurts a majority tag -
     it raises add_threshold *above* the legacy fixed 0.55, making add
     *stricter* than before for no reason (majority tags were never the
     population this fix was meant to help).
@@ -1007,11 +1007,11 @@ def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
     Twenty pictures, base rate p=12/20=0.6 (mirrors the real-vault
     reproduction: tag "man" at p=68/111=0.6126). One probe picture (``u``)
     has kNN-vote positive fraction 0.6498 and a twin (``p1``) at cosine
-    similarity 0.9535 — clearing both the twin-similarity gate (>=0.85) and
-    the legacy fixed add_threshold (0.55, so the legacy code catches it) —
+    similarity 0.9535 - clearing both the twin-similarity gate (>=0.85) and
+    the legacy fixed add_threshold (0.55, so the legacy code catches it) -
     but BELOW the *uncapped* base-rate default (p + 0.15 = 0.75), so the
     regressed formula misses it entirely (verified against the real kernel
-    directly before being transcribed here — see the PR notes). The
+    directly before being transcribed here - see the PR notes). The
     corrected default caps add_threshold at the legacy 0.55 ceiling (never
     stricter than the legacy default), so it catches ``u`` again, matching
     the legacy behaviour.
@@ -1052,11 +1052,11 @@ def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
         # 512-dim orthogonal-axis construction, same technique as the minority-tag
         # test above. Verified against pixlstash.utils.near_neighbor.
         # knn_disagreement_with_neighbors directly before being transcribed here.
-        AXIS_HUB = 0  # u <-> q1..q4 (weak — dilutes u's vote toward "no tag")
-        AXIS_PGROUP = 1  # shared among p1..p8 — dominates their own vote (all tagged)
-        AXIS_QGROUP = 2  # shared among q1..q4 — dominates their own vote (all untagged)
-        AXIS_DGROUP = 3  # shared among d1..d4 — isolated from u, all tagged
-        AXIS_TWIN = 4  # u <-> p1 only — strong, clears the min_twin_sim gate
+        AXIS_HUB = 0  # u <-> q1..q4 (weak - dilutes u's vote toward "no tag")
+        AXIS_PGROUP = 1  # shared among p1..p8 - dominates their own vote (all tagged)
+        AXIS_QGROUP = 2  # shared among q1..q4 - dominates their own vote (all untagged)
+        AXIS_DGROUP = 3  # shared among d1..d4 - isolated from u, all tagged
+        AXIS_TWIN = 4  # u <-> p1 only - strong, clears the min_twin_sim gate
 
         def vec(components):
             v = [0.0] * 512
@@ -1102,7 +1102,7 @@ def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
         # --- Run 2: the regressed, uncapped symmetric formula's thresholds ---
         # (p=0.6 -> add_threshold=p+0.15=0.75, remove_threshold=p-0.15=0.45).
         # u's pos_frac (0.6498) clears the legacy/corrected 0.55 but not this
-        # uncapped 0.75 — reproducing the confirmed "man" regression directly.
+        # uncapped 0.75 - reproducing the confirmed "man" regression directly.
         res_regressed = tag_scan_service.scan_tag(
             server.vault,
             tag,
@@ -1132,7 +1132,7 @@ def test_accept_missing_suggestion_returns_404():
 
 # ---------------------------------------------------------------------------
 # Review-scope filters: project_id / set_id / character_id (AND together).
-# These tests use the cookie-session client + unversioned paths (owner — no
+# These tests use the cookie-session client + unversioned paths (owner - no
 # token scope), so they exercise the user-supplied filter narrowing only.
 # ---------------------------------------------------------------------------
 
@@ -1465,7 +1465,8 @@ def _setup_scoped_token_env():
     # Versioned login so the auth middleware establishes the owner session.
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )
@@ -1548,8 +1549,8 @@ def _suggestion_id_for(server, picture_id):
 def _set_twin(server, suggestion_id, twin_picture_id, twin_sim=0.97):
     """Point an existing suggestion at a twin, reason string included.
 
-    The reason mirrors what ``tag_scan_service`` actually writes — it embeds the
-    twin's id and similarity — because that free-text field is a twin attribute
+    The reason mirrors what ``tag_scan_service`` actually writes - it embeds the
+    twin's id and similarity - because that free-text field is a twin attribute
     too and is part of what must be redacted.
     """
 
@@ -1571,7 +1572,7 @@ def test_scoped_token_list_redacts_out_of_scope_twin():
     """A suggestion is a *pair*; the scope filter only constrains the suspect.
 
     Without redaction a Set-A token learns the id, existence, file type,
-    perceptual similarity and model confidence of a Set-B picture — and the
+    perceptual similarity and model confidence of a Set-B picture - and the
     ``reason`` string spells the id out in prose. Iterating tags would enumerate
     picture ids across the vault. This is the same disclosure that made
     ``GET /reviews/{id}/suggestions`` owner-only; the reasoning is applied here
@@ -1601,12 +1602,12 @@ def test_scoped_token_list_redacts_out_of_scope_twin():
             assert row[field] is None, f"{field} leaked an out-of-scope twin"
         # … including the one hiding in prose.
         assert str(pic_b) not in (row["reason"] or "")
-        # The suspect's own fields are untouched — this is a redaction, not a
+        # The suspect's own fields are untouched - this is a redaction, not a
         # blanket blanking of the card.
         assert row["tag"] == "malformed hand"
         assert row["picture_ext"]
 
-        # Owner sees the full pair — over-blocking is its own regression.
+        # Owner sees the full pair - over-blocking is its own regression.
         owner_rows = client.get(
             f"{API}/tag_suggestions", params={"tag": "malformed hand"}
         ).json()
@@ -1746,7 +1747,7 @@ def test_scan_tag_survives_large_picture_ids_scope():
 
 def test_legacy_scan_refreshes_stale_pending_in_place():
     """F2(i): a legacy re-scan (review_id=None) must REFRESH the stored evidence
-    on an existing PENDING row in place — same row id, fresh evidence, no delete
+    on an existing PENDING row in place - same row id, fresh evidence, no delete
     and no duplicate. This is the no-purge replacement for the old rebuild."""
     from pixlstash.services import tag_scan_service
 
@@ -1833,7 +1834,7 @@ def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
         _seed_tag(server, pic, "malformed hand")
         sid = _seed_suggestion(server, pic, "malformed hand", "remove")
 
-        # A human manually affirms the tag belongs (POS) — the manual fix a
+        # A human manually affirms the tag belongs (POS) - the manual fix a
         # stale "remove" suggestion would otherwise reverse.
         def _manual_pos(session):
             record_human_label(session, pic, "malformed hand", POS)
@@ -1854,7 +1855,7 @@ def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
 
         # A non-contradicting suggestion (add, matching the human POS; distinct
         # source so it doesn't collide on UNIQUE(picture_id, tag, source)) still
-        # accepts — the guard is not over-blocking.
+        # accepts - the guard is not over-blocking.
         add_sid = _seed_suggestion(server, pic, "malformed hand", "add", source="model")
         assert accept_suggestion(server.vault, add_sid)["direction"] == "add"
     finally:

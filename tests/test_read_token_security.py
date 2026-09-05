@@ -36,15 +36,15 @@ routing, so a revoked, expired or absent credential is answered **401** on
 every endpoint shape this module touches, while a live-but-wrong-scope
 credential is answered 403/404 by the authz gate. A dead credential therefore
 cannot satisfy any of the assertions below, all of which require 403 or 404.
-The per-test wipe is defence in depth on top of that — it stops one test's
-token from being the one a later test unknowingly exercises — and the in-scope
+The per-test wipe is defence in depth on top of that - it stops one test's
+token from being the one a later test unknowingly exercises - and the in-scope
 positive control below is what proves the credential is live rather than
 assuming it.
 
 Each per-test fixture also re-proves the environment before the test body runs:
 the freshly minted token is exercised on an **in-scope read** (the positive
-control adjacent to every negative one), and the library's **identity** — which
-picture ids exist, which set holds which, which scores they carry — is
+control adjacent to every negative one), and the library's **identity** - which
+picture ids exist, which set holds which, which scores they carry - is
 re-checked. Identity, never counts: a missing object answers a request the same
 way a scope refusal does. These checks live in the fixture rather than in a
 trailing "canary" test because the shard split would leave such a test watching
@@ -106,7 +106,7 @@ def _make_png_bytes(width: int = 32, height: int = 32) -> bytes:
 # them all"), and the manual scores below cycle 1-5, so five is the smallest
 # library that still exercises the full score range AND leaves a
 # single-picture share token narrowing a library strictly larger than its
-# scope — which is the property the isolation tests actually assert.
+# scope - which is the property the isolation tests actually assert.
 _FIXTURE_PICTURE_COUNT = 5
 
 
@@ -115,7 +115,7 @@ def _good_picture_files() -> list[tuple[str, bytes, str]]:
 
     These are generated in-memory rather than read from ``pictures/good/``.
     That directory is 19 MB of real photographs across 12 files, and
-    ``_setup_server_with_pictures`` runs per test function — so the old version
+    ``_setup_server_with_pictures`` runs per test function - so the old version
     pushed 19 MB through the full import pipeline (embedding, face detection,
     tagging) 33 times per run of this module, to assert things like "a READ
     token gets 403 on POST /pictures/apply-scores".
@@ -167,7 +167,7 @@ def _setup_server_with_pictures(temp_dir: str):
 
     # Set up credentials.
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
 
@@ -236,7 +236,7 @@ def _setup_two_picture_sets(tmp: str):
     """Create two picture sets with one picture each.
 
     Returns a namespace carrying the server, the owner client and the ids. The
-    set-A share token is *not* minted here — ``TestResourceScopedReadTokenIsolation``
+    set-A share token is *not* minted here - ``TestResourceScopedReadTokenIsolation``
     re-mints it per test so no test can inherit another test's credential.
     """
     config_path = f"{tmp}/server-config.json"
@@ -245,7 +245,7 @@ def _setup_two_picture_sets(tmp: str):
     client = TestClient(server.api, raise_server_exceptions=True)
 
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
 
@@ -311,13 +311,13 @@ def _stop_planner_and_settle(server, timeout_s: float = 120.0) -> None:
     ``WorkPlanner.stop()`` stops the loop that FINDS work. It does not touch
     the ``TaskRunner``, which owns its own queues and worker threads, so a task
     the planner submitted seconds earlier is still queued or already executing
-    when ``stop()`` returns — measured on this very fixture: one task on the
+    when ``stop()`` returns - measured on this very fixture: one task on the
     GPU queue and a ``FaceExtractionTask`` running.
 
     That is what a shared module environment cannot survive. ``TagTask``
     deletes a picture's tags before writing its own, so a tagger still in
     flight lands inside a test body, wipes the ``tag-a-only`` row the test just
-    posted, and leaves the tagger's own vocabulary in its place — which is
+    posted, and leaves the tagger's own vocabulary in its place - which is
     exactly how ``test_list_all_tags_cannot_leak_out_of_scope_vocab`` failed on
     a CI runner slow enough to keep the pipeline alive that long, while passing
     on every machine fast enough to finish it during setup.
@@ -346,7 +346,7 @@ def _clear_rate_limit_window(server) -> None:
     """Empty the global rate limiter's sliding window on *server*.
 
     The limiter counts every request to an auth-excluded path, and
-    ``POST /login`` is one — so the per-test re-login below is itself a counted
+    ``POST /login`` is one - so the per-test re-login below is itself a counted
     event. Over a shared server those events accumulate inside the 60 s window
     and would eventually 429 the re-login (loudly, but for the wrong reason),
     and they would silently defang ``test_data_intact_after_rate_limit_barrage``
@@ -366,7 +366,7 @@ def _clear_rate_limit_window(server) -> None:
             return
         node = getattr(node, "app", None)
     raise AssertionError(
-        "RateLimitMiddleware not found in the app's middleware stack — the "
+        "RateLimitMiddleware not found in the app's middleware stack - the "
         "per-test rate-limit reset is no longer resetting anything"
     )
 
@@ -382,9 +382,9 @@ def _reset_owner_credentials(server, owner_client) -> None:
     otherwise 429 the re-login below.
 
     The re-login is itself an assertion. It proves the owner password is still
-    ``ownerpass1``, which is precisely what the "READ token cannot change the
-    password" tests are protecting, and it fails loudly instead of letting a
-    dirty environment masquerade as a scope refusal.
+    ``example-owner-password``, which is precisely what the "READ token cannot
+    change the password" tests are protecting, and it fails loudly instead of
+    letting a dirty environment masquerade as a scope refusal.
     """
 
     def _wipe(session: Session):
@@ -399,10 +399,10 @@ def _reset_owner_credentials(server, owner_client) -> None:
     _clear_rate_limit_window(server)
 
     r = owner_client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, (
-        f"owner re-login failed — the shared environment is dirty: {r.text}"
+        f"owner re-login failed - the shared environment is dirty: {r.text}"
     )
 
 
@@ -429,7 +429,7 @@ def _prove_token_reads(server, token: str, path: str = "/pictures", **params) ->
     )
     assert r.status_code == 200, (
         f"a fresh READ token cannot perform an in-scope read on {path} "
-        f"({r.status_code}: {r.text}) — the refusals below would prove nothing"
+        f"({r.status_code}: {r.text}) - the refusals below would prove nothing"
     )
     body = r.json()
     if isinstance(body, dict):
@@ -497,10 +497,10 @@ def _two_set_env():
     """One Server holding two single-picture sets, shared by the isolation tests.
 
     The planner is stopped once the two imports are done, and the work it has
-    ALREADY handed to the runner is waited out — see
+    ALREADY handed to the runner is waited out - see
     {@link _stop_planner_and_settle}, which is the half this fixture used to
     skip. Nothing after setup imports a picture, so there is no legitimate work
-    left here — but several of these tests hand-write ``Tag``, ``Character``
+    left here - but several of these tests hand-write ``Tag``, ``Character``
     and ``PictureStack`` rows, and a ``TagTask`` still in flight (it deletes a
     picture's tags before rewriting them) or a stack-cohesion sweep would
     clobber them. Same move as tests/test_smart_score_invalidation.py.
@@ -538,20 +538,20 @@ def _reset_two_set_library(env) -> None:
     Five kinds of row are written by tests in that class and would otherwise be
     inherited by the ones that follow:
 
-    * tags — one test asserts a per-tag count *exactly*, so a leftover tag row
+    * tags - one test asserts a per-tag count *exactly*, so a leftover tag row
       turns that count into someone else's;
     * a character named ``Ref``, created by two different tests;
     * the ComfyUI model/LoRA vocab columns, seeded straight onto the pictures;
     * a stack spanning both sets;
     * **set membership**. This one is the trap: forming a stack is
       stack-atomic for picture-set membership, so stacking ``pic_b`` onto
-      ``pic_a`` pulls ``pic_b`` into Set A — and Set A is the scope every
+      ``pic_a`` pulls ``pic_b`` into Set A - and Set A is the scope every
       negative assertion in that class is measured against. Membership is
       therefore rebuilt from scratch, not just left alone.
 
     No foreign-key pragma is used. The statement order below leaves every
-    reference satisfied at all times — children before parents, and the
-    ``Picture`` rows detached from their stack *before* the stacks go — which
+    reference satisfied at all times - children before parents, and the
+    ``Picture`` rows detached from their stack *before* the stacks go - which
     makes deferral unnecessary. That is deliberate: with pysqlite a
     ``PRAGMA defer_foreign_keys = ON`` issued before any DML runs in its own
     autocommit transaction and is gone again by the time the DELETEs open
@@ -680,7 +680,7 @@ def _comfyui_stack_env():
 
     Read-only for every test it serves: the pictures and stacks are written once
     here, directly in the DB, and only queried afterwards. The planner is stopped
-    for the same reason as ``_two_set_env`` — these rows point at file paths that
+    for the same reason as ``_two_set_env`` - these rows point at file paths that
     do not exist, and a warm sweep has no business rewriting them.
 
     Private on purpose: reach it through
@@ -693,7 +693,8 @@ def _comfyui_stack_env():
         try:
             owner_client = TestClient(server.api, raise_server_exceptions=True)
             r = owner_client.post(
-                f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
             )
             assert r.status_code == 200, r.text
 
@@ -717,7 +718,7 @@ class TestAllScopeResourceTokenRejected(_SharedPictureLibrary):
     The auth middleware only builds ``request.state.token_scope`` for non-ALL
     scopes, so such a token would bypass every object-scope guard
     (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` read
-    ``token_scope``) *and* pass the owner-only token-creation check — it is a
+    ``token_scope``) *and* pass the owner-only token-creation check - it is a
     full owner token wearing a "restricted" label. See the F3 finding in
     docs/reviews/feature-slick-grid-updates.md.
     """
@@ -765,13 +766,13 @@ def _rescope(server, token: str, scope: str) -> str:
     """Force *token*'s hub row to *scope* and return the token unchanged.
 
     ``create_token`` allowlists ``ALL``/``READ``, so a token carrying any other
-    scope has no mint path and the row has to be written directly — the row is
+    scope has no mint path and the row has to be written directly - the row is
     the thing under test. The cache flush matters: the middleware answers from
     the token cache, so without it the request would still see ``READ``.
 
     **The write is verified, not assumed.** A ``READ`` token answers every
-    refusal these tests assert on — the same 403 and the same
-    ``"Token is read-only"`` body — so an UPDATE that matched no row (a renamed
+    refusal these tests assert on - the same 403 and the same
+    ``"Token is read-only"`` body - so an UPDATE that matched no row (a renamed
     column, a changed prefix length, a token minted against a different hub)
     would leave all of them passing while testing nothing at all. The row is
     therefore read back and its scope asserted, which is the one thing that
@@ -794,12 +795,12 @@ def _rescope(server, token: str, scope: str) -> str:
 
     rowcount, scopes = server.hub_engine.run_task(_set)
     assert rowcount == 1, (
-        f"rescoping to {scope!r} matched {rowcount} token rows, not 1 — the "
+        f"rescoping to {scope!r} matched {rowcount} token rows, not 1 - the "
         "refusals this token is about to be measured against would be the "
         "ordinary READ refusals, and would prove nothing"
     )
     assert scopes == [scope], (
-        f"the token row reads back as {scopes} rather than [{scope!r}] — the "
+        f"the token row reads back as {scopes} rather than [{scope!r}] - the "
         "scope under test was never written"
     )
     server.auth._flush_token_cache()
@@ -810,8 +811,8 @@ class TestUnknownScopeFailsClosed(_SharedPictureLibrary):
     """A scope the product does not recognise must be treated as read-only.
 
     The middleware used to refuse a write only for ``scope == "READ"``, so any
-    other string — a misconfigured row, a forged one, a scope added in a later
-    commit — skipped the refusal and reached every ``*_SCOPED`` mutation route,
+    other string - a misconfigured row, a forged one, a scope added in a later
+    commit - skipped the refusal and reached every ``*_SCOPED`` mutation route,
     each of which is write-unreachable *solely* because of that comparison. It
     now keys on an explicit set of write-enabled scopes instead (issue #962).
     """
@@ -847,7 +848,7 @@ class TestUnknownScopeFailsClosed(_SharedPictureLibrary):
             f"the filesystem belt must hold for every scoped token, got {r.status_code}: {r.text}"
         )
         # The gate declares this path LOCAL_OWNER_ONLY and would answer 403 as
-        # well, so the body is what proves the middleware belt is the refuser —
+        # well, so the body is what proves the middleware belt is the refuser -
         # which is the half this change hoisted out of the ``READ`` branch.
         assert r.json()["detail"] == "Token is read-only"
 
@@ -924,8 +925,8 @@ class TestReadTokenBlocksWrites(_SharedPictureLibrary):
         r = TestClient(library_env.server.api).post(
             f"{API}/users/me/auth",
             json={
-                "current_password": "ownerpass1",
-                "new_password": "hacked12345",
+                "current_password": "example-owner-password",
+                "new_password": "example-hacked-password",
             },
             headers={"Authorization": f"Bearer {library_env.read_token}"},
         )
@@ -1116,8 +1117,8 @@ class TestResourceScopedReadTokenIsolation:
         * every token is deleted and the owner session re-established from a
           fresh login, so a revoked credential cannot masquerade as a scope
           refusal;
-        * the library's **identity** is re-asserted — exactly ``{pic_a, pic_b}``
-          exist, set A holds exactly ``pic_a``, set B exactly ``pic_b`` — and the
+        * the library's **identity** is re-asserted - exactly ``{pic_a, pic_b}``
+          exist, set A holds exactly ``pic_a``, set B exactly ``pic_b`` - and the
           new token is proven on an in-scope read that must return exactly
           ``{pic_a}``. A deleted picture answers a request just like a scope
           refusal, so "it is still there" has to be checked separately.
@@ -1139,11 +1140,11 @@ class TestResourceScopedReadTokenIsolation:
             f"fixture pictures: {sorted(p['id'] for p in r.json())}"
         )
         assert _picture_set_members(e.server, e.set_a) == {e.pic_a}, (
-            "set A no longer holds exactly pic_a — the scope every negative "
+            "set A no longer holds exactly pic_a - the scope every negative "
             "assertion below is measured against has moved"
         )
         assert _picture_set_members(e.server, e.set_b) == {e.pic_b}, (
-            "set B no longer holds exactly pic_b — the out-of-scope picture "
+            "set B no longer holds exactly pic_b - the out-of-scope picture "
             "every negative assertion below reaches for has moved"
         )
         assert _prove_token_reads(e.server, token_a) == {e.pic_a}, (
@@ -1427,7 +1428,7 @@ class TestResourceScopedReadTokenIsolation:
         Both directions, and both scopes. ``list_attachments`` used to skip its
         refusal unless the scope was literally ``READ``, so a scope that was not
         READ read the attachments regardless of its own ``include_attachments``
-        flag — item 3 of issue #962's blocking preconditions. The 200 leg is what
+        flag - item 3 of issue #962's blocking preconditions. The 200 leg is what
         stops the fix from being over-blocking: a grant that *does* carry the
         flag must still open.
         """
@@ -1493,7 +1494,7 @@ class TestResourceScopedReadTokenIsolation:
         assert status and status["status"] == "completed", (
             f"Export task did not complete in time: {status}"
         )
-        # `total` is set after scope filtering — must be 1, not 2
+        # `total` is set after scope filtering - must be 1, not 2
         assert status["total"] == 1, (
             f"Export for set A (1 picture) reported total={status['total']}; "
             "out-of-scope pictures from set B may have been included"
@@ -1610,7 +1611,7 @@ class TestResourceScopedReadTokenIsolation:
         assert r.status_code == 200, r.text
         # Pinned against the row set rather than a literal: the fixture pictures
         # carry a "no face found" sentinel, so whether pic_a lands in the
-        # UNASSIGNED bucket at all is the endpoint's business — but the count
+        # UNASSIGNED bucket at all is the endpoint's business - but the count
         # and the listing must agree, and neither may exceed the grant.
         assert r.json().get("count") == len(listed), (
             f"UNASSIGNED count {r.json()} disagrees with the rows it returned: "
@@ -1937,7 +1938,7 @@ class TestComfyuiFilterCannotEscapeTokenScope:
         about proving the fixture still *is* the straddling shape these
         assertions depend on: the six pictures at their exact file paths, and
         the two stacks holding exactly the members they were seeded with. The
-        layout is asserted by identity — a picture quietly moved between stacks
+        layout is asserted by identity - a picture quietly moved between stacks
         would turn "the filter did not widen scope" into a tautology.
         """
         e = _comfyui_stack_env
@@ -2141,7 +2142,8 @@ class TestComfyuiFilterCannotEscapeTokenScope:
             try:
                 owner_client = TestClient(server.api, raise_server_exceptions=True)
                 r = owner_client.post(
-                    f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                    f"{API}/login",
+                    json={"username": "owner", "password": "example-owner-password"},
                 )
                 assert r.status_code == 200, r.text
 
@@ -2394,7 +2396,7 @@ class TestLoginBruteForce:
                 # Establish a password.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
@@ -2402,7 +2404,10 @@ class TestLoginBruteForce:
                 for i in range(5):
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
                     assert r.status_code == 401, (
                         f"Expected 401 on attempt {i + 1}, got {r.status_code}"
@@ -2411,7 +2416,7 @@ class TestLoginBruteForce:
                 # The 6th attempt should be blocked.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "wrongpass6"},
+                    json={"username": "victim", "password": "example-wrong-password-6"},
                 )
                 assert r.status_code == 429, (
                     f"Expected 429 lockout after 5 failures, got {r.status_code}: {r.text}"
@@ -2429,20 +2434,23 @@ class TestLoginBruteForce:
 
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
                 for i in range(5):
                     client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
 
-                # Correct password — should still be blocked during lockout.
+                # Correct password - should still be blocked during lockout.
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 429, (
                     f"Correct password during lockout should still return 429, "
@@ -2451,7 +2459,7 @@ class TestLoginBruteForce:
 
     def test_no_lockout_for_token_endpoints(self):
         """Failed login via a bad token value should not count toward the lockout
-        that gates password logins — but each bad login does; verify the counter."""
+        that gates password logins - but each bad login does; verify the counter."""
         with tempfile.TemporaryDirectory() as tmp:
             config_path = f"{tmp}/server-config.json"
             with Server(config_path) as server:
@@ -2459,21 +2467,24 @@ class TestLoginBruteForce:
 
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, r.text
 
-                # 4 failures — not yet locked.
+                # 4 failures - not yet locked.
                 for i in range(4):
                     client.post(
                         f"{API}/login",
-                        json={"username": "victim", "password": f"wrongpass{i}"},
+                        json={
+                            "username": "victim",
+                            "password": f"example-wrong-password-{i}",
+                        },
                     )
 
                 # 5th attempt with correct password should succeed (lockout hits at 5+).
                 r = client.post(
                     f"{API}/login",
-                    json={"username": "victim", "password": "correctpass123"},
+                    json={"username": "victim", "password": "example-correct-password"},
                 )
                 assert r.status_code == 200, (
                     f"4 failures should not yet trigger lockout; "
@@ -2504,13 +2515,16 @@ class TestRateLimiter:
                     for _ in range(5):
                         client.post(
                             f"{API}/login",
-                            json={"username": "u", "password": "initialpass"},
+                            json={
+                                "username": "u",
+                                "password": "example-initial-password",
+                            },
                         )
 
                     # This should now be rate limited.
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "u", "password": "initialpass"},
+                        json={"username": "u", "password": "example-initial-password"},
                     )
                     assert r.status_code == 429, (
                         f"Expected 429 from rate limiter after {5} hits, "
@@ -2528,11 +2542,14 @@ class TestRateLimiter:
 
                     r = client.post(
                         f"{API}/login",
-                        json={"username": "owner", "password": "ownerpass99"},
+                        json={
+                            "username": "owner",
+                            "password": "example-owner-password-99",
+                        },
                     )
                     assert r.status_code == 200, r.text
 
-                    # More than _LIMIT calls to an authenticated path — must all succeed.
+                    # More than _LIMIT calls to an authenticated path - must all succeed.
                     for _ in range(20):
                         r = client.get(f"{API}/pictures")
                         assert r.status_code == 200, (
@@ -2565,13 +2582,16 @@ class TestRateLimiter:
 
                     # Exhaust the limit.
                     assert client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     ).status_code in {200, 401}
                     assert client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     ).status_code in {200, 401}
                     r = client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     )
                     assert r.status_code == 429
 
@@ -2579,7 +2599,8 @@ class TestRateLimiter:
                     time.sleep(window_seconds + 0.2)
 
                     r = client.post(
-                        f"{API}/login", json={"username": "u", "password": "password1"}
+                        f"{API}/login",
+                        json={"username": "u", "password": "example-password"},
                     )
                     assert r.status_code in {200, 401}, (
                         f"After window reset, login should no longer be rate-limited; "
@@ -2588,7 +2609,7 @@ class TestRateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# 8. Data integrity — pictures and scores survive all attacks
+# 8. Data integrity - pictures and scores survive all attacks
 # ---------------------------------------------------------------------------
 
 
@@ -2654,8 +2675,8 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         attack_client.post(
             f"{API}/users/me/auth",
             json={
-                "current_password": "ownerpass1",
-                "new_password": "hacked12345",
+                "current_password": "example-owner-password",
+                "new_password": "example-hacked-password",
             },
             headers=headers,
         )
@@ -2664,7 +2685,7 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         fresh_client = TestClient(library_env.server.api)
         r = fresh_client.post(
             f"{API}/login",
-            json={"username": "owner", "password": "ownerpass1"},
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, (
             f"Owner password must be unchanged after attack attempts, "
@@ -2681,15 +2702,16 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
         for i in range(5):
             r = attack_client.post(
                 f"{API}/login",
-                json={"username": "owner", "password": f"wrongpass{i}"},
+                json={"username": "owner", "password": f"example-wrong-password-{i}"},
             )
             assert r.status_code == 401, (
                 f"attempt {i + 1} should have been a plain auth failure, "
-                f"got {r.status_code}: {r.text} — the lockout this test is "
+                f"got {r.status_code}: {r.text} - the lockout this test is "
                 "about was never reached"
             )
         r = attack_client.post(
-            f"{API}/login", json={"username": "owner", "password": "wrongpass5"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-wrong-password-5"},
         )
         assert r.status_code == 429, (
             f"the 6th failure should have hit the lockout, got {r.status_code}"
@@ -2718,7 +2740,7 @@ class TestDataIntegrityUnderAttack(_SharedPictureLibrary):
             # limiter's own detail string distinguishes them.
             assert any("Too many requests" in d for d in details), (
                 "the barrage never tripped the rate limiter (only the login "
-                f"lockout, if anything) — its window was dirty: {details}"
+                f"lockout, if anything) - its window was dirty: {details}"
             )
 
         _assert_pictures_intact(

@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Tagger/captioner plugin template — copy this to your user plugin directory.
+"""Tagger/captioner plugin template - copy this to your user plugin directory.
 
 Licensing note:
     This template and :class:`~pixlstash.tagger_plugins.base.TaggerPlugin` are
@@ -32,7 +32,7 @@ Quick-start
 -----------
 1. Copy this file into the user tagger plugin directory below (create it if it
    does not exist).  PixlStash logs the path on startup and shows it under
-   Settings → Auto-tagging — to the owner, on the machine running the server or
+   Settings → Auto-tagging - to the owner, on the machine running the server or
    its LAN; a share link or a remote browser is shown no folder at all.
 2. Rename it and give the class a unique ``name``.
 3. Fill in the parameters and ``generate_descriptions`` (and/or ``tag_images``).
@@ -43,7 +43,7 @@ Quick-start
    It loads the file the way the server does and says what would register, so a
    typo costs a command rather than a boot.  It is a development aid and not a
    security scanner: it *runs* the plugin, unsandboxed, as you.
-5. **Restart PixlStash Server** — discovery only runs at start-up.
+5. **Restart PixlStash Server** - discovery only runs at start-up.
 
 Your plugin then appears in the Description plugin (and/or Tag plugin) table,
 with the settings UI built automatically from ``parameter_schema()``.
@@ -55,7 +55,7 @@ User plugin directories
   Windows : %LOCALAPPDATA%\\pixlstash\\pixlstash\\tagger-plugins\\user\\
 
 The doubled folder on Windows is not a typo.  Take the exact path from Settings →
-Auto-tagging, where PixlStash prints it for a local owner — a folder in the wrong
+Auto-tagging, where PixlStash prints it for a local owner - a folder in the wrong
 place is skipped in silence.
 
 A plugin may be a single ``.py`` file, or a folder containing ``__init__.py``
@@ -76,7 +76,7 @@ class MyCaptioner(TaggerPlugin):
     """One-line description of what this captioner does."""
 
     # Unique snake_case identifier.  A name already taken by a built-in
-    # plugin is rejected — the plugin is skipped and the reason is listed
+    # plugin is rejected - the plugin is skipped and the reason is listed
     # under Settings → Auto-tagging (local owner only, like the folder: the
     # reason is exception text and can name any path on the host).
     name = "my_captioner"
@@ -92,7 +92,7 @@ class MyCaptioner(TaggerPlugin):
     license = "MIT"  # your *code*, an SPDX identifier where there is one
 
     # One entry per model or remote service you load, empty when you load none.
-    # This is the one a user actually needs — your code's license says nothing
+    # This is the one a user actually needs - your code's license says nothing
     # about the weights you download.
     models = [
         {"name": "microsoft/Florence-2-base", "license": "MIT"},
@@ -111,8 +111,20 @@ class MyCaptioner(TaggerPlugin):
         self._model = None
         self._device = "cpu"
 
+    def model_version(self) -> str:
+        """Identify the weights, and how they are being run.
+
+        Only matters when the plugin sets ``supports_tags`` and returns
+        confidences: it is stamped on every prediction row and is the only
+        thing that marks one stale, so returning a constant means your
+        confidences are never refreshed after the model changes.  Include
+        anything that moves the numbers - a quantisation, a different runtime -
+        because two builds that score differently are two versions.
+        """
+        return "2026-01"
+
     # ------------------------------------------------------------------
-    # Schema — this JSON *is* the settings UI
+    # Schema - this JSON *is* the settings UI
     # ------------------------------------------------------------------
 
     def parameter_schema(self) -> list[dict[str, Any]]:
@@ -147,7 +159,7 @@ class MyCaptioner(TaggerPlugin):
     # ------------------------------------------------------------------
 
     def setup(self, device: str) -> None:
-        """Optional hook — receives the inference device ("cuda", "cpu", …).
+        """Optional hook - receives the inference device ("cuda", "cpu", …).
 
         The workflow calls this via ``hasattr`` before ``init()``, so it is
         the only way to learn which device to load onto.  Omit the method
@@ -163,7 +175,7 @@ class MyCaptioner(TaggerPlugin):
         """Fetch model files.  No-op here; see JoyCaption for a real one."""
 
     def init(self, parameters: dict[str, Any]) -> None:
-        """Load the model.  Must be idempotent — it is called per batch."""
+        """Load the model.  Must be idempotent - it is called per batch."""
         if self._model is not None:
             return
         # self._model = load_your_model(...).to(self._device)
@@ -172,11 +184,13 @@ class MyCaptioner(TaggerPlugin):
     def unload(self) -> None:
         """Release the model.
 
-        Abstract, so you must implement it — but be aware that nothing
-        currently calls it on a third-party plugin: the idle-unload path
-        knows the built-in services by name and does not walk the plugin
-        registry.  A model you load here stays resident for the life of the
-        process.  Manage it yourself if that matters.
+        Called by the host when the user turns *Keep models in memory* off
+        and every worker has gone idle.  That makes a mid-batch unload
+        unlikely rather than impossible, so serialise it against your own load
+        - the built-in services hold one lock across both - rather than
+        freeing memory another thread is still writing into.  It is only
+        called when ``is_loaded()`` is true, and a failure here is logged and
+        contained rather than stopping the other plugins being released.
         """
         self._model = None
 
@@ -189,10 +203,20 @@ class MyCaptioner(TaggerPlugin):
     ) -> int:
         """Estimated VRAM for a batch, in MB.
 
-        Nothing calls this on a third-party plugin yet — the description
-        workflow charges the budget for Florence-2 only — so overriding it
-        is forward-looking rather than protective.  Keep your own footprint
-        modest; another model may be scheduled alongside yours regardless.
+        The description workflow asks the active plugin before it schedules a
+        batch, with *image_count* already capped at your
+        ``effective_batch_size``.
+
+        **Watch the 0.**  The base class documents it as "CPU-only", and it is
+        also what the default returns for a plugin that never overrode this -
+        the host cannot tell those apart, so on a CUDA engine it reads any 0 as
+        "no answer" and charges the Florence-2 figure instead.  For a CPU-only
+        plugin that is a harmless over-charge.  For a GPU model it is not: if
+        you return 0 while your weights are merely *not loaded yet*, you are
+        billed ~1 GB for the several you are about to allocate, and something
+        else gets scheduled alongside you.  Charge for a cold start too -
+        ``JoyCaptionPlugin`` does - and keep 0 for a model that really does
+        hold nothing on the card.
         """
         return 0
 

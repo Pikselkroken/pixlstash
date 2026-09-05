@@ -4,7 +4,7 @@ The shelf labels a model by **the feature it powers**, not by its file format an
 not by its ML task. That is the one of the three a person can answer questions
 about: nobody who switched captioning on thinks they have an ``image-to-text``
 model, and ``checkpoints/`` is a directory rather than a capability. Machine
-identity stays underneath for interop — the same split the shelf already makes
+identity stays underneath for interop - the same split the shelf already makes
 between filename and display name, and between sha256 and a friendly name.
 
 **Three sources of truth, then an honest shrug.** Measured against a real 26-repo
@@ -34,7 +34,7 @@ under each. The set lives in the ``model_capability`` join table.
 
 ``model.kind`` still holds the **first** of them, and only that. It is the
 adapter-algorithm column, it carries a CHECK that says so, and every existing
-reader — the Kind column, the curation verbs — was written against one string.
+reader - the Kind column, the curation verbs - was written against one string.
 The first entry is therefore the one a reader sees when they see only one, which
 is why these tuples are ordered by what the model is *primarily* for.
 """
@@ -60,7 +60,7 @@ FEATURE_FACE = "face"
 FEATURE_SEARCH = "search"
 FEATURE_SCORER = "scorer"
 # `DetectionTask` / `InferenceEngine.detect_objects`, which is Florence-2's
-# `<OD>` and grounding heads — the same weights that caption, which is the
+# `<OD>` and grounding heads - the same weights that caption, which is the
 # worked example this module's multi-capability set exists for.
 FEATURE_DETECTOR = "detector"
 FEATURE_CHECKPOINT = "checkpoint"
@@ -93,7 +93,7 @@ OUR_REPOS: dict[str, tuple[str, ...]] = {
     # worked example. `ImageEmbeddingTask` runs ONE forward pass through these
     # weights and uses the result twice: it is written as the search embedding
     # AND fed to the aesthetic predictor. `BUILTIN_ENGINES` already declares the
-    # predictor itself as a `scorer`, but that is a 4 MB linear head — the
+    # predictor itself as a `scorer`, but that is a 4 MB linear head - the
     # ~600 MB a reader is actually deciding about is this repo, and deleting it
     # stops search and quality scores together while leaving a scorer on the
     # shelf that has nothing left to score.
@@ -124,7 +124,7 @@ _ARCHITECTURE_HINTS: tuple[tuple[str, str], ...] = (
 
 # `…ForConditionalGeneration` is the trap. It is the class of every
 # vision-language captioner AND of `T5ForConditionalGeneration`, so matching it
-# alone labelled `google/flan-t5-base` and `google/t5-v1_1-xxl` "Captioning" —
+# alone labelled `google/flan-t5-base` and `google/t5-v1_1-xxl` "Captioning" -
 # a text encoder that captions nothing, stated confidently, in the column a
 # reader uses to decide what is safe to delete. It only counts when the config
 # also describes a vision tower.
@@ -167,7 +167,7 @@ def _snapshot_dirs(repo) -> list[str]:
 
     **All of them, sorted, not the first one.** ``repo.revisions`` is a
     *frozenset*, so "the first directory" is whatever order the set iterated in
-    that run — and a repo can hold a complete revision beside a half-downloaded
+    that run - and a repo can hold a complete revision beside a half-downloaded
     one that has the tokenizer but no ``config.json``. Picking one at random
     made ``Salesforce/blip-image-captioning-base`` classify as ``other`` on one
     run and ``captioner`` on the next, off the same disk.
@@ -191,7 +191,7 @@ def _feature_from_files(snapshot: str) -> Optional[str]:
     """What the snapshot's own metadata says this is, or None.
 
     Reads at most two small JSON files and never a weight. A repo that is
-    mid-download, or whose config is not JSON, simply does not answer — which is
+    mid-download, or whose config is not JSON, simply does not answer - which is
     a shrug and not an error, because ``other`` is a real state here.
     """
     if os.path.isfile(os.path.join(snapshot, _PIPELINE_MARKER)):
@@ -232,7 +232,7 @@ def features_for_repo(repo) -> tuple[str, ...]:
     outright**: they are ranked by how much they know, so a repo our own
     downloader named is not then also guessed at from its architecture. Only
     ``OUR_REPOS`` returns more than one capability today, because it is the only
-    source that knows what PixlStash actually does with the weights — a
+    source that knows what PixlStash actually does with the weights - a
     ``config.json`` describes an architecture, and an architecture cannot say
     whether this machine's copy backs one feature or two.
 

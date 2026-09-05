@@ -351,6 +351,8 @@ class HardwareMonitor:
                 pid = os.getpid()
                 used_bytes = 0
                 total_bytes = 0
+                process_listed = False
+                figure_seen = False
                 device_count = pynvml.nvmlDeviceGetCount()
                 for index in range(device_count):
                     handle = pynvml.nvmlDeviceGetHandleByIndex(index)
@@ -381,13 +383,20 @@ class HardwareMonitor:
                     for entry in processes:
                         if entry.pid != pid:
                             continue
+                        process_listed = True
                         used_gpu = getattr(entry, "usedGpuMemory", None)
                         if used_gpu is None:
                             continue
                         if used_gpu == getattr(pynvml, "NVML_VALUE_NOT_AVAILABLE", -1):
                             continue
+                        figure_seen = True
                         used_bytes += used_gpu
-                vram_collected = _set_vram_payload(payload, used_bytes, total_bytes)
+                # Windows (WDDM) lists the process but reports its memory as not
+                # available, which read as "0 / 31.8 GB" during CUDA inference
+                # (#1162). Leave that case to torch's allocator below; a process
+                # NVML does not list at all genuinely holds nothing.
+                if figure_seen or not process_listed:
+                    vram_collected = _set_vram_payload(payload, used_bytes, total_bytes)
             except Exception as exc:
                 logger.debug("Failed to read VRAM usage: %s", exc)
             finally:

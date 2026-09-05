@@ -1,7 +1,7 @@
 """Importing an ai-toolkit run onto the shelf (shelf plan B7).
 
 An import is a move with the row created rather than repointed, so it runs the
-same ordering — copy → verify by SHA-256 → register and commit → then unlink —
+same ordering - copy → verify by SHA-256 → register and commit → then unlink -
 and the same crash window applies. The two interruption tests here are the
 import's half of the acceptance bar; the move's half is in
 ``tests/test_model_move.py``, and both use the same ``BaseException`` trick so no
@@ -14,7 +14,7 @@ What is specific to import and asserted here:
   about anything. A test pins that no bytes are hashed and no row appears.
 * **``delete_after_import`` decides only whether the last step runs.** Off, the
   run keeps its files and the shelf holds a second copy; on, the run's file goes
-  — after the row is committed, never before.
+  - after the row is committed, never before.
 * **provenance is ``trained``**, the one value the scanner never writes.
 * **one stack per run**, cover first: the bare final leads, and a run with no
   bare final falls back to its highest step (the fixtures' "unconfirmed cover").
@@ -150,7 +150,7 @@ def assert_no_dangling_rows(hub):
 
 
 # ===========================================================================
-# The crash windows — the same invariant as a move
+# The crash windows - the same invariant as a move
 # ===========================================================================
 
 
@@ -159,7 +159,7 @@ def test_crash_after_the_copy_and_before_the_register_leaves_no_row(shelf, monke
 
     The run still has its own copy, because the unlink is last and the register
     never happened. Residue: an unregistered file that a **manual** rescan of the
-    destination folder picks up as a normal adapter — nothing scans a model
+    destination folder picks up as a normal adapter - nothing scans a model
     folder on start or on a schedule. Not a dangling row: there is no row.
     """
     monkeypatch.setattr(
@@ -249,8 +249,8 @@ def test_a_run_lands_as_one_stack_with_the_final_as_its_cover(shelf):
 def test_re_importing_a_run_keeps_the_cover_its_owner_chose(shelf):
     """The claim `set_cover` rests on, tested against the path that could break it.
 
-    A hand-picked cover is `stack_position` 0 and nothing else — no column
-    records that a person chose it — so the whole design depends on the
+    A hand-picked cover is `stack_position` 0 and nothing else - no column
+    records that a person chose it - so the whole design depends on the
     importer's `COALESCE` leaving an existing position alone. Re-importing the
     same run is the one routine way those rows get written again.
     """
@@ -264,7 +264,7 @@ def test_re_importing_a_run_keeps_the_cover_its_owner_chose(shelf):
 
     # Into a SECOND folder, because importing a run back into the folder it is
     # already in is refused outright by the collision check. Same files, same
-    # digests, so this is the upsert path — the one that rewrites the columns
+    # digests, so this is the upsert path - the one that rewrites the columns
     # the cover lives in.
     second = shelf["destination_dir"].parent / "loras-2"
     second.mkdir()
@@ -288,7 +288,7 @@ def test_re_importing_a_run_keeps_the_cover_its_owner_chose(shelf):
 
 def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     """``trained`` is the one provenance the scanner never writes, and the run's
-    config names a base model the header does not carry — 37 % of real adapters
+    config names a base model the header does not carry - 37 % of real adapters
     record none at all."""
     RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
     row = models(shelf["hub"])["Clementine.safetensors"]
@@ -301,7 +301,7 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
 
 def test_delete_after_import_off_keeps_the_run_and_makes_a_second_copy(shelf):
     """The default. The run stays where the trainer left it; the shelf holds a
-    copy. Two paths, and only one of them registered — which is fine, because the
+    copy. Two paths, and only one of them registered - which is fine, because the
     output root is never catalogued."""
     RunImporter(shelf["hub"]).import_run(
         str(shelf["run_dir"]), shelf["destination_id"], delete_source=False
@@ -385,7 +385,7 @@ def test_the_bare_final_takes_the_highest_steps_samples_even_when_it_is_imported
 
 
 def test_a_checkpoint_whose_step_has_no_previews_gets_no_samples_folder(shelf):
-    """Not an empty directory, and not the highest step's either — that rule is
+    """Not an empty directory, and not the highest step's either - that rule is
     the bare final's alone."""
     write_adapter(shelf["run_dir"] / "Clementine_000000900.safetensors", seed=b"s900")
     report = RunImporter(shelf["hub"]).import_run(
@@ -395,7 +395,9 @@ def test_a_checkpoint_whose_step_has_no_previews_gets_no_samples_folder(shelf):
     assert not (shelf["destination_dir"] / "Clementine_000000900_samples").exists()
 
 
-def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(shelf):
+def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(
+    shelf,
+):
     """The ordering that makes this a data-loss fix rather than a feature.
 
     Asserted at the seam rather than after the fact: an import that copied the
@@ -455,7 +457,7 @@ def test_a_symlink_at_a_samples_destination_name_is_refused_not_written_through(
     The comment in ``_resolve_targets`` used to credit `lexists`; it is the
     containment call, which realpaths and so refuses the link whether or not it
     dangles. Asserted here because the existence check runs on the *resolved*
-    path, where a dangling link is simply absent — so `lexists` and `exists`
+    path, where a dangling link is simply absent - so `lexists` and `exists`
     cannot be told apart at that line, and only this proves the guard is real.
     """
     outside = shelf["destination_dir"].parent / "outside"
@@ -560,7 +562,7 @@ def test_a_file_that_lands_on_the_destination_name_mid_copy_is_not_overwritten(
 
     The batch is planned in the POST and the copy runs minutes later, so the
     destination being free at plan time proves nothing about it being free at
-    write time — ``SHELF_IO_LOCK`` holds off the other shelf operation, not the
+    write time - ``SHELF_IO_LOCK`` holds off the other shelf operation, not the
     owner or a trainer. ``os.replace`` overwrites in silence, so without the
     re-check this destroys a file nobody named and there is no undo.
     """
@@ -601,7 +603,7 @@ def test_a_destination_row_registered_mid_copy_fails_the_file_and_leaves_it_alon
     ``_resolve_targets`` proves the destination key free at plan time and a
     rescan is deliberately **not** under ``SHELF_IO_LOCK``, so it can take that
     key while the copy runs. Updating the row would silently point somebody
-    else's location at this import's file — the bookkeeping version of the
+    else's location at this import's file - the bookkeeping version of the
     overwrite the whole module refuses. Fail closed and leave their row for the
     rescan that owns it, exactly as ``ModelMover`` does.
     """
@@ -662,7 +664,7 @@ def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
     Same shape as the mover's (``tests/test_model_move.py``), and it was never
     flagged: ``basename`` flattens the filename but ``resolve_path_within``
     calls ``realpath``, so a symlink standing at a checkpoint's destination name
-    resolves outside. A *dangling* one is the sharp case — ``os.path.exists`` is
+    resolves outside. A *dangling* one is the sharp case - ``os.path.exists`` is
     False for it, so the collision check below the containment would wave it
     through into an ``os.replace`` that writes outside the registered folder.
     """

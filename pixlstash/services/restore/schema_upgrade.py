@@ -172,8 +172,8 @@ def _snapshot_schema_is_current(db_path: str) -> bool:
     """Return True only if the snapshot's schema is at the migration head.
 
     This replaces the old "does column X exist?" sniff. Probing a single
-    column cannot tell a current snapshot from an intermediate one — a file
-    can carry ``metadata_hash`` and still predate ``tags_file`` — and any ORM
+    column cannot tell a current snapshot from an intermediate one - a file
+    can carry ``metadata_hash`` and still predate ``tags_file`` - and any ORM
     entity load against such a file selects columns that do not exist, which
     fails at query time. Comparing the stamped revision against the head is
     the only check that stays correct as new migrations land.
@@ -183,7 +183,7 @@ def _snapshot_schema_is_current(db_path: str) -> bool:
 
     Returns:
         True when the stamped revision is one of the current heads. False for
-        an unstamped, behind, or unrecognised revision — i.e. fail towards
+        an unstamped, behind, or unrecognised revision - i.e. fail towards
         "needs upgrading", never towards reading a stale schema.
     """
     revision = _snapshot_schema_revision(db_path)
@@ -225,7 +225,7 @@ class SchemaUpgradeMixin:
         Acquire this around any direct read/write of the snapshot file on
         disk to keep compare/preview/restore from racing the in-place
         backfill that ``compare_hashes`` performs on old snapshots.
-        Reentrant — safe to nest across helpers in one thread.
+        Reentrant - safe to nest across helpers in one thread.
         """
         with self._snapshot_file_locks_meta:
             lock = self._snapshot_file_locks.get(abs_snapshot)

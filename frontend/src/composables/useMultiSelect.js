@@ -43,7 +43,7 @@ export function useMultiSelect() {
     longPressMoved = false;
     touchStartPayload = { img, idx };
     if (touchSelectMode.value) {
-      // In select mode: tap handled in handleTouchEnd — no long-press timer needed
+      // In select mode: tap handled in handleTouchEnd - no long-press timer needed
       return;
     }
     longPressTimer = setTimeout(() => {

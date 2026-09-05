@@ -232,9 +232,9 @@ def _picture_source_origin(server, pic_id: int) -> tuple[bool, str | None]:
     PixlStash's own ComfyUI import (``_import_comfyui_outputs`` calls
     ``create_picture_from_bytes`` without any of them):
 
-    - ``reference_folder_id`` — the reference folder the file is tracked in.
-    - ``import_source_folder`` — the watch-folder root that produced the file.
-    - ``original_file_name`` — stamped by the upload and staged-import paths and
+    - ``reference_folder_id`` - the reference folder the file is tracked in.
+    - ``import_source_folder`` - the watch-folder root that produced the file.
+    - ``original_file_name`` - stamped by the upload and staged-import paths and
       by the reference-folder scan, i.e. every file that arrived with a name of
       its own.
 
@@ -346,7 +346,7 @@ def _describe_preflight_failure(preflight: dict) -> str:
         )
     if not parts:
         return "This recipe cannot run on your ComfyUI."
-    return "Your ComfyUI cannot run this recipe — " + "; ".join(parts) + "."
+    return "Your ComfyUI cannot run this recipe - " + "; ".join(parts) + "."
 
 
 def _inspect_recipe(comfyui_url: str, prompt_graph: dict) -> tuple[dict, list[dict]]:
@@ -391,7 +391,7 @@ class ComfyUIWorkflowListResponse(BaseModel):
     The directories they were discovered in are deliberately absent: they are
     host paths under the owner's home directory and this route is ANY_TOKEN, so
     a share-link holder was reading them. Nothing consumed them (§16.3,
-    2026-08-15 — the same sweep that moved the tagger folders).
+    2026-08-15 - the same sweep that moved the tagger folders).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -466,7 +466,7 @@ class ComfyUIPreflightResponse(BaseModel):
     """Result of checking an embedded recipe against the target ComfyUI.
 
     ``checked=False`` means the question could not be asked (ComfyUI
-    unreachable) — NOT that the recipe passed. ``ok`` stays True in that case
+    unreachable) - NOT that the recipe passed. ``ok`` stays True in that case
     because the only thing actually known is that the check did not run.
     """
 
@@ -527,7 +527,7 @@ def create_router(server) -> APIRouter:
         admission_lease = None
         try:
             # The HTTP auth middleware does not cover WebSockets. Require an
-            # authenticated OWNER before accepting — running ComfyUI is an owner
+            # authenticated OWNER before accepting - running ComfyUI is an owner
             # operation. Without this, an unauthenticated (or merely resource-
             # scoped) client would get a WebSocket proxy to the internal ComfyUI
             # service via the DEFAULT_COMFYUI_URL fallback. Also reject cross-site
@@ -1098,9 +1098,9 @@ def create_router(server) -> APIRouter:
         "/comfyui/pictures/{picture_id}/recipe",
         summary="Get the replayable ComfyUI recipe for a picture",
         description=(
-            "Reports whether a picture carries a replayable recipe — the "
+            "Reports whether a picture carries a replayable recipe - the "
             "embedded API-format `prompt` chunk, i.e. the graph the ComfyUI "
-            "server actually executed — and pre-flights it against the target "
+            "server actually executed - and pre-flights it against the target "
             "ComfyUI's /object_info. The UI `workflow` chunk is deliberately "
             "NOT considered: it is not submittable and is never converted. "
             '`available: false` with `reason: "no_prompt_chunk"` is the normal '
@@ -1130,7 +1130,7 @@ def create_router(server) -> APIRouter:
         preflight, seed_targets = _inspect_recipe(comfyui_url, graph)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
         # A graph that calls back into PixlStash cannot be replayed as "a
-        # variant of this picture" — see run_recipe's refusal for why. Reported
+        # variant of this picture" - see run_recipe's refusal for why. Reported
         # here so the dialog can say so before the user commits to a run, and
         # offer the workflow to paste into ComfyUI instead.
         has_pixlstash_nodes = graph_has_pixlstash_nodes(graph)
@@ -1138,7 +1138,7 @@ def create_router(server) -> APIRouter:
             # "Same workflow, new seed" is only a meaningful offer when there
             # IS a seed to change. Without one the re-run is byte-identical,
             # the import dedupes it on pixel_sha, and the user sees nothing
-            # happen at all — so report it as unavailable, with the reason.
+            # happen at all - so report it as unavailable, with the reason.
             "available": bool(seed_targets) and not has_pixlstash_nodes,
             "reason": (
                 "pixlstash_nodes"
@@ -1167,8 +1167,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Replays the API-format `prompt` graph embedded in a picture, with "
             "fresh (or pinned) seeds. The graph is re-extracted from the file "
-            "server-side on every call — a client-supplied graph is never "
-            "accepted — and pre-flighted first; a pre-flight that finds missing "
+            "server-side on every call - a client-supplied graph is never "
+            "accepted - and pre-flighted first; a pre-flight that finds missing "
             "node classes or model files fails the request with 400 and names "
             "them. A pre-flight that could not run at all (ComfyUI unreachable, "
             "`preflight.checked: false`) also fails with 400 unless the caller "
@@ -1191,8 +1191,8 @@ def create_router(server) -> APIRouter:
         if client_id is not None:
             client_id = str(client_id)
         should_stack = bool(payload.get("stack", True))
-        # Consent must be the literal JSON true: any string — including
-        # "false" — is truthy in Python and must not read as an acknowledgement.
+        # Consent must be the literal JSON true: any string - including
+        # "false" - is truthy in Python and must not read as an acknowledgement.
         allow_unchecked = (
             payload.get("allow_unchecked") is True
             or payload.get("allowUnchecked") is True
@@ -1213,15 +1213,15 @@ def create_router(server) -> APIRouter:
         workflow_instance = sanitize_prompt_graph(prompt_graph)
 
         # Refused before the pre-flight, because this is not about whether the
-        # graph *can* run — it is that replaying it cannot mean what Generate
+        # graph *can* run - it is that replaying it cannot mean what Generate
         # variants promises. A ComfyUI-PixlStash graph calls back into PixlStash
         # while PixlStash is running it, and every id it carries was frozen when
         # the file was written: the loaders serialise a choice as "<name> #<id>".
         # So the graph re-applies a project/set/character that may since have
         # been deleted or split into another library (the FOREIGN KEY failure
         # this refusal replaces), sources its input by a baked picture id rather
-        # than the picture the user right-clicked — or, with that field empty,
-        # auto-selects by its own sort and filters — and imports its outputs
+        # than the picture the user right-clicked - or, with that field empty,
+        # auto-selects by its own sort and filters - and imports its outputs
         # itself, competing with the import PixlStash is already doing for the
         # variant. The owner's own associations are what a variant should
         # inherit, and PixlStash copies those from the source picture already.
@@ -1251,7 +1251,7 @@ def create_router(server) -> APIRouter:
         if not preflight.get("checked") and not allow_unchecked:
             # The graph is file metadata: whoever made the image authored it,
             # and it executes on the owner's ComfyUI. When the pre-flight could
-            # not run, nothing at all is known about it — not even which node
+            # not run, nothing at all is known about it - not even which node
             # classes exist on this install. Fail CLOSED and make the owner say
             # so explicitly, rather than letting an unreachable ComfyUI silently
             # read as "ok". Enforced here and not only in the dialog, because a
@@ -1283,7 +1283,7 @@ def create_router(server) -> APIRouter:
                 preflight.get("error") or "ComfyUI unreachable",
             )
         if preflight.get("checked") and not preflight.get("has_save_image"):
-            # Would run to completion and import nothing — refuse now rather
+            # Would run to completion and import nothing - refuse now rather
             # than after the full generation wait.
             raise HTTPException(
                 status_code=400,

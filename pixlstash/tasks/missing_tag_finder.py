@@ -6,8 +6,7 @@ from sqlalchemy.orm import selectinload
 from pixlstash.db_models import (
     Picture,
     Tag,
-    TAG_SENTINEL_LIKE_PATTERN,
-    TAG_SENTINEL_ESCAPE_CHAR,
+    TAG_PENDING_SENTINEL,
     is_tag_sentinel,
     parse_tag_engine_from_sentinel,
 )
@@ -15,7 +14,12 @@ from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
-from .task_type import TaskType
+
+# Every sentinel value starts with TAG_PENDING_SENTINEL (``__tag`` or
+# ``__tag:<engine>``), so the half-open range [``__tag``, ``__tah``) is the
+# sentinel set. Written as a range rather than the LIKE pattern because SQLite
+# cannot serve LIKE ... ESCAPE from an index: this form walks ``ix_tag_tag``.
+_SENTINEL_RANGE_END = TAG_PENDING_SENTINEL[:-1] + chr(ord(TAG_PENDING_SENTINEL[-1]) + 1)
 
 
 class MissingTagFinder(BaseTaskFinder):
@@ -36,22 +40,11 @@ class MissingTagFinder(BaseTaskFinder):
     def max_inflight_tasks(self) -> int:
         return TAGGER_MAX_INFLIGHT
 
-    def depends_on(self) -> list[TaskType]:
-        # Never submit tag tasks while face extraction is inflight — face
-        # extraction has GPU priority and must not be starved by queued tagging.
-        return [TaskType.FACE_EXTRACTION]
-
-    def on_all_tasks_complete(self) -> None:
-        """Unload the WD14 ONNX session once all tagging work is done.
-
-        ORT's CUDAExecutionProvider holds its entire activation arena inside the
-        session object.  Deleting the session returns that memory (often tens of
-        GB for large batches) so the next GPU pipeline stage starts with a clean
-        VRAM budget.  The session is rebuilt lazily on the next tagging cycle.
-        """
-        tagger = self._engine_getter()
-        if tagger is not None:
-            tagger.unload_tagger_session()
+    # No `on_all_tasks_complete`: the drain used to tear the WD14 session down,
+    # and with per-row dependencies a finder drains and refills many times per
+    # pass, so that was a reload storm. The session is bounded by its own
+    # `gpu_mem_limit` now, and `Vault._maybe_aggressive_unload` frees it once
+    # every worker has been idle - only under `keep_models_in_memory=False`.
 
     def find_task(self):
         engine = self._engine_getter()
@@ -103,9 +96,17 @@ class MissingTagFinder(BaseTaskFinder):
 
     @staticmethod
     def _fetch_missing_tags(session: Session, limit: int):
-        has_sentinel = Tag.tag.like(
-            TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+        pending = select(Tag.picture_id).where(
+            Tag.tag >= TAG_PENDING_SENTINEL, Tag.tag < _SENTINEL_RANGE_END
         )
+        # Per-row stage dependency: tag a picture once ITS faces are known, not
+        # once the whole face stage has drained. Face extraction always writes
+        # at least one Face row (a ``face_index=-1`` sentinel when there is no
+        # face), so ``faces.any()`` is exactly "face extraction has run". The
+        # quality crop in TagTask only *prefers* a face (it centre-crops
+        # without one), but cropping on the face is the shipped behaviour, so
+        # the picture waits for it.
+        faces_known = Picture.faces.any()
         # A picture frozen by a locked set keeps its confirmed tags: never re-queue
         # it for tagging (the write-side skip in TagTask is the belt; this is the
         # braces, and it avoids re-queuing a locked picture that still carries a
@@ -116,12 +117,12 @@ class MissingTagFinder(BaseTaskFinder):
         # write guard (`locked_picture_ids`) does: a picture merely *sharing a
         # stack* with a locked-set member was therefore selected here, ran full
         # GPU tagging, had its write skipped, kept its retag sentinel, and was
-        # selected again on the very next sweep — an unbounded inference loop.
+        # selected again on the very next sweep - an unbounded inference loop.
         # One definition on both sides is what closes it.
         locked_member = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(
             select(Picture)
-            .where(Picture.tags.any(has_sentinel), locked_member)
+            .where(Picture.id.in_(pending), faces_known, locked_member)
             .options(
                 selectinload(Picture.tags),
             )

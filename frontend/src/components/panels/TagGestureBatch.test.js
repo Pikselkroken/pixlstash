@@ -29,7 +29,7 @@ const tagsApi = vi.hoisted(() => ({
 
 vi.mock("../../api/tags", () => tagsApi);
 vi.mock("../../api/pictures", () => ({
-  resetPictureTags: vi.fn(async () => ({})),
+  resetPicturesTags: vi.fn(async () => ({})),
 }));
 vi.mock("../../api/taggers", () => ({
   listTaggers: vi.fn(async () => ({ plugins: [] })),
@@ -79,7 +79,7 @@ describe("the lightbox chip delete", () => {
     wrapper.unmount();
   });
 
-  it("gives a second chip delete its own id — two gestures, two undo steps", async () => {
+  it("gives a second chip delete its own id - two gestures, two undo steps", async () => {
     const wrapper = mount(OverlayTagsPanel, {
       props: {
         image: {

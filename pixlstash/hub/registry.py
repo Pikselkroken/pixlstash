@@ -7,8 +7,8 @@ never reads a library's identity tables: a folder copied in from elsewhere may
 carry someone else's ``user``/``usertoken`` rows, and those must stay inert.
 
 Every write here is a single short transaction (see
-:class:`pixlstash.hub.db.HubDatabase`), and the two structural invariants —
-one registration per path, at most one active library — are enforced by unique
+:class:`pixlstash.hub.db.HubDatabase`), and the two structural invariants -
+one registration per path, at most one active library - are enforced by unique
 indexes rather than by check-then-write logic, so a concurrent CLI and server
 cannot interleave their way past them.
 """
@@ -43,6 +43,26 @@ _LIBRARY_COLUMNS = (
 # our migration lineage; ``picture`` proves it is a vault rather than some other
 # PixlStash-managed SQLite file. Checked read-only, without importing the ORM.
 _VAULT_MARKER_TABLES = ("alembic_version", "picture")
+
+# A vault written before PixlStash adopted Alembic has no ``alembic_version``,
+# so the lineage has to be recognised from the schema itself. This is the
+# ``0001_baseline`` table set minus the tables a later migration added, and
+# ``VaultDatabase`` already knows what to do with such a file: it stamps the
+# baseline and upgrades it to head (see ``database.py``'s "Existing database
+# without Alembic version table" branch). Refusing it here would make that
+# branch unreachable for every library the hub owns, which is what turned an
+# upgradable December-2025 vault into a backend that exited during first-run
+# setup. The set is deliberately wide: one stray table named ``picture`` must
+# still not be mistaken for a library.
+_LEGACY_VAULT_MARKER_TABLES = (
+    "picture",
+    "character",
+    "face",
+    "tag",
+    "quality",
+    "metadata",
+    "pictureset",
+)
 
 
 class LibraryError(RuntimeError):
@@ -125,6 +145,10 @@ def validate_vault_folder(folder: str) -> str:
     migrate, write to, or otherwise touch a foreign vault, and it must not read
     its identity tables.
 
+    "Usable" means a vault ``VaultDatabase`` can open, which includes a
+    pre-Alembic one it will stamp and upgrade - see
+    :data:`_LEGACY_VAULT_MARKER_TABLES`.
+
     Raises:
         NotAVaultError: No folder, no ``vault.db``, unreadable, or missing the
             marker tables.
@@ -160,9 +184,25 @@ def validate_vault_folder(folder: str) -> str:
     tables = {row[0] for row in rows}
     missing = [table for table in _VAULT_MARKER_TABLES if table not in tables]
     if missing:
-        raise NotAVaultError(
-            f"{vault_path} does not look like a PixlStash vault (missing "
-            f"{', '.join(missing)})."
+        legacy_missing = [
+            table for table in _LEGACY_VAULT_MARKER_TABLES if table not in tables
+        ]
+        if legacy_missing:
+            # Both sets, not just the modern one. A database holding nothing
+            # but a `picture` table is missing only `alembic_version` by the
+            # modern reckoning, and saying so alone reads as "an old vault we
+            # could upgrade" - the opposite of the truth. The reason is
+            # surfaced verbatim by the recovery dialog, so it has to carry
+            # which of the two it failed to be.
+            raise NotAVaultError(
+                f"{vault_path} does not look like a PixlStash vault (missing "
+                f"{', '.join(missing)}), and not a pre-Alembic one either "
+                f"(missing {', '.join(legacy_missing)})."
+            )
+        logger.info(
+            "%s is a PixlStash vault from before Alembic (no alembic_version); "
+            "it will be stamped at the baseline and upgraded when it is opened.",
+            vault_path,
         )
 
     return vault_path
@@ -305,6 +345,55 @@ class LibraryRegistry:
             raise LibraryNotFoundError(f'No library named or numbered "{name_or_id}".')
         return self._row_to_library(row)
 
+    def _refuse_duplicate_name(
+        self,
+        cleaned: str,
+        *,
+        except_id: int | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """Refuse a name another attached library already answers to.
+
+        ``library.uuid`` and ``library.path`` carry unique indexes; ``name`` does
+        not, so the ``sqlite3.IntegrityError`` that :meth:`rename` and
+        :meth:`_register` catch can never fire for a name and both documented
+        their ``LibraryExistsError`` for one anyway. Two libraries sharing a name
+        is not cosmetic: :meth:`get` refuses a name that matches more than one
+        row, so every CLI verb that takes a name stops working for both of them
+        the moment the second is registered.
+
+        Checked here rather than at each caller so the GUI and the CLI refuse
+        alike, and left as a check rather than a new unique index because a hub
+        written before this could already hold a duplicate, and a migration that
+        cannot build its index fails a startup instead of a rename.
+
+        Args:
+            cleaned: The stripped name about to be written.
+            except_id: A row allowed to hold the name already - the one being
+                renamed, or revived into it.
+            conn: An open transaction to read through.
+                :meth:`~pixlstash.hub.db.HubDatabase.transaction` opens
+                ``BEGIN IMMEDIATE``, so a check issued on the same connection as
+                the write that follows is atomic against another process, where
+                the same check on its own connection is check-then-write and two
+                concurrent adds of one name both pass. Every caller that is
+                about to write passes it. The exception is :meth:`create`'s early
+                call, which exists to fail *before* a vault is built and is
+                deliberately advisory - the authoritative check runs later,
+                inside :meth:`_register`'s own transaction.
+
+        Raises:
+            LibraryExistsError: Another attached library has that name.
+        """
+        sql = "SELECT id FROM library WHERE name = ? COLLATE NOCASE AND attached = 1"
+        rows = (
+            conn.execute(sql, (cleaned,)).fetchall()
+            if conn is not None
+            else self._hub.fetchall(sql, (cleaned,))
+        )
+        if any(int(row[0]) != except_id for row in rows):
+            raise LibraryExistsError(f'Another library is already named "{cleaned}".')
+
     def overlapping(self, path: str) -> list[Library]:
         """Return registered libraries that contain, or sit inside, *path*.
 
@@ -353,6 +442,11 @@ class LibraryRegistry:
         return self._register(
             resolved,
             name or os.path.basename(resolved),
+            # Start-up must not die on a name. `bootstrap._register_first_library`
+            # passes the hardcoded "Library 1" and does not catch
+            # LibraryExistsError, so refusing here would turn a duplicate label -
+            # a nuisance - into a server that will not boot.
+            unique_name=False,
         )
 
     def create(self, folder: str, name: str | None = None) -> Library:
@@ -373,6 +467,13 @@ class LibraryRegistry:
                 "to register it."
             )
 
+        # Before anything is written. `_register` would refuse the name at the
+        # end anyway, but by then the vault exists, and a refused `create` that
+        # leaves a vault behind turns the folder into an `attach` case the owner
+        # never asked for.
+        cleaned = (name or "").strip() or os.path.basename(resolved)
+        self._refuse_duplicate_name(cleaned)
+
         # Every MISSING component 0700, not only the leaf (W21: makedirs'
         # mode stops at the leaf, so a deep new path left 0775 intermediates
         # under umask 002 and the guarded open refused them). Existing
@@ -390,7 +491,7 @@ class LibraryRegistry:
         logger.info("Initialising a new vault at %s", vault_path)
         vault = VaultDatabase(vault_path)
         try:
-            registered = self._register(resolved, name or os.path.basename(resolved))
+            registered = self._register(resolved, cleaned)
         finally:
             vault.close()
         return registered
@@ -604,6 +705,7 @@ class LibraryRegistry:
             raise LibraryError("A library name cannot be empty.")
         try:
             with self._hub.transaction() as conn:
+                self._refuse_duplicate_name(cleaned, except_id=library.id, conn=conn)
                 conn.execute(
                     "UPDATE library SET name = ? WHERE id = ?", (cleaned, library.id)
                 )
@@ -620,6 +722,7 @@ class LibraryRegistry:
         *,
         identity_migration_state: str = "not_required",
         recovered_uuid: str | None = None,
+        unique_name: bool = True,
     ) -> Library:
         """Register a library, reviving a previously detached row when it fits.
 
@@ -629,6 +732,13 @@ class LibraryRegistry:
         Otherwise the old row is left detached and a new identity is minted, so
         share links can never come back pointing at content they were not issued
         for.
+
+        Args:
+            unique_name: Refuse a name another attached library holds. True for
+                every verb a person types a name at. False only for
+                :meth:`register_pending`, whose caller is start-up: a duplicate
+                name is a nuisance there and a failed boot is not, so the
+                start-up path records what it was given.
         """
         cleaned = name.strip() or os.path.basename(resolved_path)
         fingerprint = read_vault_uuid(resolved_path)
@@ -641,7 +751,20 @@ class LibraryRegistry:
 
         if existing is not None:
             if _fingerprints_match(existing.vault_uuid, fingerprint):
-                return self._revive(existing, cleaned, fingerprint)
+                return self._revive(existing, cleaned, fingerprint, unique_name)
+            # Before the UPDATE below, not after. That UPDATE commits, and it
+            # renames the detached row's path to something `_find_by_path` can
+            # never match again - so a refusal after it would strand that row's
+            # uuid and every share token stamped with it, which is exactly what
+            # `detach` promises cannot happen.
+            #
+            # Gated on the flag like every other call, or `unique_name=False`
+            # would be a promise this branch quietly breaks: start-up would
+            # still die on a name here (#1096 review). Nothing is stranded by
+            # skipping it - with no name check anywhere in the call there is no
+            # refusal left to land after the commit.
+            if unique_name:
+                self._refuse_duplicate_name(cleaned)
             logger.warning(
                 "A different library now sits at %s (fingerprint %s, expected "
                 "%s). Registering it as new; the detached library keeps its "
@@ -658,6 +781,9 @@ class LibraryRegistry:
                     (f"{existing.path}#detached-{existing.uuid}", existing.id),
                 )
 
+        if unique_name:
+            self._refuse_duplicate_name(cleaned)
+
         now = datetime.now(timezone.utc).isoformat()
         first_library = not self.list_libraries()
         library_uuid = (
@@ -668,6 +794,11 @@ class LibraryRegistry:
 
         try:
             with self._hub.transaction() as conn:
+                # The authoritative one: BEGIN IMMEDIATE is held from here to
+                # the INSERT, so two processes adding the same name cannot both
+                # pass. The call above is the cheap early refusal.
+                if unique_name:
+                    self._refuse_duplicate_name(cleaned, conn=conn)
                 cursor = conn.execute(
                     "INSERT INTO library (uuid, vault_uuid, settings_salt, "
                     "identity_migration_state, name, path, created_at, "
@@ -760,11 +891,27 @@ class LibraryRegistry:
                 )
 
     def _revive(
-        self, existing: Library, name: str, fingerprint: Optional[str]
+        self,
+        existing: Library,
+        name: str,
+        fingerprint: Optional[str],
+        unique_name: bool = True,
     ) -> Library:
-        """Re-attach a detached row, keeping its uuid and its tokens."""
+        """Re-attach a detached row, keeping its uuid and its tokens.
+
+        Args:
+            unique_name: As :meth:`_register`'s. Reviving is the branch a
+                start-up registration takes when the folder is provably the same
+                library, so it is on that path too and must honour the flag for
+                the same reason.
+        """
         now = datetime.now(timezone.utc).isoformat()
         with self._hub.transaction() as conn:
+            # The row is about to take this name, so it has to clear the same
+            # check a fresh registration does: a folder re-attached under a name
+            # another library now answers to would break `get` for both.
+            if unique_name:
+                self._refuse_duplicate_name(name, except_id=existing.id, conn=conn)
             conn.execute(
                 "UPDATE library SET attached = 1, detached_at = NULL, "
                 "attached_at = ?, name = ?, vault_uuid = COALESCE(?, vault_uuid) "
@@ -780,13 +927,27 @@ class LibraryRegistry:
         )
         return self.get(existing.id)
 
+    def forget_vault_fingerprint(self, library: Library) -> Library:
+        """Treat a registered library whose vault file is gone as never opened.
+
+        Startup creates a fresh vault at the same path and stamps it with the
+        library's own uuid, exactly as for a folder registered without one.
+        The library keeps its uuid, so share links stay stamped for it; they
+        find nothing until pictures are imported again.
+        """
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET vault_uuid = NULL WHERE id = ?", (library.id,)
+            )
+        return self.by_uuid(library.uuid) or library
+
     def adopt_vault_fingerprint(self, library: Library) -> Library:
         """Record the fingerprint of a registered vault this hub never opened.
 
         A registration made while its vault carried no fingerprint records
         ``vault_uuid = NULL``; the value is written on the first successful
-        open. If something else stamps that vault first — another PixlStash
-        installation on this machine pointed at the same folder — every later
+        open. If something else stamps that vault first - another PixlStash
+        installation on this machine pointed at the same folder - every later
         startup dies on the conflict check with nothing in the UI to undo it.
 
         A NULL fingerprint means this hub has never served the library, so

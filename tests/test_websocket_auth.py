@@ -88,7 +88,7 @@ def owner_client(server):
     """A TestClient logged in as the owner (carries the session cookie)."""
     client = TestClient(server.api, raise_server_exceptions=True)
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
     return client
@@ -139,7 +139,7 @@ def test_updates_accepts_read_token_via_query(server, owner_client):
     is rejected, so a cookie-less client connecting here proves the token was
     honoured)."""
     token = _read_token(owner_client)
-    anon = TestClient(server.api)  # no session cookie — only the token can auth
+    anon = TestClient(server.api)  # no session cookie - only the token can auth
     with anon.websocket_connect(f"{WS_UPDATES}?token={token}") as ws:
         ws.send_json({"type": "set_filters"})
 
@@ -682,7 +682,7 @@ def test_authz_gate_noops_on_websocket_scope():
     WS routes are out of the HTTP gate by design (their chokepoint is
     ``authenticate_websocket``). The gate must therefore resolve harmlessly and
     enforce nothing on a WS scope: it must not crash the handshake (the old
-    ``request: Request`` param did — ``TypeError: missing 'request'``) and, even
+    ``request: Request`` param did - ``TypeError: missing 'request'``) and, even
     when ENFORCING against an empty registry (which 403s any *HTTP* route as an
     undeclared miss), a WS connection must return ``None`` before that lookup.
     """

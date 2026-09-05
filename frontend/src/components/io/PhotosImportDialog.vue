@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
+  IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
@@ -265,7 +266,7 @@ watch(dialogOpen, (isOpen) => {
                     class="local-import-input"
                     type="file"
                     multiple
-                    accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain"
+                    :accept="IMPORT_FILE_ACCEPT"
                     @change="handleLocalChange"
                   />
                   <v-btn variant="outlined" @click="openLocalPicker">

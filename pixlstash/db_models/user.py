@@ -46,7 +46,10 @@ class User(SQLModel, table=True):
     # a permanent purge. True = the user opted out of seeing it again.
     hide_purge_snapshot_warning: Optional[bool] = Field(default=False)
     date_format: Optional[str] = Field(default="locale")
-    theme_mode: Optional[str] = Field(default="light")
+    # Dark by default. Only a NEW row takes it: every existing user already
+    # carries the theme they chose (or the light one they were given), and a
+    # column default never rewrites a stored value.
+    theme_mode: Optional[str] = Field(default="dark")
     comfyui_url: Optional[str] = Field(default=None)
     public_url: Optional[str] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)

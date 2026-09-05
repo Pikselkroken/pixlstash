@@ -97,11 +97,11 @@ def test_distinct_defects_in_a_family_accumulate_with_diminishing_returns():
     # Distinct anatomy defects must keep *adding* (defect count has to matter), but with
     # diminishing returns, bounded by the geometric RANK_DECAY series. The old noisy-OR
     # capped the family at a single tag's severity, which is what crushed the bottom of
-    # the scale — three defects scored barely worse than one.
+    # the scale - three defects scored barely worse than one.
     #
     # Asserted at full confidence, which is where the count bands are defined. Confidence
     # is a separate axis and is now graded steeply (CONF_POWER), so a 0.9 detection is
-    # deliberately not "three confirmed defects" — see the threshold-grading tests below.
+    # deliberately not "three confirmed defects" - see the threshold-grading tests below.
     one = anomaly_penalty({"bad anatomy": 1.0})
     three = anomaly_penalty(
         {"bad anatomy": 1.0, "malformed hand": 1.0, "malformed foot": 1.0}
@@ -147,7 +147,7 @@ def test_corroboration_noise_disambiguated_by_sharpness():
 
 
 def test_merge_child_is_noisy_ored_into_its_parent_not_counted_twice():
-    # "extra digit" IS "malformed hand" — the same defect under two names. Noisy-OR is
+    # "extra digit" IS "malformed hand" - the same defect under two names. Noisy-OR is
     # reserved for exactly this duplicate-detection job, so the pair must stay within one
     # canonical tag's severity rather than escalating like two distinct defects would.
     # At full confidence, so the comparison isolates aggregation from confidence grading.
@@ -183,7 +183,7 @@ def test_family_severity_follows_the_affine_weight_map():
 
 
 def test_zero_weight_tag_is_not_penalised():
-    # "silicone breasts" is registered with weight 0 — deliberately de-penalised.
+    # "silicone breasts" is registered with weight 0 - deliberately de-penalised.
     assert anomaly_penalty({"silicone breasts": 1.0}) == 0.0
 
 
@@ -371,7 +371,7 @@ def test_defect_count_separates_meaningfully_not_marginally():
     # ~0.3 (the noisy-OR ran 0.900 / 0.990 / 0.999) while the first defect alone cost more
     # than a good picture's entire score. Require real separation across the counts that
     # are still on the open part of the scale. Once a picture is inside the floor band the
-    # remaining separation is intentionally tiny — that is what the band is for — so
+    # remaining separation is intentionally tiny - that is what the band is for - so
     # ordering there is asserted by test_scores_below_the_old_clamp_floor_stay_ordered.
     one, two, three = (_score_with_defects(_stack_of(4, k)) for k in (1, 2, 3))
     assert one - two >= 0.4
@@ -436,7 +436,7 @@ def test_unpenalised_picture_keeps_a_high_score():
     clean = _candidate(1, emb)
     (score,) = SmartScoreUtils.calculate_smart_score_batch_numpy([clean], [], [])
     # Within a point of the best this configuration can score, rather than a hardcoded
-    # 4.0 — see _best_case_score.
+    # 4.0 - see _best_case_score.
     assert score >= _best_case_score(emb) - 1.0
     assert score <= 5.0
 
@@ -527,7 +527,7 @@ def test_top_of_the_scale_stays_reachable():
     (score,) = SmartScoreUtils.calculate_smart_score_batch_numpy([perfect], [], [])
     assert score >= 4.9, (
         f"a flawless picture tops out at {score:.2f}. The positive weights no longer "
-        "leave headroom above the 1.0 clip — redistribute rather than simply trimming."
+        "leave headroom above the 1.0 clip - redistribute rather than simply trimming."
     )
 
 
@@ -536,13 +536,13 @@ def _best_case_score(emb):
 
     The absolute score a good picture lands on is a function of the positive weights
     (``w_aest`` / ``w_sharpness`` / …), so pinning it to a literal turns every deliberate
-    re-weighting into a spurious test failure — which is exactly what happened when the
+    re-weighting into a spurious test failure - which is exactly what happened when the
     aesthetic and sharpness weights were reduced from 0.30 to 0.20. Scoring a best-case
     candidate under the same configuration makes these assertions calibration-relative:
     they survive an intentional re-weighting but still fail if good pictures stop scoring
     like good pictures relative to what the formula can produce.
 
-    Scored with no anchors, matching the callers — the anchor terms are exercised
+    Scored with no anchors, matching the callers - the anchor terms are exercised
     separately.
     """
     best = _candidate(
@@ -642,7 +642,7 @@ def _severity_for_weight(weight):
 
 def test_tag_absent_from_user_table_is_not_penalised():
     # "watermark" is the whole watermark family and the user removed it, so the family
-    # contributes nothing at all — not a reduced amount.
+    # contributes nothing at all - not a reduced amount.
     assert "watermark" not in _USER_WEIGHTS
     assert anomaly_penalty({"watermark": 1.0}, tag_weights=_USER_WEIGHTS) == 0.0
     # Same for the noise family, whose only weighted member the user also removed. This
@@ -707,7 +707,7 @@ def test_default_table_is_not_consulted_when_a_user_config_exists():
     assert anomaly_penalty({"bad anatomy": 1.0}, tag_weights=solo) > 0.0
     assert anomaly_penalty({"watermark": 1.0}, tag_weights=solo) == 0.0
     # "malformed hand" shares the anatomy family with "bad anatomy", so it inherits the
-    # family ceiling as an alias — the documented behaviour for unweighted family members.
+    # family ceiling as an alias - the documented behaviour for unweighted family members.
     assert anomaly_penalty({"malformed hand": 1.0}, tag_weights=solo) > 0.0
 
 

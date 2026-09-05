@@ -21,7 +21,7 @@ function saveBool(key, val) {
   try {
     window.localStorage?.setItem(key, val ? "true" : "false");
   } catch {
-    // ignore — preference simply won't persist this session.
+    // ignore - preference simply won't persist this session.
   }
 }
 

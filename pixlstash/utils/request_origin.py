@@ -13,12 +13,12 @@ unit (docs/backend_architecture.md §21.2).
 
 This module provides:
 
-- ``OriginClientMiddleware`` — reads ``X-Client-Id`` (capped at
+- ``OriginClientMiddleware`` - reads ``X-Client-Id`` (capped at
   ``MAX_CLIENT_ID_LENGTH`` characters; longer values are ignored), and stashes
   it on both ``request.state.origin_client_id`` and the module-level
   ``origin_client_id_var`` contextvar. It also reads
   ``X-Operation-Batch-Id`` into ``request.state.operation_batch_id``.
-- ``origin_client_id_var`` — a contextvar that lets a handler read the origin
+- ``origin_client_id_var`` - a contextvar that lets a handler read the origin
   *synchronously, in-request* without threading ``request`` through helpers.
 - ``sanitize_operation_batch_id`` / ``require_client_batch_id``: the one place
   the ``cli-`` batch-id contract is enforced, for the ambient header (drop a bad
@@ -34,7 +34,7 @@ the event ``data`` dict. The broadcaster never reads the contextvar.
 Security: ``X-Client-Id`` is attacker-controllable and is used ONLY for
 echo-matching, NEVER for authorization or scoping. It is length-capped and is
 not logged at INFO. ``X-Operation-Batch-Id`` is likewise attacker-controllable
-and is only a *grouping hint* over the caller's own operations — grouping never
+and is only a *grouping hint* over the caller's own operations - grouping never
 widens what an operation may touch, and the whole ``/operations*`` surface is
 OWNER_ONLY, so a batch id can only ever regroup the owner's own history. It is
 strictly validated (namespaced ``cli-`` prefix, bounded length, safe charset)

@@ -105,7 +105,12 @@ class DescriptionTask(BaseTask):
 
     def estimated_vram_mb(self) -> int:
         try:
-            return max(0, self._workflow.estimate_vram_mb(len(self._pictures)))
+            return max(
+                0,
+                self._workflow.estimate_vram_mb(
+                    len(self._pictures), plugin_name=self._engine_override
+                ),
+            )
         except Exception as exc:
             logger.debug(
                 "DescriptionTask: VRAM estimate failed for %d picture(s); "
@@ -125,7 +130,7 @@ class DescriptionTask(BaseTask):
 
         def update_descriptions(session: Session, pics):
             # Defense in depth: a picture frozen by a locked set has a read-only
-            # description (rule 3) — never persist a machine-regenerated caption
+            # description (rule 3) - never persist a machine-regenerated caption
             # onto it, even if one was generated for an in-flight task.
             locked = locked_picture_ids(session, [pic.id for pic in pics])
             changed = []
@@ -228,7 +233,7 @@ class DescriptionTask(BaseTask):
                 self._release_idle_cpu_spillover_engine(force=False)
 
         # Blanking is how a picture the model genuinely cannot caption stops
-        # being retried for ever — MissingDescriptionFinder selects only NULL
+        # being retried for ever - MissingDescriptionFinder selects only NULL
         # or a ``__description::`` sentinel, so an empty string is a permanent
         # exclusion. A cancel is not a failure: it says nothing about these
         # pictures, so leave them exactly as they were and let the finder pick

@@ -63,7 +63,7 @@ def _setup_server_with_pictures():
     client = TestClient(server.api, raise_server_exceptions=True)
 
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, r.text
 
@@ -188,7 +188,7 @@ def test_scoped_token_denies_out_of_scope_ids(monkeypatch):
         ]
 
         # The out-of-scope id is denied with the SAME shape as a genuinely
-        # missing id — no way to tell from the response that it exists.
+        # missing id - no way to tell from the response that it exists.
         assert _deny_shape(results[out_of_scope]), results[out_of_scope]
         assert _deny_shape(results[missing_id]), results[missing_id]
         # The signal fields (everything but the echoed picture_id) must be
@@ -200,7 +200,7 @@ def test_scoped_token_denies_out_of_scope_ids(monkeypatch):
 
         # The in-scope id is NOT auto-denied by scope: it goes through the real
         # classification path. It exists and is not soft-deleted, so under the
-        # "ALL" filter it is classified as eligible — distinct from the deny shape
+        # "ALL" filter it is classified as eligible - distinct from the deny shape
         # the out-of-scope/missing ids get (eligible:false, likeness:null),
         # whether or not face extraction has finished yet. Over-blocking an
         # in-scope id would be its own regression.

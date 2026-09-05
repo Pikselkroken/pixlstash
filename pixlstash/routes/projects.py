@@ -36,6 +36,8 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import rename_entity_folders
+from pixlstash.utils.library_layout import Facet
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
@@ -51,7 +53,7 @@ from pixlstash.utils.service.filter_helpers import (
 
 logger = get_logger(__name__)
 
-# Default maximum attachment size — overridden by server_config["max_attachment_size_mb"]
+# Default maximum attachment size - overridden by server_config["max_attachment_size_mb"]
 _DEFAULT_MAX_ATTACHMENT_MB = 50
 
 
@@ -397,7 +399,7 @@ def create_router(server) -> APIRouter:
     def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
         # A set listed under this project may *also* belong to others, and its
-        # stored scalar ``project_id`` names its primary project — which is not
+        # stored scalar ``project_id`` names its primary project - which is not
         # necessarily this one. Serialising it raw hands a project-scoped token
         # another project's id (issue #125 / R1b, #708 F4).
         visible_projects = visible_project_ids(server, request)
@@ -515,6 +517,7 @@ def create_router(server) -> APIRouter:
             project = session.get(Project, pid)
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
+            previous_name = project.name
             if normalized_name is not None:
                 _ensure_unique_project_name(
                     session,
@@ -538,6 +541,22 @@ def create_router(server) -> APIRouter:
                     detail="Project name already exists",
                 )
             session.refresh(project)
+            if normalized_name is not None and previous_name != normalized_name:
+                # **Renaming a project renames its FOLDER; it moves no files**
+                # (v1.11 §4). It is also not cosmetic: the layout reads folder
+                # names against the library's *current* vocabulary, so a folder
+                # left under the old name would name nothing PixlStash knows
+                # and its pictures would drop out of the layout for good.
+                # Commits for itself, and rolls the directories back if it
+                # cannot: the renames and the ``file_path`` rewrites describing
+                # them have to land together.
+                rename_entity_folders(
+                    session,
+                    Facet.PROJECT,
+                    previous_name,
+                    normalized_name,
+                    image_root=server.vault.image_root,
+                )
             return project
 
         return server.vault.db.run_task(
@@ -727,7 +746,7 @@ def create_router(server) -> APIRouter:
                 if session.get(Project, pid_value) is None:
                     raise HTTPException(status_code=404, detail="Project not found")
 
-            # Pure existence read — keep it off the writer queue (issue #651).
+            # Pure existence read - keep it off the writer queue (issue #651).
             server.vault.db.run_immediate_read_task(ensure_project_exists, pid)
             conditions = [
                 Picture.deleted.is_(False),

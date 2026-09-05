@@ -67,16 +67,16 @@ class ResourceRestoreMixin:
         """Restore a single resource from a snapshot snapshot.
 
         Supported *resource_type* values:
-        - ``'picture'``  — restores the Picture row plus Face, Tag,
+        - ``'picture'``  - restores the Picture row plus Face, Tag,
           PictureSetMember, and PictureProjectMember dependents.
-        - ``'picture_set'`` — restores the PictureSet row and all member
+        - ``'picture_set'`` - restores the PictureSet row and all member
           pictures (recursive picture restore).
-        - ``'character'`` — restores the Character row only. **Does not
+        - ``'character'`` - restores the Character row only. **Does not
           re-attach faces**: if a character was deleted live, the cascading
           ``Face.character_id = NULL`` is not reversed by this path. Use the
           full restore for a faithful character revert.
 
-        ``'project'`` is **not** supported in this release — use the full
+        ``'project'`` is **not** supported in this release - use the full
         restore. See ``_SUPPORTED_RESOURCE_TYPES`` for the reasoning.
 
         Args:
@@ -181,7 +181,7 @@ class ResourceRestoreMixin:
                 that have been deleted from live since the snapshot,
                 ``False`` (the default) raises ``MissingDependenciesError``
                 with the *union* of missing parents across the whole
-                batch — no items are restored. ``True`` re-inserts the
+                batch - no items are restored. ``True`` re-inserts the
                 missing parents from the snapshot first and then runs
                 the batch.
 
@@ -223,7 +223,7 @@ class ResourceRestoreMixin:
 
                 # Pre-flight: compute the union of parents referenced by
                 # any item in the batch but missing from live. Raise once
-                # for the whole batch if the caller hasn't confirmed —
+                # for the whole batch if the caller hasn't confirmed -
                 # avoids the "restore item 1, fail on item 2, leave
                 # partial state" trap.
                 union_candidates = self._collect_batch_candidate_parents(
@@ -237,7 +237,7 @@ class ResourceRestoreMixin:
                 if batch_missing and not confirm_restore_dependencies:
                     raise MissingDependenciesError(batch_missing)
                 if batch_missing:
-                    # Confirmed — restore parents once for the whole batch.
+                    # Confirmed - restore parents once for the whole batch.
                     self._vault.db.run_task(
                         lambda session: self._restore_parent_rows(
                             session, union_candidates, batch_missing
@@ -258,7 +258,7 @@ class ResourceRestoreMixin:
                             continue
                         try:
                             # Pass confirm=True down because the pre-flight
-                            # already restored any missing parents — the
+                            # already restored any missing parents - the
                             # per-item dep check is now a no-op.
                             sub = self._restore_resource_from_snapshot(
                                 upgraded_snapshot,
@@ -466,7 +466,7 @@ class ResourceRestoreMixin:
             upgraded_snapshot: Path to the alembic-upgraded snapshot file.
             resources: Batch items ``[{"type": ..., "id": ...}, ...]``.
             vault_root: Vault image root (used to skip pictures whose
-                file is missing on disk — those will be dropped by the
+                file is missing on disk - those will be dropped by the
                 per-item restore, so their FK refs don't matter).
 
         Returns:
@@ -554,7 +554,7 @@ class ResourceRestoreMixin:
         """Snapshot the parent rows referenced by ``snap_rows`` so we can
         re-attach them later in the live session if needed.
 
-        We materialise the parent ORM objects as plain dicts here — the
+        We materialise the parent ORM objects as plain dicts here - the
         snap session closes before the live work runs, and a detached
         SQLModel object isn't always portable across sessions.
 
@@ -564,7 +564,7 @@ class ResourceRestoreMixin:
 
         Returns:
             ``{"characters": [{...}, ...], "picture_sets": [...],
-              "projects": [...]}`` — one dict per parent referenced
+              "projects": [...]}`` - one dict per parent referenced
             anywhere in ``snap_rows``. Character and picture-set dicts carry an
             extra :data:`_PROJECT_IDS_KEY` entry holding the entity's project
             membership from the snapshot; :meth:`_restore_parent_rows` pops it
@@ -650,7 +650,7 @@ class ResourceRestoreMixin:
             candidate_parents: Output of ``_collect_candidate_parents``.
 
         Returns:
-            ``{"characters": [missing_ids...], ...}`` — only keys with at
+            ``{"characters": [missing_ids...], ...}`` - only keys with at
             least one missing parent are included.
         """
         missing: dict[str, list[int]] = {}
@@ -689,7 +689,7 @@ class ResourceRestoreMixin:
         join rows rebuilt from the snapshot (issue #125). The join is the read
         model, so merging the row alone would restore an entity that is
         unreachable from the project it belongs to. Only memberships whose
-        project actually exists live are re-created — a project the user did not
+        project actually exists live are re-created - a project the user did not
         restore would violate the foreign key.
 
         Args:
@@ -760,7 +760,7 @@ class ResourceRestoreMixin:
                 for project_id in project_ids:
                     if project_id not in live_project_ids:
                         logger.warning(
-                            "Restore: skipping %s membership %s=%s project_id=%s — "
+                            "Restore: skipping %s membership %s=%s project_id=%s - "
                             "the project does not exist in the live database, so "
                             "the entity comes back without that membership",
                             membership_model.__name__,
@@ -942,7 +942,7 @@ class ResourceRestoreMixin:
         # Picture-scoped dependents (Face, Tag, PictureSetMember,
         # PictureProjectMember): replace, don't merge. Merging by the snapshot
         # row's PK is wrong here because:
-        #   1. Face has a surrogate PK shared across all pictures — a snapshot
+        #   1. Face has a surrogate PK shared across all pictures - a snapshot
         #      Face.id can land on an unrelated live face that reused that id.
         #   2. Rows present in live but absent from the snapshot must vanish,
         #      or the picture isn't really reverted to its snapshot state.

@@ -51,7 +51,7 @@ def _database_is_at_script_head() -> bool:
     can be broken: skip them.
 
     A ``downgrade`` also starts from head and so skips the scans. That is
-    deliberate — downgrades only ever run through the standalone Alembic CLI
+    deliberate - downgrades only ever run through the standalone Alembic CLI
     (``tests/test_migrations.py``), never against a live vault. The
     suspension itself is not skipped, so the rebuild still works.
 
@@ -81,8 +81,8 @@ def _foreign_keys_suspended(connection):
 
     ``op.batch_alter_table`` is the only way to drop or alter a column on
     SQLite: it builds a new table, copies the rows across, ``DROP``s the
-    original and renames. With ``PRAGMA foreign_keys=ON`` — which the vault
-    engine sets (``database.init_database``) — that ``DROP`` raises
+    original and renames. With ``PRAGMA foreign_keys=ON`` - which the vault
+    engine sets (``database.init_database``) - that ``DROP`` raises
     "FOREIGN KEY constraint failed" the moment any row references the table
     being rebuilt, so migration 0080's rebuild of ``picture`` fails on every
     database that actually holds pictures (the committed e2e fixture, and any
@@ -98,8 +98,8 @@ def _foreign_keys_suspended(connection):
     Refused, not merely reported, on the path that matters: a vault opens
     Alembic on an already-open connection, so Alembic treats the transaction
     as external and leaves the commit to ``database._run_migrations``. The
-    check therefore runs while the whole run is still uncommitted — SQLite's
-    procedure checks at step 10, before the commit at step 11 — and the
+    check therefore runs while the whole run is still uncommitted - SQLite's
+    procedure checks at step 10, before the commit at step 11 - and the
     rollback below discards every migration in the run. The standalone engine
     has no external transaction, so SQLite's non-transactional DDL commits
     each migration as it goes and the guard can only refuse the result; its
@@ -108,7 +108,7 @@ def _foreign_keys_suspended(connection):
 
     Only violations the run *introduced* are refused. A database that already
     holds orphan rows (written before its FKs existed, or by any path with
-    enforcement off) is logged and left alone — failing on those would brick
+    enforcement off) is logged and left alone - failing on those would brick
     an existing library on every open, with no way back.
 
     The PRAGMA has to be issued outside a transaction to take effect, hence the
@@ -125,7 +125,7 @@ def _foreign_keys_suspended(connection):
     connection.commit()
 
     # Deliberately not gated on ``was_enabled``: the standalone engine leaves
-    # SQLite's default (off), and that is the snapshot-restore path — the one
+    # SQLite's default (off), and that is the snapshot-restore path - the one
     # migration input that did not come from this process.
     check = not _database_is_at_script_head()
     pre_existing = _foreign_key_violations(connection) if check else Counter()

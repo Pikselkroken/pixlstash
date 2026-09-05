@@ -26,7 +26,7 @@ def wipe_tables(session, models):
     restoring ``ON`` must come *after* the commit. Issued before it (the shape
     every ``clean_db`` fixture used to have) it is silently ignored and the
     connection goes back to the pool with foreign keys off, for whichever test
-    picks it up next — see issue #712. The restore runs in a ``finally`` so a
+    picks it up next - see issue #712. The restore runs in a ``finally`` so a
     delete that raises mid-wipe cannot leak enforcement off either, and it
     raises rather than asserts because the whole point of the check is that a
     no-opped pragma is silent (``python -O`` would drop an ``assert``).
@@ -67,7 +67,7 @@ def delete_characters(session, character_ids=None):
     (``routes/characters.py::clear_character_and_nullify_faces``).
     ``CharacterProjectMember`` rows cascade on their own.
 
-    This is only the FK-relevant part of ``DELETE /characters/{id}`` — it does
+    This is only the FK-relevant part of ``DELETE /characters/{id}`` - it does
     not delete the character's reference picture set, which the route also
     does. Callers that need the full route semantics should call the route.
 
@@ -143,7 +143,7 @@ def wait_for_import_task(client, task_id, timeout_s=30, poll_interval=0.1):
     on.** The import runs on a detached executor thread, but the write inside it
     goes through ``vault.db.run_task``, which queues onto the *single* DB worker.
     So this bounds "the DB queue drained far enough to run my write", not "the
-    import worked — and in a test that imports twenty-one pictures in a loop,
+    import worked - and in a test that imports twenty-one pictures in a loop,
     each iteration queues behind the tagging and embedding writes of the ones
     before it. At 10s that was a wall-clock race the loaded Windows shards lost
     (`test_server.py::test_semantic_search`, run 31481874866): a timeout there
@@ -184,7 +184,7 @@ def upload_pictures_and_wait(
 ):
     """Upload and wait for the import to settle.
 
-    The default tracks :func:`wait_for_import_task`'s deliberately — this is the
+    The default tracks :func:`wait_for_import_task`'s deliberately - this is the
     wrapper almost every caller actually uses (including the loop in
     `test_semantic_search` that flaked), so leaving it at 10 would have kept the
     old bound in place everywhere while looking fixed.
@@ -216,7 +216,7 @@ def wait_for_faces(client, picture_id, timeout_s=30, poll_interval=0.5):
         if faces:
             return faces
         time.sleep(poll_interval)
-    # Return whatever is there (possibly empty) after timeout — callers decide whether to skip
+    # Return whatever is there (possibly empty) after timeout - callers decide whether to skip
     resp = client.get(f"{API_PREFIX}/pictures/{picture_id}/faces")
     assert resp.status_code == 200
     return resp.json().get("faces", [])
@@ -239,7 +239,7 @@ def wait_likeness_settled(server, timeout_s=_DEFAULT_TIMEOUT_S):
     real pairs. Both race with a seeded fixture. Waiting on the parameter stage
     alone is not enough: ``count_pending_parameters`` reads 0 in the gaps
     between per-picture embedding batches, and ``MissingLikenessFinder`` then
-    seeds the queue and writes real pairs for the pictures that *are* ready —
+    seeds the queue and writes real pairs for the pictures that *are* ready -
     which collides with the fixture's own INSERT on the
     ``(picture_id_a, picture_id_b)`` unique constraint.
 

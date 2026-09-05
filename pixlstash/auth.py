@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
 from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
-from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.system_utils import default_max_vram_gb
 
 
@@ -50,7 +50,7 @@ class LoginRequest(BaseModel):
         return v
 
 
-# Paths and prefixes that bypass authentication — also used by rate limiting.
+# Paths and prefixes that bypass authentication - also used by rate limiting.
 AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         "/login",
@@ -82,7 +82,7 @@ AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 RESTORE_ADMISSION_PREFIXES: tuple[str, ...] = (*AUTH_API_PREFIXES, "/share/")
 
 # Token scopes that permit a mutating request. The middleware fails **closed**
-# against this set: any other scope — including one nobody recognises — is
+# against this set: any other scope - including one nobody recognises - is
 # treated as read-only, so a scope value is admitted by declaration rather than
 # by omission. ``ALL`` is absent on purpose: ``request.state.token_scope`` is
 # populated only for non-ALL scopes, so an owner token never reaches the check.
@@ -96,7 +96,7 @@ WRITE_ENABLED_SCOPES: frozenset[str] = frozenset({"WRITE"})
 READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/pictures/thumbnails",
-        # Bulk tag lookup — POST only because it carries an id list; the handler
+        # Bulk tag lookup - POST only because it carries an id list; the handler
         # is a pure SELECT and scope-filters its ids (see tags.bulk_fetch_tags).
         "/api/v1/pictures/tags/bulk_fetch",
         "/api/v1/pictures/guest-scores",
@@ -105,7 +105,7 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
         "/api/v1/picture_sets/membership",
         "/api/v1/projects/membership",
         "/api/v1/characters/membership",
-        # Reverse image search — POST only because it accepts a file upload.
+        # Reverse image search - POST only because it accepts a file upload.
         "/api/v1/pictures/likeness-search",
         "/api/v1/pictures/face-search",
         "/api/v1/characters/likeness-search",
@@ -113,7 +113,7 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
 )
 
 # GET paths that must not be accessible to READ-scoped tokens.
-# Covers sensitive user settings and all folder/filesystem endpoints — READ tokens
+# Covers sensitive user settings and all folder/filesystem endpoints - READ tokens
 # are allowed to access content (pictures, picture_sets, characters, projects)
 # but must never expose server filesystem or import-folder configuration.
 READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
@@ -130,12 +130,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # plugin import errors whose text can carry any path the failing plugin
         # reached for. The authz gate declares it LOCAL_OWNER_ONLY; it is here
         # as well because that is the pattern filesystem/browse already sets,
-        # and because AUTHZ_GATE_ENFORCING is a documented one-line rollback —
+        # and because AUTHZ_GATE_ENFORCING is a documented one-line rollback -
         # without this entry, taking it would hand the folder straight back to
         # every share token.
         "/api/v1/taggers/plugin-diagnostics",
         # The plugin list carries the caller's own tagger_settings, which is
-        # user settings exactly like /users/me/config above — a plugin may
+        # user settings exactly like /users/me/config above - a plugin may
         # declare a free-text parameter and the owner may have typed a path
         # into it. Gate policy is OWNER_ONLY; same belt-and-braces reasoning.
         "/api/v1/taggers",
@@ -145,9 +145,41 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # and serves the move queue's source and destination folders, so with
         # the gate rolled back a READ token read host paths straight out of it.
         # Its two templated siblings on the same tier cannot be expressed here
-        # at all — this frozenset matches literal paths — and stay the recorded
+        # at all - this frozenset matches literal paths - and stay the recorded
         # follow-up.
         "/api/v1/model-moves",
+        # Walks the server filesystem from a client-supplied path to say what a
+        # folder is, so it is the /filesystem/browse class exactly and belongs
+        # on the same belt: with AUTHZ_GATE_ENFORCING rolled back, a READ token
+        # handed out to view a shared gallery would otherwise probe host layout
+        # a folder at a time.
+        "/api/v1/libraries/inspect",
+        # LOCAL_OWNER_ONLY at the gate: it names the host folder this library
+        # publishes its Views tree to. Same belt-and-braces as the entries
+        # above - AUTHZ_GATE_ENFORCING is a documented one-line rollback, and
+        # without this entry taking it would hand that path to every share
+        # token.
+        "/api/v1/server-config/views",
+        # The folder-structure read's result IS a map of the owner's folder
+        # names, tree shape and picture counts (v1.11 Phase 2). It is
+        # LOCAL_OWNER_ONLY at the gate; it is here as well for the same
+        # rollback reason as filesystem/browse above.
+        "/api/v1/folder-structure/read/status",
+        # The commit's result carries the same host-path-derived information
+        # as the read above (v1.11 Phase 3) - same tier, same rollback
+        # reasoning, same belt.
+        "/api/v1/folder-structure/commit/status",
+        # The library's own folder layout (v1.11 Phase 4b). It names no path,
+        # but it describes the shape of the owner's folder tree and it is the
+        # read side of the control that decides where their files get written.
+        # LOCAL_OWNER_ONLY at the gate; here as well for the same rollback
+        # reason as the entries above.
+        "/api/v1/server-config/layout",
+        # The migration preview (v1.11 Phase 4c) is the same belt one route
+        # further: it counts what moving the whole library onto that layout
+        # would do, and the sample paths and mount-point findings it returns
+        # are more of the owner's folder tree, not less.
+        "/api/v1/server-config/layout/migration",
     }
 )
 
@@ -225,7 +257,7 @@ _TAILSCALE_NETS = (
 def is_tailscale_ip(ip: str) -> bool:
     """Return True if *ip* is in a Tailscale CGNAT (IPv4) or ULA (IPv6) range.
 
-    Non-parseable strings (e.g. ``"testclient"``) are NOT Tailscale — the caller's
+    Non-parseable strings (e.g. ``"testclient"``) are NOT Tailscale - the caller's
     ``is_local_ip`` already treats those as local, so returning False here avoids a
     second, redundant "everything unparsable is local" widening.
     """
@@ -242,7 +274,7 @@ def is_local_or_tailscale_ip(ip: str) -> bool:
     Scoped locality predicate for the §16.3 host-capability gate ONLY
     (:mod:`pixlstash.authz.gate`). It deliberately does **not** replace the shared
     :func:`is_local_ip`, which also backs ``_require_local_for_write``, the
-    middleware ALL-token remote block, and the HTTPS-skip carve-out — widening
+    middleware ALL-token remote block, and the HTTPS-skip carve-out - widening
     those to Tailscale is an unrelated remote-login risk decision the §16.3 debate
     refused to couple. This predicate widens only the host-ops locality check so a
     Tailscale-over-IPv4 owner is no longer falsely denied.
@@ -366,7 +398,7 @@ class AuthService:
         # is handed the same id, at which point these maps would name a token
         # they were never built from. Revoking the right token would then not
         # end its session, and revoking an unrelated one would end the wrong
-        # session — fail-open. ``public_id`` is random and never reissued, so a
+        # session - fail-open. ``public_id`` is random and never reissued, so a
         # stale key resolves to the same token or to nothing (issue #666).
         self._sessions_by_token_public_id: dict[str, set[str]] = {}
         self._token_public_id_by_session: dict[str, str] = {}
@@ -392,7 +424,7 @@ class AuthService:
         self._token_cache_lock = threading.Lock()
         # Revocation generation counter, bumped by every _flush_token_cache().
         # A lookup that started before a revocation must not be allowed to
-        # install its (now stale) result into the cache afterwards — it samples
+        # install its (now stale) result into the cache afterwards - it samples
         # this before reading and re-checks it before writing, see
         # _token_from_value. Guarded by _token_cache_lock.
         self._token_cache_epoch: int = 0
@@ -415,11 +447,11 @@ class AuthService:
         # old (4 hours), so a truly-active burst of sessions is never silently dropped.
         self._guest_sessions: dict[str, float] = {}
         self._guest_sessions_lock = threading.Lock()
-        self._GUEST_SESSION_ACTIVE_TTL = 3600.0  # 1 hour — "currently active"
-        self._GUEST_SESSION_INACTIVE_TTL = 30 * 86400.0  # 30 days — hard expiry
+        self._GUEST_SESSION_ACTIVE_TTL = 3600.0  # 1 hour - "currently active"
+        self._GUEST_SESSION_INACTIVE_TTL = 30 * 86400.0  # 30 days - hard expiry
         self._GUEST_SESSION_EVICT_MIN_AGE = (
             4 * 3600.0
-        )  # 4 hours — min age to evict under cap
+        )  # 4 hours - min age to evict under cap
         self._guest_max_tracked_sessions: int = int(
             self._server_config.get("guest_max_stored_sessions", 1000)
         )
@@ -695,7 +727,7 @@ class AuthService:
         * Otherwise the sweep ran first. The sweep runs only after
           ``run_task(remove_token)`` has returned, so the delete had already
           committed before the registration, and therefore before this re-read
-          starts — so this re-read cannot see the row and ends the session
+          starts - so this re-read cannot see the row and ends the session
           here.
 
         There is no third ordering, so exactly one of the two always fires.
@@ -765,15 +797,15 @@ class AuthService:
         is owner-only, and the identities the surviving state names have moved.
 
         The desktop shell's pre-authenticated session is re-seeded afterwards.
-        It is not a stored credential — the shell mints it per launch and the
-        server only registers it — so re-registering it against the restored
+        It is not a stored credential - the shell mints it per launch and the
+        server only registers it - so re-registering it against the restored
         owner is the honest equivalent of the sign-in every other client has to
         redo, and it does not leave the local window stranded until a restart.
 
         **This is not made redundant by ``UserToken.public_id``.** A restored
         snapshot brings back its *own* ``public_id`` values, so a public id this
-        process still remembers can be absent from the restored database, or —
-        for a snapshot taken from this same vault — present and pointing at a
+        process still remembers can be absent from the restored database, or -
+        for a snapshot taken from this same vault - present and pointing at a
         token row whose other columns have since changed. Never-reused ids stop
         an id from silently naming a *different* token; they cannot make
         in-memory state that outlived a whole-file swap correct. Both halves of
@@ -783,7 +815,7 @@ class AuthService:
         reads that follow it (``ensure_user`` and, when the desktop shell is
         running, ``seed_desktop_session``) go through the ordinary writer queue,
         which is why this must be called from the restore path only *after*
-        ``run_control_task(_do_swap)`` has returned — the swap has released
+        ``run_control_task(_do_swap)`` has returned - the swap has released
         ``exclusive_engine_access()`` by then and the engine has been
         re-created. Calling it from inside the swap would deadlock the request
         path (see ``services/restore/full_restore.py``).
@@ -809,7 +841,7 @@ class AuthService:
         # window always reaches the backend over a plain-HTTP loopback connection
         # by design (require_ssl drives the separate external listener, not this
         # one), and a standalone HTTPS-only server never serves plaintext at all.
-        # So a local/loopback client must not be forced onto HTTPS — only a
+        # So a local/loopback client must not be forced onto HTTPS - only a
         # genuinely remote plaintext request is rejected.
         if is_local_ip(self._get_real_client_ip(request)):
             return
@@ -870,7 +902,7 @@ class AuthService:
         if not self._server_config.get("require_local_for_write", True):
             return
         if http_request is None:
-            return  # programmatic call (e.g. tests) — treat as local
+            return  # programmatic call (e.g. tests) - treat as local
         client_ip = self._get_real_client_ip(http_request)
         if not is_local_ip(client_ip):
             raise HTTPException(
@@ -891,7 +923,7 @@ class AuthService:
         the entire library. Pin to loopback so the LAN cannot claim the account.
         """
         if http_request is None:
-            return  # programmatic call (e.g. tests) — treat as loopback
+            return  # programmatic call (e.g. tests) - treat as loopback
         client_ip = self._get_real_client_ip(http_request)
         if not is_loopback_ip(client_ip):
             self._logger.warning(
@@ -1047,9 +1079,9 @@ class AuthService:
         loopback-only first-owner registration gate
         (:meth:`_require_loopback_for_registration`): inside a container, host
         traffic arrives as the bridge-gateway IP, so the in-browser first-run
-        setup is unreachable by design. The IP guard must stay that strict —
+        setup is unreachable by design. The IP guard must stay that strict -
         under Docker's userland proxy a LAN attacker is indistinguishable from
-        the operator by IP — so instead the operator provisions the initial
+        the operator by IP - so instead the operator provisions the initial
         credentials via the ``PIXLSTASH_INITIAL_USERNAME`` /
         ``PIXLSTASH_INITIAL_PASSWORD`` env vars. This startup chokepoint claims
         the account with them before the server accepts requests, removing the
@@ -1057,7 +1089,7 @@ class AuthService:
 
         Hard rules:
 
-        - An **already-claimed account is never modified** — stale env vars on
+        - An **already-claimed account is never modified** - stale env vars on
           a later restart must not become a takeover vector; they are ignored
           with an INFO log.
         - Exactly one of the two vars set is a configuration error: warn
@@ -1069,7 +1101,7 @@ class AuthService:
             True when the account was claimed from the env vars.
         """
         username = os.environ.get(self.INITIAL_OWNER_LOGIN_ENV, "").strip()
-        # Strip to mirror LoginRequest's whitespace-stripping validator —
+        # Strip to mirror LoginRequest's whitespace-stripping validator -
         # otherwise an env password with stray whitespace could never log in.
         password = os.environ.get(self.INITIAL_OWNER_AUTH_ENV, "").strip()
         if not username and not password:
@@ -1151,7 +1183,7 @@ class AuthService:
         self.password_hash = user.password_hash
         self._logger.info(
             "Claimed the owner account as %r from %s/%s. Initial setup is "
-            "complete — unset these environment variables now; they are no "
+            "complete - unset these environment variables now; they are no "
             "longer needed, and leaving them set exposes the initial password "
             "in the container/process environment.",
             username,
@@ -1218,11 +1250,11 @@ class AuthService:
         if "USERNAME" in self._server_config:
             del self._server_config["USERNAME"]
             removed_any = True
-        # Persist whenever either key was removed — previously the write was
+        # Persist whenever either key was removed - previously the write was
         # nested under the USERNAME branch, so removing only PASSWORD_HASH left
         # the stale hash on disk.
         if removed_any:
-            write_json_atomic(self._server_config_path, self._server_config)
+            persist_server_config(self._server_config_path, self._server_config)
         return user
 
     def token_from_value(self, token_value: str) -> Optional[UserToken]:
@@ -1250,7 +1282,7 @@ class AuthService:
 
         Revocation safety: the DB candidate fetch is the authority and runs on
         the read path (issue #651), so it always observes an already-committed
-        revocation — every removal path commits *before* calling
+        revocation - every removal path commits *before* calling
         :meth:`_flush_token_cache`, and under WAL a read that starts after that
         commit sees it. The one ordering that would slip through is a lookup
         that read the row *before* the delete committed and installed it in the
@@ -1276,7 +1308,7 @@ class AuthService:
                     # Validate token hasn't been expired server-side either.
                     if not is_token_expired(token_obj):
                         return token_obj
-                # Cache entry stale — remove and fall through to verification.
+                # Cache entry stale - remove and fall through to verification.
                 self._token_cache.pop(digest, None)
 
         user = self.get_user()
@@ -1296,7 +1328,7 @@ class AuthService:
                 )
             ).all()
 
-        # Read path, not the writer queue — see get_user (issue #651).
+        # Read path, not the writer queue - see get_user (issue #651).
         tokens = self._db.run_immediate_read_task(fetch_candidates, user.id, prefix)
         now = datetime.utcnow()
         for token in tokens:
@@ -1304,7 +1336,7 @@ class AuthService:
                 continue
             if bcrypt.verify(token_value, token.token_hash):
                 self._record_token_last_used(token.id)
-                # Populate cache so subsequent requests skip bcrypt — but only
+                # Populate cache so subsequent requests skip bcrypt - but only
                 # if no revocation landed while we were reading/verifying. A
                 # token this lookup saw as live may have been deleted in the
                 # meantime; caching it then would keep a revoked token working
@@ -1353,7 +1385,7 @@ class AuthService:
         ``last_used_at`` is a display-only hygiene signal (shown by
         :meth:`list_tokens` and the Settings account panel); **nothing in the
         authentication or authorization path reads it**, and it carries neither
-        revocation nor expiry state — those live in the row's existence and in
+        revocation nor expiry state - those live in the row's existence and in
         ``expires_at``, both of which are re-read from the database on every
         cache miss. So it is deliberately fire-and-forget: the request no longer
         waits for the serialised writer queue to reach it (issue #651). The cost
@@ -1419,7 +1451,7 @@ class AuthService:
 
     def _token_from_query_param(self, request: Request) -> Optional[UserToken]:
         """Validate a ?token= query parameter.  Only READ-scoped tokens are
-        accepted this way — ALL-scoped tokens must not be placed in URLs."""
+        accepted this way - ALL-scoped tokens must not be placed in URLs."""
         token_value = request.query_params.get("token")
         if not token_value:
             return None
@@ -1499,8 +1531,8 @@ class AuthService:
             websocket: The incoming Starlette/FastAPI ``WebSocket``.
 
         Returns:
-            A ``WebSocketAuth(user_id, is_owner)`` — ``is_owner`` is True for a
-            cookie session or an ALL-scope token with no resource restriction —
+            A ``WebSocketAuth(user_id, is_owner)`` - ``is_owner`` is True for a
+            cookie session or an ALL-scope token with no resource restriction -
             or ``None`` if the connection is unauthenticated.
         """
         # WebSocket handshakes bypass HTTP middleware. Keep them behind the
@@ -1509,7 +1541,7 @@ class AuthService:
         if self.is_auth_closed_for_restore():
             return None
 
-        # Cookie session — full owner (the browser SPA sends this on the
+        # Cookie session - full owner (the browser SPA sends this on the
         # handshake, same-origin).
         session_id = websocket.cookies.get("session_id")
         if session_id:
@@ -1542,7 +1574,7 @@ class AuthService:
         auth_header = websocket.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             matched = self._token_from_value(auth_header[len("Bearer ") :])
-        # ?token= query param — READ scope only, mirroring _token_from_query_param.
+        # ?token= query param - READ scope only, mirroring _token_from_query_param.
         if matched is None:
             token_value = websocket.query_params.get("token")
             if token_value:
@@ -1607,7 +1639,7 @@ class AuthService:
 
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)
-        # Read path, not the writer queue — see get_user (issue #651).
+        # Read path, not the writer queue - see get_user (issue #651).
         user = self._db.run_immediate_read_task(
             lambda session: session.get(User, user_id)
         )
@@ -1720,7 +1752,7 @@ class AuthService:
         # ``request.state.token_scope`` for non-ALL scopes, so such a token would
         # (a) bypass every object-scope guard (``enforce_picture_scope`` /
         # ``fetch_scope_allowed_picture_ids`` read ``token_scope``) and (b) pass
-        # the "only the owner may create tokens" check above — i.e. it is a full
+        # the "only the owner may create tokens" check above - i.e. it is a full
         # owner token wearing a "restricted" label. Forbid minting it at the
         # source. See docs/reviews/feature-slick-grid-updates.md (F3).
         if scope == "ALL" and resource_type is not None:
@@ -1915,7 +1947,7 @@ class AuthService:
                 removed_public_id,
             )
         # Clear the token cache. The cache is keyed on a digest of the raw
-        # token *value*, and nothing maps a token row back to that digest —
+        # token *value*, and nothing maps a token row back to that digest -
         # ``public_id`` does not supply it either, so precise eviction would
         # need a second index maintained at insert time (see §16.5). Flushing
         # everything is coarse but correct. The delete has already committed
@@ -1977,7 +2009,7 @@ class AuthService:
                     UserToken.resource_id == rid,
                 )
             ).all()
-            # Public ids, collected before the delete — they key the session
+            # Public ids, collected before the delete - they key the session
             # maps, and the rows are gone once this commits.
             public_ids = [t.public_id for t in tokens if t.public_id is not None]
             for t in tokens:
@@ -2087,7 +2119,7 @@ class AuthService:
                 if self._failed_login_attempts >= 5:
                     self._login_lockout_until = time.monotonic() + 60
                     self._logger.warning(
-                        "5 failed login attempts — locked out for 60s."
+                        "5 failed login attempts - locked out for 60s."
                     )
                 else:
                     self._logger.warning(
@@ -2161,7 +2193,7 @@ class AuthService:
                 # so this is only reachable on a database that never ran it. The
                 # session-to-token link is what keeps a session's lifetime
                 # inside its credential's, and it cannot be made on an integer
-                # id that is reissued after deletion — so refuse the sign-in
+                # id that is reissued after deletion - so refuse the sign-in
                 # rather than issue a session that revocation cannot reach.
                 self._logger.error(
                     "Refused a session for token id %s: the token has no "
@@ -2216,7 +2248,7 @@ class AuthService:
                         db_user = User(max_vram_gb=default_max_vram_gb())
                     # Re-check unclaimed-ness INSIDE the transaction, mirroring
                     # claim_owner_from_env: two concurrent loopback claims must
-                    # not overwrite each other — first commit wins, the loser
+                    # not overwrite each other - first commit wins, the loser
                     # falls through to normal credential verification.
                     if db_user.username or db_user.password_hash:
                         return db_user
@@ -2359,7 +2391,7 @@ class AuthService:
         if not is_auth_excluded_path(request.url.path):
             # Only enforce authentication for API routes.  Non-API paths (e.g.
             # SPA routes like /character/5) are served as static HTML so the
-            # frontend can load and handle auth itself — the login screen is
+            # frontend can load and handle auth itself - the login screen is
             # shown and, after a successful login, Vue router restores the
             # original URL automatically.
             if not any(
@@ -2374,7 +2406,7 @@ class AuthService:
             # window talks to the backend over 127.0.0.1, so this high-privilege
             # session must never grant access on the optional external listener
             # (even though the cookie is scoped to the loopback origin and so is
-            # not normally sent there — this is the fail-closed backstop). Pin to
+            # not normally sent there - this is the fail-closed backstop). Pin to
             # loopback, not the broad LAN: the external listener is reached over
             # the LAN, so an is_local_ip check would leave the whole LAN open.
             # Drop it for non-loopback clients and let normal token auth take over.
@@ -2390,7 +2422,7 @@ class AuthService:
                 user_id = None
 
             if user_id is not None:
-                # Cookie session — full owner access, no scope restriction
+                # Cookie session - full owner access, no scope restriction
                 request.state.auth_user_id = user_id
                 session_library_uuid = self._library_uuid_by_session.get(session_id)
                 if session_library_uuid is not None:
@@ -2439,7 +2471,7 @@ class AuthService:
                         request.state.auth_user_id = user_id
                         # Stash the matched token so route-level helpers
                         # (e.g. require_unscoped_owner) can introspect its
-                        # resource_type — token_scope is only populated for
+                        # resource_type - token_scope is only populated for
                         # non-ALL scopes, so an ALL+resource_type token would
                         # otherwise look indistinguishable from a cookie session.
                         request.state.matched_token = matched_token
@@ -2447,7 +2479,7 @@ class AuthService:
                         # mint an ALL+resource_type token, but a legacy or
                         # snapshot-restored one would have token_scope is None
                         # and thus bypass every object-scope guard while looking
-                        # like an owner. Reject it fail-closed — the shape is
+                        # like an owner. Reject it fail-closed - the shape is
                         # invalid and unreachable through any supported flow.
                         if (
                             matched_token.scope == "ALL"

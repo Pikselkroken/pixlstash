@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 # Thumbnails are served under content-addressed URLs (the ?v=WxH version changes
 # whenever the bitmap is regenerated), so browsers may cache them briefly but must
-# revalidate afterwards — that keeps reference-folder source swaps (same URL, new
+# revalidate afterwards - that keeps reference-folder source swaps (same URL, new
 # bytes) from serving stale forever, which the previous header-less heuristic
 # caching allowed. `private` stops shared proxies caching access-controlled
 # thumbnails. FileResponse still emits ETag/Last-Modified for cheap 304s.
@@ -95,7 +95,7 @@ def register_routes(router, server):
         pixels are copied through and only the EXIF orientation tag changes, so
         the stored bitmap is now sideways relative to the file. ``apply_orientation``
         NULLs ``thumbnail_width``/``height`` to re-queue the regeneration, but
-        that runs on a background sweep — until it lands this route was handing
+        that runs on a background sweep - until it lands this route was handing
         back the pre-rotate bitmap, which is why a rotate used to paint the wrong
         way round and only correct itself on a second refresh.
 
@@ -169,18 +169,24 @@ def register_routes(router, server):
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
 
+        # Where the bitmap belongs, kept for the in-lock re-check below: a
+        # concurrent request that generated it while this one waited writes
+        # exactly here. `find_thumbnail` is the read that also brings a
+        # pre-#1164 bitmap home, and may answer a legacy path if that move
+        # failed, so the two are deliberately separate variables.
         thumb_path = ImageUtils.get_thumbnail_path(vault.image_root, pic.file_path)
-        if thumb_path and os.path.exists(thumb_path):
-            if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
+        existing = ImageUtils.find_thumbnail(vault.image_root, pic.file_path)
+        if existing:
+            if not discard_stale_thumbnail(id, pic.file_path, existing):
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
                     id,
-                    thumb_path,
+                    existing,
                     elapsed_ms,
                 )
                 return FileResponse(
-                    thumb_path,
+                    existing,
                     media_type="image/webp",
                     headers=_THUMBNAIL_CACHE_HEADERS,
                 )
@@ -459,7 +465,7 @@ def register_routes(router, server):
                     "square_crop_side",
                     "imported_at",
                     # Feeds `thumbnail_cache_version` below. `select_fields` is an
-                    # allowlist, so anything absent is DEFERRED — and these rows
+                    # allowlist, so anything absent is DEFERRED - and these rows
                     # outlive their session, which turns a deferred read into
                     # `DetachedInstanceError` for every picture in the batch.
                     # `getattr(pic, ..., None)` does not save you: SQLAlchemy

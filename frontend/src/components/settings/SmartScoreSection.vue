@@ -21,7 +21,7 @@ const emit = defineEmits(["update:hidden-tags", "update:apply-tag-filter"]);
 // no-op on screen until the maintainer's design pass mounts the notice host.
 const noticeStore = useNoticeStore();
 
-// ── Tag filter (hidden tags) — moved here from Behaviour ──────────────────────
+// ── Tag filter (hidden tags) - moved here from Behaviour ──────────────────────
 const hiddenTags = ref([]);
 const hiddenTagInput = ref("");
 const hiddenTagsLoading = ref(false);

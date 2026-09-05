@@ -355,3 +355,57 @@ def test_an_undecodable_picture_is_marked_once_from_the_crop_pass(tmp_path):
 
     assert task._build_quality_crop(pic, [], 32, {}) is None
     assert registry.marked == [(7, str(bad), "tag source could not be decoded")]
+
+
+def _rotated_jpeg(tmp_path, name, size=(4608, 2592), orientation=6):
+    """A landscape JPEG that EXIF says is portrait - an ordinary phone photo."""
+    from PIL import Image as PILImage
+
+    path = tmp_path / name
+    image = PILImage.new("RGB", size, "blue")
+    exif = image.getexif()
+    exif[274] = orientation
+    image.save(path, exif=exif)
+    return path
+
+
+def test_a_rotated_photo_is_loaded_the_way_its_faces_were_measured(tmp_path):
+    """Orientation 6 means 4608x2592 on disk and 2592x4608 to everyone else.
+
+    Face bboxes are recorded against the transposed frame, because
+    `load_image_bgr_reduced` transposes. This loader did not, so every rotated
+    photo reached the tagger sideways and its recorded faces pointed off the
+    edge of the frame it produced.
+    """
+    path = _rotated_jpeg(tmp_path, "phone.jpg")
+    task = _task_for(_FakeDb(str(tmp_path)))
+
+    _file_path, img, _undecodable = task._load_pic(Picture(id=1, file_path=str(path)))
+
+    assert img is not None
+    assert img.size == (2592, 4608), (
+        "the tagger must see the picture the way a person does, and the way the "
+        f"face pass measured it; got {img.size}"
+    )
+
+
+def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
+    """The exact failure from a real library, reproduced.
+
+    Picture 4401: orientation 6, 4608x2592 stored, face bbox
+    [432, 1971, 1584, 3699]. Against the untransposed frame the box's centre
+    sits below the image, `expand_bbox_to_square` clamps the bottom edge and
+    not the top, and PIL refuses: "Coordinate 'lower' is less than 'upper'".
+    """
+    path = _rotated_jpeg(tmp_path, "low-face.jpg")
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=4401, file_path=str(path))
+    faces = [_FakeFace(1, [432.0, 1971.0, 1584.0, 3699.0])]
+
+    built = task._build_quality_crop(pic, faces, 448, {})
+
+    assert built is not None, "the crop must be buildable, not warned away"
+    key, crop, _source, is_centre = built
+    assert key.endswith("#face1"), "and it must be the FACE crop, not the fallback"
+    assert is_centre is False
+    assert crop.size == (448, 448), f"a square target-sized crop; got {crop.size}"

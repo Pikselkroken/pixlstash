@@ -13,7 +13,7 @@ safe, both asserted / referenced here:
 * **Live guard (asserted end-to-end below).** Every resource-scoped share token is
   a READ token, and these POST routes are NOT in ``READ_SAFE_POST_PATHS``, so the
   auth middleware blocks a scoped token from all of them (403) before any handler
-  or DB work runs. A share token therefore cannot mutate tag predictions at all —
+  or DB work runs. A share token therefore cannot mutate tag predictions at all -
   in-scope or out.
 * **Latent object-scope (proven elsewhere).** The routes are declared
   ``PICTURE_SCOPED`` in ``pixlstash/authz/registry.py``; the gate's per-object
@@ -21,7 +21,7 @@ safe, both asserted / referenced here:
   in ``tests/test_authz_gate_step4.py``.
 
 Both directions per CLAUDE.md: a resource-scoped token is denied (403) and the
-owner still succeeds (200) — over-blocking the owner would be its own regression.
+owner still succeeds (200) - over-blocking the owner would be its own regression.
 The destructive handlers additionally assert fail-closed: the 403 leaves the
 out-of-scope data intact.
 """
@@ -35,8 +35,10 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from pixlstash.db_models import Picture, Tag, is_description_sentinel, is_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.server import Server
+from pixlstash.tasks.task_type import TaskType
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
@@ -77,7 +79,7 @@ def env():
         assert len(picture_ids) >= 2, "Need two pictures for the scope test"
 
         # A real resource-scoped READ share token. create_token does not require
-        # the resource to exist — the point is exercising the scoped-token path
+        # the resource to exist - the point is exercising the scoped-token path
         # through the middleware, which blocks it on every non-READ_SAFE POST.
         r = client.post(
             "/users/me/token",
@@ -212,6 +214,99 @@ def test_reset_description_scope(env):
     assert r.status_code == 403, r.text
     r = client.post(f"/pictures/{target}/reset_description")
     assert r.status_code == 200, r.text
+
+
+def _descriptions(server, picture_ids):
+    def query(session):
+        from sqlmodel import select
+
+        rows = session.exec(select(Picture).where(Picture.id.in_(picture_ids))).all()
+        return {row.id: row.description for row in rows}
+
+    return server.vault.db.run_immediate_read_task(query)
+
+
+def _write_descriptions(server, by_id):
+    def op(session):
+        for pic_id, description in by_id.items():
+            pic = session.get(Picture, pic_id)
+            pic.description = description
+            session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(op)
+
+
+def _detach_finders(server, task_types):
+    for task_type in task_types:
+        server.vault._planner_work_finders.pop(task_type, None)
+    server.vault._work_planner.detach_finders(task_types)
+
+
+def test_bulk_reset_description_scope_and_count(env):
+    """The multi-picture reset (#1162): a scoped token is refused, the owner's
+    one call marks every picture with the sentinel, and the task manager counts
+    those sentinels as remaining work - it used to count NULL only, so a
+    regeneration read "N / N" from start to finish."""
+    server, client, anon, picture_ids, scoped = env
+    # The finder would caption the sentinels straight away; the assertion is
+    # about the write and the count, not the captioner.
+    _detach_finders(server, [TaskType.DESCRIPTION])
+    # Both pictures start captioned: one real caption, one blanked by an
+    # earlier failed pass (the permanent exclusion). Under the old NULL-only
+    # count both are "done", and the reset must move both to "remaining".
+    _write_descriptions(server, {picture_ids[0]: "a caption", picture_ids[1]: ""})
+    remaining_key = TaskType.DESCRIPTION.value
+    workers = client.get("/workers/progress").json()["workers"]
+    assert workers[remaining_key]["remaining"] == 0
+    # A stale id must be skipped, not fail the batch.
+    body = {"picture_ids": [*picture_ids, 999_999]}
+
+    r = anon.post("/pictures/reset_description", json=body, headers=_bearer(scoped))
+    assert r.status_code == 403, r.text
+    assert not any(
+        is_description_sentinel(d) for d in _descriptions(server, picture_ids).values()
+    ), "a scoped token's blocked reset must not mark anything"
+
+    r = client.post("/pictures/reset_description", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == len(picture_ids)
+    descriptions = _descriptions(server, picture_ids)
+    assert all(is_description_sentinel(d) for d in descriptions.values()), descriptions
+
+    progress = client.get("/workers/progress").json()["workers"]
+    assert progress[remaining_key]["remaining"] == len(picture_ids)
+
+
+def test_bulk_reset_tags_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    _detach_finders(server, [TaskType.TAGGER])
+    target = picture_ids[1]
+    _seed_prediction(server, target, "gale")
+    body = {"picture_ids": picture_ids}
+
+    r = anon.post("/pictures/reset_tags", json=body, headers=_bearer(scoped))
+    assert r.status_code == 403, r.text
+    assert _prediction_exists(server, target, "gale"), (
+        "a scoped token's blocked reset_tags must not destroy tag-prediction data"
+    )
+
+    # A stale id is skipped: it must not sink the batch on the sentinel's FK.
+    body = {"picture_ids": [*picture_ids, 999_999]}
+    r = client.post("/pictures/reset_tags", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == len(picture_ids)
+    assert not _prediction_exists(server, target, "gale")
+
+    def sentinel_owners(session):
+        from sqlmodel import select
+
+        rows = session.exec(select(Tag).where(Tag.picture_id.in_(picture_ids))).all()
+        return sorted({row.picture_id for row in rows if is_tag_sentinel(row.tag)})
+
+    assert server.vault.db.run_immediate_read_task(sentinel_owners) == sorted(
+        picture_ids
+    )
 
 
 # ---------------------------------------------------------------------------

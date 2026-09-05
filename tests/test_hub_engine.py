@@ -2,12 +2,11 @@
 
 The point of :class:`pixlstash.hub.engine.HubEngine` is that identity can move
 out of the vault by re-pointing one constructor argument, so these tests assert
-the real :class:`~pixlstash.auth.AuthService` works when handed one — that is
+the real :class:`~pixlstash.auth.AuthService` works when handed one - that is
 the claim the hub schema's shape exists to support.
 """
 
 import os
-import re
 import sqlite3
 import stat
 import threading
@@ -34,6 +33,14 @@ from pixlstash.trusted_sqlite import (
     _reject_symlinked_path,
     _validate_file,
 )
+
+
+def _warned(caplog, text: str) -> bool:
+    """A WARNING record mentioning *text* was logged; mode bits warn, not refuse."""
+    return any(
+        text in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    )
 
 
 @pytest.fixture
@@ -272,22 +279,22 @@ class TestHubFileSecurity:
         )
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_a_hostile_file_that_wins_the_creation_race_is_still_refused(
-        self, tmp_path, monkeypatch
+    def test_a_hostile_file_that_wins_the_creation_race_is_still_reported(
+        self, tmp_path, monkeypatch, caplog
     ):
         """The logged race branch must fall through to validation, not accept.
 
         A loose-mode file that won the race is exactly what the old silent
-        ``pass`` could have hidden; ``_validate_file`` must still refuse it.
+        ``pass`` could have hidden; ``_validate_file`` must still see it.
         """
         path = tmp_path / "hub.db"
         os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o644))
         monkeypatch.setattr(os.path, "lexists", lambda _p: False)
 
-        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
-            TrustedSQLiteLocation.open(
-                str(path), private=True, create=True, trusted_root=str(tmp_path)
-            )
+        TrustedSQLiteLocation.open(
+            str(path), private=True, create=True, trusted_root=str(tmp_path)
+        ).close()
+        assert _warned(caplog, "mode 600")
 
     def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
         self, tmp_path, monkeypatch
@@ -367,7 +374,9 @@ class TestHubFileSecurity:
         # assert nothing at all while still looking green.
         assert swapped, "the swap never fired; this test proved nothing"
 
-    def test_a_directory_that_turns_writable_after_open_is_refused(self, tmp_path):
+    def test_a_directory_that_turns_writable_after_open_is_reported(
+        self, tmp_path, caplog
+    ):
         """The property that replaced the timestamp snapshot, asserted directly.
 
         verify_after_open now re-runs the ownership/permission check instead of
@@ -384,10 +393,11 @@ class TestHubFileSecurity:
         )
         try:
             guard.verify_after_open()  # clean while the directory is private
+            assert not _warned(caplog, "world-writable")
 
             os.chmod(directory, 0o777)
-            with pytest.raises(TrustedSQLiteLocationError, match="world-writable"):
-                guard.verify_after_open()
+            guard.verify_after_open()
+            assert _warned(caplog, "world-writable")
         finally:
             os.chmod(directory, 0o700)
             guard.close()
@@ -398,7 +408,7 @@ class TestTrustedPathSymlinkCheck:
 
     The check used to be ``os.path.abspath(p) != os.path.realpath(p)``. On
     POSIX those differ only where a symlink was resolved, so it read correctly
-    here — and wrongly on Windows, where ``realpath`` also expands 8.3 short
+    here - and wrongly on Windows, where ``realpath`` also expands 8.3 short
     names. ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` was rejected as
     "contains a symlink", taking down every Windows test that opens a hub.
 
@@ -454,8 +464,8 @@ class TestTrustedPathSymlinkCheck:
         """The W6/W7/W18 outage regression.
 
         The desktop shell derives the hub path from ``--server-config`` under
-        ``%APPDATA%\\pixlstash-desktop`` — never inside
-        ``user_config_dir("pixlstash")`` — so the old DACL predicate refused
+        ``%APPDATA%\\pixlstash-desktop`` - never inside
+        ``user_config_dir("pixlstash")`` - so the old DACL predicate refused
         every desktop install and the server could not start on Windows. A
         private open with ``trusted_root`` set to the hub's own parent must
         succeed regardless of where that parent is.
@@ -559,7 +569,7 @@ class TestTrustedPathSymlinkCheck:
         What made the old check wrong on Windows is that it asked ``realpath``
         a question realpath does not answer: "did this path cross a symlink?"
         Nothing on POSIX can produce a short name to reproduce that with, so
-        this pins the property instead — the decision does not depend on the
+        this pins the property instead - the decision does not depend on the
         canonical spelling at all. ``realpath`` is made to explode; a path with
         no symlink in it must still be accepted.
         """
@@ -580,11 +590,11 @@ class TestGroupWritableDirectories:
     The blanket ``mode & 0o022`` test exited the server 1 at startup on a stock
     Linux box: Debian/Ubuntu give every account a same-named group of its own
     and default to umask 002, so every directory PixlStash created before it
-    started passing 0700 is 0775 — group-writable by a group of exactly one.
+    started passing 0700 is 0775 - group-writable by a group of exactly one.
 
     ``grp``/``pwd`` are patched rather than read, in both directions, because
-    the real answer depends on the machine — a developer box's group is named
-    after the login, a CI runner's need not be — so an unpatched test asserting
+    the real answer depends on the machine - a developer box's group is named
+    after the login, a CI runner's need not be - so an unpatched test asserting
     a *value* would assert whatever the box happened to be configured with. Two
     tests at the end do call the real lookups, for what is machine-independent:
     that the production path resolves real ``pwd``/``grp`` records without an
@@ -620,7 +630,9 @@ class TestGroupWritableDirectories:
         )
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_a_private_group_makes_group_write_harmless(self, tmp_path, monkeypatch):
+    def test_a_private_group_makes_group_write_harmless(
+        self, tmp_path, monkeypatch, caplog
+    ):
         directory = tmp_path / "images"
         directory.mkdir()
         os.chmod(tmp_path, 0o755)
@@ -628,20 +640,23 @@ class TestGroupWritableDirectories:
         self._patch_groups(monkeypatch, group_name="me", members=["me"])
 
         TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert not _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_a_shared_group_still_refuses_group_write(self, tmp_path, monkeypatch):
+    def test_a_shared_group_still_warns_about_group_write(
+        self, tmp_path, monkeypatch, caplog
+    ):
         directory = tmp_path / "images"
         directory.mkdir()
         os.chmod(directory, 0o775)
         self._patch_groups(monkeypatch, group_name="staff", members=["me", "someone"])
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
     def test_a_same_named_group_with_another_member_is_not_private(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, caplog
     ):
         """The name alone is not the property; a group of one is."""
         directory = tmp_path / "images"
@@ -649,27 +664,29 @@ class TestGroupWritableDirectories:
         os.chmod(directory, 0o775)
         self._patch_groups(monkeypatch, group_name="me", members=["me", "someone"])
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_world_write_is_refused_whatever_the_group_is(self, tmp_path, monkeypatch):
+    def test_world_write_warns_whatever_the_group_is(
+        self, tmp_path, monkeypatch, caplog
+    ):
         directory = tmp_path / "images"
         directory.mkdir()
         os.chmod(directory, 0o777)
         self._patch_groups(monkeypatch, group_name="me", members=["me"])
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
     def test_a_differently_named_group_of_one_is_not_private(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, caplog
     ):
         """The member count alone is not the property; the name carries half of it.
 
         ``gr_mem`` is empty for *every* private group, so "no other member" is
-        the default state of a group rather than evidence about it — a shared
+        the default state of a group rather than evidence about it - a shared
         group with only primary members looks identical. The name is what makes
         this the owner's own group, and without this case that half of the
         predicate could be deleted with the suite still green.
@@ -679,16 +696,16 @@ class TestGroupWritableDirectories:
         os.chmod(directory, 0o775)
         self._patch_groups(monkeypatch, group_name="staff", members=[])
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
     @pytest.mark.skipif(
         hasattr(os, "geteuid") and os.geteuid() == 0,
         reason="running as root makes root-owned the owner's own directory",
     )
-    def test_a_root_owned_group_writable_ancestor_is_still_refused(
-        self, tmp_path, monkeypatch
+    def test_a_root_owned_group_writable_ancestor_still_warns(
+        self, tmp_path, monkeypatch, caplog
     ):
         """gid 0 is the administrators' group, not one owner's own.
 
@@ -723,8 +740,8 @@ class TestGroupWritableDirectories:
         monkeypatch.setattr(os, "lstat", as_root)
         self._patch_groups(monkeypatch, group_name="me", members=["me"])
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
     @pytest.mark.skipif(
@@ -737,7 +754,7 @@ class TestGroupWritableDirectories:
         Every other test here replaces ``grp`` and ``pwd`` with stand-ins written
         to match the code, so ``pw_name``/``gr_name``/``gr_mem`` would go on
         agreeing with a typo. Asking about gid 0 as a non-root user has a
-        machine-independent answer — this login is not called ``root`` — while
+        machine-independent answer - this login is not called ``root`` - while
         still running the production lookups end to end.
         """
         assert _is_private_group(os.geteuid(), 0) is False
@@ -754,7 +771,7 @@ class TestGroupWritableDirectories:
         ``grp.getgrgid`` raises ``OverflowError`` past the end of ``gid_t``,
         where the unresolvable id above raises ``KeyError`` and where
         ``pwd.getpwuid`` raises ``KeyError`` for the same value. Unreachable from
-        ``_require_owned_directory``, whose gid comes from the kernel — but the
+        ``_require_owned_directory``, whose gid comes from the kernel - but the
         helper promises to fail closed on *any* lookup failure, and an escaping
         ``OverflowError`` would make that a startup crash instead.
         """
@@ -762,7 +779,7 @@ class TestGroupWritableDirectories:
         assert _is_private_group(os.geteuid(), -2) is False
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_an_unresolvable_group_fails_closed(self, tmp_path, monkeypatch):
+    def test_an_unresolvable_group_fails_closed(self, tmp_path, monkeypatch, caplog):
         """A lookup that did not work must not be read as "nobody else"."""
         directory = tmp_path / "images"
         directory.mkdir()
@@ -782,8 +799,8 @@ class TestGroupWritableDirectories:
             trusted_sqlite, "grp", types.SimpleNamespace(getgrgid=explode)
         )
 
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+        assert _warned(caplog, "group/world-writable")
 
 
 class TestWindowsHasNoModeBits:
@@ -792,7 +809,7 @@ class TestWindowsHasNoModeBits:
     Windows synthesises ``st_mode`` from the read-only attribute alone, so an
     ordinary file reads 0o666 and no chmod can make it 0o600. Asserting the
     mode there refuses *every* hub, including one this process created moments
-    earlier — which is how both Windows shards failed with "SQLite credential
+    earlier - which is how both Windows shards failed with "SQLite credential
     file ... must be mode 600" on a freshly created file.
 
     Both directions, because these are credential-file checks: they must go on
@@ -809,13 +826,13 @@ class TestWindowsHasNoModeBits:
 
         _validate_file(str(path), private=True)
 
-    def test_validate_file_still_refuses_that_mode_on_posix(self, tmp_path):
+    def test_validate_file_still_reports_that_mode_on_posix(self, tmp_path, caplog):
         path = tmp_path / "hub.db"
         path.touch()
         os.chmod(path, 0o666)
 
-        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
-            _validate_file(str(path), private=True)
+        _validate_file(str(path), private=True)
+        assert _warned(caplog, "mode 600")
 
     def test_check_file_mode_is_a_no_op_on_windows(self, tmp_path, monkeypatch):
         path = tmp_path / "hub.db"
@@ -825,13 +842,14 @@ class TestWindowsHasNoModeBits:
 
         check_file_mode(str(path), repair=False)
 
-    def test_check_file_mode_still_reports_a_loose_hub_on_posix(self, tmp_path):
+    def test_check_file_mode_still_reports_a_loose_hub_on_posix(self, tmp_path, caplog):
         path = tmp_path / "hub.db"
         path.touch()
         os.chmod(path, 0o666)
 
-        with pytest.raises(HubPermissionError):
-            check_file_mode(str(path), repair=False)
+        check_file_mode(str(path), repair=False)
+        assert _warned(caplog, "should be 600")
+        assert stat.S_IMODE(os.lstat(path).st_mode) == 0o666
 
 
 class TestHostileSidecarRefusal:
@@ -895,44 +913,20 @@ class TestHostileSidecarRefusal:
         return path, sidecar
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
-    def test_a_loose_mode_sidecar_is_refused_by_the_guard(self, tmp_path, suffix):
-        """Mode 0o666 on the sidecar alone must refuse the open.
+    def test_a_loose_mode_sidecar_is_reported_by_the_guard(
+        self, tmp_path, suffix, caplog
+    ):
+        """Mode 0o666 on the sidecar alone is warned about, naming the sidecar.
 
-        The error must name the sidecar: a refusal naming the directory or the
-        main file would mean a different control fired and this attack is
-        still uncovered.
+        The warning must name the sidecar: one naming the directory or the
+        main file would mean a different check fired and this one is silent.
         """
         path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
 
-        with pytest.raises(TrustedSQLiteLocationError, match=re.escape(sidecar)):
-            TrustedSQLiteLocation.open(
-                path, private=True, trusted_root=os.path.dirname(path)
-            )
-
-    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
-    def test_the_refusal_happens_before_sqlite_connects(
-        self, tmp_path, monkeypatch, suffix
-    ):
-        """SQLite must never see the path: replay happens inside connect().
-
-        Asserting that ``verify_after_open`` raises would be theatre; by then
-        the hostile WAL is already in the database. Zero connect calls is the
-        property that matters.
-        """
-        path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
-        real_connect = sqlite3.connect
-        connects = []
-
-        def spying_connect(database, *args, **kwargs):
-            connects.append(str(database))
-            return real_connect(database, *args, **kwargs)
-
-        monkeypatch.setattr(sqlite3, "connect", spying_connect)
-
-        with pytest.raises(HubPermissionError):
-            HubDatabase(path)
-
-        assert connects == []
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+        assert _warned(caplog, sidecar)
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
     def test_a_foreign_owned_sidecar_is_refused(self, tmp_path, monkeypatch, suffix):
@@ -1019,7 +1013,7 @@ class TestHostileSidecarRefusal:
         ``-journal`` during first migration. When it vanished between the
         ``lexists`` probe and ``_validate_file``'s ``lstat``, the resulting
         FileNotFoundError was wrapped as "Could not inspect" and the healthy
-        opener was refused — concurrency mistaken for tampering, the same
+        opener was refused - concurrency mistaken for tampering, the same
         class the creation-race test pins. Simulated here by making the probe
         claim the journal exists when it does not.
         """
@@ -1322,8 +1316,8 @@ class TestHubUnderASymlinkedAncestor:
 
     v1.10.0 introduced both the hub and ``trusted_sqlite``'s guard. The guard
     refuses a *caller-supplied* path that crosses a symlink, and the hub's path
-    — unlike a library's, which ``registry.resolve_path`` has always canonicalised
-    at attach — was handed over exactly as derived from the config directory.
+    - unlike a library's, which ``registry.resolve_path`` has always canonicalised
+    at attach - was handed over exactly as derived from the config directory.
     A stow/chezmoi-managed ``~/.config``, a ``$HOME`` symlinked onto another
     disk, or a macOS path crossing ``/var`` -> ``/private/var`` therefore
     bricked startup with no route back, since ``startup_permissions`` mirrors
@@ -1380,24 +1374,25 @@ class TestHubUnderASymlinkedAncestor:
         assert target.read_bytes() == b"do not open"
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
-    def test_a_symlink_to_an_exposed_directory_is_still_refused(self, tmp_path):
+    def test_a_symlink_to_an_exposed_directory_is_still_reported(
+        self, tmp_path, caplog
+    ):
         """Resolving the ancestor must not smuggle past the namespace walk.
 
-        This is what carries the security load now that the redirect itself is
-        followed: the link is resolved, and then the directory it lands on is
-        judged on its own ownership and mode.
+        The link is resolved, and then the directory it lands on is judged on
+        its own ownership and mode.
         """
         exposed = tmp_path / "exposed"
         exposed.mkdir()
         # chmod, not mkdir(mode=...): the process umask is commonly 0o022, which
         # would silently make this 0o755 and leave nothing for the guard to
-        # refuse — the assertion would then pass for the wrong reason.
+        # report - the assertion would then pass for the wrong reason.
         os.chmod(exposed, 0o777)
         link = tmp_path / "config"
         link.symlink_to(exposed, target_is_directory=True)
 
-        with pytest.raises(HubPermissionError, match="writable"):
-            HubDatabase(str(link / "hub.db"))
+        HubDatabase(str(link / "hub.db")).close()
+        assert _warned(caplog, str(exposed))
 
 
 class TestCanonicalHubPath:
@@ -1432,8 +1427,8 @@ class TestCanonicalHubPath:
         On ``nt`` resolving the ancestors would defeat the redirect refusal, one
         of the only controls left there (W19, ``docs/backend_architecture.md``
         section 13). A real symlink is made on this POSIX gate, ``os.name`` is
-        forced to ``nt``, and the ancestor must come back *unresolved* — the
-        symlink still present — so the leaf-and-ancestor walk in
+        forced to ``nt``, and the ancestor must come back *unresolved* - the
+        symlink still present - so the leaf-and-ancestor walk in
         ``_reject_symlinked_path`` still gets to see and refuse it. Without the
         guard this resolves the link and the assertion fails.
         """

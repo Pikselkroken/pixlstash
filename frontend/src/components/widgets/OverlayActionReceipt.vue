@@ -4,7 +4,7 @@
  *
  * The owner ruled that undo must work inside the lightbox, and that the
  * affordance may be fitted differently there because the lightbox has its own
- * GUI. So this is not the grid pill promoted above the modal layer — it is the
+ * GUI. So this is not the grid pill promoted above the modal layer - it is the
  * same receipt, rendered in the overlay's own material.
  *
  * What is identical (all of it from `useActionReceipt`, so the two surfaces
@@ -28,7 +28,7 @@
  *     tiles change; here you can see exactly one picture while Ctrl+Z reverts
  *     an action across thousands. Above one target the pill says how wide the
  *     step was, derived from the count alone so it stays true no matter which
- *     picture is on screen. Nothing here ever says "this picture" — that would
+ *     picture is on screen. Nothing here ever says "this picture" - that would
  *     become a lie the instant the user presses the right arrow.
  *   • No History popover. Choosing a step is a browsing task whose preview has
  *     no visible referent on a surface showing one picture. Repeated Ctrl+Z
@@ -211,7 +211,7 @@ defineExpose({
 
 /* The grid pill's recipe in this surface's material. Capped, unlike the grid
    pill: the cap is what keeps it clear of the progress cards on a narrow
-   window. Deliberately NO overflow: hidden — it would clip both the drain's
+   window. Deliberately NO overflow: hidden - it would clip both the drain's
    tail inside the cap radius and the focus ring on the Undo button. */
 .overlay-receipt {
   position: relative;
@@ -408,7 +408,7 @@ defineExpose({
      asserting "expired" about a live receipt.
 
      The grid pill justifies this by pointing at the toolbar control surviving
-     the receipt. That fallback is FALSE here — `UndoControl` is occluded by the
+     the receipt. That fallback is FALSE here - `UndoControl` is occluded by the
      lightbox. What survives instead is the Ctrl+Z binding this overlay's own
      key handler keeps live, plus the hover/focus pause. Same conclusion, and a
      2px linear hairline is at the bottom of the vestibular-risk scale, but the

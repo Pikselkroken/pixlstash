@@ -7,7 +7,7 @@ export const useFilterStore = defineStore("filter", () => {
   const _maxScore = ref(null);
   // "Only pictures nobody has rated" (`unscored=1`, i.e. score IS NULL OR 0).
   // It is the complement of a score range rather than a point on it, so the two
-  // are mutually exclusive — and that is enforced here, in the setters, so the
+  // are mutually exclusive - and that is enforced here, in the setters, so the
   // filter panel and the stats histogram both inherit it without either one
   // having to remember.
   const _unscoredOnly = ref(false);

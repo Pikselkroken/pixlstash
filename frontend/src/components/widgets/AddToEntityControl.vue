@@ -271,7 +271,7 @@ const props = defineProps({
   // not tied to `type === "face"`. Incompatible with `placement="right"`: the
   // `.ate--flyout` rules position the menu at `left: 100%` of the root, which
   // has no meaning once the node has left its parent. That is now ENFORCED and
-  // not merely stated — see `floating`, which drops the request rather than
+  // not merely stated - see `floating`, which drops the request rather than
   // honouring a pair with no coherent behaviour.
   floatMenu: { type: Boolean, default: false },
   // Face mode only: which face the menu acts on, and who it currently shows.
@@ -299,7 +299,7 @@ const isFace = computed(() => props.type === "face");
 // Both people modes list characters and can offer the create row.
 const listsPeople = computed(() => isCharacter.value || isFace.value);
 // A picture can be in many sets and carry many characters, but it has exactly
-// one project and a face has exactly one person — so only the first two are a
+// one project and a face has exactly one person - so only the first two are a
 // multi-selectable listbox.
 const isMultiSelect = computed(() => isSet.value || isCharacter.value);
 
@@ -373,7 +373,7 @@ const membersById = ref({}); // key: item.key → Set<string> of subject IDs
  * The membership in play: the host's when it supplied one, else what was read.
  *
  * Resolved once so no reader has to remember which mode it is in, and so the
- * host's map cannot be half-applied — every consumer of membership goes through
+ * host's map cannot be half-applied - every consumer of membership goes through
  * this.
  */
 const effectiveMembers = computed(() => props.membership ?? membersById.value);
@@ -426,7 +426,7 @@ const flyoutClickedOpen = ref(false);
  * written, and saying it was not enough: the model shelf's row context menu
  * passed both, and the flyout came out below the row it hangs off and outside
  * the `.ate` root it hovers off, so reaching for it fired `mouseleave` and shut
- * it. Refused here rather than at each call site — the guard belongs where all
+ * it. Refused here rather than at each call site - the guard belongs where all
  * of them route through, and a combination that is documented as meaningless
  * should not be representable.
  */
@@ -448,7 +448,7 @@ const MENU_MIN_HEIGHT_PX = 140;
 function sizeMenu() {
   nextTick(() => {
     // A flyout's SIDE is as viewport-dependent as its height, and this is the
-    // function the `resize` and capture-phase `scroll` listeners call — so a
+    // function the `resize` and capture-phase `scroll` listeners call - so a
     // menu that is already open follows the window rather than keeping the side
     // it was opened on. Hover cannot stand in for this: a keyboard user never
     // fires one, and that is the case the flip used to depend on entirely.
@@ -627,8 +627,8 @@ function getItemState(item) {
   const members = effectiveMembers.value?.[item.key];
   if (!members || members.size === 0) return "unchecked";
 
-  // The face narrowing is a PICTURE rule — a picture with no face cannot be a
-  // character member — so it must not survive into host-driven mode. Left in,
+  // The face narrowing is a PICTURE rule - a picture with no face cannot be a
+  // character member - so it must not survive into host-driven mode. Left in,
   // it would filter the shelf's adapter ids against a set that never contains
   // them, and every row would read `unchecked` however many were attached.
   const relevantIds =
@@ -723,7 +723,7 @@ function toggleMenu() {
  * 185px is the flyout's fixed width (`.ate--flyout .ate-menu`), and 8px is the
  * same keep-off distance `sizeMenu` uses. It used to live in
  * `onFlyoutMouseenter` alone, so a flyout opened from the KEYBOARD near the
- * right edge kept the last measurement — `false` on the first open — and
+ * right edge kept the last measurement - `false` on the first open - and
  * painted off-screen with nothing to clamp it.
  *
  * Three callers, and each covers a case the others cannot: `openMenu`
@@ -853,7 +853,7 @@ function onFlyoutMouseenter() {
 
 function onFlyoutMouseleave() {
   if (props.placement !== "right") return;
-  if (flyoutClickedOpen.value) return; // user clicked to open — keep it open
+  if (flyoutClickedOpen.value) return; // user clicked to open - keep it open
   closeMenu();
 }
 
@@ -1207,7 +1207,7 @@ async function toggleCharacter(item) {
       statusMessage.value = `Assigned to ${item.name}`;
       emit("added", { characterId: item.id, pictureIds: ids });
       // Only update the optimistic member cache for pictures that actually have
-      // faces — faceless pictures can't be reflected in the membership state.
+      // faces - faceless pictures can't be reflected in the membership state.
       if (members) {
         idsToAdd
           .filter((id) => picturesWithFaces.value.has(String(id)))
@@ -1266,7 +1266,7 @@ watch(
   () => normalisedIdsKey.value,
   () => {
     // Membership belongs to a selection, so it is dropped the moment the
-    // selection changes — never carried over — and re-read only if the menu is
+    // selection changes - never carried over - and re-read only if the menu is
     // actually open. The entity list itself is selection-independent and stays.
     membersById.value = {};
     membershipLoaded.value = false;
@@ -1355,7 +1355,7 @@ defineExpose({
     transform var(--dur-1) var(--ease-standard);
   /* `--z-dropdown` (300), which is the token's own definition: "menus,
      popovers, tooltips anchored to a control". It was a bare `6`, which is
-     BELOW `--z-sticky` (100) — so anywhere this menu opens over a sticky
+     BELOW `--z-sticky` (100) - so anywhere this menu opens over a sticky
      header it rendered behind it. Found on the model shelf, where the picker
      sits in the selection bar and the folder group headers are sticky; the bug
      was in this shared component, so every caller with a sticky neighbour had

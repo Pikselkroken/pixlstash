@@ -57,8 +57,8 @@ class DescriptionWorkflow:
             stop_event: Optional :class:`threading.Event` the caller sets to
                 cancel.  It is checked between images and handed to the plugin,
                 so a cancel stops the batch instead of running it out.  The
-                event belongs to the caller — ``DescriptionTask`` passes its own
-                — because the workflow object running a batch is not always the
+                event belongs to the caller - ``DescriptionTask`` passes its own
+                - because the workflow object running a batch is not always the
                 one the task was constructed with (CPU spillover builds a fresh
                 one on every access).
 
@@ -201,7 +201,7 @@ class DescriptionWorkflow:
 
         for picture in pictures:
             # Videos are captioned one at a time in this loop, and a video is
-            # the slowest single item there is — so the check belongs here and
+            # the slowest single item there is - so the check belongs here and
             # not only on the still-image chunks below.
             if stop_event is not None and stop_event.is_set():
                 break
@@ -233,23 +233,42 @@ class DescriptionWorkflow:
 
         return results
 
-    def estimate_vram_mb(self, image_count: int) -> int:
+    def estimate_vram_mb(self, image_count: int, plugin_name: str | None = None) -> int:
         """Estimate incremental VRAM (in MB) required to caption *image_count* images.
+
+        The estimate follows the batch's dispatch: when a plugin other than
+        Florence-2 will run it, that plugin is asked. Charging the Florence
+        figure for a run that never loads Florence lets the scheduler start a
+        second model alongside the plugin's and OOM.
 
         When Florence is already resident in GPU memory only the per-image
         activation scratch is charged, avoiding a false-positive VRAM gate
         stall on warm runs. The cold-start charge follows the *configured*
-        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) — a
+        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) - a
         constant pinned to base would under-count and spill on large-ft.
 
         Args:
             image_count: Number of images to be captioned.
+            plugin_name: Plugin the batch will be dispatched to, matching
+                ``generate_batch``'s ``engine_override``. ``None`` means the
+                configured ``active_description_plugin``.
 
         Returns:
             Estimated VRAM in MB, or ``0`` on non-CUDA devices.
         """
         if self._engine.device != "cuda":
             return 0
+        active = (
+            plugin_name
+            if plugin_name is not None
+            else self._engine.tagger_settings.get(
+                "active_description_plugin", "florence2"
+            )
+        )
+        if active and active != "florence2":
+            estimate = self._plugin_estimate_vram_mb(active, image_count)
+            if estimate > 0:
+                return estimate
         service = self._engine.florence_service
         # The gate runs before the load, so charge the variant that is about to
         # be loaded, not whichever one happens to be resident.
@@ -259,3 +278,42 @@ class DescriptionWorkflow:
         if service.is_loaded():
             return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
         return int(service.base_vram_mb + FLORENCE_PER_IMAGE_VRAM_MB * batch)
+
+    def _plugin_estimate_vram_mb(self, plugin_name: str, image_count: int) -> int:
+        """Ask *plugin_name* what a batch of *image_count* images will cost.
+
+        Returns ``0``, meaning "charge the Florence-2 estimate instead", in two
+        different situations. For a plugin that is missing or cannot caption
+        that is simply correct: ``generate_batch`` falls back to Florence-2, so
+        Florence is what loads. For a plugin that returns 0 or raises it is
+        a deliberate charge for the wrong model, because that plugin *does*
+        run. 0 is ambiguous at this seam - it is the base class default, and
+        also its documented "CPU-only" value, and the two cannot be told apart
+        - so the fallback is kept for both: the host cannot invent a figure for
+        a model it knows nothing about, and for the CPU-only reading the error
+        is a harmless over-charge. ``TaggerPlugin.estimated_vram_mb`` tells
+        authors to charge for a cold start rather than rely on this (#967).
+        """
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        try:
+            plugin = get_tagger_plugin_manager().get_plugin(plugin_name)
+            if plugin is None or not plugin.supports_descriptions:
+                return 0
+            cfg = self._engine.tagger_settings.get("plugins", {}).get(plugin_name, {})
+            params = {**plugin.default_params(), **(cfg.get("params") or {})}
+            # Capped at the plugin's own batch size for the same reason the
+            # Florence path caps at its own: only one batch is resident at once.
+            batch = min(
+                max(1, int(image_count or 1)),
+                max(1, int(plugin.effective_batch_size(params))),
+            )
+            return max(0, int(plugin.estimated_vram_mb(batch, params)))
+        except Exception as exc:
+            logger.warning(
+                "Description plugin %r could not estimate VRAM; falling back to "
+                "the Florence-2 estimate: %s",
+                plugin_name,
+                exc,
+            )
+            return 0

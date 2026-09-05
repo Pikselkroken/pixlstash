@@ -1,10 +1,10 @@
 """Add ``file_removed`` to ``deleted_file_log`` to disambiguate the ledger.
 
 ``deleted_file_log`` was serving two different meanings through one table: (1) the
-picture's content was permanently deleted and its file removed from disk — restore
+picture's content was permanently deleted and its file removed from disk - restore
 must never resurrect it; and (2) the picture was removed from the library but its
 file was deliberately kept on disk (a protected reference-folder picture,
-``allow_delete_file=False``) — the row exists only so the reference-folder scanner
+``allow_delete_file=False``) - the row exists only so the reference-folder scanner
 does not auto re-import that path. Conflating the two made restore drop alive,
 file-present reference pictures.
 
@@ -40,7 +40,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "deleted_file_log" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current columns via SQLModel.metadata.create_all(); nothing to do.
         return
 

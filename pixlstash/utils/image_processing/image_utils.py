@@ -33,6 +33,12 @@ logger = get_logger(__name__)
 
 THUMBNAIL_FORMAT = "WEBP"
 THUMBNAIL_EXTENSION = ".webp"
+#: Where every thumbnail lives, under the library root. One hidden folder for
+#: managed and reference pictures alike, so the owner's own folders hold only
+#: the owner's files and a walk of the library never meets a thumbnail (#1164).
+THUMBNAIL_DIR_NAME = ".pixlstash-thumbnails"
+#: The folder reference-folder thumbnails lived in before THUMBNAIL_DIR_NAME.
+_LEGACY_REF_THUMB_DIR = ".ref_thumbs"
 THUMBNAIL_QUALITY = 80
 THUMBNAIL_WEBP_METHOD = 2
 # A thumbnail is ONE aspect-ratio-preserving bitmap of the whole frame. It is
@@ -92,7 +98,7 @@ class ImageUtils:
         """
         if not file_path or not os.path.exists(file_path):
             return {}
-        # Pillow cannot open video files — skip metadata extraction for them.
+        # Pillow cannot open video files - skip metadata extraction for them.
         if VideoUtils.is_video_file(file_path):
             return {}
         try:
@@ -152,30 +158,123 @@ class ImageUtils:
         return os.path.join(image_root, file_path)
 
     @staticmethod
+    def _hashed_thumbnail_name(file_path: str) -> str:
+        path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        return f"{stem}_{path_hash}_thumb{THUMBNAIL_EXTENSION}"
+
+    @staticmethod
     def get_thumbnail_path(
         image_root: Optional[str], file_path: Optional[str]
     ) -> Optional[str]:
-        """Return the expected thumbnail file path for a given picture path.
+        """Return where the thumbnail for *file_path* belongs.
 
-        For reference-folder pictures (absolute ``file_path``), thumbnails are
-        stored under ``image_root/.ref_thumbs/`` so they don't pollute the
-        source directory and get re-indexed on the next scan.
+        ``image_root/.pixlstash-thumbnails/<stem>_<sha256(file_path)[:16]>_thumb.webp``
+        for every picture. *file_path* is ``Picture.file_path`` in its STORED
+        form - relative for a library picture, absolute for a reference-folder
+        one - because the hash is of that string; the two forms of one file
+        would hash to two names. The key is the path, so a followed move has to
+        carry the bitmap (``_carry_thumbnail`` in the scan task and the move
+        engine), which it did before this folder existed too.
+
+        A bitmap written before 1.11.1 may still sit at one of
+        :meth:`legacy_thumbnail_paths`; :meth:`find_thumbnail` looks there and
+        brings it home. Callers that only READ should use that.
         """
         if not file_path:
             return None
-        if os.path.isabs(file_path) and image_root:
-            # Reference-folder picture — redirect thumbnail into image_root.
-            path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
-            stem = os.path.splitext(os.path.basename(file_path))[0]
-            thumb_dir = os.path.join(image_root, ".ref_thumbs")
-            return os.path.join(
-                thumb_dir, f"{stem}_{path_hash}_thumb{THUMBNAIL_EXTENSION}"
-            )
+        if not image_root:
+            # No root to put the folder under (tests, some tools): the old
+            # sibling rule is the only answer that names a real place.
+            base, _ = os.path.splitext(file_path)
+            return f"{base}_thumb{THUMBNAIL_EXTENSION}"
+        return os.path.join(
+            image_root, THUMBNAIL_DIR_NAME, ImageUtils._hashed_thumbnail_name(file_path)
+        )
+
+    @staticmethod
+    def legacy_thumbnail_paths(
+        image_root: Optional[str], file_path: Optional[str]
+    ) -> list[str]:
+        """Where the thumbnail for *file_path* was written before #1164.
+
+        A managed picture's sat beside it as ``<stem>_thumb.webp``; a
+        reference-folder picture's sat under ``image_root/.ref_thumbs/`` with the
+        same hashed name the new folder uses. Order matters to nobody: at most
+        one of them ever existed for a given picture.
+        """
+        if not file_path or not image_root:
+            return []
+        if os.path.isabs(file_path):
+            return [
+                os.path.join(
+                    image_root,
+                    _LEGACY_REF_THUMB_DIR,
+                    ImageUtils._hashed_thumbnail_name(file_path),
+                )
+            ]
         resolved = ImageUtils.resolve_picture_path(image_root, file_path)
-        if not resolved:
-            return None
         base, _ = os.path.splitext(resolved)
-        return f"{base}_thumb{THUMBNAIL_EXTENSION}"
+        return [f"{base}_thumb{THUMBNAIL_EXTENSION}"]
+
+    @staticmethod
+    def find_thumbnail(
+        image_root: Optional[str], file_path: Optional[str]
+    ) -> Optional[str]:
+        """Return the path of the existing thumbnail for *file_path*, or ``None``.
+
+        Looks at :meth:`get_thumbnail_path` first. A bitmap still at a legacy
+        location is MOVED home and the new path returned, so the library
+        migrates itself one picture at a time - the startup pass in
+        ``maintenance.py`` visits every row, the thumbnail route catches the
+        rest - and no thumbnail is ever re-rendered for having moved house. A
+        move that fails is logged and the legacy path is served from where it
+        is; the next read tries again.
+        """
+        thumb_path = ImageUtils.get_thumbnail_path(image_root, file_path)
+        if not thumb_path:
+            return None
+        if os.path.isfile(thumb_path):
+            return thumb_path
+        for legacy in ImageUtils.legacy_thumbnail_paths(image_root, file_path):
+            if legacy == thumb_path or not os.path.isfile(legacy):
+                continue
+            try:
+                os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+                os.replace(legacy, thumb_path)
+                return thumb_path
+            except OSError as exc:
+                logger.warning(
+                    "Could not move thumbnail %s into %s (%s); serving it from "
+                    "where it is.",
+                    legacy,
+                    THUMBNAIL_DIR_NAME,
+                    exc,
+                )
+                return legacy
+        return None
+
+    @staticmethod
+    def remove_thumbnail(image_root: Optional[str], file_path: Optional[str]) -> int:
+        """Delete the thumbnail for *file_path* wherever it is; count removed.
+
+        Both the current home and every legacy location, so deleting a picture
+        indexed before #1164 does not leave its bitmap behind in the owner's
+        folder. Failures are logged, not raised: the picture is already gone
+        and a stray bitmap is the lesser problem.
+        """
+        removed = 0
+        candidates = [ImageUtils.get_thumbnail_path(image_root, file_path)]
+        candidates += ImageUtils.legacy_thumbnail_paths(image_root, file_path)
+        for path in dict.fromkeys(p for p in candidates if p):
+            if not os.path.isfile(path):
+                continue
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError as exc:
+                logger.warning("Failed to delete thumbnail %s: %s", path, exc)
+        return removed
 
     @staticmethod
     def write_thumbnail_bytes(
@@ -443,7 +542,7 @@ class ImageUtils:
 
         For JPEG files, PIL's ``draft()`` instructs the JPEG decoder to use DCT
         subsampling (1/2, 1/4, or 1/8 of the original size), which is much
-        faster than decoding at full resolution and then resizing — for a 4K
+        faster than decoding at full resolution and then resizing - for a 4K
         JPEG targeting 256 px, this decodes roughly 64× fewer pixels.  For PNG,
         WebP, and other formats ``draft()`` is a no-op and a normal decode +
         cv2 resize is performed instead.
@@ -674,8 +773,8 @@ class ImageUtils:
 
         **The orientation is part of the key, and it is not optional polish.**
         Thumbnails are served ``Cache-Control: private, max-age=3600,
-        must-revalidate``, and a 180° in-place rotate — or a 90° one of a square
-        picture — regenerates a bitmap with exactly the dimensions it had before.
+        must-revalidate``, and a 180° in-place rotate - or a 90° one of a square
+        picture - regenerates a bitmap with exactly the dimensions it had before.
         On dimensions alone the URL would be identical and the browser would go
         on painting the pre-rotate bitmap for up to an hour.
 
@@ -729,9 +828,15 @@ class ImageUtils:
         source_file_path: str,
         picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
+        subfolder: Optional[str] = None,
     ) -> Picture:
         """
         Create a Picture from a file path, using metadata for created_at if available.
+
+        Args:
+            subfolder: Relative folder under ``image_root_path`` to write into,
+                for a library whose root has a v1.11 layout. See
+                :meth:`create_picture_from_bytes`.
         """
         if not os.path.exists(source_file_path):
             raise ValueError(f"Source file path does not exist: {source_file_path}")
@@ -747,6 +852,7 @@ class ImageUtils:
             pixel_sha=pixel_sha,
             created_at=created_at,
             original_file_name=os.path.basename(source_file_path),
+            subfolder=subfolder,
         )
 
     @staticmethod
@@ -759,6 +865,7 @@ class ImageUtils:
         original_file_name: Optional[str] = None,
         output_dir: Optional[str] = None,
         reference_folder_id: Optional[int] = None,
+        subfolder: Optional[str] = None,
     ) -> Picture:
         """Create a Picture from raw bytes, deriving metadata and saving the file.
 
@@ -772,10 +879,17 @@ class ImageUtils:
             original_file_name: Original filename to store on the Picture record.
             output_dir: When set, save the image file into this directory instead
                 of ``image_root_path``.  The Picture's ``file_path`` is stored as
-                the full absolute path so that reference-folder thumbnails are
-                correctly routed to ``image_root/.ref_thumbs/``.
+                the full absolute path, which is what marks a reference-folder
+                picture everywhere else.
             reference_folder_id: When set, assigned to the Picture so that the
                 reference-folder scan recognises the record as already indexed.
+            subfolder: A ``/``-separated relative folder under
+                *image_root_path* to write into - where the v1.11 layout says a
+                new picture belongs (``services/layout_move_service.render``).
+                The stored ``file_path`` stays RELATIVE, so the picture is still
+                a library picture and its thumbnail is still a sibling file;
+                only ``output_dir`` makes a path absolute, and that means a
+                reference folder. Ignored when *output_dir* is given.
         """
         if not pixel_sha:
             pixel_sha = ImageUtils.calculate_hash_from_bytes(image_bytes)
@@ -801,7 +915,7 @@ class ImageUtils:
                 # left to `MissingOrientationFinder`. That finder exists to fill
                 # rows that predate the column; a NEW picture whose orientation
                 # is NULL for an indeterminate window is a value anything reading
-                # it right after import races — and the operation log records it
+                # it right after import races - and the operation log records it
                 # as a facet, so a rotate landing in that window would snapshot
                 # `None` as the prior state and its undo would have nothing to
                 # write back.
@@ -878,10 +992,17 @@ class ImageUtils:
         file_name = os.path.basename(picture_uuid)
         if output_dir:
             # Save into the caller-specified directory (e.g. a reference folder).
-            # Store the absolute path so thumbnail routing treats this as a
-            # reference-folder picture and writes the thumb to .ref_thumbs/.
+            # Store the absolute path: that is what marks a reference-folder
+            # picture for every reader.
             full_path = os.path.join(output_dir, file_name)
             picture_file_path: str = full_path
+        elif subfolder:
+            # Placement on write, v1.11 Phase 4b. Relative, so the picture stays
+            # a library picture; the layout decided the folder and the caller
+            # has already checked that the root has one.
+            relative = os.path.join(*subfolder.split("/"), file_name)
+            full_path = os.path.join(image_root_path, relative)
+            picture_file_path = relative.replace(os.sep, "/")
         else:
             full_path = os.path.join(image_root_path, file_name)
             picture_file_path = file_name
@@ -987,7 +1108,7 @@ class ImageUtils:
         coordinate by ``inv_scale`` to get the original-space value.
 
         Uses PIL ``draft()`` for JPEG files so the JPEG decoder subsamples at
-        the DCT level — much faster than full decode + resize for large JPEGs.
+        the DCT level - much faster than full decode + resize for large JPEGs.
         For HEIF, PNG, WebP the image is decoded at full resolution and then
         resized with ``cv2.INTER_AREA``.
 
@@ -1008,7 +1129,7 @@ class ImageUtils:
                 else:
                     orig_w, _ = stored_w, stored_h
 
-                # draft() tells the JPEG decoder to use DCT subsampling — a no-op
+                # draft() tells the JPEG decoder to use DCT subsampling - a no-op
                 # for other formats.  Must be called before load()/convert().
                 img.draft("RGB", (max_side, max_side))
                 img = ImageOps.exif_transpose(img)

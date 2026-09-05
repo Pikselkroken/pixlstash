@@ -7,19 +7,24 @@
 // source of truth for what a level MEANS; the 0082 backfill is a frozen,
 // one-time translation of the legacy `columns` preference into a level and is
 // deliberately NOT kept in step with later re-scalings of this ladder.
-// Column counts step DOWN gently toward the large end (…6,5,4,3) and never
-// reach 1–2, where a square tile would balloon to a half- or full-width image.
-// The perceptual jump between few-column layouts is large (tile width scales as
-// 1/columns), so the steps shrink (3,2,2,1,1,1) rather than grow as the tiles
-// get bigger. Justified row heights are a separate, smoother scale.
+// Column counts step DOWN gently toward the large end and never reach 1–2,
+// where a square tile would balloon to a half- or full-width image. The
+// perceptual jump between few-column layouts is large (tile width scales as
+// 1/columns), so the steps shrink rather than grow as the tiles get bigger.
+// Justified row heights are a separate, smoother scale.
 // Both grid scales were made STEEPER (owner call, 2026-08-05): the large end
 // was right but the small end never got small enough, so `huge` is pinned where
-// it was and every level below it steps down harder — a constant ratio of about
+// it was and every level below it steps down harder - a constant ratio of about
 // 1.20 per notch on row height (was ~1.17) and the matching ~0.77 on square tile
-// width. `tiny`'s 14 columns is the ceiling `MAX_COLUMNS` in
-// `useViewportLayout.js` allows; going denser than that means raising it there
-// too, and at 96px minimum tile width there is little room left.
-// `stripHeight` is the third consumer of the same ladder: the duplicate
+// width.
+// Every image-grid level (columns, rowHeight) was then cut a further 25%
+// across the board (owner call, 2026-09-03): thumbnails still read too large
+// once a window got wide. Columns scaled up ~1.33x, rowHeight down 0.75x, so
+// `tiny`'s 19 columns is the ceiling `MAX_COLUMNS` in `useViewportLayout.js`
+// allows and `MIN_THUMBNAIL_SIZE`/`MAX_THUMBNAIL_SIZE` there and in
+// `useVirtualScroll.js` were cut 25% too; going denser than that means raising
+// those caps further. `stripHeight` was left alone - it is the third consumer
+// of the same ladder: the duplicate
 // queue's candidate strip, where the pictures sit in a row beside the group's
 // facts rather than in a grid of their own. Its numbers are a third scale
 // again, and a smaller one, because a triage row is read a screenful at a
@@ -28,43 +33,43 @@
 // the strip exists for. The ratios between the levels are unchanged, so the
 // control still steps the way it did.
 const THUMBNAIL_SIZE_STEPS = [
-  { key: "tiny", label: "Tiny", columns: 14, rowHeight: 128, stripHeight: 112 },
+  { key: "tiny", label: "Tiny", columns: 19, rowHeight: 96, stripHeight: 112 },
   {
     key: "very_small",
     label: "Very Small",
-    columns: 11,
-    rowHeight: 153,
+    columns: 15,
+    rowHeight: 115,
     stripHeight: 140,
   },
   {
     key: "small",
     label: "Small",
-    columns: 8,
-    rowHeight: 183,
+    columns: 11,
+    rowHeight: 137,
     stripHeight: 168,
   },
   {
     key: "medium",
     label: "Medium",
-    columns: 6,
-    rowHeight: 219,
+    columns: 8,
+    rowHeight: 164,
     stripHeight: 196,
   },
   {
     key: "large",
     label: "Large",
-    columns: 5,
-    rowHeight: 262,
+    columns: 7,
+    rowHeight: 197,
     stripHeight: 252,
   },
   {
     key: "very_large",
     label: "Very Large",
-    columns: 4,
-    rowHeight: 313,
+    columns: 5,
+    rowHeight: 235,
     stripHeight: 322,
   },
-  { key: "huge", label: "Huge", columns: 3, rowHeight: 375, stripHeight: 406 },
+  { key: "huge", label: "Huge", columns: 4, rowHeight: 281, stripHeight: 406 },
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium

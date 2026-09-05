@@ -1,24 +1,31 @@
-"""Set, serve and clear a model's icon — the shelf's sixth verb.
+"""Set, serve and clear a model's icon - the shelf's sixth verb.
 
 Three routes over one content-addressed store (see
 :mod:`pixlstash.services.model_icons` for why the storage is shaped this way).
 
 **One upload route serves all three ways of setting an icon.** The ruling names
-three — upload a file, pick a library picture, promote one of the model's own
-samples — and is explicit that "all three produce the same thing: bytes in the
+three - upload a file, pick a library picture, promote one of the model's own
+samples - and is explicit that "all three produce the same thing: bytes in the
 icon store and a hash in the column". So the client fetches or renders the bytes
 and posts them here; there is no second path that resolves a picture id
 server-side, which is also what keeps the vault out of a hub table.
 
-**No confirmation on set, or on clearing one row.** Both are reconstructable by
+**No confirmation on a single-row set or clear.** Both are reconstructable by
 doing them again, and the shelf's rule is to confirm only where the prior state
 cannot be reconstructed. A **bulk** clear over a selection is not
 reconstructable and falls on the same side of that test as the bulk base-model
-overwrite, so the client confirms it — the route itself stays a plain mutation.
+overwrite, and so does a bulk set over rows that already have a mark; the client
+confirms both - the routes themselves stay plain mutations.
+
+**A bulk set is N calls to this route**, one per model, because the store is
+content-addressed and the same bytes collapse to one file however many times
+they are posted. The client caps and windows that fan-out
+(`MAX_MODELS_PER_ICON_SET`, `useModelShelfStore.js`); this route sees only
+single-model writes and cannot see the gesture.
 
 Authorization: all three are ``OWNER_ONLY``. The store lives beside the hub and
 is written and read by PixlStash alone, so no route here takes, walks or serves
-a caller-supplied host path — the §16.3 locality tier its shelf neighbours sit
+a caller-supplied host path - the §16.3 locality tier its shelf neighbours sit
 on would be wrong for the same reason it is wrong for ``GET /adapters``.
 """
 
@@ -39,7 +46,9 @@ from pixlstash.services.model_icons import (
 logger = get_logger(__name__)
 
 # Ceiling on one clear. Mirrors the shelf's other bulk verbs rather than
-# inventing a number: a selection is what a person made, not a script.
+# inventing a number: a selection is what a person made, not a script. The
+# client's bulk *set* uses the same figure, enforced there rather than here
+# because a set is N single-model calls this route cannot correlate.
 MAX_MODELS_PER_CLEAR = 500
 
 
@@ -96,7 +105,7 @@ def create_router(server) -> APIRouter:
             "Stores the uploaded image in the hub's content-addressed icon "
             "store and points the model at it.\n\n"
             "**The same bytes always produce the same hash**, so forty models "
-            "given one logo store one file — which is the normal case for a "
+            "given one logo store one file - which is the normal case for a "
             "base-model mark and the point of addressing by content.\n\n"
             "This is the single write path for all three ways of choosing an "
             "icon: uploading a file, picking a library picture (the client "
@@ -166,7 +175,7 @@ def create_router(server) -> APIRouter:
             "generated mark, so a cleared row is never blank.\n\n"
             "**The stored file is deliberately left in place.** The store is "
             "content-addressed and shared, so another model may name the same "
-            "hash — deleting on clear would take a mark forty rows were using. "
+            "hash - deleting on clear would take a mark forty rows were using. "
             "An unreferenced icon is a few KB.\n\n"
             "Clearing one row needs no confirmation (doing it again restores "
             "it); a bulk clear is not reconstructable and the client confirms "
@@ -190,7 +199,7 @@ def create_router(server) -> APIRouter:
         with server.hub.transaction() as conn:
             # The rows that actually HAVE an icon, read and cleared in one
             # transaction. Reported rather than counted, so the receipt can say
-            # what changed instead of how many ids were sent — a selection of
+            # what changed instead of how many ids were sent - a selection of
             # twenty where three had icons is "3 cleared", not "20".
             cleared = [
                 int(row[0])

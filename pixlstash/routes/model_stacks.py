@@ -3,7 +3,7 @@
 Five routes. ``GET`` reads the shelf and returns groups it believes belong
 together; it writes nothing, so the whole dry run can be drawn before the owner
 decides. ``POST`` is the half that writes, and it is reached only after they
-have seen that — or from the shelf directly, where it also **fuses**: given
+have seen that - or from the shelf directly, where it also **fuses**: given
 models that are already stacked it absorbs their stacks whole, which is how
 stacking two stacks yields one. ``DELETE`` is the undo, and the shelf's first:
 it breaks a stack up and leaves every file exactly where it sits on disk.
@@ -14,12 +14,12 @@ shelf draws for the run, which ``POST`` deliberately will not let a caller do;
 ``DELETE .../members/{model_id}`` takes one file back out of a run it does not
 belong to. Like the unstack, neither touches a byte on disk.
 
-**Detection proposes, it never applies** — the house rule this module is the
+**Detection proposes, it never applies** - the house rule this module is the
 third instance of, after folder monitoring and the ai-toolkit run scan.
 
 **A stack is a subject, not a training run.** Groups come back as
 ``step_group`` (one version, files differing only by a step) or
-``version_group`` (``Foxglove`` beside ``Foxglove_v2`` — several runs of one
+``version_group`` (``Foxglove`` beside ``Foxglove_v2`` - several runs of one
 subject, covered by the newest version). Prefix grouping (``JimmyVehicle``
 beside ``JimmyVehicle2``) is still not here: only an explicit ``v<digits>``
 token is read as a version, and the ambiguous case needs per-group
@@ -28,8 +28,8 @@ missing code.
 
 Authorization: all five routes are ``OWNER_ONLY``, declared in
 ``pixlstash/authz/registry.py`` and never inline. None touches the host
-filesystem — detection reads `model` rows the scan already wrote, and applying,
-fusing, unstacking, covering and releasing write hub columns — so none belongs
+filesystem - detection reads `model` rows the scan already wrote, and applying,
+fusing, unstacking, covering and releasing write hub columns - so none belongs
 on the §16.3 locality tier that ``model-moves`` and the import block sit on.
 They surface folder ids, not paths.
 """
@@ -93,8 +93,8 @@ class StackProposalResponse(BaseModel):
 
     tier: str = Field(
         description=(
-            "`step_group` — one version, files differing only by a training "
-            "step. `version_group` — two or more versions of one subject, so "
+            "`step_group` - one version, files differing only by a training "
+            "step. `version_group` - two or more versions of one subject, so "
             "the group spans training runs."
         )
     )
@@ -149,14 +149,14 @@ class ApplyStackRequest(BaseModel):
         default=None,
         description=(
             "What to call the stack. Null leaves it unnamed, except when fusing "
-            "— there it inherits the first name among the stacks absorbed."
+            " - there it inherits the first name among the stacks absorbed."
         ),
     )
     fuse: bool = Field(
         default=False,
         description=(
             "Allow models that are **already stacked**, absorbing their stacks "
-            "whole — this is what makes stacking two stacks fuse them. Every "
+            "whole - this is what makes stacking two stacks fuse them. Every "
             "member of every stack named comes along, including ones not listed "
             "in `model_ids`, because a stack is atomic and half of one is not a "
             "stack. Off by default: the proposals flow confirms a dry run over "
@@ -217,7 +217,7 @@ class RemoveMemberResponse(BaseModel):
 
     released: int = Field(
         description=(
-            "How many models are loose on the shelf again — one, or both when "
+            "How many models are loose on the shelf again - one, or both when "
             "the removal left a stack of one and it dissolved."
         )
     )
@@ -248,7 +248,7 @@ def create_router(server) -> APIRouter:
             "ai-toolkit is already a stack, and a stack that has been ratified "
             "must never be re-proposed. Grouping is per folder, on the name with "
             "the training step and the version token removed, and needs a "
-            "difference those account for — a stepped member, or two versions. "
+            "difference those account for - a stepped member, or two versions. "
             "Without either, the shared name is a duplicate rather than a "
             "subject with a history."
         ),
@@ -294,7 +294,7 @@ def create_router(server) -> APIRouter:
             "is a 409 and nothing is written.\n\n"
             "**`fuse` stacks the stacks.** With it, models that already belong "
             "to a stack are taken, and their stacks are absorbed *whole* and "
-            "then removed — so stacking two stacks yields one. Without it (the "
+            "then removed - so stacking two stacks yields one. Without it (the "
             "default) an already-stacked model is refused, which is what the "
             "proposals flow needs."
         ),
@@ -345,7 +345,7 @@ def create_router(server) -> APIRouter:
             "The undo. Clears `stack_id` and `stack_position` on every member "
             "and removes the `adapter_stack` row, leaving the files loose on the "
             "shelf as the individual adapters they always were.\n\n"
-            "**Nothing on disk is touched** — this writes two hub columns and "
+            "**Nothing on disk is touched** - this writes two hub columns and "
             "deletes one row; no file is moved, renamed or unlinked. Unknown "
             "`stack_id` is a 404 and nothing is written.\n\n"
             "The released models become *loose*, so "
@@ -382,8 +382,8 @@ def create_router(server) -> APIRouter:
             "once the owner knows the run's best checkpoint is step 1500 rather "
             "than the file the trainer wrote last.\n\n"
             "**The choice sticks.** Nothing recomputes a stack's order after it "
-            "is built — detection only ever looks at *loose* adapters, and the "
-            "run importer's upsert keeps an existing `stack_position` — so a "
+            "is built - detection only ever looks at *loose* adapters, and the "
+            "run importer's upsert keeps an existing `stack_position` - so a "
             "chosen cover survives a re-scan and a re-import.\n\n"
             "Nothing on disk is touched. A `model_id` that is not in this stack "
             "is a 404 and nothing is written."
@@ -411,13 +411,13 @@ def create_router(server) -> APIRouter:
             "The single-member counterpart to breaking the whole stack up. "
             "Clears `stack_id` and `stack_position` on that one model, leaving "
             "it loose on the shelf as the individual adapter it always was, and "
-            "renumbers the survivors so the stack keeps a cover — removing the "
+            "renumbers the survivors so the stack keeps a cover - removing the "
             "cover promotes whichever member was behind it.\n\n"
             "**A stack of one is not a stack.** Removing the second-to-last "
             "member dissolves the whole thing: both files go loose and the "
             "`adapter_stack` row is deleted, which the response reports as "
             "`dissolved`.\n\n"
-            "**Nothing on disk is touched** — no file is moved, renamed or "
+            "**Nothing on disk is touched** - no file is moved, renamed or "
             "unlinked. The released model becomes *loose*, so "
             "`GET /model-stacks/proposals` may offer to regroup it, exactly as "
             "after an unstack. A `model_id` that is not in this stack is a 404 "

@@ -1,4 +1,4 @@
-// Tag-review sessions resource — /reviews.
+// Tag-review sessions resource - /reviews.
 //
 // A review is one tag plus a frozen scope plus one scan's results. The session
 // bookkeeping (create / list / refresh / archive / abort) lives here; the

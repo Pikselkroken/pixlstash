@@ -102,6 +102,47 @@ class TestSwitching:
         finally:
             server.library_switch.switch_to(original.uuid)
 
+    def test_the_switched_to_vault_gets_its_inference_engine(
+        self, server, second_library, monkeypatch
+    ):
+        """Without this the planner sweeps a library nothing ever queues work for:
+        every engine-gated finder (tags, descriptions, faces, embeddings) short-
+        circuits on a None engine."""
+        from pixlstash.vault import Vault
+
+        calls = []
+        monkeypatch.setattr(
+            Vault, "ensure_ready", lambda self: calls.append(self.image_root)
+        )
+
+        original = server.library_registry.active_library()
+        try:
+            server.library_switch.switch_to(second_library.uuid)
+            assert second_library.path in calls, (
+                "the incoming vault was started without an inference engine"
+            )
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
+    def test_an_engine_that_cannot_be_built_does_not_fail_the_switch(
+        self, server, second_library, monkeypatch
+    ):
+        """A library is usable without AI workers; rolling the user back is worse."""
+        from pixlstash.vault import Vault
+
+        def _boom(self):
+            raise RuntimeError("no models on this machine")
+
+        monkeypatch.setattr(Vault, "ensure_ready", _boom)
+
+        original = server.library_registry.active_library()
+        try:
+            active = server.library_switch.switch_to(second_library.uuid)
+            assert active.uuid == second_library.uuid
+            assert server.vault.image_root == second_library.path
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
     def test_switching_to_the_active_library_is_a_no_op(self, server):
         active = server.library_registry.active_library()
         before = server.vault
@@ -253,7 +294,9 @@ class TestFailingToSwitch:
         with pytest.raises(LibrarySwitchError) as excinfo:
             server.library_switch.switch_to(library.uuid)
 
-        assert "newer version of PixlStash" in str(excinfo.value)
+        assert "newer PixlStash" in str(excinfo.value)
+        assert "releases/latest" in str(excinfo.value)
+        assert "revision 9999;" in str(excinfo.value)
         assert server.vault is before_vault
         assert server.library_switch.state is SwitchState.READY
 

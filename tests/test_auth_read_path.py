@@ -14,13 +14,13 @@ The security-critical property that must survive that move is **revoke → immed
 replacement guarantee is two-part and is what these tests pin:
 
 1. Every revocation path commits the delete (synchronously, on the writer queue)
-   *before* it flushes the token cache, so the next lookup's read — which now runs
-   on the read path — necessarily observes the committed delete.
+   *before* it flushes the token cache, so the next lookup's read - which now runs
+   on the read path - necessarily observes the committed delete.
 2. ``_flush_token_cache`` bumps ``_token_cache_epoch``, so a lookup that read the
    token row just *before* the delete committed cannot install its stale result
    into the cache just *after* the flush and keep a revoked token alive for the
-   full 5-minute cache TTL.  (That window existed before this change too — the
-   cache write has always been outside the queue — so closing it is a strict
+   full 5-minute cache TTL.  (That window existed before this change too - the
+   cache write has always been outside the queue - so closing it is a strict
    improvement, not a repair of something the refactor broke.)
 
 Both directions are asserted: revoked/deleted credentials are refused, and valid
@@ -62,7 +62,7 @@ FAST_REQUEST_S = 2.0
 
 @pytest.fixture(scope="module")
 def server():
-    """One Server for the module — building it runs migrations and vault start-up."""
+    """One Server for the module - building it runs migrations and vault start-up."""
     with tempfile.TemporaryDirectory() as temp_dir:
         with Server(f"{temp_dir}/server-config.json") as srv:
             yield srv
@@ -94,7 +94,7 @@ def owner_client(server):
 
     client = TestClient(server.api)
     response = client.post(
-        "/login", json={"username": "owner651", "password": "ownerpass1"}
+        "/login", json={"username": "owner651", "password": "example-owner-password"}
     )
     assert response.status_code == 200, response.text
     yield client
@@ -390,7 +390,7 @@ def test_auth_reads_submit_nothing_to_the_writer_queue(server, owner_client):
 
 
 def test_last_used_at_is_still_recorded_off_the_critical_path(server, owner_client):
-    """The debounced ``last_used_at`` write still lands — just not synchronously."""
+    """The debounced ``last_used_at`` write still lands - just not synchronously."""
     token_value, token_id = _mint_read_token(owner_client)
     server.auth._flush_token_cache()
 
@@ -418,7 +418,7 @@ def test_last_used_at_is_still_recorded_off_the_critical_path(server, owner_clie
 
 
 # ---------------------------------------------------------------------------
-# Guest sessions — different semantics from token auth, so pinned separately
+# Guest sessions - different semantics from token auth, so pinned separately
 # ---------------------------------------------------------------------------
 
 

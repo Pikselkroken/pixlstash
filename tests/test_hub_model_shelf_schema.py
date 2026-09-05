@@ -217,7 +217,7 @@ class TestReRunIsSafe:
 
         A build shipped before it has `CURRENT_SCHEMA_VERSION = 2` and would
         refuse a v3 hub with `HubSchemaTooNewError`, locking that user out of a
-        downgrade — so the column amends v2 in place rather than bumping it.
+        downgrade - so the column amends v2 in place rather than bumping it.
         The rows already in `model` must survive the amend, which is what makes
         this different from the table case above: those could be dropped and
         recreated because nothing had ever written them.
@@ -241,7 +241,7 @@ class TestReRunIsSafe:
         # stack detector's UPDATE guard exists for: with `isolation_level=""` a
         # transaction opens on DML, so this INSERT leaves one open while the
         # DROP/CREATE above did not. `apply_migrations` then fails with "cannot
-        # start a transaction within a transaction" — which is how this test
+        # start a transaction within a transaction" - which is how this test
         # first failed.
         hub.commit()
         assert "icon_sha256" not in column_names(hub, "model")
@@ -428,7 +428,7 @@ class TestReRunIsSafe:
         The guard keys on ``adapter``, which does not exist after the reshape,
         so it must be false on a fresh hub and false on every re-run. If it
         ever fired again it would take a populated ``model``/``model_file`` pair
-        with it — the guard drops tables, and a drop cannot be undone.
+        with it - the guard drops tables, and a drop cannot be undone.
         """
         apply_migrations(hub)
         folder_id = add_folder(hub, "/models")
@@ -562,7 +562,7 @@ class TestComponentRoleBackfill:
 
     Every row on an existing shelf was classified by tensor markers and a
     parameter count, and neither can see a VAE or a text encoder. The folder
-    each file sits in can, and it is already in the hub — so this is a data
+    each file sits in can, and it is already in the hub - so this is a data
     backfill over stored columns, not a rescan.
 
     It runs exactly once per hub, tracked in ``PRAGMA user_version`` rather than

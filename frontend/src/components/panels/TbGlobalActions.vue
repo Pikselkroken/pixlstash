@@ -35,7 +35,7 @@
 // The app-wide chrome that must survive a change of destination: Settings and
 // the stats sidebar toggle. The grid's toolbar and the duplicates queue both
 // mount this SAME component, which is what keeps the pair pixel-identical in
-// every view — the styles live here, not in either host.
+// every view - the styles live here, not in either host.
 //
 // Both buttons act on global state (the settings dialog lives in App.vue, the
 // stats rail in the sidebar store), so the component takes no data props; the
@@ -100,7 +100,7 @@ const tasksStore = useTasksStore();
 
 /* No collapse rule here on purpose (amendment #2 in
    docs/design/toolbar-responsive-decisions.md): Settings and Stats never
-   fold — a burger may only collapse controls from its own visual group, and
+   fold - a burger may only collapse controls from its own visual group, and
    these are the app-wide tail's. The activity dot stays first-class on the
    Stats button at every width. */
 </style>

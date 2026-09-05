@@ -1,11 +1,11 @@
-// The ai-toolkit training-runs view — the model shelf's second tab.
+// The ai-toolkit training-runs view - the model shelf's second tab.
 //
 // The assertions worth having are the ones guarding promises this view is the
 // only place to keep. Drawing the grid must import nothing. A run with no bare
 // final file must SAY its cover is a guess (it is still training or was
 // interrupted, and importing it silently is how the wrong step becomes the
 // cover of a stack). A reload happens unprompted, so it must not move the
-// ground under someone mid-decision. And a batch must go out SEQUENTIALLY —
+// ground under someone mid-decision. And a batch must go out SEQUENTIALLY -
 // `POST /model-imports` holds a non-blocking lock, so a concurrent fan-out
 // would 409 every request after the first.
 
@@ -79,7 +79,7 @@ async function settle(wrapper) {
 
 // Every mount is tracked and torn down. This view registers listeners on
 // `document` and `window`, so a wrapper left mounted keeps answering the events
-// a later test fires — which is exactly how the teardown assertion below first
+// a later test fires - which is exactly how the teardown assertion below first
 // counted twenty-five reloads instead of one.
 const mounted = [];
 
@@ -180,7 +180,7 @@ describe("drawing the grid", () => {
   it("reads the runs the moment the folder is set, without a remount", async () => {
     // The case this view is most likely to be in when the folder is set: its
     // OWN empty state is the control that sets it, so the shelf's "show the
-    // runs" answer is a no-op — the runs tab is already showing. Depending on
+    // runs" answer is a no-op - the runs tab is already showing. Depending on
     // `onMounted` alone left the panel blank beside a folder it now had.
     const wrapper = await openWith([], [FOLDERS[1]]);
     expect(wrapper.text()).toContain("No ai-toolkit output folder is set");
@@ -235,7 +235,7 @@ describe("drawing the grid", () => {
     // The cold-start / direct-navigation case: `folders.refresh()` is not
     // awaited, so `destinations` is EMPTY at mount. Choosing the default there
     // left `destinationId` null with nothing to re-derive it, and `canSubmit`
-    // requires one — so the reader could tick runs and find Import disabled
+    // requires one - so the reader could tick runs and find Import disabled
     // with nothing on screen saying why.
     listRuns.mockResolvedValue([run()]);
     const store = useModelFoldersStore();
@@ -449,12 +449,12 @@ describe("importing the batch", () => {
   it("cannot be submitted with no source root registered", async () => {
     // Both ends have to be named. Without the source clause, `submit` reaches
     // its loop with no `sourceFolderId` and spends a request per run to be
-    // told so — and the receipt reports each refusal against the run rather
+    // told so - and the receipt reports each refusal against the run rather
     // than against the missing folder.
     //
     // Asserted BEFORE the flush deliberately. The watcher empties the rows and
     // the tick when the root goes away, so a tick later `chosenRuns` is empty
-    // and every other clause of `canSubmit` is false too — the assertion would
+    // and every other clause of `canSubmit` is false too - the assertion would
     // then pass with the source clause deleted. This instant, with the folder
     // already gone from the registry and the rows still up, is the only one
     // where the clause is what answers.
@@ -519,7 +519,7 @@ describe("staying current without moving the ground", () => {
   // Mount, a folder change, a visibility change and a window focus each start a
   // read, and none of them cancels the last, so two are in flight whenever one
   // is slow. Ordering is not promised: the older read can answer last, and what
-  // it carries is another folder's runs — or the same folder's, from before the
+  // it carries is another folder's runs - or the same folder's, from before the
   // run that just finished existed.
   describe("with two reads in flight", () => {
     const SOURCE_B = {
@@ -625,7 +625,7 @@ describe("staying current without moving the ground", () => {
     it("imports from the folder the chosen runs were read under", async () => {
       // The batch is sequential and each request is awaited, so the registry
       // can change between two of them. Every run in the batch came out of ONE
-      // listing, and both roots can hold a run of the same name — so naming
+      // listing, and both roots can hold a run of the same name - so naming
       // whichever folder is registered when its turn arrives is how run 2 gets
       // imported from a folder its row was never read from.
       const wrapper = await openWith([run(), run("Foxglove")]);

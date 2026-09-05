@@ -1,9 +1,9 @@
-// The loose-file path onto the shelf — POST /model-files (shelf plan F6).
+// The loose-file path onto the shelf - POST /model-files (shelf plan F6).
 //
 // For a single adapter or checkpoint that is not part of a training run and
 // does not deserve a registered folder of its own. The server copies it into
 // the managed store and registers it there, so the row is on the shelf as the
-// call returns — no rescan. It is a **copy**: the file the user picked stays
+// call returns - no rescan. It is a **copy**: the file the user picked stays
 // where it is.
 //
 // It shares the one shelf I/O slot with a move and an import, so either of

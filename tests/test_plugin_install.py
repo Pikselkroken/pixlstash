@@ -1,11 +1,11 @@
-"""`pixlstash-cli plugins` — install, test, list and remove.
+"""`pixlstash-cli plugins` - install, test, list and remove.
 
 No `Server` here on purpose: every one of these tests is a file copy and an
 `ast.parse`, so the whole module runs in well under a second and never needs a
 vault, a hub or a model.
 
 `plugins test` is the one verb that *imports* the plugin, so its tests execute
-a plugin's module body — the shipped `plugin_template.py`, which loads without
+a plugin's module body - the shipped `plugin_template.py`, which loads without
 a model, and copies of it with one mistake spliced in.
 """
 
@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import os
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -489,8 +491,8 @@ def published(monkeypatch):
     """Serve a codeload zip holding exactly the files one test names.
 
     The shared `fake_repository` is the repository as it really is; this is for
-    the shapes it cannot hold at once — a name collision, a folder that will not
-    parse — without changing what every other test in the module sees.
+    the shapes it cannot hold at once - a name collision, a folder that will not
+    parse - without changing what every other test in the module sees.
     """
 
     def serve(files: dict[str, str]) -> None:
@@ -794,16 +796,25 @@ def test_requirements_are_never_installed_implicitly(
 
 
 def test_with_deps_says_what_it_will_install(
-    tmp_path, plugin_root, monkeypatch, capsys
+    tmp_path, plugin_root, monkeypatch, pip_report, capsys
 ):
+    """What is listed is what pip resolved, not what the file asked for.
+
+    The two differ whenever a requirement pulls anything in, which is most of
+    the time, and it is the resolved set that lands in the environment.
+    """
     calls = []
     monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    pip_report(("something", "1.0"), ("a-dependency-of-it", "2.4"), installed={})
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
     _write(folder / "requirements.txt", "# a comment\nsomething==1.0\n")
 
     assert _install(folder, "--with-deps") == cli.EXIT_OK
-    assert "something==1.0" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "This operation will install the following Python packages:" in output
+    assert "something" in output
+    assert "a-dependency-of-it" in output
     assert len(calls) == 1
 
 
@@ -936,7 +947,7 @@ def test_remove_asks_which_kind_when_both_hold_the_name(plugin_root, capsys):
 # ----------------------------------------------------------------------
 
 #: The starter a contributor copies. Every check below is a real mistake made
-#: to it, so the fixtures cannot drift away from what people actually write —
+#: to it, so the fixtures cannot drift away from what people actually write -
 #: and the pass case guards the shipped template itself.
 TEMPLATE = Path(tagger_plugins.__file__).parent / "plugin_template.py"
 
@@ -945,7 +956,7 @@ def _template(*mutations: tuple[str, str]) -> str:
     """Return the shipped template with each ``(old, new)`` spliced in.
 
     The count assertion is the point: a mutation that silently matched
-    nothing — or matched a docstring instead of the code — would leave the
+    nothing - or matched a docstring instead of the code - would leave the
     test passing against an unbroken plugin and read as coverage.
     """
     source = TEMPLATE.read_text(encoding="utf-8")
@@ -1041,7 +1052,7 @@ def test_a_cosmetic_fault_is_reported_without_failing_the_command(
 
     A missing `label` renders the parameter's `name` (`field.label ||
     field.name`), and a plugin with no capability flag registers exactly as
-    written — it is simply never reached. `plugins install` warns about the
+    written - it is simply never reached. `plugins install` warns about the
     second and installs it; this agrees with that rather than inventing a
     stricter contract for the same plugin.
     """
@@ -1090,7 +1101,7 @@ def test_a_name_discovery_skips_is_refused_however_well_it_loads(
     """The scan filters the directory listing above the loader they share.
 
     So this file imports and registers perfectly here and is never looked at
-    by the server — silently, which is the failure the command exists for.
+    by the server - silently, which is the failure the command exists for.
     """
     source = _write(tmp_path / name, _template())
 
@@ -1106,7 +1117,7 @@ def test_a_name_an_installed_plugin_already_holds_is_a_problem(
     """One of the two silently loses; the checker cannot see it from the load.
 
     This manager scans no directory on purpose, so the server's own duplicate
-    refusal can never fire here — the installed names are read statically
+    refusal can never fire here - the installed names are read statically
     instead, without importing anybody's plugin.
     """
     _write(plugin_root / "tagger-plugins" / "user" / "my_captioner.py", CAPTIONER)
@@ -1141,7 +1152,7 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     it cannot fail this. It seeds ``self._device = "cpu"`` in ``__init__`` and
     falls back to ``max_tokens or 128``, so a caption reading
     ``(128 tokens, cpu)`` is exactly what you get when ``setup()``, ``init()``
-    and the merged defaults are all skipped — every assertion here passed with
+    and the merged defaults are all skipped - every assertion here passed with
     each of those three deleted from plugin_check until the sentinels below
     were spliced in.
     """
@@ -1187,7 +1198,7 @@ def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, caps
     """No capability flag means no method to call, so there is nothing to load.
 
     `init()` is made to raise, so the run reports `init() raised` and fails the
-    command if it is reached at all — which it was, before the capability check
+    command if it is reached at all - which it was, before the capability check
     moved above the download-and-init pair.
     """
     source = _write(
@@ -1213,7 +1224,7 @@ def test_a_torch_that_will_not_answer_does_not_take_the_command_down(monkeypatch
     """The plugin's own init() gives a better error than a traceback from here.
 
     An installed-but-unloadable torch raises `OSError` rather than
-    `ImportError` — a missing CUDA shared library is the usual way — so the
+    `ImportError` - a missing CUDA shared library is the usual way - so the
     narrower catch let it escape and end the command before the plugin could
     report its own missing dependency.
     """
@@ -1233,8 +1244,8 @@ def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys)
     """A check command has no business starting a multi-gigabyte fetch.
 
     This is the courtesy, not a guarantee: `needs_download()` is the plugin's
-    own answer, and a plugin that downloads inside `init()` — which is where
-    `from_pretrained_local_first` does it — is past this gate already.
+    own answer, and a plugin that downloads inside `init()` - which is where
+    `from_pretrained_local_first` does it - is past this gate already.
     """
     source = _write(
         tmp_path / "mine.py", _template(("        return False", "        return True"))
@@ -1253,7 +1264,7 @@ def test_schema_types_match_the_component_that_renders_them():
 
     The whole value of the schema check is that it agrees with what actually
     renders, and nothing else in this repository would notice the two drifting
-    — a type added to the component would be reported here as unrenderable,
+    - a type added to the component would be reported here as unrenderable,
     and one removed from it would sail through. Pinned the way
     `_SUBDIRS` is pinned to the registries.
 
@@ -1322,8 +1333,8 @@ def test_the_installer_writes_where_the_registries_read():
 def _header_literals(path: Path) -> dict[str, dict[str, object]]:
     """Return ``{class_name: {attr: value}}`` for the header of each class.
 
-    Reads the source the way a tool outside PixlStash has to — ``ast`` only,
-    no import — so an attribute computed at runtime shows up as absent here.
+    Reads the source the way a tool outside PixlStash has to - ``ast`` only,
+    no import - so an attribute computed at runtime shows up as absent here.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     headers: dict[str, dict[str, object]] = {}
@@ -1373,7 +1384,7 @@ def _shipped_plugin_sources() -> list[Path]:
             package / "tagger_plugins" / "plugin_template.py",
         }
     )
-    # Parametrising over an empty list is `1 skipped` and exit 0 — the glob
+    # Parametrising over an empty list is `1 skipped` and exit 0 - the glob
     # coming back empty (a renamed folder, a packaging change) would drop every
     # image plugin from this check without failing anything. Count instead.
     assert len(sources) >= 12, f"only found {len(sources)} shipped plugin sources"
@@ -1499,7 +1510,7 @@ def test_the_windows_desktop_derives_its_name_since_nothing_declares_one(
     """Issue #1058: on Windows the app declares nothing, on purpose.
 
     The command that works there is this very interpreter, so it is derived
-    rather than announced — and through the same helper that fills the Settings
+    rather than announced - and through the same helper that fills the Settings
     panel, so the panel and the CLI's own output cannot drift apart.
     """
     resources = tmp_path / "resources"
@@ -1536,3 +1547,191 @@ def test_the_hub_is_read_off_the_command_line_in_both_spellings(monkeypatch):
     assert cli._hub_from_argv() is None
     monkeypatch.setattr(cli.sys, "argv", ["x", "--hub"])
     assert cli._hub_from_argv() is None
+
+
+# ----------------------------------------------------------------------
+# Dependencies
+# ----------------------------------------------------------------------
+#
+# `resolve_requirements` shells out to pip, which needs a network and an index,
+# so the resolver itself is stubbed and what is tested is the rule applied to
+# its answer. The one thing that must not be stubbed away is the shape of the
+# report, so `_report` builds the real thing: pip's `--report` JSON, whose
+# `install` list holds only what is *not* already satisfied.
+
+
+def _report(*packages: tuple[str, str]) -> str:
+    """Return a pip install report naming *packages* as (name, version)."""
+    return json.dumps(
+        {
+            "install": [
+                {"metadata": {"name": name, "version": version}}
+                for name, version in packages
+            ]
+        }
+    )
+
+
+@pytest.fixture
+def pip_report(monkeypatch, tmp_path):
+    """Serve a canned pip `--report`, and record what pip was asked."""
+
+    def serve(*packages: tuple[str, str], installed: dict[str, str] | None = None):
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            index = command.index("--report")
+            Path(command[index + 1]).write_text(_report(*packages), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        def fake_version(name: str) -> str:
+            present = installed or {}
+            if name in present:
+                return present[name]
+            raise plugin_install.PackageNotFoundError(name)
+
+        monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+        monkeypatch.setattr(plugin_install, "metadata_version", fake_version)
+        return calls
+
+    return serve
+
+
+def test_a_new_package_is_an_addition(pip_report, tmp_path):
+    pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    changes = plugin_install.resolve_requirements(requirements)
+    assert [(c.name, c.version, c.installed) for c in changes] == [
+        ("flask", "3.1.3", None)
+    ]
+    assert not changes[0].moves
+
+
+def test_a_different_version_of_an_installed_package_moves_it(pip_report, tmp_path):
+    """The one case that can stop PixlStash starting."""
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("pillow==11.0.0\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.moves
+    assert change.installed == "12.3.0"
+
+
+def test_transitive_packages_are_reported_too(pip_report, tmp_path):
+    """A plugin asking for one package routinely pulls in several."""
+    pip_report(
+        ("Flask", "3.1.3"),
+        ("Werkzeug", "3.1.8"),
+        ("blinker", "1.9.0"),
+        installed={},
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    changes = plugin_install.resolve_requirements(requirements)
+    assert [c.name for c in changes] == ["blinker", "Flask", "Werkzeug"]
+
+
+def test_resolving_asks_pip_not_to_install_anything(pip_report, tmp_path):
+    """It runs before the plugin is copied, so it must change nothing."""
+    calls = pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    plugin_install.resolve_requirements(requirements)
+    assert "--dry-run" in calls[0]
+    assert calls[0][0] == sys.executable
+
+
+def test_a_pip_that_cannot_resolve_is_a_refusal_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        plugin_install.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="ERROR: no matching distribution\n"
+        ),
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("nope==1\n", encoding="utf-8")
+
+    with pytest.raises(PluginError, match="no matching distribution"):
+        plugin_install.resolve_requirements(requirements)
+
+
+def test_install_refuses_dependencies_that_replace_a_package_in_use(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """End to end: the plugin must not be copied when the deps are refused."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow==11.0.0\n", encoding="utf-8")
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+
+    exit_code = cli.main(["plugins", "install", str(source), "--with-deps", "--yes"])
+    assert exit_code != 0
+
+    captured = capsys.readouterr()
+    assert "This operation will install the following Python packages:" in captured.out
+    assert "replaces 12.3.0" in captured.out
+    assert "Refused" in captured.err
+    # Nothing copied: the refusal happens before the plugin is written, so
+    # there is no half-installed plugin to clean up.
+    assert not (plugin_install.user_dir(IMAGE) / "my_filter.py").exists()
+
+
+def test_force_deps_installs_anyway_and_says_so(
+    tmp_path, plugin_root, pip_report, monkeypatch, capsys
+):
+    """The owner's machine, the owner's call, once they have been told."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow==11.0.0\n", encoding="utf-8")
+    pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
+    installed: list[Path] = []
+    monkeypatch.setattr(
+        plugin_install, "install_requirements", lambda path: installed.append(path)
+    )
+
+    exit_code = cli.main(
+        ["plugins", "install", str(source), "--with-deps", "--force-deps", "--yes"]
+    )
+    assert exit_code == cli.EXIT_OK
+    assert "Proceeding anyway: --force-deps." in capsys.readouterr().out
+    assert installed and (plugin_install.user_dir(IMAGE) / "my_filter.py").exists()
+
+
+def test_a_plugin_whose_dependencies_are_all_present_says_so(
+    tmp_path, plugin_root, pip_report, monkeypatch, capsys
+):
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("pillow\n", encoding="utf-8")
+    pip_report(installed={"pillow": "12.3.0"})
+    monkeypatch.setattr(plugin_install, "install_requirements", lambda path: None)
+
+    assert cli.main(["plugins", "install", str(source), "--with-deps", "--yes"]) == 0
+    assert "Everything it needs is already installed." in capsys.readouterr().out
+
+
+def test_without_with_deps_pip_is_never_consulted(
+    tmp_path, plugin_root, monkeypatch, capsys
+):
+    """Resolution costs a network round trip, so it is not done unasked."""
+    source = tmp_path / "dep_filter"
+    source.mkdir()
+    (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
+    (source / "requirements.txt").write_text("flask\n", encoding="utf-8")
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("pip was consulted without --with-deps")
+
+    monkeypatch.setattr(plugin_install, "resolve_requirements", explode)
+    assert cli.main(["plugins", "install", str(source), "--yes"]) == 0
+    assert "It is NOT installed" in capsys.readouterr().out

@@ -4,8 +4,8 @@ Both routes are declared ``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` and
 enforced by the central authz gate, so these assert **both directions** per the
 CLAUDE.md security review process:
 
-* negative — a resource-scoped READ share token gets 403 on both routes;
-* positive — the owner cookie session gets 200 and a complete report
+* negative - a resource-scoped READ share token gets 403 on both routes;
+* positive - the owner cookie session gets 200 and a complete report
   (over-blocking is its own regression).
 
 Plus the contract the future UI reads: the policy is a request parameter object,
@@ -132,7 +132,8 @@ def _env():
     client = TestClient(server.api)
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )

@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Tag
+from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.service.label_ledger import (
     NEG,
     POS,
@@ -87,7 +88,7 @@ def confirm_tag_prediction_in_session(
     Raises:
         KeyError: If no prediction with the given tag exists for the picture.
     """
-    # Confirming promotes a prediction to a Tag and writes a human POS — label
+    # Confirming promotes a prediction to a Tag and writes a human POS - label
     # data frozen when the picture is in a locked set.
     enforce_pictures_not_locked(session, [pic_id], "confirm a tag on a locked picture")
     prediction = session.exec(
@@ -142,7 +143,7 @@ def confirm_tag_prediction(
         origin_client_id: The originating tab's ``X-Client-Id``. When confirming an
             anomaly tag moves the scorer's inputs, the invalidated id is recorded in the
             vault's interactive rescore registry so the background recompute emits an
-            immediate, origin-stamped ``smart_score`` grid refresh for that card — the
+            immediate, origin-stamped ``smart_score`` grid refresh for that card - the
             user's primary "confirm-driven" workflow, where the visible score must drop in
             place rather than routing to the deferred "view changed" pill.
 
@@ -183,7 +184,7 @@ def reject_tag_prediction_in_session(
         commit: Commit before returning. The operation-log wrapper passes
             ``False`` so it owns the mutation and receipt transaction.
     """
-    # Rejecting writes a human NEG onto the picture — label data frozen when
+    # Rejecting writes a human NEG onto the picture - label data frozen when
     # the picture is in a locked set.
     enforce_pictures_not_locked(session, [pic_id], "reject a tag on a locked picture")
     # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
@@ -247,7 +248,7 @@ def delete_tag_predictions(
     ``TagPrediction`` rows in the anomaly vocabulary), so the cached ``Picture.smart_score``
     goes stale and must be NULLed for the background ``SmartScoreTask`` to recompute it.
     Wrapping the delete in :func:`invalidate_on_anomaly_change` mirrors the sibling
-    :func:`reset_picture_tags` path — without it, deleting a ``malformed nipples`` /
+    :func:`reset_picture_tags` path - without it, deleting a ``malformed nipples`` /
     ``watermark`` prediction leaves the stored score frozen with the old penalty baked in.
 
     Args:
@@ -289,11 +290,28 @@ def reset_picture_tags(
     engine_name: str | None = None,
     origin_client_id: str | None = None,
 ) -> None:
+    """Single-picture form of :func:`reset_pictures_tags`."""
+    reset_pictures_tags(
+        vault, [pic_id], engine_name=engine_name, origin_client_id=origin_client_id
+    )
+
+
+def reset_pictures_tags(
+    vault: "Vault",
+    pic_ids: list[int],
+    engine_name: str | None = None,
+    origin_client_id: str | None = None,
+) -> list[int]:
     """Atomically delete all non-manual predictions and all tags, then restore the sentinel.
+
+    One transaction for the whole list: a bulk retag used to be one request
+    and one urgent single-picture task per picture (#1162). Ids that name no
+    picture are skipped rather than failing the batch on the sentinel's
+    foreign key.
 
     Args:
         vault: Application vault, used for DB task dispatch.
-        pic_id: Picture ID to reset.
+        pic_ids: Picture IDs to reset.
         engine_name: Optional engine/plugin name to embed in the sentinel so the
             background tagger uses that specific engine for this picture.  Pass
             ``None`` to use the default ``active_tag_plugin`` setting.
@@ -304,26 +322,46 @@ def reset_picture_tags(
             that card instead of the deferred bulk-drain path.
     """
 
-    def _reset(session: Session) -> None:
-        # Reset deletes ALL confirmed Tag rows and drops a retag sentinel — a
-        # destructive rewrite of frozen label data. Refuse on a locked picture.
-        enforce_pictures_not_locked(session, [pic_id], "reset tags on a locked picture")
-        # Dropping the model's prediction rows removes their anomaly probabilities
-        # from the scorer's inputs, so the cached smart score goes stale.
-        with invalidate_on_anomaly_change(
-            session,
-            [pic_id],
-            context="reset picture tags",
-            registry=vault.interactive_rescore_registry,
-            origin_client_id=origin_client_id,
-        ):
-            session.exec(
-                delete(TagPrediction)
-                .where(TagPrediction.picture_id == pic_id)
-                .where(not_human_labeled())
-            )
-            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-            session.add(Tag(tag=make_tag_sentinel(engine_name), picture_id=pic_id))
-        session.commit()
+    ids = sorted({int(pid) for pid in pic_ids})
+    if not ids:
+        return []
+    sentinel = make_tag_sentinel(engine_name)
 
-    vault.db.run_task(_reset)
+    def _reset(session: Session) -> list[int]:
+        reset_ids: list[int] = []
+        # Chunked: a whole-library selection can exceed SQLite's parameter cap.
+        for chunk in chunked(ids):
+            # Reset deletes ALL confirmed Tag rows and drops a retag sentinel -
+            # a destructive rewrite of frozen label data. Refuse on a locked
+            # picture.
+            enforce_pictures_not_locked(
+                session, chunk, "reset tags on a locked picture"
+            )
+            present = list(
+                session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
+            )
+            if not present:
+                continue
+            # Dropping the model's prediction rows removes their anomaly
+            # probabilities from the scorer's inputs, so the cached smart score
+            # goes stale.
+            with invalidate_on_anomaly_change(
+                session,
+                present,
+                context="reset picture tags",
+                registry=vault.interactive_rescore_registry,
+                origin_client_id=origin_client_id,
+            ):
+                session.exec(
+                    delete(TagPrediction)
+                    .where(TagPrediction.picture_id.in_(present))
+                    .where(not_human_labeled())
+                )
+                session.exec(delete(Tag).where(Tag.picture_id.in_(present)))
+                for pic_id in present:
+                    session.add(Tag(tag=sentinel, picture_id=pic_id))
+            reset_ids.extend(present)
+        session.commit()
+        return reset_ids
+
+    return vault.db.run_task(_reset)

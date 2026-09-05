@@ -5,7 +5,7 @@ Replaces ``reference_folder.sync_captions`` with two independent toggles
 each (``tags_suffix`` / ``description_suffix``).
 
 Replaces the single ``picture.caption_file`` / ``caption_file_mtime`` pair with
-two pairs — one per sidecar type — so tags and descriptions can live in separate
+two pairs - one per sidecar type - so tags and descriptions can live in separate
 files and have their external changes tracked independently.
 
 Existing data is preserved: the old ``caption_file`` is split by extension

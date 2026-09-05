@@ -2,7 +2,7 @@
 
 The reference-folder scanner overrides the permanent-deletion ledger (re-importing
 removed-but-kept files present on disk and clearing their ``deleted_file_log`` rows
-so restore can resurface them) only on a *deliberate* folder (re-)add — never on a
+so restore can resurface them) only on a *deliberate* folder (re-)add - never on a
 routine sync-toggle, rename, relocate, mount-recovery, watcher, or periodic
 re-scan. ``pending_reimport`` is that dedicated one-shot signal: it is set to True
 only by the reference-folder create endpoint and cleared by the next scan that
@@ -11,7 +11,7 @@ earlier ``last_scanned IS NULL`` + no-pictures heuristic, which the watcher (it
 resets ``last_scanned``) could spoof.
 
 Existing folders predate the signal and default to ``False`` (``server_default="0"``)
-so they are inert — a routine re-scan of an already-added folder never overrides
+so they are inert - a routine re-scan of an already-added folder never overrides
 the ledger.
 
 Revision ID: 0078_add_reference_folder_pending_reimport
@@ -39,7 +39,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "reference_folder" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current columns via SQLModel.metadata.create_all(); nothing to do.
         return
 

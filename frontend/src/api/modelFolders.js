@@ -32,7 +32,7 @@ export const MANAGED_KIND = "managed";
  * An ai-toolkit output root: taken from on import, never catalogued in place.
  *
  * The server permits several, but ai-toolkit writes everything under one root,
- * so the UI treats it as a single setting — registering one hides the offer to
+ * so the UI treats it as a single setting - registering one hides the offer to
  * register another, and the training-runs view reads that one.
  */
 export const SOURCE_KIND = "source";
@@ -48,7 +48,7 @@ export const CREATABLE_KINDS = ["user", "source"];
  *
  * @returns {Promise<Array<Object>>} the `folders` array. Each entry carries
  *   `id`, `path`, `kind` (`user`/`managed`/`foreign`/`source`), `owner`,
- *   `movable`, `relocatable` (whether `POST .../relocate` will move it whole —
+ *   `movable`, `relocatable` (whether `POST .../relocate` will move it whole -
  *   offer Move on exactly these, never on `movable === "root_only"`, which the
  *   InsightFace packs also say and cannot be moved yet), `host_path`,
  *   `delete_after_import`, `last_checked`, `created_at`, `file_count` (copies
@@ -114,7 +114,7 @@ export async function createModelFolder({
  *
  * Nothing on disk is touched and no curation is lost, so this needs no
  * confirmation prompt. The managed store answers 409 instead, and so does a
- * folder asked for while a move or an import is running — that job is writing
+ * folder asked for while a move or an import is running - that job is writing
  * the very location rows this drops, so it is a "try again in a moment", not a
  * refusal of the gesture. The store shows the server's `detail` either way.
  *

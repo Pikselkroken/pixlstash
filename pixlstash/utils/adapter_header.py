@@ -19,7 +19,7 @@ What the wild actually looks like, measured against real files on 2026-08-07:
 * ai-toolkit output carries ``ss_base_model_version``, ``ss_output_name``,
   ``ss_tag_frequency``, plus ``software`` and ``training_info``.
 * A LoRA downloaded from a model site routinely carries **nothing** but
-  ``format`` — one measured at 819 MB and 448 tensors with a single metadata
+  ``format`` - one measured at 819 MB and 448 tensors with a single metadata
   key. Empty metadata is the normal case, not an edge case.
 
 Which is why :func:`detect_adapter_kind` reads *tensor names* rather than
@@ -77,7 +77,7 @@ FILE_CHECKPOINT = "checkpoint"
 FILE_UNKNOWN = "unknown"
 
 # What PixlStash downloaded for itself: a tagger, a captioner, a scorer, a face
-# pack. Never produced by `classify_model_file` — these rows are DECLARED by
+# pack. Never produced by `classify_model_file` - these rows are DECLARED by
 # `services/builtin_models.py`, because we chose to download them and therefore
 # know what they are without reading a header (half of them are ONNX or `.pt`,
 # which the scanner does not even yield). The role goes in `model.kind`, which
@@ -103,19 +103,19 @@ FILE_TEXT_ENCODER = "text_encoder"
 # ordinary tensor bundles with no marker to find, and their parameter counts
 # straddle the checkpoint threshold from both sides.
 #
-# Only genuinely different words belong here — the normaliser already folds
+# Only genuinely different words belong here - the normaliser already folds
 # spacing and case, so a `text_encoders` entry covers `TextEncoders` too.
 #
 # Deliberately absent, each for its own reason:
 #
-# * `loras` / `lora` — an adapter is asserted from tensor markers, which is
+# * `loras` / `lora` - an adapter is asserted from tensor markers, which is
 #   positive evidence no directory can improve on. Trusting the folder here
 #   would actively break the case that already works: an all-in-one checkpoint
 #   dropped in a LoRA folder is caught today by its parameter count.
-# * `approxvae` — TAESD previews and latent interposers. They live beside real
+# * `approxvae` - TAESD previews and latent interposers. They live beside real
 #   autoencoders and are not one, so treating them as VAEs would offer the wrong
 #   file as a companion.
-# * `clipvision` — an image encoder. It shares a prefix with `clip` and does a
+# * `clipvision` - an image encoder. It shares a prefix with `clip` and does a
 #   different job, which is exactly the confusion worth not shipping.
 _ROLE_FOLDERS: dict[str, str] = {
     "vae": FILE_VAE,
@@ -148,7 +148,7 @@ class AdapterInfo:
 
     Every field except ``kind`` and ``tensor_count`` is optional, because the
     common downloaded file carries no metadata at all. A ``None`` here means
-    "the file did not say", never "the value is empty" — the shelf shows those
+    "the file did not say", never "the value is empty" - the shelf shows those
     differently, since the first is a prompt to fill something in.
 
     Attributes:
@@ -363,7 +363,7 @@ def role_from_folder(path: str) -> Optional[str]:
 
     Returns:
         ``"vae"``, ``"text_encoder"``, or ``None`` when the directory names no
-        role we recognise — which is the answer for a flat folder of mixed
+        role we recognise - which is the answer for a flat folder of mixed
         downloads and must never be read as "not a VAE".
     """
     folder = os.path.basename(os.path.dirname(path))
@@ -379,7 +379,7 @@ def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
     how much each signal can be trusted:
 
     1. **Adapter markers**, when present, settle it. They are positive evidence
-       the file cannot strip without breaking, so nothing overrides them — not
+       the file cannot strip without breaking, so nothing overrides them - not
        a parameter count and not a directory. This is what keeps an all-in-one
        checkpoint dropped in someone's ``Lora/`` folder from being filed as a
        LoRA.
@@ -400,7 +400,7 @@ def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
     Args:
         tensor_names: Iterable of tensor keys from the header.
         param_count: Total parameters, from :func:`count_parameters`.
-        path: Where the file lives. Optional — omitting it drops rule 2 and
+        path: Where the file lives. Optional - omitting it drops rule 2 and
             leaves the pre-existing behaviour, which is what a caller holding
             only a header should get.
 

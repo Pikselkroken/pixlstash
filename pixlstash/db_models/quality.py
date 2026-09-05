@@ -5,8 +5,6 @@ import time
 from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship
 from typing import List, Optional, TYPE_CHECKING
 
-from scipy.ndimage import median_filter
-
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
@@ -58,12 +56,12 @@ class Quality(SQLModel, table=True):
         Accepts a 4D np.ndarray (batch, H, W, C) and returns a list of Quality
         instances.  Metrics are vectorised as much as possible:
 
-        - brightness, contrast, colorfulness — fully vectorised (single NumPy op)
-        - edge_density — batched L1 gradient (pure NumPy, replaces per-image Canny)
-        - luminance_entropy — offset-bincount trick (single C call for whole batch)
-        - dominant_hue — vectorised NumPy RGB→hue; per-image only for argmax
-        - sharpness, noise_level — fully vectorised discrete Laplacian
-        - text_score — stored on Picture; not computed here
+        - brightness, contrast, colorfulness - fully vectorised (single NumPy op)
+        - edge_density - batched L1 gradient (pure NumPy, replaces per-image Canny)
+        - luminance_entropy - offset-bincount trick (single C call for whole batch)
+        - dominant_hue - vectorised NumPy RGB→hue; per-image only for argmax
+        - sharpness, noise_level - fully vectorised discrete Laplacian
+        - text_score - stored on Picture; not computed here
         """
         batch_size = images.shape[0]
         if images.ndim != 4:
@@ -76,7 +74,7 @@ class Quality(SQLModel, table=True):
         contrast = images.std(axis=(1, 2, 3)) / 255.0
 
         # --- Fully vectorised: colorfulness (Hasler & Süsstrunk) ---
-        # rgb is shared for edge_density, grayscale, and hue below — single float32 alloc.
+        # rgb is shared for edge_density, grayscale, and hue below - single float32 alloc.
         rgb = images.astype(np.float32) / 255.0  # (B, H, W, C)
         if images.shape[3] == 3:
             rg = rgb[:, :, :, 0] - rgb[:, :, :, 1]
@@ -90,14 +88,14 @@ class Quality(SQLModel, table=True):
         else:
             colorfulness = np.zeros(batch_size, dtype=np.float32)
 
-        # Grayscale for the metrics below — derived from rgb to avoid a second cast.
+        # Grayscale for the metrics below - derived from rgb to avoid a second cast.
         # Multiply by 255 so gray_uint8 clip/cast and Laplacian inputs are correct.
         gray = rgb.mean(axis=3) * 255.0  # (B, H, W), float32, values in [0, 255]
 
         # --- Batched L1 gradient as edge_density (replaces per-image cv2.Canny) ---
         # Mean absolute first-order gradient across all channels/spatial dims,
-        # normalised to [0, 1].  Fully vectorised across the whole batch — no
-        # Python loop, no OpenCV.  Reuses rgb (0..1) — no second astype needed.
+        # normalised to [0, 1].  Fully vectorised across the whole batch - no
+        # Python loop, no OpenCV.  Reuses rgb (0..1) - no second astype needed.
         dy = np.abs(rgb[:, 1:, :, :] - rgb[:, :-1, :, :])
         dx = np.abs(rgb[:, :, 1:, :] - rgb[:, :, :-1, :])
         edge_density = (dy.mean(axis=(1, 2, 3)) + dx.mean(axis=(1, 2, 3))) / 2.0
@@ -141,7 +139,7 @@ class Quality(SQLModel, table=True):
             hue_int = np.clip(h * (180.0 / 6.0), 0, 179).astype(np.int32)
             sat = np.where(Cmax > eps, delta / (Cmax + eps), 0.0)
             sat_val_mask = (sat > 20.0 / 255.0) & (Cmax > 20.0 / 255.0)  # (B, H, W)
-            # Fully vectorised histogram — same offset-bincount trick as entropy.
+            # Fully vectorised histogram - same offset-bincount trick as entropy.
             # sat_val_mask used as weights: 0.0 for masked-out pixels, 1.0 for valid,
             # so they contribute nothing to the per-image hue counts.
             hue_flat = hue_int.reshape(batch_size, -1).astype(np.int64)  # (B, H*W)
@@ -164,7 +162,7 @@ class Quality(SQLModel, table=True):
 
         # --- Fully vectorised: sharpness + noise_level via discrete Laplacian ---
         # 5-point stencil (identical to cv2.Laplacian ksize=1) applied to the
-        # whole batch in one NumPy expression — no Python loop, no OpenCV call,
+        # whole batch in one NumPy expression - no Python loop, no OpenCV call,
         # GIL released for the entire computation.
         lap = (
             4.0 * gray[:, 1:-1, 1:-1]
@@ -177,7 +175,7 @@ class Quality(SQLModel, table=True):
         # noise_level: mean |Laplacian| normalised to [0, 1]
         noise_level = np.clip(np.abs(lap).mean(axis=(1, 2)) / 255.0, 0.0, 1.0)
 
-        # sharpness: vectorised _cell_sharpness — rewards a sharp subject region.
+        # sharpness: vectorised _cell_sharpness - rewards a sharp subject region.
         # Divide each frame's Laplacian into a 4×4 grid, take the top-4 cell
         # variances, normalise.  Equivalent to calling _cell_sharpness per image.
         _GRID, _TOP_K, _NORM = 4, 4, 500.0
@@ -292,7 +290,7 @@ class Quality(SQLModel, table=True):
             lap: 2-D Laplacian array (float32).
             grid: Number of rows/columns in the cell grid.
             top_k: Number of sharpest cells to average.
-            norm: Normalisation constant — cell variance above this maps to 1.0.
+            norm: Normalisation constant - cell variance above this maps to 1.0.
 
         Returns:
             Score in [0, 1].
@@ -343,6 +341,15 @@ class Quality(SQLModel, table=True):
     @staticmethod
     def _calculate_noise_level(image: np.ndarray) -> float:
         # Optimised: grayscale and quarter resolution
+
+        # Local import: scipy.ndimage costs ~120ms to import (it pulls in its
+        # numpy array-API compat layer) and this static method is the only
+        # user of it in the whole codebase. Importing it here instead of at
+        # module scope keeps that cost off every server boot (this module is
+        # reached from pixlstash.db_models at startup) and off every test
+        # that merely imports the model, paying it only when a quality score
+        # is actually calculated (a background task).
+        from scipy.ndimage import median_filter
 
         # Convert to grayscale
         if image.ndim == 3:
@@ -471,18 +478,18 @@ class Quality(SQLModel, table=True):
         # (scanned / held-up receipt) or whether a bright paper sits on a dark scene
         # (receipt laid on a table and photographed from above).
         if bg_level > 128:
-            # Light background, dark text — standard case.
+            # Light background, dark text - standard case.
             # Run Otsu first: the threshold value itself is the strongest discriminant.
             thresh_val, binary = cv2.threshold(
                 gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
             )
             # Genuine ink-on-white documents split at 130–190: large white spike (~240)
             # vs dark ink / UI chrome (~0–80).  Mid-grey natural scenes (stone walls,
-            # pool decks) split at 80–125 — the two "halves" are just texture, not ink.
+            # pool decks) split at 80–125 - the two "halves" are just texture, not ink.
             if thresh_val < 130:
                 return 0.0
             # A very high Otsu split (≥ 140) is strong evidence of document bimodality
-            # — e.g. a PDF screenshot where phone chrome squeezes bg_fraction below 0.60.
+            # - e.g. a PDF screenshot where phone chrome squeezes bg_fraction below 0.60.
             # In that case waive the bg_score requirement; otherwise require it.
             if bg_score == 0.0 and thresh_val < 140:
                 return 0.0
@@ -494,7 +501,7 @@ class Quality(SQLModel, table=True):
             analysis_binary = binary
         else:
             # Dark scene with a bright document region.
-            # Check for a large near-white area — the paper is brighter than the backdrop.
+            # Check for a large near-white area - the paper is brighter than the backdrop.
             # Ramp: 20 % paper coverage → 0; 55 % coverage → 1.
             paper_fraction = float((gray > 160).sum()) / area
             paper_score = float(np.clip((paper_fraction - 0.20) / 0.35, 0.0, 1.0))

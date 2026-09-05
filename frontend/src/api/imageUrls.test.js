@@ -1,4 +1,4 @@
-// The URLs the BROWSER loads by itself — an `<img src>`, a download — rather
+// The URLs the BROWSER loads by itself - an `<img src>`, a download - rather
 // than through Axios.
 //
 // Deliberately NOT co-located per resource module, and deliberately UNMOCKED,

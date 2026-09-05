@@ -29,7 +29,7 @@
     <!-- Direct tagging of the current card's picture(s), independent of the
          queue decision. Opened via T or a card's bottom-left "Tag manually"
          button (`rs-manual-tag` in ReviewBinaryCard/ReviewPairCard, through
-         the `rs-open-tag-apply` provide below) — that button is the one
+         the `rs-open-tag-apply` provide below) - that button is the one
          surviving entry point; this used to also render a second, redundant
          bottom-right "Apply tags" button, removed as a duplicate. Anchored
          bottom-right so the panel still opens in the same place. -->
@@ -115,11 +115,11 @@
 <script setup>
 // The "Review sessions" overlay shell: left rail (sessions + sticker shelf) +
 // main area (tag health board / one session / an archived receipt), plus the
-// overlay-level layers — new-review dialog, direct-tagging panel (T), keyboard
+// overlay-level layers - new-review dialog, direct-tagging panel (T), keyboard
 // cheat-sheet (?), and the full-screen zoom.
 //
 // Keyboard: one capture-phase window handler (same discipline as the old
-// overlay). It bails for genuine text entry (input/textarea/contenteditable —
+// overlay). It bails for genuine text entry (input/textarea/contenteditable -
 // NOT <select>, which is a fixed-choice control whose type-ahead must not
 // swallow decision keys; selects are blurred after every change). Session keys
 // are delegated to the session view, which owns the consistency guard.
@@ -176,7 +176,7 @@ const archivedReview = computed(() =>
 const SHORTCUTS = computed(() => [
   ["Y / N", "Answer a binary card (yes / no)"],
   ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
-  ["S", "Skip — leaves the queue undecided, no change made"],
+  ["S", "Skip - leaves the queue undecided, no change made"],
   [
     `U / ${formatKeyHint(undoKeyHint())}`,
     "Undo the last decision in this review",
@@ -214,7 +214,7 @@ function initialScopeFromSelection() {
 
 function openNewReview(preset = "") {
   store.createError = null;
-  // A scope chosen on the health board is the user's explicit working scope —
+  // A scope chosen on the health board is the user's explicit working scope -
   // it wins over the app-selection prefill.
   const initialScope = store.healthScoped
     ? { ...store.healthScope }
@@ -249,7 +249,7 @@ const zoomScale = ref(1);
 const zoomNaturalW = ref(0);
 const zoomNaturalH = ref(0);
 
-// The hint pill sits over the bottom of the image — it MUST auto-hide after a
+// The hint pill sits over the bottom of the image - it MUST auto-hide after a
 // few seconds or it covers exactly the detail being inspected (it fades back
 // in on the next zoom open).
 const zoomHintVisible = ref(true);
@@ -373,7 +373,7 @@ function onZoomClick() {
 
 // --- Keyboard --------------------------------------------------------------------
 
-// Genuine text entry only — NOT <select> (see the old overlay's select-blur
+// Genuine text entry only - NOT <select> (see the old overlay's select-blur
 // fix: a focused select must not swallow decision keys into its type-ahead).
 function isEditable(el) {
   if (!(el instanceof HTMLElement)) return false;
@@ -417,8 +417,8 @@ function isRedoChord(event) {
  * One undo request, however it was typed: `U`, Ctrl+Z, or the bar's button all
  * land here.
  *
- * The session view owns every guard and every message once a review is open — a
- * locked picture set makes a decision final, an empty stack has to say so — and
+ * The session view owns every guard and every message once a review is open - a
+ * locked picture set makes a decision final, an empty stack has to say so - and
  * it consumes the key in all of those cases. This function only covers the case
  * it can see and the session view cannot: no review open at all.
  *
@@ -459,7 +459,7 @@ function reportNoRedo() {
 function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
 
-  // Undo/redo are checked BEFORE the modifier bail below — that bail is what
+  // Undo/redo are checked BEFORE the modifier bail below - that bail is what
   // made Ctrl+Z dead in a review session, while App's global handler skips the
   // whole overlay. The owner ruled the chord must be consistent, so it lands
   // here on the review's own undo, exactly like `U`. The bail itself stays for
@@ -495,7 +495,7 @@ function handleKeyDown(event) {
       // The session consumed it (a pending consistency confirm).
     } else if (store.activeSession) {
       // A review is open with nothing pending inside it: close just the
-      // review, back to the tag health board underneath — not the whole
+      // review, back to the tag health board underneath - not the whole
       // overlay. A second Esc (no active review) falls through to close.
       store.showBoard();
     } else emit("close");
@@ -558,7 +558,7 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-/* Positioning anchor only now — the visible bottom-right "Apply tags" button
+/* Positioning anchor only now - the visible bottom-right "Apply tags" button
    that used to live here was removed as a duplicate of each card's
    bottom-left `.rs-manual-tag` button (the surviving entry point); the panel
    itself still opens fixed bottom-right via this wrapper. */

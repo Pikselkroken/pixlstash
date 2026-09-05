@@ -30,6 +30,11 @@ from pixlstash.utils.caption_file_utils import (
     writeback_path,
 )
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
+from pixlstash.utils.library_layout import (
+    DEFAULT_LAYOUT,
+    folder_name,
+    parse_layout,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
     validate_reference_folder_accessible,
@@ -123,6 +128,25 @@ class ReferenceFolderUpdateRequest(BaseModel):
     description_suffix: Optional[str] = None
     tags_suffix: Optional[str] = None
     host_path: Optional[str] = None
+    layout: Optional[str] = Field(
+        default=None,
+        description=(
+            "Reserved. **A reference folder cannot be given a layout in this "
+            "version**: any value other than `null` is refused with a 400. "
+            "PixlStash never reorganises a folder you curate yourself, so "
+            "without a layout it places nothing here and moves nothing here, "
+            "whatever changes about the pictures. Layouts apply to the "
+            "library's own root instead. `null`, the default, is accepted and "
+            "leaves the folder alone."
+        ),
+    )
+    layout_unfiled: Optional[str] = Field(
+        default=None,
+        description=(
+            "The folder a picture with nothing to file it by is written to. "
+            "One safe path component; `null` means `Unassigned`."
+        ),
+    )
 
 
 class ReferenceFolderResponse(BaseModel):
@@ -139,6 +163,8 @@ class ReferenceFolderResponse(BaseModel):
     tags_suffix: Optional[str]
     status: str
     last_scanned: Optional[float]
+    layout: Optional[str] = None
+    layout_unfiled: Optional[str] = None
     relocation: Optional[dict] = None
 
 
@@ -232,7 +258,7 @@ def create_router(server) -> APIRouter:
     # Owner identity + locality for every reference-folder host operation
     # (LOCAL_OWNER_ONLY, and the LOOPBACK_OWNER_ONLY red-line routes /open and
     # /server/restart) are enforced by the centralised authz gate before the
-    # handler runs — no inline owner check lives here (backend refactor plan Step 5).
+    # handler runs - no inline owner check lives here (backend refactor plan Step 5).
 
     def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -277,6 +303,8 @@ def create_router(server) -> APIRouter:
             tags_suffix=rf.tags_suffix,
             status=rf.status,
             last_scanned=rf.last_scanned,
+            layout=rf.layout,
+            layout_unfiled=rf.layout_unfiled,
         )
 
     def _is_within_path(path: str, root: str) -> bool:
@@ -295,8 +323,8 @@ def create_router(server) -> APIRouter:
         if os.path.isabs(raw_scope):
             # An absolute scope must already sit inside the root. Reduce it to
             # the relative remainder so the user-controlled value flows through
-            # resolve_path_within — the traversal sanitizer the rest of this
-            # module (and CodeQL's taint analysis) relies on — instead of a
+            # resolve_path_within - the traversal sanitizer the rest of this
+            # module (and CodeQL's taint analysis) relies on - instead of a
             # bespoke containment check the analyser cannot see. os.path.relpath
             # is called only after confirming the same root, so it cannot raise
             # on a cross-drive path.
@@ -602,7 +630,7 @@ def create_router(server) -> APIRouter:
         if error:
             raise HTTPException(status_code=400, detail=error)
         if not os.path.isdir(folder):
-            # Path not reachable yet (e.g. Docker pending mount) — no detection.
+            # Path not reachable yet (e.g. Docker pending mount) - no detection.
             return ReferenceFolderDetectResponse(
                 tags_suffix=None,
                 description_suffix=None,
@@ -634,6 +662,12 @@ def create_router(server) -> APIRouter:
         error = validate_reference_folder_path(folder)
         if error:
             raise HTTPException(status_code=400, detail=error)
+        # Stored resolved, because the check above resolves. Keeping the link's
+        # own name would leave the row naming one directory and the scan walking
+        # another, and repointing the link afterwards would silently move the
+        # folder somewhere the blocklist never saw. `model_folders.py` already
+        # does this and its comment says this route did too; it did not.
+        folder = os.path.realpath(folder)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 
@@ -740,6 +774,10 @@ def create_router(server) -> APIRouter:
                 error = validate_reference_folder_path(new_folder)
                 if error:
                     raise HTTPException(status_code=400, detail=error)
+                # Resolved for the same reason the create route resolves: this
+                # is where an existing folder is repointed, so a link accepted
+                # here would name one directory in the row and walk another.
+                new_folder = os.path.realpath(new_folder)
                 _validate_reference_folder_conflicts(
                     session, new_folder, exclude_id=folder_id
                 )
@@ -858,6 +896,62 @@ def create_router(server) -> APIRouter:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
+            if {"layout", "layout_unfiled"} & payload.model_fields_set:
+                # Validated here rather than stored and hoped for: an unparseable
+                # layout would be dropped every time it was read, which reads as
+                # "the layout is off" and is indistinguishable from having asked
+                # for that. The unfiled name is checked on its own too, because
+                # ``parse_layout`` short-circuits on an empty layout and would
+                # otherwise never reach ``Layout``'s check on the one field that
+                # reaches a path verbatim.
+                layout = (
+                    (payload.layout or None)
+                    if "layout" in payload.model_fields_set
+                    else rf.layout
+                )
+                unfiled = (
+                    (payload.layout_unfiled or None)
+                    if "layout_unfiled" in payload.model_fields_set
+                    else rf.layout_unfiled
+                )
+                if (
+                    "layout" in payload.model_fields_set
+                    and (payload.layout or None) is not None
+                ):
+                    # v1.11 ships this field disarmed. Setting it arms the
+                    # automatic mover inside a tree the owner curates by hand,
+                    # and the Phase 5 machinery behind it still carries two
+                    # faults: the scan can walk the tree before it reads the
+                    # database and write `file_path` to a path the move has
+                    # just vacated, and a dismissed reconciliation is reversed
+                    # by the engine at the next membership edit. There is no
+                    # UI, no preview and no migration route for it, so nothing
+                    # shipping sets it - which is what makes refusing free and
+                    # leaving it reachable not.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "A reference folder cannot be given a layout in "
+                            "this version: PixlStash does not reorganise a "
+                            "folder you curate yourself. Layouts apply to the "
+                            "library's own root."
+                        ),
+                    )
+                if unfiled is not None and unfiled != folder_name(unfiled):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "layout_unfiled must be a single safe path "
+                            f"component, got {unfiled!r} (try "
+                            f"{folder_name(unfiled)!r})"
+                        ),
+                    )
+                try:
+                    parse_layout(layout, unfiled or DEFAULT_LAYOUT.unfiled)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                rf.layout = layout
+                rf.layout_unfiled = unfiled
 
             if newly_enabled:
                 # The scan finder treats last_scanned=None as "scan now".
@@ -1431,7 +1525,7 @@ def create_router(server) -> APIRouter:
             descriptions_count = 0
             skipped_count = 0
             # A sidecar import deletes+rewrites confirmed Tag rows and overwrites
-            # the description on EXISTING pictures — frozen for anything in a
+            # the description on EXISTING pictures - frozen for anything in a
             # locked set. Skip those (counted as skipped) instead of overwriting.
             locked = locked_picture_ids(
                 session, [pic.id for pic in pictures if pic.id is not None]
@@ -1562,15 +1656,7 @@ def create_router(server) -> APIRouter:
         if image_root:
             removed_thumbs = 0
             for rel_path in file_paths:
-                thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
-                if thumb_path and os.path.isfile(thumb_path):
-                    try:
-                        os.remove(thumb_path)
-                        removed_thumbs += 1
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
-                        )
+                removed_thumbs += ImageUtils.remove_thumbnail(image_root, rel_path)
             if removed_thumbs:
                 logger.info(
                     "Removed %d orphan thumbnails for reference folder: %s",

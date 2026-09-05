@@ -54,8 +54,12 @@ import {
   handleUpdatesSocketClose,
   useUpdatesSocket,
   VRAM_OOM_NOTICE_KEY,
+  vramOomNotice,
 } from "./useUpdatesSocket";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { useWsStore } from "../stores/useWsStore";
+import { useTasksStore } from "../stores/useTasksStore";
+import { useGridStore } from "../stores/useGridStore";
 import { API_BASE_URL } from "../utils/apiClient";
 
 describe("updates socket close lifecycle", () => {
@@ -400,7 +404,90 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     receive({ type: "vram_oom", attempt: 1, max_attempts: 3, gave_up: false });
 
     // A share viewer cannot act on the machine's GPU, and the backend does not
-    // deliver the event to them either — this is the second lock.
+    // deliver the event to them either - this is the second lock.
     expect(useNoticeStore().notices).toHaveLength(0);
+  });
+});
+
+describe("vramOomNotice names the process holding the card", () => {
+  it("names the largest other process when the backend could see it", () => {
+    const notice = vramOomNotice({
+      attempt: 1,
+      max_attempts: 3,
+      gave_up: false,
+      recovered: false,
+      other_processes: [
+        { name: "lms", used_mb: 18432 },
+        { name: "Xorg", used_mb: 210 },
+      ],
+    });
+    expect(notice.text).toContain("lms is holding 18.0 GB of the card");
+    expect(notice.text).not.toContain("probably");
+  });
+
+  it("falls back to the guess when nobody could be named", () => {
+    const notice = vramOomNotice({
+      attempt: 3,
+      max_attempts: 3,
+      gave_up: true,
+      recovered: false,
+      other_processes: [],
+    });
+    expect(notice.text).toContain(
+      "another program is probably holding the card",
+    );
+  });
+});
+
+describe("the view-changed pill while the tagger runs", () => {
+  /** Mount the composable and hand back its API plus the stores it drives. */
+  function mountApi() {
+    let api = null;
+    host = mount({
+      setup() {
+        api = useUpdatesSocket({
+          gridContainer: ref(null),
+          refreshSidebar: vi.fn(),
+          refreshSidebarPicturesDebounced: vi.fn(),
+        });
+        return () => null;
+      },
+    });
+    return { api, wsStore: useWsStore(), tasksStore: useTasksStore() };
+  }
+
+  it("holds the ids while tagging runs and raises one pill when it ends", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 800 } };
+    await host.vm.$nextTick();
+    expect(tasksStore.taggingActive).toBe(true);
+
+    api.onFlagSortChanged([1, 2]);
+    api.onFlagSortChanged([2, 3]);
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
+
+    tasksStore.workerSnapshots = { TagTask: { active: false, total: 800 } };
+    await host.vm.$nextTick();
+    expect(tasksStore.taggingActive).toBe(false);
+    expect([...wsStore.sortChangedExternalIds].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("raises the pill at once when nothing is tagging", () => {
+    const { api, wsStore } = mountApi();
+    api.onFlagSortChanged([7]);
+    expect(wsStore.sortChangedExternalIds).toEqual([7]);
+  });
+
+  it("drops held ids when the grid rebuilds", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 8 } };
+    await host.vm.$nextTick();
+    api.onFlagSortChanged([5]);
+
+    useGridStore().gridVersion += 1;
+    await host.vm.$nextTick();
+    tasksStore.workerSnapshots = {};
+    await host.vm.$nextTick();
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
   });
 });

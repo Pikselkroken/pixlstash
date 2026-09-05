@@ -2,41 +2,41 @@
 
 There are exactly two verdicts in v1.9 and neither of them deletes anything:
 
-* **stack** — the chosen members become one stack led by the chosen cover, with
+* **stack** - the chosen members become one stack led by the chosen cover, with
   the metadata union applied; excluded members stay exactly where they were;
-* **keep separate** — nothing changes on disk or in the picture rows, but the
+* **keep separate** - nothing changes on disk or in the picture rows, but the
   group's signature is remembered so no rescan and no re-import ever re-asks.
 
 Both are recorded against the group *signature*, not against picture or group
 ids, which is what makes the memory survive a re-import (see
 :func:`pixlstash.services.dedup_tier_service.group_signature`). "Keep separate"
 stands until :func:`reopen_verdict_in_session` is called from the Decided page's
-"Clear decision" — or, since 2026-07-30, until its own operation is undone (see
+"Clear decision" - or, since 2026-07-30, until its own operation is undone (see
 below).
 
 Metadata union (design delta 5)
 -------------------------------
 Stacking unions **tags, project membership, set membership and characters** onto
 every member and lifts every member to the **highest score** in the group.
-Nothing is overwritten and nothing is lost — a union cannot break an album,
+Nothing is overwritten and nothing is lost - a union cannot break an album,
 which is the failure mode that burns Immich users.
 
 Project and set membership already had a union in
 :func:`pixlstash.services.stack_membership.reconcile_stack_membership`; this
 module calls it and adds the three the design requires on top:
 
-* **tags** — every member gains every non-sentinel tag any member carries.
+* **tags** - every member gains every non-sentinel tag any member carries.
   Sentinel tags (``__tag``, ``__tag:<engine>``) are pipeline markers, not user
   metadata, so they are deliberately excluded: copying a "needs retagging"
   marker onto a picture that was already tagged would re-queue it for no reason.
-* **score** — every member is lifted to ``max(score)``. Only lifted: a union
+* **score** - every member is lifted to ``max(score)``. Only lifted: a union
   never lowers a rating the user set.
-* **characters** — a real face-to-character union is not expressible without
+* **characters** - a real face-to-character union is not expressible without
   fabricating :class:`~pixlstash.db_models.face.Face` rows (a face has a bbox and
   an embedding that belong to one specific picture), and inventing detection data
   is worse than not unioning. Instead, when the group's members between them
   reference exactly **one** character, every member that does not already carry
-  it gets ``Picture.pending_character_id`` set — the shipped deferred-assignment
+  it gets ``Picture.pending_character_id`` set - the shipped deferred-assignment
   mechanism that the face-extraction task consumes. A group spanning several
   characters is left alone and logged; the members keep their own faces, which is
   the non-lossy outcome.
@@ -44,7 +44,7 @@ module calls it and adds the three the design requires on top:
 Operation log (§21)
 -------------------
 Every verdict raises an action receipt and lands in the operation log. Each
-verdict — stack **and** keep-separate — records **exactly one**
+verdict - stack **and** keep-separate - records **exactly one**
 :class:`~pixlstash.db_models.operation.Operation` row, and a bulk action shares a
 single ``batch_id`` across every group in the run, so
 ``POST /operations/batches/{batch_id}/undo`` reverses a thousand verdicts in one
@@ -59,7 +59,7 @@ symmetric with the stack verdict.
 Clearing a decision ("Clear decision" on the Decided page) goes through
 :func:`reopen_verdict_in_session`. Since 2026-07-30 a clear of a still-standing
 ``stacked`` verdict **dissolves the verdict's stack** by restoring the recorded
-pre-verdict stack state from the verdict's own operation row — without that,
+pre-verdict stack state from the verdict's own operation row - without that,
 the reopened group failed the queue's two-stack-units rule and never returned
 to review. That unstack is itself one undoable ``dedup.reopen`` operation; see
 the function's docstring for the full contract.
@@ -74,7 +74,7 @@ Two details this module owns rather than inherits:
 * **It snapshots the stack-expanded set**, not just the group's members
   (§21's ``expand_stacks`` rule). Folding an existing stack into the new one
   reparents co-members the group never named, and ``normalize_stack_positions``
-  renumbers *every* member including soft-deleted ones — so the snapshot is taken
+  renumbers *every* member including soft-deleted ones - so the snapshot is taken
   over :func:`expand_picture_ids_to_stacks` with ``include_deleted=True``, or an
   undo would restore the group and leave its siblings behind.
 """
@@ -139,7 +139,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-# The op_types this module records. Stable — part of the API contract the
+# The op_types this module records. Stable - part of the API contract the
 # frontend keys its undo affordances off. A bulk action shares one batch_id
 # across every row it writes, so the whole run reverses in a single step.
 #
@@ -152,7 +152,7 @@ logger = get_logger(__name__)
 # stack (restoring the recorded pre-verdict stack state) and that mutation must
 # be undoable like every other stack mutation. A clear that touches no picture
 # (keep-separate, or a stack the user already dissolved by hand) still records
-# nothing — see :func:`reopen_verdict_in_session` for why that line is where
+# nothing - see :func:`reopen_verdict_in_session` for why that line is where
 # the old "no second confusing way to re-decide" concern now lives.
 OP_TYPE_STACK = "dedup.stack"
 OP_TYPE_KEEP_SEPARATE = "dedup.keep_separate"
@@ -163,7 +163,7 @@ OP_TYPE_REOPEN = "dedup.reopen"
 # rather than inferred from a count mismatch.
 BULK_REASON_APPLIED = "applied"
 BULK_REASON_BLOCKED = "blocked"
-"""The group was refused by a guard that returns an HTTP status — in practice a
+"""The group was refused by a guard that returns an HTTP status - in practice a
 locked picture set (423). Nothing was written for it."""
 BULK_REASON_FAILED = "failed"
 """The group could not be resolved at all (stale signature, too few members)."""
@@ -194,7 +194,7 @@ class VerdictResult:
             field is what tells the client the exclusion was the server's doing
             rather than the user's.
         event_picture_ids: The pictures the WS ``pictures_changed`` announcement
-            should name — for a stack verdict the stack-expanded set (folding a
+            should name - for a stack verdict the stack-expanded set (folding a
             stack in touches siblings the group never named), for keep-separate
             the group's members. Deliberately NOT part of :meth:`as_dict`: it is
             broadcast plumbing, not response contract.
@@ -254,7 +254,7 @@ def _record_operation(
     """Append **one** operation row for this verdict.
 
     Called once per verdict, around the whole mutation, on the verdict's own
-    session — so the row and the change it describes commit against the same
+    session - so the row and the change it describes commit against the same
     serialised writer (§21). The verdict path deliberately does not reuse
     ``routes/stacks.py``, which records itself; going through it would produce a
     second row and break "one verdict, one undo".
@@ -369,7 +369,7 @@ def apply_metadata_union_in_session(
     ``pending_character_id`` rather than through fabricated ``Face`` rows.
 
     Args:
-        session: Pre-opened session. Not committed here — the caller owns the
+        session: Pre-opened session. Not committed here - the caller owns the
             transaction so a verdict lands as one unit.
         picture_ids: The stack's members.
         stack_id: The stack they were just placed in; the project / set union
@@ -545,7 +545,7 @@ def _stack_members(
             pictures.setdefault(int(pic.id), pic)
 
     # The cover sorts ahead of everything so normalize_stack_positions lands it
-    # at position 0 — the leader convention the whole app reads.
+    # at position 0 - the leader convention the whole app reads.
     for pic in pictures.values():
         pic.stack_id = stack_id
         pic.stack_position = -1 if int(pic.id) == cover_picture_id else 1
@@ -581,7 +581,7 @@ def _dry_run_summary_in_session(
     the same read, so the dialog's "N groups" and its "M covers gain metadata"
     row cannot disagree because a scan landed between two queries.
 
-    The union is **not** run to work this out — nothing is written and no
+    The union is **not** run to work this out - nothing is written and no
     membership is reconciled. Each figure is derived from the planned verdict:
     the cover is the group's stored preselection, and a cover "gains" a facet
     when some other member of its group already carries something the cover does
@@ -591,7 +591,7 @@ def _dry_run_summary_in_session(
     Returns:
         ``groups_by_tier`` (always keyed by every tier, zero-filled),
         ``pictures``, ``covers_gaining_tags``, ``covers_gaining_score`` and
-        ``covers_gaining_metadata`` (the union of the previous two — the row the
+        ``covers_gaining_metadata`` (the union of the previous two - the row the
         design's dialog promises).
 
         ``pictures`` counts the **distinct stack-expanded** set the run would
@@ -955,7 +955,7 @@ def apply_keep_separate_in_session(
     """Remember that this group is *not* duplicates. Changes no picture row.
 
     Records **one** operation (:data:`OP_TYPE_KEEP_SEPARATE`), exactly like the
-    stack verdict does — the owner's 2026-07-30 reversal of the #644-era CSO
+    stack verdict does - the owner's 2026-07-30 reversal of the #644-era CSO
     ruling that kept this verdict out of the log. The verdict changes no picture
     facet, so the operation's before/after payloads are empty and the whole
     restore is the post-restore hook's: undo reopens the verdict and returns the
@@ -969,7 +969,7 @@ def apply_keep_separate_in_session(
         batch_id: Operation-log batch. A client gesture spanning several
             verdicts passes one ``cli-`` id so the whole gesture reverses with a
             single undo; minted server-side (``srv-``) when absent, exactly as
-            the stack verdict does — the batch id is what ties the Operation row
+            the stack verdict does - the batch id is what ties the Operation row
             back to this verdict row on restore.
         actor: Who performed the change, from ``request_context`` in the handler.
         source: WS-envelope source, likewise read from the request (§21 origin
@@ -979,7 +979,7 @@ def apply_keep_separate_in_session(
     _group, member_ids = _load_group(session, signature)
     # Always under a batch id, for the same reason the stack verdict is: the
     # batch id is the key restore_verdicts_in_session uses to find this verdict
-    # row again on undo/redo. Stored on the row since 2026-07-30 — safe now that
+    # row again on undo/redo. Stored on the row since 2026-07-30 - safe now that
     # keep-separate records its own operation, so a shared gesture id reverses it
     # only through THAT operation, explicitly and visibly, never as a silent
     # side effect of undoing a sibling stack (the original CSO R5 concern).
@@ -1040,7 +1040,7 @@ def _verdict_stack_still_standing(session: Session, row: DedupVerdict) -> bool:
     live-groups filter requires a group's live members to span two or more
     stack units (``COALESCE(stack_id, -id)``), so a group whose members all
     share the verdict's stack is invisible to the queue and clearing only the
-    memory would strand it — gone from Decided, never back in review (the
+    memory would strand it - gone from Decided, never back in review (the
     owner-reported 2026-07-30 bug).
 
     The check is deliberately narrow: it must be the **verdict's own** stack.
@@ -1048,7 +1048,7 @@ def _verdict_stack_still_standing(session: Session, row: DedupVerdict) -> bool:
     and the group is queue-visible the moment the memory clears; and if the
     user re-stacked the members into some *other* stack, that is their own
     fresh decision, which the queue's stack-units rule deliberately does not
-    re-offer — mutating either arrangement would fight the user.
+    re-offer - mutating either arrangement would fight the user.
     """
     if row.stack_id is None:
         logger.warning(
@@ -1075,8 +1075,8 @@ def _verdict_stack_still_standing(session: Session, row: DedupVerdict) -> bool:
 def _correlate_stack_operation(session: Session, row: DedupVerdict) -> Operation:
     """Find the one applied ``dedup.stack`` operation recorded for *row*.
 
-    Correlation is by the verdict's ``batch_id`` — every verdict is recorded
-    under one — plus membership: a bulk auto-stack coalesces MANY groups into
+    Correlation is by the verdict's ``batch_id`` - every verdict is recorded
+    under one - plus membership: a bulk auto-stack coalesces MANY groups into
     one batch, but each group records its **own** operation row, so within the
     batch the verdict's operation is the one whose (stack-expanded) target set
     covers the verdict's members. When a fold dragged this group's members into
@@ -1145,7 +1145,7 @@ def _recorded_stack_state(operation: Operation, signature: str) -> dict[str, dic
 
     A clear reverts the verdict's *stacking* only. The metadata union (tags,
     scores, membership) stays: clearing means "review this again", not "undo
-    everything the verdict did" — the full inverse remains the operation log's
+    everything the verdict did" - the full inverse remains the operation log's
     undo of the verdict itself.
     """
     try:
@@ -1188,13 +1188,13 @@ def reopen_verdict_in_session(
     stack units, so a cleared-but-still-stacked group would vanish from the
     Decided page yet never return to review (the owner-reported 2026-07-30
     bug). The stack is dissolved by restoring the **recorded pre-verdict stack
-    state** from the verdict's own operation-log row — so a pre-existing stack
-    the verdict folded in comes back instead of being flattened — scoped to
+    state** from the verdict's own operation-log row - so a pre-existing stack
+    the verdict folded in comes back instead of being flattened - scoped to
     that one operation's targets, so clearing one group of a bulk batch never
     touches its batch siblings. Stack rows the restore empties are deleted
     (`operation_log_service.delete_emptied_stacks`, the #643 hygiene). The
     metadata union is deliberately **not** reverted: a clear means "review
-    this again", not "undo the verdict" — that full inverse remains the
+    this again", not "undo the verdict" - that full inverse remains the
     operation log's.
 
     **The unstack is itself one undoable operation** (:data:`OP_TYPE_REOPEN`),
@@ -1203,12 +1203,12 @@ def reopen_verdict_in_session(
     :func:`restore_reopens_in_session` post-restore hook, so the pictures and
     the queue can never disagree. The old rule was "reopen records nothing,
     or undo-of-reopen becomes a second, confusing way to re-decide a group";
-    that rule survives exactly where its rationale still holds — a clear that
+    that rule survives exactly where its rationale still holds - a clear that
     touches **no picture** (keep-separate, or a stack the user already
     dissolved by hand) records nothing and returns ``batch_id: None``. Once a
     clear moves pictures, *not* re-deciding on undo would leave the pictures
-    restacked while the group sat open — the same half-restore class the
-    verdict hooks exist to prevent — so the operation is recorded and its
+    restacked while the group sat open - the same half-restore class the
+    verdict hooks exist to prevent - so the operation is recorded and its
     undo re-decides.
 
     A stacked verdict whose stack still stands but whose operation cannot be
@@ -1223,7 +1223,7 @@ def reopen_verdict_in_session(
         signature: The decided group's signature.
         batch_id: Optional client (``cli-``) batch id grouping several clears
             into one undo step; minted server-side (``srv-``) when absent and
-            pictures change. Must not equal the verdict's own batch id — that
+            pictures change. Must not equal the verdict's own batch id - that
             graft would make one undo apply the stack and its inverse in the
             same restore.
         actor: Who performed the change, from ``request_context`` in the
@@ -1352,11 +1352,11 @@ def restore_verdicts_in_session(
     Registered with the operation log as the post-restore hook for both
     :data:`OP_TYPE_STACK` (with ``verdict_kind=VERDICT_STACKED``) and
     :data:`OP_TYPE_KEEP_SEPARATE` (with ``verdict_kind=VERDICT_KEEP_SEPARATE``)
-    — see
+    - see
     :func:`pixlstash.services.operation_log_service.register_post_restore_hook`.
 
     Why this is needed at all: the operation log restores the reversible *picture*
-    facets, and a verdict changes two more things that are not picture facets —
+    facets, and a verdict changes two more things that are not picture facets -
     the ``DedupVerdict`` row (decided) and the ``DedupGroup`` row (resolved).
     Without this hook an undo left the group decided, so it never returned to
     the queue, survived a rescan (the signature still carried a live verdict)
@@ -1370,7 +1370,7 @@ def restore_verdicts_in_session(
     the hook takes the whole list rather than one operation at a time.
 
     Args:
-        session: The restore's own session. Not committed here — the operation
+        session: The restore's own session. Not committed here - the operation
             log commits the restore and this together, so the pictures and the
             queue can never disagree.
         operations: Every operation of this hook's ``op_type`` in this restore.
@@ -1378,7 +1378,7 @@ def restore_verdicts_in_session(
         verdict_kind: Which ``DedupVerdict.verdict`` this hook owns. The filter
             is what keeps each hook on its own rows when a client gesture id
             spans both verdict kinds: the stack hook must not touch a
-            keep-separate row and vice versa — each is reversed only through its
+            keep-separate row and vice versa - each is reversed only through its
             OWN operation, so nothing is ever undone silently.
     """
     batch_ids = sorted({op.batch_id for op in operations if op.batch_id})
@@ -1413,7 +1413,7 @@ def restore_verdicts_in_session(
             # The row is "live" precisely when reopened_at is NULL; one field
             # carries the lifecycle. decided_at is RE-stamped on redo
             # (2026-07-30): it means "when this decision last became live", not
-            # "when it was first made" — pressing redo is the user re-deciding
+            # "when it was first made" - pressing redo is the user re-deciding
             # now. The Decided page uses decided_at for keep-separate verdicts
             # and as the fallback when a stacked verdict has no live stack
             # timestamp. The original decision instant survives in the
@@ -1459,8 +1459,8 @@ def restore_reopens_in_session(
     unstacked them again; the emptied-stack hygiene is the restore's own,
     via ``delete_emptied_stacks`` in ``_restore``).
 
-    Correlation is by ``DedupVerdict.reopen_batch_id`` — stamped by
-    :func:`reopen_verdict_in_session` whenever a clear records an operation —
+    Correlation is by ``DedupVerdict.reopen_batch_id`` - stamped by
+    :func:`reopen_verdict_in_session` whenever a clear records an operation -
     NOT by ``batch_id``, which keeps pointing at the verdict's own operation
     so undoing the original stack still finds its verdict.
 
@@ -1632,7 +1632,7 @@ def bulk_auto_stack_in_session(
         except (DedupVerdictError, HTTPException) as exc:
             # One unstackable group must never abort the run: every earlier group
             # has already committed, so aborting here would leave a partially
-            # applied bulk mutation whose batch id the caller never receives —
+            # applied bulk mutation whose batch id the caller never receives -
             # i.e. no undo handle for work that did happen.
             #
             # HTTPException is caught alongside DedupVerdictError because the
@@ -1712,7 +1712,7 @@ def _notify_pictures_changed(
     wrappers, after the verdict's own commit, mirroring how the operation log's
     undo/redo wrappers emit after their DB task returns. ``origin_client_id`` /
     ``source`` are the values the handler read from the request and passed down
-    explicitly — never a contextvar, which is dead off the request's task.
+    explicitly - never a contextvar, which is dead off the request's task.
     """
     if not picture_ids:
         return
@@ -1741,7 +1741,7 @@ def apply_stack_verdict(
 
     ``actor`` / ``source`` / ``origin_client_id`` come from
     ``operation_log_service.request_context(request)``, evaluated in the handler
-    on the request's own task — never read here, where the contextvar is dead.
+    on the request's own task - never read here, where the contextvar is dead.
     """
     result = vault.db.run_task(
         apply_stack_verdict_in_session,
@@ -1769,7 +1769,7 @@ def apply_keep_separate(
 
     ``actor`` / ``source`` / ``origin_client_id`` come from
     ``operation_log_service.request_context(request)``, evaluated in the handler
-    on the request's own task — never read here, where the contextvar is dead.
+    on the request's own task - never read here, where the contextvar is dead.
     """
     result = vault.db.run_task(
         apply_keep_separate_in_session,
@@ -1879,7 +1879,7 @@ def reopen_verdict(
 
     ``actor`` / ``source`` / ``origin_client_id`` come from
     ``operation_log_service.request_context(request)``, evaluated in the handler
-    on the request's own task — never read here, where the contextvar is dead.
+    on the request's own task - never read here, where the contextvar is dead.
     Emits the standard ``pictures_changed`` announcement over the affected
     members (and, for a clear that unstacked, the whole restored target set),
     since a clear changes state other tabs render.
@@ -1941,7 +1941,7 @@ def bulk_auto_stack(
 
 
 # Registered at import time, and this module is imported by
-# ``pixlstash/routes/dedup.py``, which ``Server`` mounts at startup — so the
+# ``pixlstash/routes/dedup.py``, which ``Server`` mounts at startup - so the
 # hooks are in place before any request can reach undo. The registration lives
 # here, not in the operation log, so the op-log core keeps no dedup knowledge.
 # One hook per op_type, each scoped to its own verdict kind: a gesture batch

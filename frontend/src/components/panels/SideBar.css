@@ -28,7 +28,7 @@
   flex-shrink: 0;
   /* Fixed 36px so the tabs' bottom edge aligns with the 36px toolbar's, regardless
      of the sidebar font scaling. min-height:0 defeats the flex default
-     (min-height:auto) — without it the tab content pushes this past its set height
+     (min-height:auto) - without it the tab content pushes this past its set height
      (the toolbar, a plain block, isn't subject to that). Re-pin --text-xs (the only
      ramp token the tabs use) to its literal value so the tab labels are exempt from
      --sidebar-font-scale and the height never drifts. */
@@ -52,7 +52,7 @@
   background: transparent;
   border-bottom: none;
   /* Query container for the progressive tab-label collapse (see the @container
-     rules below). Sits on the tabs row — not the header — so the thresholds
+     rules below). Sits on the tabs row - not the header - so the thresholds
      measure the space actually left for the tabs after the pin button. */
   container: sidebartabs / inline-size;
 }
@@ -96,13 +96,13 @@
   color: inherit;
 }
 
-/* Tab text label — shown whole or not at all (no ellipsis). It's dropped in two
+/* Tab text label - shown whole or not at all (no ellipsis). It's dropped in two
    stages by the @container rules below as the header narrows. */
 .sidebar-view-tab-label {
   white-space: nowrap;
 }
 
-/* Stage 1 — the non-selected tabs shed their text and shrink to their icon, so
+/* Stage 1 - the non-selected tabs shed their text and shrink to their icon, so
    the selected tab keeps its label and takes the freed space. */
 @container sidebartabs (max-width: 205px) {
   .sidebar-view-tab:not(.active) .sidebar-view-tab-label {
@@ -116,7 +116,7 @@
   }
 }
 
-/* Stage 2 — too tight even for the selected label: every tab is icon-only and
+/* Stage 2 - too tight even for the selected label: every tab is icon-only and
    the three share the row equally again. */
 @container sidebartabs (max-width: 115px) {
   .sidebar-view-tab.active .sidebar-view-tab-label {
@@ -273,7 +273,7 @@
   border-radius: 0;
 }
 
-/* Drop-target highlight (drag pictures onto a project to assign them) —
+/* Drop-target highlight (drag pictures onto a project to assign them) -
    mirrors .sidebar-list-item.droppable used by character/set rows. */
 .sidebar-project-tree-row.droppable {
   filter: brightness(1.2);
@@ -840,7 +840,7 @@
 /* The brand row is the browser shell's top band, so it takes the band's height
    and the columns line up: its bottom edge is the toolbar's bottom edge, and
    the tab row below it starts where the grid does. MUST stay in sync with the
-   toolbar height (`.selection-bar-overlay` in Toolbar.vue) — the same pairing
+   toolbar height (`.selection-bar-overlay` in Toolbar.vue) - the same pairing
    `html.is-desktop .sidebar-view-header` already states in style.css.
    `min-height`, not `height`: the "new version available" line flows under the
    wordmark and must be allowed to grow the row rather than be clipped. */
@@ -887,7 +887,7 @@
 
 .sidebar-brand-title {
   /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl" uses the
-     sidebar text colour, "Stash" the accent — matching the desktop title bar. */
+     sidebar text colour, "Stash" the accent - matching the desktop title bar. */
   font-size: var(--text-xl);
   color: rgb(var(--v-theme-sidebar-text));
   --wordmark-accent: rgb(var(--v-theme-accent));
@@ -1217,7 +1217,7 @@
 
 /* Inset, not the token's outer ring: these rows run edge to edge in the
    sidebar, so an outer 3px stroke is clipped on both sides. Same colour, same
-   width — `inset var(--focus-ring)` expands to `inset 0 0 0 3px accent`. */
+   width - `inset var(--focus-ring)` expands to `inset 0 0 0 3px accent`. */
 .sidebar-list-item:focus-visible,
 .sidebar-collapsed-item:focus-visible {
   outline: none;
@@ -1230,7 +1230,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   padding: 0px 0 0;
-  /* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
+  /* Shared subtle scrollbar treatment - keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
   scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
   scrollbar-width: thin;
   display: flex;
@@ -1298,7 +1298,7 @@
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-accent), 0.15);
   /* 11px text on a 15% accent tint. The accent as its own foreground here
-     measured 3.41:1 light / 2.81:1 dark after the fill deepen — under the 4.5:1
+     measured 3.41:1 light / 2.81:1 dark after the fill deepen - under the 4.5:1
      body floor in both, and under even the 3:1 UI floor in dark. Same rule as
      the project-menu fixes: on a TINT the foreground is the surface's own, not
      the tint's hue. `on-surface` gives 11.55:1 light / 10.43:1 dark at rest
@@ -1370,7 +1370,7 @@
   color: rgb(var(--v-theme-on-primary));
 }
 
-/* Rejected drop target — the row is under the pointer but will not take the
+/* Rejected drop target - the row is under the pointer but will not take the
    payload being dragged (a face bbox over a picture set, say). It must not be
    mistaken for `.droppable`, and it must not rely on colour alone: the hatch
    texture carries the state, the mdi-cancel glyph names it, and the disabled
@@ -1486,7 +1486,7 @@
   overflow: visible;
 }
 
-/* Top-level nav rows (All Pictures, Scrapheap) — slightly larger than --fixed */
+/* Top-level nav rows (All Pictures, Scrapheap) - slightly larger than --fixed */
 .sidebar-list-icon--toplevel {
   width: min(var(--sidebar-thumb-size), 26px) !important;
   height: min(var(--sidebar-thumb-size), 26px) !important;
@@ -1705,7 +1705,7 @@
   margin: 0;
 }
 
-/* Under ~150px there isn't room for the per-entry image counts — drop them. */
+/* Under ~150px there isn't room for the per-entry image counts - drop them. */
 .sidebar--narrow .sidebar-list-count,
 .sidebar--narrow .sidebar-folder-count-badge {
   display: none;
@@ -1951,7 +1951,7 @@
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
-/* Add folder button in the folders tab needs no bottom divider — section headers do that job */
+/* Add folder button in the folders tab needs no bottom divider - section headers do that job */
 .sidebar-tab-panel > .sidebar-project-tree-add {
   border-bottom: none;
 }
@@ -2505,4 +2505,23 @@ button.sidebar-ctx-item:disabled:hover {
 
 .sidebar-collapsed-item.sidebar-destination-btn {
   text-align: center;
+}
+
+/* v1.11 Phase 3: the "finish organising" resume row. Accented rather than the
+   plain sidebar-text color of an ordinary folder row, because it names
+   unfinished work the owner asked to come back to, not a settled folder. */
+.sidebar-mapping-resume-row {
+  color: rgb(var(--v-theme-accent));
+}
+
+.sidebar-mapping-resume-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-mapping-resume-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
 }

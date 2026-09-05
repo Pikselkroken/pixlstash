@@ -2,14 +2,14 @@
 //
 // A picture in a locked picture set is read-only everywhere, and the bulk
 // `DELETE /pictures` endpoint honours that by SKIPPING it and reporting the ids
-// back as `skipped_locked` — the request still returns 200. Throwing that array
+// back as `skipped_locked` - the request still returns 200. Throwing that array
 // away is what produced the reported bug: the user deleted a locked selection,
 // got a success, and watched nothing happen with no explanation.
 //
 // The message construction lives here, as pure functions, for two reasons:
-//   * the same wording is needed on two paths — the pre-flight block (we refuse
+//   * the same wording is needed on two paths - the pre-flight block (we refuse
 //     to send a request that we know would delete nothing) and the post-response
-//     partial outcome — and they must not drift apart;
+//     partial outcome - and they must not drift apart;
 //   * counts drive singular/plural in three places, which is exactly the kind of
 //     thing that silently regresses without tests.
 //
@@ -39,7 +39,7 @@ function plural(count, singular, pluralForm) {
  * @param {number} counts.lockedCount - pictures skipped because they are locked.
  * @param {number} counts.deletedCount - pictures actually moved to the scrapheap.
  * @returns {{kind: string, title: string, body: string, hint: string}|null}
- *   `null` when nothing was skipped — i.e. there is nothing to tell the user.
+ *   `null` when nothing was skipped - i.e. there is nothing to tell the user.
  */
 export function buildLockedDeleteMessage({
   lockedCount = 0,
@@ -81,12 +81,12 @@ export function buildLockedDeleteMessage({
  *
  * `POST /pictures/scrapheap/delete-preview` returns three **disjoint** buckets
  * that sum to `total_count`, classified LOCKED FIRST:
- *   - `locked_count`      — frozen by a lock (whether or not also protected)
- *   - `protected_count`   — a reference-folder original AND not locked
- *   - `unprotected_count` — neither
+ *   - `locked_count`      - frozen by a lock (whether or not also protected)
+ *   - `protected_count`   - a reference-folder original AND not locked
+ *   - `unprotected_count` - neither
  *
  * Because they partition the total, the destroyable figures are plain sums of
- * the server's own buckets — never arithmetic on `total_count`. That matters:
+ * the server's own buckets - never arithmetic on `total_count`. That matters:
  * deriving a count as `total - locked` would silently drift the moment the
  * server changed how it classifies a picture, which is exactly the class of bug
  * that produced the original silent no-op.
@@ -129,7 +129,7 @@ export function buildLockedPurgeNote(lockedCount = 0) {
   const set = plural(locked, "a locked set", "locked sets");
   const itThem = plural(locked, "it", "them");
   return (
-    `${locked} ${noun} ${isAre} in ${set} and will be kept — ` +
+    `${locked} ${noun} ${isAre} in ${set} and will be kept - ` +
     `neither action below deletes ${itThem}.`
   );
 }

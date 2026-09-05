@@ -1,11 +1,11 @@
-// useGlobalKeydown — where the undo chord is allowed to act.
+// useGlobalKeydown - where the undo chord is allowed to act.
 //
 // The handler's own invariant is that every undo raises a receipt, which is why
 // it already declines behind a modal scrim. The model shelf is the same rule
 // reached from the other side: it mounts no `ActionReceipt` and no
 // `UndoControl`, so an undo fired there would revert a library action taken on
 // a screen the reader has left, with nothing on this one to say so. These tests
-// pin the positive control beside the negative — over-declining would be its
+// pin the positive control beside the negative - over-declining would be its
 // own regression.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -44,7 +44,7 @@ function press(key, init = {}) {
   );
 }
 
-/** Mount the shelf's root signal — the class `ModelShelf.vue` renders. */
+/** Mount the shelf's root signal - the class `ModelShelf.vue` renders. */
 function mountShelfMarker() {
   const el = document.createElement("div");
   el.className = "shelf";

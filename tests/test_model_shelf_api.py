@@ -6,7 +6,7 @@ One ``Server`` per module, built once. The shelf's own data lives in the **hub**
 and is written here with plain SQL, which costs microseconds; the expensive part
 is the server boot, so it is paid once. Per test, the autouse fixture wipes and
 re-seeds the three shelf tables and the vault's ``adapter_attachment`` rows, and
-re-mints every credential — so no test can inherit another test's token, and a
+re-mints every credential - so no test can inherit another test's token, and a
 negative assertion cannot pass because the credential was dead rather than
 because the scope was refused.
 
@@ -14,7 +14,7 @@ The seeded shelf is deliberately shaped around the three decisions B5 had to
 make, so a regression in any of them is a failing assertion rather than a
 judgement call:
 
-* two adapters **with** a base model and two **without** — a null base model is a
+* two adapters **with** a base model and two **without** - a null base model is a
   bulk state (37 % of a measured 91-file folder), so it is carried by the filter
   as an explicit ``UNASSIGNED`` rather than dropped;
 * one ``file_kind='unknown'``, which must appear in neither list by default and
@@ -25,7 +25,7 @@ judgement call:
 
 Both authz directions on every route, per §16.1: the owner cookie 200s (over-
 blocking is its own regression) and every scoped/unscoped share token is 403'd by
-the gate's ``OWNER_ONLY`` declaration — with an in-scope positive control proving
+the gate's ``OWNER_ONLY`` declaration - with an in-scope positive control proving
 the refused token is live.
 """
 
@@ -289,7 +289,8 @@ def shelf_env():
     try:
         owner = TestClient(server.api, raise_server_exceptions=True)
         r = owner.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
 
@@ -330,7 +331,7 @@ def fresh_shelf(shelf_env):
     r = shelf_env.owner.get(f"{API}/adapters")
     assert r.status_code == 200, (
         f"the shared owner session cannot read the shelf ({r.status_code}: "
-        f"{r.text}) — every refusal below would prove nothing"
+        f"{r.text}) - every refusal below would prove nothing"
     )
     yield shelf_env
 
@@ -355,7 +356,7 @@ def _names(payload: list[dict]) -> set[str]:
 
 
 # ===========================================================================
-# Declarations — the registry entry is the route's only authorization
+# Declarations - the registry entry is the route's only authorization
 # ===========================================================================
 
 
@@ -513,7 +514,7 @@ def test_search_escapes_sqlite_like_wildcards(shelf_env):
 
 
 # ===========================================================================
-# The cross-database filter — hub query + vault query, joined in Python
+# The cross-database filter - hub query + vault query, joined in Python
 # ===========================================================================
 
 
@@ -557,7 +558,7 @@ def test_character_and_set_filters_are_mutually_exclusive(shelf_env):
 
 
 # ===========================================================================
-# Authorization — both directions, on every route
+# Authorization - both directions, on every route
 # ===========================================================================
 
 
@@ -602,7 +603,7 @@ def test_resource_scoped_share_token_is_refused_on_every_shelf_route(shelf_env):
     control = client.get(f"{API}/pictures")
     assert control.status_code == 200, (
         f"the freshly minted scoped token cannot do an in-scope read "
-        f"({control.status_code}: {control.text}) — the refusals below would "
+        f"({control.status_code}: {control.text}) - the refusals below would "
         "prove nothing"
     )
 
@@ -615,7 +616,7 @@ def test_resource_scoped_share_token_is_refused_on_every_shelf_route(shelf_env):
 
 def test_unscoped_read_token_is_refused_on_every_shelf_route(shelf_env):
     """``OWNER_ONLY`` rejects an unscoped READ token too, not only a
-    resource-scoped one — this is the sibling vector that the scope-filter
+    resource-scoped one - this is the sibling vector that the scope-filter
     policies (``SCOPED_LIST``) would let through."""
     token = _mint(shelf_env.owner, "shelf global read token")
     client = _bearer(shelf_env.server, token)
@@ -623,7 +624,7 @@ def test_unscoped_read_token_is_refused_on_every_shelf_route(shelf_env):
     control = client.get(f"{API}/pictures")
     assert control.status_code == 200, (
         f"the unscoped READ token cannot read at all ({control.status_code}: "
-        f"{control.text}) — the refusals below would prove nothing"
+        f"{control.text}) - the refusals below would prove nothing"
     )
 
     for path in _shelf_paths():
@@ -765,7 +766,7 @@ def test_a_path_that_is_not_a_directory_is_refused(shelf_env, tmp_path):
 
 def test_the_filesystem_root_is_refused(shelf_env):
     """``/`` is absolute, is no blocklist entry and is prefixed by none, so the
-    blocklist alone admits it — and a rescan of it then stats every file on every
+    blocklist alone admits it - and a rescan of it then stats every file on every
     mounted volume and SHA-256s every adapter on the machine, with a server
     restart as the only off switch. It is refused for containing the vault."""
     assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
@@ -989,14 +990,14 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
     READ token (``ALL``+``resource_type`` is refused at mint and fail-closed at
     the middleware). So the 403 below is the **middleware's**, and the gate's
     ``LOCAL_OWNER_ONLY`` owner half is defence in depth that no HTTP request can
-    observe independently — there exists no credential that reaches the gate on
+    observe independently - there exists no credential that reaches the gate on
     these routes and fails its owner check. Verified by mutation: deleting
     ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch does
     **not** turn this file red, and that is a property of the system rather than
     a hole in this test. It is flagged to the adversarial review rather than
     papered over, and it is not specific to the shelf.
 
-    **What is NOT true — corrected by the 2026-08-09 security review:** the tier
+    **What is NOT true - corrected by the 2026-08-09 security review:** the tier
     is not all non-GET. ``GET /filesystem/browse`` and
     ``GET /reference-folders/detect-sidecars`` are both ``LOCAL_OWNER_ONLY``, and
     for those two the middleware's non-GET rule says nothing. What refuses a
@@ -1011,14 +1012,14 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
 
     **Updated 2026-08-15:** "nothing goes red" is no longer true of this file.
     ``test_no_share_token_can_download_a_model_file`` covers a GET on this tier
-    directly — ``GET /adapters/{sha256}/file``, whose templated path
-    ``READ_BLOCKED_GET_PATHS`` could not match in any case — and deleting
+    directly - ``GET /adapters/{sha256}/file``, whose templated path
+    ``READ_BLOCKED_GET_PATHS`` could not match in any case - and deleting
     ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch
     fails it. The gap the paragraph above describes is real for a *new*
     undeclared GET; it is not currently unmeasured.
 
     What this test does own: the block is real, the credential is live, and the
-    routes exist. ``assert_real_route`` is load-bearing — middleware answers 403
+    routes exist. ``assert_real_route`` is load-bearing - middleware answers 403
     before routing, so a renamed route would 403 identically and the assertion
     would dissolve into nothing.
     """
@@ -1078,7 +1079,7 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
 
     It ran unobserved: a 57 GB folder is minutes of hashing with nothing to
     show, a crash looked exactly like a slow read, and the thread was alive at
-    interpreter shutdown — the shape #856's teardown gate exists to catch. As a
+    interpreter shutdown - the shape #856's teardown gate exists to catch. As a
     ``TaskRunner`` task the scan reports file progress on the same
     ``/workers/progress`` lane every other task uses, and the runner owns its
     lifecycle.
@@ -1135,7 +1136,7 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     assert row["file_count"] == 3, row
     assert row["last_checked"] is not None, row
 
-    # Terminal, so the lane goes quiet again — over-reporting a finished scan as
+    # Terminal, so the lane goes quiet again - over-reporting a finished scan as
     # running is its own regression.
     lane = shelf_env.owner.get(f"{API}/workers/progress").json()["workers"][
         "ModelFolderScanTask"
@@ -1147,7 +1148,7 @@ def test_a_crashed_rescan_reports_failed_rather_than_looking_slow(
     shelf_env, tmp_path, monkeypatch
 ):
     """The scanner logs its exception and returns without stamping
-    ``last_checked``, so a timestamp cannot tell a crash from a slow read — which
+    ``last_checked``, so a timestamp cannot tell a crash from a slow read - which
     is why the UI had to guess with a ten-minute ceiling. The task's status can.
     """
     folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "doomed", 2)
@@ -1183,7 +1184,7 @@ def test_forgetting_a_folder_forgets_the_scan_recorded_against_it(shelf_env, tmp
 
 
 # ===========================================================================
-# PUT /adapters/{sha256}/attachments — the assignment path (B5, part 3)
+# PUT /adapters/{sha256}/attachments - the assignment path (B5, part 3)
 # ===========================================================================
 
 
@@ -1233,8 +1234,8 @@ def test_put_deduplicates_on_the_composite_key(shelf_env):
 
 
 def test_put_refuses_an_entity_that_does_not_exist_and_writes_nothing(shelf_env):
-    """``adapter_attachment`` carries no foreign key — it cannot, its other end
-    is in the hub — so a typo'd id would sit there invisible and permanent.
+    """``adapter_attachment`` carries no foreign key - it cannot, its other end
+    is in the hub - so a typo'd id would sit there invisible and permanent.
     The check runs before the delete, so a refused call is a no-op."""
     _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
 
@@ -1322,7 +1323,7 @@ def test_put_attaches_an_unclassified_file(shelf_env):
 def test_attachment_write_is_owner_only_in_both_directions(shelf_env):
     """Positive: the owner writes. Negative: no share token does.
 
-    Same caveat as the folder mutators — PUT is a non-GET, so the middleware's
+    Same caveat as the folder mutators - PUT is a non-GET, so the middleware's
     READ-token write block answers before the gate's ``OWNER_ONLY`` check. The
     block is the live enforcement; ``assert_real_route`` is what stops a renamed
     route from 403ing identically and making this vacuous.
@@ -1352,7 +1353,7 @@ def test_attachment_write_is_owner_only_in_both_directions(shelf_env):
 
 
 # ===========================================================================
-# Sorting (B7) — the aggregates are in the list query, not per row
+# Sorting (B7) - the aggregates are in the list query, not per row
 # ===========================================================================
 
 
@@ -1383,7 +1384,7 @@ def test_sort_keys_are_exactly_the_five_that_were_ruled():
 
 def test_default_sort_is_newest_added_first(shelf_env):
     """Ruled default. Alice and Dana are one stack, so both carry the stack's
-    newest member date (Dana's, 08-04) and lead — Alice's own 08-01 would put her
+    newest member date (Dana's, 08-04) and lead - Alice's own 08-01 would put her
     last, which is exactly the per-row reading this must not do."""
     assert _order(shelf_env) == [
         "alice.safetensors",
@@ -1524,18 +1525,18 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     # `model-folder-rescan` when a rescan outlived the test that started it, and
     # was still short: `TaskRunner` names its workers `<name>-cpu-<i>` and
     # `<name>-gpu` (task_runner.py:423), and `CHECKPOINT_HASH` works on the hub
-    # — so it slipped through and this failed with "3 hub queries for 24 rows"
+    # - so it slipped through and this failed with "3 hub queries for 24 rows"
     # on an unrelated PR. Every future worker would have to be remembered here.
     #
     # An allowlist cannot go stale that way: Starlette serves the handler on its
     # own threadpool, whose threads are named "AnyIO worker thread", and nothing
-    # else in this process is. It also cannot rot into a dead assertion — the
+    # else in this process is. It also cannot rot into a dead assertion - the
     # tally is asserted to be an exact number, so a naming change that matched
     # nothing would fail loudly rather than pass silently.
     #
     # That number is three: the rows, the locations, and the capabilities. What
     # this test actually guards is that the tally does not MOVE WITH THE ROW
-    # COUNT, which is why both sides are compared as well as pinned — a whole-
+    # COUNT, which is why both sides are compared as well as pinned - a whole-
     # page query added on purpose changes the constant, a per-row lookup breaks
     # the equality.
     request_thread_prefix = "AnyIO worker thread"
@@ -1586,7 +1587,7 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
         assert r.status_code == 200, r.text
         assert len(r.json()["adapters"]) == 24
         assert len(calls) == with_four_rows == 3, (
-            f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 — "
+            f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 - "
             "the list has grown a per-row lookup"
         )
     finally:
@@ -1594,7 +1595,7 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
 
 
 # ===========================================================================
-# Moves (B7) — behaviour at the route, and both authz directions
+# Moves (B7) - behaviour at the route, and both authz directions
 # ===========================================================================
 
 _MOVE_ROUTES = (
@@ -1674,8 +1675,8 @@ def _await_move(shelf_env, timeout=10.0):
 def test_the_move_worker_writes_the_job_under_the_readers_lock(mutate):
     """The worker thread must not touch ``_job`` while a reader holds the lock.
 
-    ``_snapshot`` reads the dict in several steps — ``done`` from
-    ``len(results)``, then ``results`` itself, then ``status`` — so a write
+    ``_snapshot`` reads the dict in several steps - ``done`` from
+    ``len(results)``, then ``results`` itself, then ``status`` - so a write
     landing between two of them hands the client a snapshot that contradicts
     itself. Asserted as blocking rather than by racing for real: hold
     ``_job_lock``, run the worker's write on another thread, and require that it
@@ -1722,7 +1723,7 @@ def test_the_move_worker_writes_the_job_under_the_readers_lock(mutate):
 
 def test_every_move_route_is_declared_local_owner_only():
     """§16.3: the shelf's first block that writes and unlinks host files. The
-    GET is on the tier too, deliberately — see the coverage-matrix rationale."""
+    GET is on the tier too, deliberately - see the coverage-matrix rationale."""
     for method, path, _ in _MOVE_ROUTES:
         key = (method, path.replace(API, "/api/v1"))
         assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
@@ -1789,7 +1790,7 @@ def test_a_move_and_an_import_share_one_job_slot(
     itself and neither against the other: both could find one destination
     filename free and whichever wrote second won in silence.
 
-    Held deterministically rather than by racing two threads — the slot is the
+    Held deterministically rather than by racing two threads - the slot is the
     contract, and a timing test would prove less and flake more. Both directions
     plus a positive control, so a 409 cannot pass because the request was bad.
     """
@@ -1875,7 +1876,7 @@ def test_remote_owner_is_refused_on_every_move_route_naming_the_flag(shelf_env):
 
 
 # ===========================================================================
-# ai-toolkit import (B7) — the route, and both authz directions
+# ai-toolkit import (B7) - the route, and both authz directions
 # ===========================================================================
 
 _IMPORT_ROUTES = (
@@ -1964,7 +1965,7 @@ def test_every_import_route_is_declared_local_owner_only():
         # for on the grounds that a model.id crosses the wire and a host path
         # does not. That is the argument the matrix records as *not* the
         # argument: GET /adapters/{sha256}/file takes no host path either and is
-        # on this tier, because the tier follows the authority exercised —
+        # on this tier, because the tier follows the authority exercised -
         # reading bytes out of a folder the owner registered.
         ("GET", "/api/v1/models/{model_id}/samples"),
         ("GET", "/api/v1/models/{model_id}/samples/{filename}"),
@@ -2048,7 +2049,7 @@ def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
     percent-decodes the path before matching, so `{filename}` is structurally
     incapable of carrying a `/`: a literal `../` is collapsed by the client, and
     `..%2F` becomes an extra path segment that matches no route. Three
-    measurements got this wrong before it was pinned down —
+    measurements got this wrong before it was pinned down -
 
       1. the plain-`../` version stayed green with `resolve_path_within` deleted;
       2. so did the percent-encoded version;
@@ -2060,7 +2061,7 @@ def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
     So an HTTP-level traversal test here asserts nothing and was removed rather
     than kept as reassurance. The guard is still real and still load-bearing on
     **Windows**, where a backslash is both an ordinary URL character and a path
-    separator, and where four CI shards run — which is why this asserts the join
+    separator, and where four CI shards run - which is why this asserts the join
     directly, and why it fails on every platform when the guard is removed.
 
     If either path segment is ever changed to a `:path` converter, the HTTP
@@ -2269,7 +2270,7 @@ def test_an_imported_runs_samples_are_listed_and_served_off_the_shelf(
     assert listed.json()["samples"] == [
         "1712345678901__000000500_0.jpg",
         "1712345678901__000000500_1.jpg",
-    ], "the stack cover listed no previews — the blank-cover failure"
+    ], "the stack cover listed no previews - the blank-cover failure"
     assert (
         shelf_env.owner.get(f"{API}/models/{stepped}/samples").json()["samples"]
         == listed.json()["samples"]
@@ -2300,7 +2301,7 @@ def test_the_sample_routes_serve_previews_and_not_the_owners_own_pictures(
     """The directory is found by name, so anything can be in it.
 
     Both routes therefore key on the trainer's `<timestamp>__<step>_<index>`
-    shape rather than on "it is an image in a directory whose name matched" —
+    shape rather than on "it is an image in a directory whose name matched" -
     the same test the delete verb uses to decide the directory is the model's.
     Without it these routes read the owner's own pictures back out over HTTP and
     the response describes them as the run's previews.
@@ -2326,7 +2327,7 @@ def test_an_unknown_model_id_is_a_404_on_both_sample_routes(shelf_env):
     """An unmatched path is *also* a 404, so this assertion is worthless unless
     the routes are known to exist. `assert_real_route` is that proof, and
     without it the test would pass verbatim against a renamed or deleted
-    route — the 403-shaped trap in its 404 form."""
+    route - the 403-shaped trap in its 404 form."""
     for path in ("samples", "samples/a.jpg"):
         url = f"{API}/models/9999999/{path}"
         assert_real_route(shelf_env.server.api, "GET", url)
@@ -2390,7 +2391,7 @@ def test_a_symlinked_model_samples_directory_is_not_its_own_safe_base(tmp_path):
 
     `resolve_path_within` realpaths the base it is handed, so containing the
     filename against the derived directory alone would make a symlinked
-    `<stem>_samples` its own safe base — an arbitrary-image reader for any
+    `<stem>_samples` its own safe base - an arbitrary-image reader for any
     allowlisted extension. Registered model folders are less exposed than a
     `source` folder, whose contents are third-party tool output, but the
     directory name here is derived rather than chosen and the owner's disk is
@@ -2461,7 +2462,7 @@ def test_remote_owner_is_refused_on_every_import_route_naming_the_flag(shelf_env
 
 
 # ===========================================================================
-# The managed store (B7) — it is always there, and it does not go away
+# The managed store (B7) - it is always there, and it does not go away
 # ===========================================================================
 
 
@@ -2470,7 +2471,7 @@ def managed_folder(shelf_env, tmp_path):
     """A managed row and a plain user row, so both delete directions are live.
 
     Registered here rather than relied on from server start, because the autouse
-    re-seed wipes ``model_folder`` before every test — which is what keeps the
+    re-seed wipes ``model_folder`` before every test - which is what keeps the
     shelf assertions above deterministic.
     """
     store = tmp_path / "managed"
@@ -2530,7 +2531,7 @@ def test_forgetting_a_folder_takes_the_same_job_slot_as_a_move_and_an_import(
 
     Forgetting a folder deletes exactly the ``model_file`` rows a running move is
     repointing. Let it interleave and the move's UPDATE matches nothing, which
-    SQL reports as success — so the source got unlinked and the destination bytes
+    SQL reports as success - so the source got unlinked and the destination bytes
     ended up registered nowhere. The mover refuses such a commit on its own side
     too; this is the half that stops the interleaving from ever starting.
     """
@@ -2573,7 +2574,7 @@ def test_the_managed_kind_cannot_be_created_over_http(shelf_env, tmp_path):
 
 
 # ===========================================================================
-# Relocating the managed store — a B7 move of every file it holds
+# Relocating the managed store - a B7 move of every file it holds
 # ===========================================================================
 
 
@@ -2660,7 +2661,7 @@ def test_relocating_the_store_moves_its_files_and_keeps_one_managed_row(
         "the new row is the store now; the old one is gone"
     )
 
-    # Every row the old store held now belongs to the new one — including the
+    # Every row the old store held now belongs to the new one - including the
     # tombstone, which came across rather than being dropped with the old row:
     # the store moving is not news about whether that file came back. (The
     # module's own seeded folder 1 is not part of this and is excluded.)
@@ -2687,7 +2688,7 @@ def test_a_relocation_interrupted_before_the_promotion_leaves_one_managed_row(
     shelf_env, relocatable_store, monkeypatch
 ):
     """The crash window that is specific to relocation. Every file may already
-    have moved and the promotion may not have run — and that must still leave
+    have moved and the promotion may not have run - and that must still leave
     exactly one managed folder and no row naming a file that is gone."""
     from pixlstash.routes import model_moves
 
@@ -2733,7 +2734,7 @@ def test_a_symlink_into_a_system_directory_is_refused_not_followed(
     That is right about boundaries and beside the point about *this* check:
     there is no non-owner principal, so the blocklist is not a boundary, it is
     the guard against the owner relocating the store onto a system directory by
-    accident — and a symlink is exactly the accident the owner cannot see in the
+    accident - and a symlink is exactly the accident the owner cannot see in the
     path they typed. Lexically checked, this route would ``makedirs`` under
     ``/usr``, move every file of the store there, and ``rmdir`` around it.
     """
@@ -2772,7 +2773,7 @@ def test_a_relocation_target_must_be_absolute_and_off_the_system_blocklist(
     test at all: nulling the guard left the suite green.
 
     Owner-chosen paths are trusted here (the reference-folder precedent), so the
-    guard is narrow on purpose — absolute, and not a system directory — but it
+    guard is narrow on purpose - absolute, and not a system directory - but it
     is the difference between relocating the store onto ``/etc`` and not. Both
     refusals plus the positive control below, because over-blocking would make
     the store unmovable.
@@ -2847,7 +2848,7 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
     # `_await_move` cannot tell "the job finished" from "there was never a job":
     # the fixture nulls `_job`, and a snapshot of nothing reads `idle`, so a
     # positive control that regressed to a 409 would be awaited in name only.
-    # And it is waited for because it really relocates — the job runs on a
+    # And it is waited for because it really relocates - the job runs on a
     # daemon thread whose ending repoints folder rows, and for the download
     # folder, which shares this route, records a machine-global location. Left
     # running it finishes inside whichever test comes next.
@@ -2856,7 +2857,7 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
 
 
 def test_relocating_keeps_the_stores_subdirectories(shelf_env, relocatable_store):
-    """The store is ``movable='root_only'`` — it moves as a unit — so its tree
+    """The store is ``movable='root_only'`` - it moves as a unit - so its tree
     has to arrive as a tree. Flattened, two runs holding a same-named checkpoint
     collide and the store can never be relocated at all."""
     with shelf_env.server.hub.transaction() as conn:
@@ -2947,7 +2948,7 @@ def relocatable_downloads(shelf_env, tmp_path, monkeypatch):
 
     The companion is the whole reason this needs its own coverage. The
     declaration gives a ``model_file`` row to the engine file alone, so the mover
-    — which moves rows — never sees the label set beside it. A relocation that
+    - which moves rows - never sees the label set beside it. A relocation that
     only moved the rows would leave a tagger that cannot load and would be
     downloaded again, which is the failure #905 exists to prevent.
 
@@ -3000,7 +3001,7 @@ def test_relocating_the_download_folder_takes_the_companions_with_it(
 def test_an_empty_download_folder_still_relocates(shelf_env, relocatable_downloads):
     """The obvious first thing to do on a fresh install: send the downloads to
     the big drive BEFORE anything is fetched. Nothing to move is not nothing to
-    do — the location still has to be recorded, or the first download lands in
+    do - the location still has to be recorded, or the first download lands in
     the folder the owner just moved away from."""
     from pixlstash.services import builtin_models
 
@@ -3058,7 +3059,7 @@ def test_a_root_only_folder_with_no_relocate_route_is_still_refused(
     shelf_env, relocatable_downloads, tmp_path
 ):
     """The InsightFace packs carry the same kind, owner and `movable` as the
-    download folder — `declare_folder` writes all three the same way — so the
+    download folder - `declare_folder` writes all three the same way - so the
     route cannot key on those columns. #906 is what opens this one."""
     packs = tmp_path / "insightface" / "models"
     packs.mkdir(parents=True)
@@ -3178,7 +3179,7 @@ def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
 
 def test_clearing_the_algorithm_of_an_adapter_is_refused(shelf_env):
     """Named no `file_kind` at all, so it never looked like the CHECK guard's
-    business — and the row is already an adapter, so `kind = NULL` violates
+    business - and the row is already an adapter, so `kind = NULL` violates
     `CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)`. Reported by the CSO
     review of #869; it was a 500 before the guard read the post-write state."""
     alice = shelf_env.model_ids["alice.safetensors"]
@@ -3218,14 +3219,14 @@ def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
 
     `hub.fetchall` takes and releases the hub lock per call, so a gate read
     through it leaves a window in which a background scan can flip a row from
-    `missing` back to `present` before the DELETE lands — and the model is
+    `missing` back to `present` before the DELETE lands - and the model is
     forgotten anyway. Counting the reads that go OUTSIDE the transaction is the
     assertion, because the race itself cannot be scheduled reliably. Reported by
     the CSO review of #869.
 
     **Counted per THREAD, and that is what makes the count mean anything.**
     `hub.fetchall` is patched on the shared, module-scoped server, so every
-    caller in the process goes through it — including the background finders,
+    caller in the process goes through it - including the background finders,
     and `MissingCheckpointHashFinder` queries `model` on the hub in both
     `progress()` and `find_task()`. A sweep landing inside the request window
     put its SQL in this list and failed the test with a diagnostic pointing at
@@ -3238,7 +3239,7 @@ def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
     denylist of background worker names was tried twice there and lost twice.
 
     Pinning to the TEST's thread id instead does not work and is worth recording
-    — it was tried here first. The handler is `def`, so FastAPI runs it in that
+    - it was tried here first. The handler is `def`, so FastAPI runs it in that
     threadpool rather than on the caller, which means an ident match excludes
     every read the request makes and turns this into a green assertion about
     nothing. It was caught by moving the builtin gate out of the transaction and
@@ -3247,7 +3248,7 @@ def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
     **This assertion is satisfied by an empty list, and that is intended**: a
     correct `forget_models` makes NO `hub.fetchall` call at all, because every
     read it needs happens on the transaction's own connection. So there is no
-    in-test way to prove the allowlist still matches — an added "we saw at least
+    in-test way to prove the allowlist still matches - an added "we saw at least
     one" check fails on correct code. Liveness is proved by the N+1 guard above,
     which uses the same prefix and asserts an exact count, so a renamed
     threadpool goes red there rather than silently emptying this."""
@@ -3352,8 +3353,8 @@ def test_forget_refuses_a_model_that_is_still_there(shelf_env):
 
 
 def test_forget_refuses_a_model_we_could_not_look_for(shelf_env):
-    """The one that matters. `unreachable` is "we could not look" — an unplugged
-    NAS — and treating it as a deletion would wipe the curation for a whole
+    """The one that matters. `unreachable` is "we could not look" - an unplugged
+    NAS - and treating it as a deletion would wipe the curation for a whole
     drive on one call."""
     alice = shelf_env.model_ids["alice.safetensors"]
     _set_states(shelf_env, alice, "unreachable")
@@ -3433,7 +3434,7 @@ def test_the_verb_routes_are_owner_only_in_both_directions(shelf_env):
 
 
 # ===========================================================================
-# GET /model-folders/devices — the drive bands' capacity meter (F2)
+# GET /model-folders/devices - the drive bands' capacity meter (F2)
 # ===========================================================================
 
 
@@ -3638,7 +3639,7 @@ def test_a_band_reads_its_kind_off_the_mount_table(
 @_LINUX_ONLY
 def test_a_stick_is_removable_and_the_disk_beside_it_is_not(tmp_path, monkeypatch):
     """`removable` is one byte udev maintains on the DISK, so a partition finds
-    it one directory up. A false here is deliberately weak — an SSD in a USB
+    it one directory up. A false here is deliberately weak - an SSD in a USB
     enclosure reports 0 and is called a local disk, which claims nothing about
     speed rather than claiming the wrong thing."""
     from pixlstash.utils import system_utils
@@ -3789,7 +3790,7 @@ def _capabilities(shelf_env, model_id: int) -> list:
 
 def test_the_features_a_model_serves_are_the_owners_to_set(shelf_env):
     """The Kind column has always shown `Captioning` and `Faces` on rows
-    PixlStash classified, and the editor offered nothing but file kinds — a
+    PixlStash classified, and the editor offered nothing but file kinds - a
     value on screen the owner could not correct. The set is REPLACED, not
     merged: it is two entries long, and a merge would leave no way to take one
     off."""
@@ -3831,7 +3832,7 @@ def test_a_feature_this_build_has_never_heard_of_is_refused(shelf_env):
 
 
 def test_setting_the_file_kind_and_the_features_at_once_keeps_both(shelf_env):
-    """Correcting a file kind clears the capabilities we guessed — but not when
+    """Correcting a file kind clears the capabilities we guessed - but not when
     the same call states them, which is the owner answering both questions at
     once. One dialog sends both, so the order inside the transaction is the
     difference between the feature landing and vanishing."""
@@ -3899,7 +3900,7 @@ def test_a_model_in_a_shared_cache_that_we_did_not_choose_is_the_owners_to_corre
 
 def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
     """Reported like every other refusal rather than raised, and refused inside
-    the same transaction as the state gate — forgetting one would delete a row
+    the same transaction as the state gate - forgetting one would delete a row
     that the next start-up declares straight back.
 
     `not_downloaded` is the state that says so: declared, and nothing has needed
@@ -3919,8 +3920,8 @@ def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
 def test_forget_clears_an_engine_row_nothing_declares_any_more(shelf_env):
     """The other half of that gate, and the reason it cannot be `file_kind`
     alone. `declare_folder` writes `missing` onto a row exactly when its
-    declaration stopped naming it — a repo dropped by `huggingface-cli
-    delete-cache`, a deleted InsightFace pack — and nothing fetches those back.
+    declaration stopped naming it - a repo dropped by `huggingface-cli
+    delete-cache`, a deleted InsightFace pack - and nothing fetches those back.
     Refusing them left a row the shelf draws as a fault that no verb could
     clear."""
     engine = _declare_engine(shelf_env, display_name="Tongyi-MAI/Z-Image-Turbo")
@@ -3951,7 +3952,7 @@ def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_rescanned(shelf_env):
 
 
 # ===========================================================================
-# base_model_folded — the fold applied on the way out
+# base_model_folded - the fold applied on the way out
 # ===========================================================================
 
 
@@ -4201,7 +4202,7 @@ def _seeded_stack_members(shelf_env):
 
 
 def test_unstacking_an_unknown_stack_is_a_404(shelf_env):
-    """A wrong address, not a shelf that moved — so 404 rather than the
+    """A wrong address, not a shelf that moved - so 404 rather than the
     apply's 409, and nothing is written on the way to saying so."""
     r = shelf_env.owner.delete(f"{API}/model-stacks/999999")
     assert r.status_code == 404, r.text
@@ -4348,7 +4349,7 @@ def test_forgetting_one_member_renumbers_the_run_behind_it(shelf_env):
     """A member can leave a run without this module being asked.
 
     Forget deletes the `model` row through `_purge`, which knows nothing about
-    stacks — so the repair is what stops the run being left numbered 0, 2, 3,
+    stacks - so the repair is what stops the run being left numbered 0, 2, 3,
     or with no cover at all when the cover is what went.
     """
     alice = shelf_env.model_ids["alice.safetensors"]
@@ -4361,7 +4362,7 @@ def test_forgetting_one_member_renumbers_the_run_behind_it(shelf_env):
     assert fused.status_code == 200, fused.text
     stack_id = fused.json()["stack_id"]
     # Forget refuses anything with a copy on disk, so the cover's copy has to
-    # be recorded as gone first — which is the state the verb exists for.
+    # be recorded as gone first - which is the state the verb exists for.
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
             "UPDATE model_file SET state = 'missing' WHERE model_id = ?", (alice,)
@@ -4479,7 +4480,7 @@ def test_two_models_given_one_logo_share_a_single_file(shelf_env):
 
 
 def test_a_non_image_upload_is_refused(shelf_env):
-    """Checked on the bytes, not on the filename or the declared type — both of
+    """Checked on the bytes, not on the filename or the declared type - both of
     which say `image/png` here."""
     alice = shelf_env.model_ids["alice.safetensors"]
     r = shelf_env.owner.post(
@@ -4532,7 +4533,7 @@ def test_clearing_leaves_the_stored_file_for_the_rows_still_using_it(shelf_env):
 
 
 # ===========================================================================
-# Add file (F6's remainder) — the loose-file path onto the shelf
+# Add file (F6's remainder) - the loose-file path onto the shelf
 # ===========================================================================
 #
 # The one shelf route that takes a host path in its body, because the file it
@@ -4585,8 +4586,8 @@ def test_a_loose_file_lands_in_the_managed_store_and_is_listed_without_a_rescan(
 ):
     """The whole of F6's `Add file`: one call, and the row is there.
 
-    No `destination_folder_id`, so this also pins the ruled default — the managed
-    store — rather than the caller having to name it.
+    No `destination_folder_id`, so this also pins the ruled default - the managed
+    store - rather than the caller having to name it.
     """
     r = shelf_env.owner.post(
         f"{API}/model-files", json={"path": str(loose_file.source)}
@@ -4760,7 +4761,7 @@ def test_the_picker_lists_model_files_only_when_it_is_asked_to(shelf_env, loose_
     )
     assert picker.status_code == 200, picker.text
     entries = picker.json()["entries"]
-    # Directories first, then the model file — and never the .txt beside it.
+    # Directories first, then the model file - and never the .txt beside it.
     assert [entry["name"] for entry in entries] == ["sub", "loose.safetensors"]
     assert entries[1]["is_file"] is True
     assert entries[0]["is_dir"] is True
@@ -4772,7 +4773,7 @@ def test_the_picker_lists_a_directory_symlink_that_leaves_the_tree(
     """`Models -> /vault/Models` has to be clickable, or it cannot be registered.
 
     A launcher keeping its models off the system disk is the ordinary case, and
-    the entry-level containment check dropped every one of them — silently, so
+    the entry-level containment check dropped every one of them - silently, so
     the folder simply was not in the listing. Nothing is loosened by listing it:
     the route browses any directory the owner names, so the target is reachable
     by typing its path already.
@@ -4819,7 +4820,7 @@ def test_the_copy_is_hashed_on_its_way_in_and_never_read_again(
     to verify it, so the digest is already known and proven when the row is
     registered. A scanner that hashed again would read a gigabyte a third time
     with the caller still waiting on the response. Asserted by counting, because
-    the wrong version is *correct* — only slower — and would never fail an
+    the wrong version is *correct* - only slower - and would never fail an
     assertion about the row.
     """
     from pixlstash.services import model_folder_scanner
@@ -4871,7 +4872,7 @@ def test_a_row_carries_every_feature_it_serves_not_just_the_first(shelf_env):
     """The contract the shelf's feature axis and capability filter are built on.
 
     `kind` keeps the primary label so every existing reader is unchanged, and
-    `capabilities` carries the whole ordered set beside it — primary first, so
+    `capabilities` carries the whole ordered set beside it - primary first, so
     the two agree rather than telling a reader two different stories.
     """
     server = shelf_env.server
@@ -4894,7 +4895,7 @@ def test_a_row_carries_every_feature_it_serves_not_just_the_first(shelf_env):
 
 
 def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
-    """The two shapes cannot drift apart — the list is what the shelf renders
+    """The two shapes cannot drift apart - the list is what the shelf renders
     and the detail route is what a client fetching one model reads."""
     server = shelf_env.server
     model_id = shelf_env.model_ids["alice.safetensors"]
@@ -4914,7 +4915,7 @@ def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
 
 
 # ===========================================================================
-# GET /adapters/{sha256}/file — the shelf's one route that serves bytes
+# GET /adapters/{sha256}/file - the shelf's one route that serves bytes
 # ===========================================================================
 #
 # The route exists so a generator on another machine can *use* an adapter this
@@ -4922,8 +4923,8 @@ def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
 # nothing over there, which is why "the client can just read the path" was
 # never an answer.
 #
-# It is the only shelf read off the OWNER_ONLY tier — raw bytes out of a
-# registered model folder is the ai-toolkit sample route's authority class — so
+# It is the only shelf read off the OWNER_ONLY tier - raw bytes out of a
+# registered model folder is the ai-toolkit sample route's authority class - so
 # both halves of LOCAL_OWNER_ONLY are asserted below, and the share-token
 # direction matters more here than on the folder mutators: this is a **GET**,
 # so the middleware's non-GET block says nothing about it and the gate's owner
@@ -5019,8 +5020,8 @@ def test_a_known_adapter_with_no_readable_copy_is_409_not_404(shelf_env):
     """The distinction the caller cannot make for itself.
 
     404 means "no such adapter" and tells a client to stop asking. This is the
-    other case — the shelf knows the adapter and the drive is unplugged or the
-    file was deleted — and it is worth a different code, because retrying later
+    other case - the shelf knows the adapter and the drive is unplugged or the
+    file was deleted - and it is worth a different code, because retrying later
     is the right move for exactly one of the two. The seeded folder points at
     `/models/loras`, which does not exist.
     """
@@ -5051,8 +5052,8 @@ def test_a_relpath_that_escapes_its_folder_is_refused_rather_than_served(
 ):
     """Containment on a read, and the reason it is not paranoia.
 
-    Neither half of the join is caller-supplied — `folder_path` is registered
-    and `relpath` is the scanner's — so a `..` can only arrive from a faulty
+    Neither half of the join is caller-supplied - `folder_path` is registered
+    and `relpath` is the scanner's - so a `..` can only arrive from a faulty
     scan, a restored hub or a bug. But this route streams the result to the
     network, so that bug would be an arbitrary-file reader rather than a wrong
     row. The positive control in the same test is what proves the refusal is
@@ -5166,7 +5167,7 @@ def test_no_share_token_can_download_a_model_file(shelf_env, tmp_path):
     refusals come from the auth middleware's non-GET rule, and warns in as many
     words that a **GET** added to this tier without a `READ_BLOCKED_GET_PATHS`
     entry is a real hole that turns nothing red. This route is that GET, and its
-    path is templated, so that frozenset — which matches literal paths — could
+    path is templated, so that frozenset - which matches literal paths - could
     not cover it even if one were added. So the gate's owner check is the only
     thing standing here, and this is the test that says whether it holds.
 
@@ -5214,7 +5215,7 @@ def test_an_unauthenticated_caller_cannot_download(shelf_env, tmp_path):
 
 
 # ===========================================================================
-# Delete from disk (#933) — the shelf's one destructive verb
+# Delete from disk (#933) - the shelf's one destructive verb
 # ===========================================================================
 #
 # `POST /model-files/delete` is the only shelf route that destroys the owner's
@@ -5300,7 +5301,7 @@ def test_delete_takes_a_directory_of_nothing_but_previews_with_the_model(
     """The lifecycle the import opens and a move carries has to close here.
 
     A delete that skipped `<stem>_samples/` would leave a directory no route
-    lists and no rescan registers — and, worse, one that then refuses the
+    lists and no rescan registers - and, worse, one that then refuses the
     owner's **whole** re-import of that run, with the remedy only available
     outside the app. Both gestures, because the trash path and the unlink path
     remove it by different calls.
@@ -5337,8 +5338,8 @@ def test_delete_never_touches_a_directory_pixlstash_did_not_write(
     An owner who keeps favourite generations in `alice_samples/` beside a model
     is doing the natural thing, and on `permanent=true` this route would `rmtree`
     it with no trash and no undo. The importer refuses the mirror image of the
-    same guess — it will not merge into a directory "they may have put there
-    themselves" — so without this the two halves of one PR contradict each other.
+    same guess - it will not merge into a directory "they may have put there
+    themselves" - so without this the two halves of one PR contradict each other.
 
     Deliberately **not** keyed on `provenance`: that is a fact about the model's
     *content*, one value shared by every copy of it, while the risk is per
@@ -5370,7 +5371,7 @@ def test_a_symlinked_previews_directory_is_left_alone(
     shelf_env, real_files, fake_trash, tmp_path, permanent
 ):
     """`os.path.isdir` follows the link, so without an explicit check what
-    happens is decided by which branch runs — `rmtree` refuses a symlinked root,
+    happens is decided by which branch runs - `rmtree` refuses a symlinked root,
     `send2trash` moves the link. Neither is promised by either function, and an
     `ignore_errors=True` added later would turn the first into a deletion
     somewhere else entirely.
@@ -5378,14 +5379,14 @@ def test_a_symlinked_previews_directory_is_left_alone(
     **The trash case is the one that proves the guard**, and the first version
     of this test omitted it and therefore proved nothing: `rmtree` refuses a
     symlinked root on its own, so the permanent branch stays green with the
-    guard mutated out — an adversarial pass demonstrated exactly that.
+    guard mutated out - an adversarial pass demonstrated exactly that.
     `send2trash` has no such scruple, it moves the link, so only this
     parametrisation goes red when the guard goes.
     """
     alice = shelf_env.model_ids["alice.safetensors"]
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    # Trainer-shaped, so it is not the contents check sparing this — the link is.
+    # Trainer-shaped, so it is not the contents check sparing this - the link is.
     (elsewhere / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
     (real_files / "alice_samples").symlink_to(elsewhere, target_is_directory=True)
 
@@ -5452,7 +5453,7 @@ def test_delete_refuses_a_model_pixlstash_downloaded_for_itself(
     shelf_env, real_files, fake_trash
 ):
     """An engine is declared again on every start, so deleting one removes a file
-    that comes straight back — after the feature that needed it has broken."""
+    that comes straight back - after the feature that needed it has broken."""
     engine = _declare_engine(shelf_env)
 
     r = _delete(shelf_env, [engine])
@@ -5567,8 +5568,8 @@ def test_delete_still_refuses_an_engine_in_that_same_folder(
 def test_delete_refuses_a_model_on_a_drive_we_could_not_look_at(
     shelf_env, real_files, fake_trash
 ):
-    """The one that matters. `unreachable` is "we could not look" — an unplugged
-    NAS — and deleting the row would leave those bytes orphaned with nothing on
+    """The one that matters. `unreachable` is "we could not look" - an unplugged
+    NAS - and deleting the row would leave those bytes orphaned with nothing on
     the shelf naming them."""
     alice = shelf_env.model_ids["alice.safetensors"]
     _set_states(shelf_env, alice, "unreachable")
@@ -5738,8 +5739,8 @@ def test_delete_refuses_every_share_token(shelf_env, real_files, fake_trash):
 def test_a_symlinked_model_loses_the_link_and_not_the_file_it_points_at(
     shelf_env, real_files, fake_trash, tmp_path
 ):
-    """A symlinked model is ordinary practice on this shelf — the download route
-    serves one — so deleting one has to behave like a file manager: the name the
+    """A symlinked model is ordinary practice on this shelf - the download route
+    serves one - so deleting one has to behave like a file manager: the name the
     shelf catalogues goes, and the bytes it points at are somebody else's."""
     target = tmp_path / "real-weights.safetensors"
     write_adapter(target)
@@ -5813,7 +5814,7 @@ def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
 ):
     """The other half of the window the plan cannot hold a transaction across.
 
-    A scan can register a copy between the gate and the purge — the unlink is
+    A scan can register a copy between the gate and the purge - the unlink is
     disk I/O and cannot run under the hub's write lock. Purging the model row
     anyway would leave a file on disk that nothing on the shelf names, which is
     the one thing the tombstone design forbids.
@@ -5855,7 +5856,7 @@ def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
 
 
 # ===========================================================================
-# Open in file manager (#933) — the shelf's one host-shell verb
+# Open in file manager (#933) - the shelf's one host-shell verb
 # ===========================================================================
 #
 # `POST /models/{model_id}/open-location` changes nothing, which is exactly why
@@ -5988,8 +5989,8 @@ def test_the_spawn_helper_reports_a_path_that_is_not_there(tmp_path):
 def test_the_spawn_helper_reads_the_openers_exit_status(tmp_path):
     """The whole reason this helper exists rather than a fourth inline copy.
 
-    A headless or containerised Linux host normally *has* `xdg-open` — it is a
-    shell script — and it exits non-zero when there is no desktop session to
+    A headless or containerised Linux host normally *has* `xdg-open` - it is a
+    shell script - and it exits non-zero when there is no desktop session to
     hand the path to. The three inline copies pass `check=False` and discard
     that, so they report success for precisely the deployment where nothing
     opened; this one must not, or the route's 500 branch is unreachable and

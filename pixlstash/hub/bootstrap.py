@@ -16,6 +16,8 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version as package_version
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -25,6 +27,7 @@ from pixlstash.hub.registry import (
     Library,
     LibraryError,
     LibraryRegistry,
+    NotAVaultError,
     VAULT_FILENAME,
     validate_vault_folder,
 )
@@ -37,6 +40,126 @@ logger = get_logger(__name__)
 
 class HubBootstrapError(RuntimeError):
     """Startup cannot safely establish a consistent hub/vault pair."""
+
+
+# Set to "1" by the caller that has already asked a human whether the
+# unopenable vault may be moved aside. An explicit value, checked here and
+# nowhere else, so an inherited shell variable cannot authorise it by accident.
+VAULT_RECREATE_ENV = "PIXLSTASH_RECREATE_VAULT"
+
+# SQLite keeps these beside the database. A vault moved aside without them
+# would leave a stale journal for the replacement to be opened against.
+_VAULT_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+class UnusableVaultError(HubBootstrapError):
+    """The configured folder holds a ``vault.db`` this build cannot open.
+
+    Carries the folder, the file and the reason so a caller can offer the one
+    recovery that exists - start over with an empty database, keeping the old
+    file - instead of printing a traceback at somebody who has just installed
+    the app. See :func:`set_aside_unusable_vault`.
+    """
+
+    def __init__(self, folder: str, vault_path: str, reason: str):
+        super().__init__(
+            f"{vault_path} cannot be opened as a PixlStash library ({reason})"
+        )
+        self.folder = folder
+        self.vault_path = vault_path
+        self.reason = reason
+
+
+# Failures that are about the machine rather than the database. Offering to
+# start a library over because the disk filled up would be a catastrophe
+# dressed as a recovery, so these keep their own traceback and are never turned
+# into the question.
+_ENVIRONMENTAL_SQLITE_FAILURES = (
+    "database is locked",  # SQLITE_BUSY
+    "disk i/o error",  # SQLITE_IOERR
+    "unable to open database file",  # SQLITE_CANTOPEN
+    "database or disk is full",  # SQLITE_FULL - SQLite's own wording
+    "no space left",  # ...and the OS's, for a write that never reached SQLite
+    "readonly database",  # SQLITE_READONLY
+    "permission denied",  # SQLITE_PERM
+    "database disk image is malformed",  # SQLITE_CORRUPT
+    "out of memory",  # SQLITE_NOMEM
+)
+# Deliberately absent: SQLITE_NOTADB ("file is not a database"). That one is a
+# statement about the file, which is exactly what the offer is for.
+
+
+def unusable_vault_from_open_failure(
+    library: Library, exc: BaseException
+) -> "UnusableVaultError | None":
+    """Classify a failure to open or migrate a registered vault.
+
+    Validation only reads ``sqlite_master``, so a vault can pass it and still
+    be one no migration path reaches: the December-2025 schema is stamped at
+    the baseline it predates, and the chain dies on a table it never had. That
+    is the same dead end as a file that will not open at all, and it deserves
+    the same question rather than a traceback on the splash screen.
+
+    Nothing is masked: the caller logs the original exception in full, the
+    reason quotes it, and the recovery renames rather than deletes. Returns
+    None for a failure that is about the machine - those must keep failing.
+    """
+    lowered = str(exc).lower()
+    if any(marker in lowered for marker in _ENVIRONMENTAL_SQLITE_FAILURES):
+        return None
+    # SQLAlchemy's own message is often a bare identifier - `NoSuchTableError:
+    # user` reads as "user" on its own - so the reason says what the failure
+    # means before it quotes what raised it.
+    reason = (
+        "The library database could not be upgraded to this version of "
+        f"PixlStash ({type(exc).__name__}: {exc})"
+    )
+    return UnusableVaultError(library.path, library.vault_path, reason)
+
+
+def set_aside_unusable_vault(vault_path: str) -> str:
+    """Rename an unopenable vault and its sidecars out of the way.
+
+    Renamed, never deleted, and never by this function's own decision: the
+    caller has to have been told "yes" by a human first. A vault we cannot read
+    is not a vault that holds nothing, and the file is the only copy of
+    whatever catalogue it does hold - somebody who deletes it to get the app
+    started has thrown away work they could still have recovered.
+
+    Returns:
+        The path the vault was renamed to.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = f"{vault_path}.unusable-{stamp}"
+    attempt = 0
+    while os.path.exists(target):
+        attempt += 1
+        target = f"{vault_path}.unusable-{stamp}-{attempt}"
+
+    os.rename(vault_path, target)
+    logger.warning(
+        "Moved the unopenable vault %s to %s and will start with a new, empty "
+        "library database. The old file is kept; nothing was deleted.",
+        vault_path,
+        target,
+    )
+    for suffix in _VAULT_SIDECAR_SUFFIXES:
+        sidecar = f"{vault_path}{suffix}"
+        if not os.path.exists(sidecar):
+            continue
+        try:
+            os.rename(sidecar, f"{target}{suffix}")
+        except OSError as exc:
+            # Not fatal: SQLite recreates its own sidecars. Worth recording,
+            # because a leftover -wal beside a new vault is confusing enough on
+            # its own that the next reader should know where it came from.
+            logger.warning(
+                "Could not move the sidecar %s beside the vault it belongs to "
+                "(%s); it is stale and can be removed.",
+                sidecar,
+                exc,
+            )
+    return target
 
 
 class RegisteredVaultPath(str):
@@ -135,6 +258,9 @@ def bootstrap_hub(
     configured_image_root: str,
     hub_path: Optional[str] = None,
     legacy_identity_prompt: Optional[Callable[[Library], bool]] = None,
+    library_switch_prompt: Optional[
+        Callable[[Library, str, list[Library]], Optional[Library]]
+    ] = None,
 ) -> HubBootstrap:
     """Open the hub and perform only the pre-vault-open part of migration.
 
@@ -151,13 +277,17 @@ def bootstrap_hub(
     library exactly as inert as if the prompt had never been offered.
 
     The callback may block on a human for an arbitrary time (it is how the
-    interactive startup prompt is implemented), so another process — for
-    instance the CLI command it stands in for, run concurrently — can finish
+    interactive startup prompt is implemented), so another process - for
+    instance the CLI command it stands in for, run concurrently - can finish
     the same preparation, or the whole migration, while it waits. The state is
     therefore re-read once the callback returns, before deciding whether to
     call :func:`prepare_legacy_identity` at all, and that call is still
     tolerated if it loses the race anyway: a startup that was just told the
     thing it wanted has already happened must not abort over it.
+
+    ``library_switch_prompt``, when given, is offered the attached libraries
+    that still open whenever the active one does not - see
+    :func:`_offer_a_usable_library`.
     """
     hub = HubDatabase(hub_path or default_hub_path())
     registry = LibraryRegistry(hub)
@@ -168,6 +298,7 @@ def bootstrap_hub(
     # carried no fingerprint would otherwise conflict forever with whatever
     # stamped it first.
     library = registry.adopt_vault_fingerprint(library)
+    library = _offer_a_usable_library(registry, library, library_switch_prompt)
 
     if (
         legacy_identity_prompt is not None
@@ -236,7 +367,23 @@ def _register_first_library(
             "only an explicit durable preparation operation can authorize import",
             image_root,
         )
-        return registry.attach(image_root, "Library 1")
+        try:
+            return registry.attach(image_root, "Library 1")
+        except NotAVaultError as exc:
+            # The file is there and is not something we can open. That is a
+            # decision for a human - the only way forward loses whatever the
+            # file holds - so raise a typed error the caller can put a question
+            # behind, rather than letting an exception out of a constructor and
+            # ending first-run setup on a traceback.
+            if os.environ.get(VAULT_RECREATE_ENV) != "1":
+                raise UnusableVaultError(image_root, vault_path, str(exc)) from exc
+            logger.warning(
+                "Recreating the library database at %s was authorised: %s",
+                image_root,
+                exc,
+            )
+            set_aside_unusable_vault(vault_path)
+            return registry.register_pending(image_root, "Library 1")
 
     # This process is creating the SQLite namespace, so establish the trust
     # boundary now instead of inheriting a permissive umask-created directory.
@@ -410,6 +557,128 @@ def prevalidate_library_fingerprint(library: Library) -> None:
         )
 
 
+def _vault_is_loadable(library: Library) -> bool:
+    """True when the file at ``vault_path`` is one this build could open.
+
+    Read-only, and about the file rather than the registration: a vault that
+    passes here but still fails to open is a different problem with a different
+    answer, and must not be offered the recreate-it recovery.
+    """
+    try:
+        validate_vault_folder(library.path)
+    except NotAVaultError:
+        return False
+    return True
+
+
+def _library_opens(library: Library) -> bool:
+    """True when this library's vault is present and still the one recorded."""
+    if not library.is_reachable:
+        return False
+    try:
+        prevalidate_library_fingerprint(library)
+    except HubBootstrapError as exc:
+        logger.warning(
+            "Library %s at %s would not open (%s); not offering it.",
+            library.name,
+            library.path,
+            exc,
+        )
+        return False
+    return True
+
+
+def _vault_gone_from_a_populated_folder(library: Library) -> bool:
+    """The folder is here with files in it, only the vault database is not.
+
+    That is a restored or hand-copied picture folder, and the useful thing to
+    do with it is start a fresh library there and offer the pictures for
+    import. An *empty* folder is left alone: an unmounted external drive looks
+    exactly like that, and a fresh vault created inside the mount point would
+    lock the real library out once the drive came back.
+    """
+    if library.is_reachable or not os.path.isdir(library.path):
+        return False
+    with os.scandir(library.path) as entries:
+        return any(True for _ in entries)
+
+
+def _alternatives_note(alternatives: list[Library]) -> str:
+    if not alternatives:
+        return ""
+    listed = "\n".join(f"    {lib.name} ({lib.path})" for lib in alternatives)
+    return (
+        "\n  These attached libraries do open. Start PixlStash in an "
+        f"interactive terminal to be offered them:\n{listed}"
+    )
+
+
+def _offer_a_usable_library(
+    registry: LibraryRegistry,
+    library: Library,
+    prompt: Optional[Callable[[Library, str, list[Library]], Optional[Library]]],
+) -> Library:
+    """Recover, before the vault is opened, from an active library that is gone.
+
+    Two failures are folded into one recovery here because start-up itself is
+    what makes the first one permanent. Opening a vault *creates* the file, so a
+    vault deleted outside PixlStash - a desktop install and a source install
+    keep separate hubs but share one folder on disk - is a missing database on
+    the next start-up and an *unrecognisable* one on every start-up after that.
+    Validating read-only first leaves the folder untouched.
+
+    That still leaves nowhere to go: the Settings pane that changes the active
+    library needs the server this failure is preventing, and the CLI has no verb
+    for it. So the attached libraries that do open are offered instead, and the
+    error names them when nobody can be asked. Never chosen automatically - an
+    import landing in a library the owner did not pick is worse than a refusal.
+    """
+    try:
+        prevalidate_library_fingerprint(library)
+        return library
+    except HubBootstrapError as exc:
+        reason = str(exc)
+
+    if _vault_gone_from_a_populated_folder(library):
+        logger.warning(
+            "The library database %s is missing but the folder still has "
+            "content; starting a fresh library there and treating what is on "
+            "disk as pictures to import. The previous library's tags, scores "
+            "and history are not in this folder.",
+            library.vault_path,
+        )
+        return registry.forget_vault_fingerprint(library)
+
+    alternatives = [
+        other
+        for other in registry.list_libraries()
+        if other.uuid != library.uuid and _library_opens(other)
+    ]
+    chosen = prompt(library, reason, alternatives) if prompt and alternatives else None
+    if chosen is None:
+        # A file that is there and will not open is the one failure with a
+        # recovery: start over with an empty database and keep the old file.
+        # Offered here as well as on the first run, because a library that
+        # opened yesterday is exactly where an unreadable vault shows up.
+        # A fingerprint conflict is not this case - that vault loads fine, and
+        # the answer is to put the right one back, not to start over.
+        if os.path.isfile(library.vault_path) and not _vault_is_loadable(library):
+            if os.environ.get(VAULT_RECREATE_ENV) == "1":
+                set_aside_unusable_vault(library.vault_path)
+                return registry.forget_vault_fingerprint(library)
+            raise UnusableVaultError(library.path, library.vault_path, reason)
+        raise HubBootstrapError(f"{reason}{_alternatives_note(alternatives)}")
+    logger.warning(
+        "%s could not be opened (%s); the active library is now %s at %s, as "
+        "chosen at start-up.",
+        library.path,
+        reason,
+        chosen.name,
+        chosen.path,
+    )
+    return registry.set_active(chosen.id)
+
+
 def _opened_execute(connection, sql: str, params: tuple = ()):
     if hasattr(connection, "exec_driver_sql"):
         return connection.exec_driver_sql(sql, params)
@@ -423,6 +692,47 @@ def _opened_first(connection, sql: str, params: tuple = ()):
         return dict(row) if row is not None else None
     row = result.fetchone()
     return dict(row) if isinstance(row, sqlite3.Row) else row
+
+
+RELEASES_URL = "https://github.com/pikselkroken/pixlstash/releases/latest"
+_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations" / "versions"
+
+
+def known_vault_revisions() -> set[str]:
+    """Return every Alembic revision id this build understands."""
+    pattern = re.compile(r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M)
+    revisions: set[str] = set()
+    for path in _MIGRATIONS_DIR.glob("*.py"):
+        if path.stem.startswith("__"):
+            continue
+        match = pattern.search(path.read_text(encoding="utf-8"))
+        if match:
+            revisions.add(match.group(1))
+    return revisions
+
+
+def newer_library_message(unknown: list[str], *, library: str) -> str:
+    """Explain a vault written by a later build than this one, in three lines.
+
+    *library* names the vault as the reader knows it. The revision ids stay
+    in, last, because a bug report needs them.
+    """
+    try:
+        this = f"This version ({package_version('pixlstash')})"
+    except PackageNotFoundError:
+        this = "This version"
+
+    def number(rev: str) -> str:
+        return rev.split("_", 1)[0]  # "0113_reset_..." -> "0113"
+
+    latest = number(max(known_vault_revisions(), default="none"))
+    return (
+        f"{library} was last opened by a newer PixlStash. {this} cannot "
+        "read it; nothing has been changed.\n"
+        f"  Update PixlStash and try again: {RELEASES_URL}\n"
+        f"  (Library revision {', '.join(map(number, unknown))}; this version "
+        f"knows up to {latest}.)"
+    )
 
 
 def _opened_revision_rows(connection) -> list[str]:
@@ -497,21 +807,13 @@ def prevalidate_opened_library(connection, library: Library) -> None:
             f"contains {observed}, but this registration expects {library.uuid}."
         )
 
-    known = set()
-    revision_pattern = re.compile(
-        r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M
-    )
-    versions = Path(__file__).resolve().parent.parent / "migrations" / "versions"
-    for path in versions.glob("*.py"):
-        match = revision_pattern.search(path.read_text(encoding="utf-8"))
-        if match:
-            known.add(match.group(1))
+    known = known_vault_revisions()
     unknown = [rev for rev in _opened_revision_rows(connection) if rev not in known]
     if unknown:
         raise HubBootstrapError(
-            "This library was last opened by a newer version of PixlStash "
-            f"(database revision {', '.join(unknown)}). Update PixlStash before "
-            "opening it. Nothing has been changed."
+            newer_library_message(
+                unknown, library=f'The library "{library.name}" ({library.path})'
+            )
         )
 
 

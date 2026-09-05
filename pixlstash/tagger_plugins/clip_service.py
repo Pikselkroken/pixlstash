@@ -15,7 +15,7 @@ import numpy as np
 # ML imports (torch / open_clip, which itself pulls torch, torchvision and
 # transformers) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
-# server's import path — so importing them at module scope would make server
+# server's import path - so importing them at module scope would make server
 # startup and every single test pay that cost before doing any work.
 
 logger = logging.getLogger(__name__)
@@ -95,14 +95,39 @@ class ClipService:
         """The CLIP tokenizer, or ``None`` if not yet loaded."""
         return self._tokenizer
 
-    def encode_image_batch(self, images: list) -> "Optional[np.ndarray]":
-        """Encode a batch of PIL images into normalised CLIP visual embeddings.
+    def preprocess_images(self, images: list) -> "Optional[list]":
+        """Run CLIP's preprocessing (resize, crop, normalise) on the CPU.
 
-        Preprocesses the images, runs a single batched forward pass, and returns
-        row-normalised float32 embeddings.  Falls back to CPU on CUDA OOM.
+        The half of :meth:`encode_image_batch` that costs the time: ~30 ms per
+        full-resolution image, against ~1 ms of GPU forward pass each. Split
+        out so a task can run it in its preload threads instead of on the
+        single GPU worker, where it was 4 s of every 4.2 s batch. Returns
+        ``None`` when the model is not loaded - preloading must never be what
+        loads it.
 
         Args:
             images: List of ``PIL.Image`` objects.
+
+        Returns:
+            One CPU tensor per image, or ``None`` if the model is not loaded.
+        """
+        if not self.is_loaded():
+            return None
+        return [self._preprocess(img) for img in images]
+
+    def encode_image_batch(
+        self, images: list, tensors: "Optional[list]" = None
+    ) -> "Optional[np.ndarray]":
+        """Encode a batch of PIL images into normalised CLIP visual embeddings.
+
+        Preprocesses the images (unless *tensors* carries that work already
+        done), runs a single batched forward pass, and returns row-normalised
+        float32 embeddings.  Falls back to CPU on CUDA OOM.
+
+        Args:
+            images: List of ``PIL.Image`` objects.
+            tensors: Their :meth:`preprocess_images` output, when the caller
+                did that on another thread; same order as *images*.
 
         Returns:
             Float32 numpy array of shape ``(N, D)`` or ``None`` on failure.
@@ -113,9 +138,9 @@ class ClipService:
             return None
         self.ensure_ready()
         try:
-            tensors = torch.stack([self._preprocess(img) for img in images]).to(
-                self._device
-            )
+            if tensors is None or len(tensors) != len(images):
+                tensors = [self._preprocess(img) for img in images]
+            tensors = torch.stack(tensors).to(self._device)
             if self._device == "cuda":
                 tensors = tensors.half()
             with torch.no_grad():

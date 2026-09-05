@@ -1,4 +1,4 @@
-// AppDialog — the dialog keyboard contract (owner decision, 2026-07-29).
+// AppDialog - the dialog keyboard contract (owner decision, 2026-07-29).
 //
 // Escape dismisses and plain Enter accepts, handled on the dialog's own
 // subtree so no page-level Escape owner is consulted first. Enter is inert
@@ -54,13 +54,13 @@ describe("AppDialog keyboard contract", () => {
     expect(w.emitted("accept")).toBeTruthy();
   });
 
-  it("leaves Enter alone in a textarea — newlines beat accept", async () => {
+  it("leaves Enter alone in a textarea - newlines beat accept", async () => {
     const w = mountDialog();
     await w.find(".area").trigger("keydown", { key: "Enter" });
     expect(w.emitted("accept")).toBeFalsy();
   });
 
-  it("leaves Enter alone on a button — native activation wins", async () => {
+  it("leaves Enter alone on a button - native activation wins", async () => {
     const w = mountDialog();
     await w.find(".btn").trigger("keydown", { key: "Enter" });
     expect(w.emitted("accept")).toBeFalsy();
@@ -74,7 +74,7 @@ describe("AppDialog keyboard contract", () => {
     expect(w.emitted("accept")).toBeFalsy();
   });
 
-  it("ignores modified Enter — Ctrl+Enter stays a dialog-local shortcut", async () => {
+  it("ignores modified Enter - Ctrl+Enter stays a dialog-local shortcut", async () => {
     const w = mountDialog();
     await w.find(".txt").trigger("keydown", { key: "Enter", ctrlKey: true });
     expect(w.emitted("accept")).toBeFalsy();

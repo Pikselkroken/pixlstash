@@ -7,8 +7,8 @@ values out to owner-level WebSocket clients, and owns the ``/ws/updates`` route.
 vault event listener, the route registration) are unchanged.
 
 Load-bearing invariant (see docs/backend_architecture.md §15): the broadcaster
-runs on ``self._ws_loop`` — a different task/thread than the request that emitted
-the event — where the ``origin_client_id`` contextvar is **dead**. Every envelope
+runs on ``self._ws_loop`` - a different task/thread than the request that emitted
+the event - where the ``origin_client_id`` contextvar is **dead**. Every envelope
 field (``source``, ``origin_client_id``, ``change_kind``, ``picture_ids``) is
 therefore read from the event ``data`` dict ONLY, never from the contextvar. The
 attribution-critical emitters capture origin synchronously at request entry and
@@ -149,6 +149,9 @@ class WsBroadcasterMixin:
                 # Machine-level, not view-level: the GPU is full whatever the
                 # client's grid filters are.
                 EventType.VRAM_OOM,
+                # Vault-wide, like VRAM_OOM: the reconciliation queue is not a
+                # grid view a client's filters could exclude it from.
+                EventType.EXTERNAL_MOVES_PENDING,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
@@ -157,7 +160,7 @@ class WsBroadcasterMixin:
     def _source_from(data) -> str:
         """Coarse origin class for the envelope. Defaults to ``"external"``.
 
-        Reads from the ``data`` dict ONLY — the broadcaster runs on
+        Reads from the ``data`` dict ONLY - the broadcaster runs on
         ``self._ws_loop`` (a different thread/task than the request), so the
         origin contextvar is dead here and must never be consulted.
         """
@@ -200,7 +203,7 @@ class WsBroadcasterMixin:
 
     #: The closed set of wire values for ``change_kind``. An emit site that sets
     #: anything else has its hint DROPPED (not rejected), and the SPA then falls
-    #: back to ``"updated"`` — which for a lifecycle change leaves a stale,
+    #: back to ``"updated"`` - which for a lifecycle change leaves a stale,
     #: 404-clickable card behind. Adding a value here is therefore half of the
     #: contract; the other half is ``resolveChangeKind`` in
     #: ``frontend/src/composables/useGridRealtimeSync.js``.
@@ -268,6 +271,15 @@ class WsBroadcasterMixin:
                 "max_attempts": int(info.get("max_attempts") or 0),
                 "gave_up": bool(info.get("gave_up")),
                 "recovered": bool(info.get("recovered")),
+            }
+        elif event_type == EventType.EXTERNAL_MOVES_PENDING:
+            # A "look again" nudge, not a count: the buckets (unambiguous /
+            # ambiguous / off-layout) are classified live, so the client
+            # re-fetches GET /moves/pending rather than trusting a number
+            # carried on the wire.
+            payload = {
+                "type": "external_moves_pending",
+                "event": event_type.name,
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}
@@ -360,8 +372,8 @@ class WsBroadcasterMixin:
             try:
                 # The HTTP auth middleware does not run for WebSocket connections,
                 # so authenticate here BEFORE accepting. Without this, any reachable
-                # client — including a cross-site page via CSWSH, since the browser
-                # auto-attaches the session cookie to the handshake — could
+                # client - including a cross-site page via CSWSH, since the browser
+                # auto-attaches the session cookie to the handshake - could
                 # subscribe to live vault activity.
                 if not self.auth.is_websocket_origin_allowed(
                     websocket, self.allow_origins, self.allow_origin_regex
@@ -383,7 +395,7 @@ class WsBroadcasterMixin:
                 self._ws_loop = asyncio.get_running_loop()
                 # Only owner-level connections receive the global vault-activity
                 # stream. A resource-scoped / READ token may connect (authenticated)
-                # but is never sent events outside its grant — see
+                # but is never sent events outside its grant - see
                 # ``_broadcast_ws_event``.
                 candidate = {
                     "ws": websocket,
@@ -429,7 +441,7 @@ class WsBroadcasterMixin:
                         client["filters"] = filters
                         # The originating tab's opaque client id. Stored for
                         # forward-looking server-side echo matching; the FE
-                        # matches locally for v1. Echo-matching only — never
+                        # matches locally for v1. Echo-matching only - never
                         # used for authz/scoping. Cap length defensively.
                         raw_client_id = payload.get("client_id")
                         if isinstance(raw_client_id, str) and len(raw_client_id) <= 200:

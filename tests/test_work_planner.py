@@ -1,13 +1,19 @@
+import logging
 import threading
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from pixlstash.task_runner import TaskRunner
-from pixlstash.tasks import TaskType
+from pixlstash.tasks import TaskType, smart_score_task
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+from pixlstash.tasks.smart_score_task import SmartScoreTask
+from pixlstash.tasks.tag_task import TagTask
 from pixlstash.vault import Vault
 from pixlstash.work_planner import WorkPlanner
 
@@ -109,7 +115,7 @@ class _IdleFinder:
         self._find_delay_s = find_delay_s
         # Interruptible delay. The wedged-thread tests use delays far longer
         # than the join they are testing, so a plain sleep() left the planner
-        # thread alive for the rest of the pytest session — see _stopped().
+        # thread alive for the rest of the pytest session - see _stopped().
         self._release = threading.Event()
 
     def finder_name(self) -> str:
@@ -162,7 +168,7 @@ def test_finder_removed_mid_cycle_does_not_kill_the_loop():
     Module fixtures detach backfill finders from a live planner. The loop used
     to capture ``len(self._task_finders)`` and then index the live list, so a
     removal in between raised ``IndexError`` inside the planner thread, which
-    died with no report — and every later import answered "Face worker is not
+    died with no report - and every later import answered "Face worker is not
     running", naming a condition that was not the problem.
     """
     victim = _IdleFinder("Victim")
@@ -875,8 +881,8 @@ def test_a_failed_submit_does_not_arm_the_drain_for_work_that_never_ran():
     completes synchronously calls back before `submit()` returns. That arming
     has to be undone when the submit fails: nothing ran, so the burst never
     earned its callback. Left armed, the flag is claimed by the next
-    `find_task() -> None` — the finder reports no work, in-flight is zero,
-    exhausted is true — and the drain fires for a task that was never submitted.
+    `find_task() -> None` - the finder reports no work, in-flight is zero,
+    exhausted is true - and the drain fires for a task that was never submitted.
     For the tagger that means tearing down a CUDA arena that was never built.
     """
     finder = _OneShotFinder()
@@ -896,3 +902,205 @@ def test_a_failed_submit_does_not_arm_the_drain_for_work_that_never_ran():
     # owed a completion callback.
     assert planner._run_finders_once() is False
     assert drained == [], f"drain fired for work that never ran: {drained}"
+
+
+# --- Throughput plan step 0: the pass and batch timing lines -----------------
+
+
+def _one_line(caplog, marker: str) -> str:
+    lines = [r.getMessage() for r in caplog.records if marker in r.getMessage()]
+    assert len(lines) == 1, f"expected exactly one {marker} line, got {lines}"
+    return lines[0]
+
+
+class _CountedTask:
+    def __init__(self, task_id: str, picture_ids: list):
+        self.id = task_id
+        self.params = {"picture_ids": list(picture_ids)}
+
+
+class _TwoTaskFinder(_OneShotFinder):
+    """Two tasks of three pictures each, then dry."""
+
+    def __init__(self):
+        self._tasks = [_CountedTask("t1", [1, 2, 3]), _CountedTask("t2", [4, 5, 6])]
+
+    def find_task(self):
+        return self._tasks.pop(0) if self._tasks else None
+
+    def on_all_tasks_complete(self):
+        return None
+
+
+def test_a_finder_burst_emits_exactly_one_pipeline_pass_line(caplog):
+    runner = _FastCompleteRunner()
+    finder = _TwoTaskFinder()
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    runner.on_submit = lambda task: planner.on_task_complete(task, None)
+
+    with caplog.at_level(logging.INFO):
+        # Both tasks submit, complete and run the finder dry in one cycle; the
+        # second cycle finds nothing and must not report the burst again.
+        assert planner._run_finders_once() is True
+        assert planner._run_finders_once() is False
+
+    line = _one_line(caplog, "[PIPELINE_PASS]")
+    assert "finder=TestFinder pictures=6 tasks=2" in line
+    for field in ("wall_s=", "img_per_s=", "gpu_busy="):
+        assert field in line, line
+    assert planner._pass_stats == {}, "the burst's accounting outlived its drain"
+
+
+class _FakeClipWorkflow:
+    device = "cpu"
+
+    def is_ready(self) -> bool:
+        return True
+
+    def ensure_ready(self) -> None:
+        return None
+
+    def encode_images(self, images):
+        return np.ones((len(images), 4), dtype=np.float32)
+
+
+class _EmbedDb:
+    """Persistence is not under test: answer with the ids the task handed over."""
+
+    image_root = ""
+
+    def run_task(self, fn, updates, **kwargs):
+        return [update[0] for update in updates]
+
+
+def test_embed_timing_line_carries_every_field(caplog):
+    task = ImageEmbeddingTask(
+        database=_EmbedDb(),
+        clip_workflow=_FakeClipWorkflow(),
+        batch=[(1, "a.png"), (2, "b.png")],
+    )
+    img = Image.new("RGB", (16, 16))
+    with caplog.at_level(logging.DEBUG):
+        task._process_preloaded([(1, "a.png", img), (2, "b.png", img)])
+
+    line = _one_line(caplog, "[EMBED_TIMING]")
+    for field in (
+        f"task_id={task.id}",
+        "n=2",
+        "device=cpu",
+        "preload_wait_s=",
+        "inference_s=",
+        "db_s=",
+        "total_s=",
+        "throughput=",
+    ):
+        assert field in line, line
+
+
+class _SmartScoreDb:
+    def __init__(self):
+        vec = np.ones(4, dtype=np.float32).tobytes()
+        self._anchors = [SimpleNamespace(image_embedding=vec, score=1.0)]
+        self._candidates = [SimpleNamespace(id=1, image_embedding=vec)]
+
+    def run_immediate_read_task(self, fn, *args, **kwargs):
+        return self._anchors, self._anchors, self._candidates, None, {}
+
+    def run_task(self, fn, id_to_score, before_signature, **kwargs):
+        return list(id_to_score)
+
+
+def test_smart_score_timing_line_carries_every_field(caplog, monkeypatch):
+    # Both resolvers read the tagger and the hub; neither is what is timed.
+    monkeypatch.setattr(
+        smart_score_task, "resolve_anomaly_apply_thresholds", lambda vault: {}
+    )
+    monkeypatch.setattr(
+        smart_score_task, "resolve_penalised_tag_weights", lambda auth: {}
+    )
+    vault = SimpleNamespace(db=_SmartScoreDb(), auth_service=None)
+    task = SmartScoreTask(vault, [SimpleNamespace(id=1)])
+
+    with caplog.at_level(logging.DEBUG):
+        assert task._run_task()["changed_count"] == 1
+
+    line = _one_line(caplog, "[SMART_SCORE_TIMING]")
+    for field in (
+        f"task_id={task.id}",
+        "n=1",
+        "device=cpu",
+        "preload_wait_s=",
+        "fetch_s=",
+        "inference_s=",
+        "db_s=",
+        "total_s=",
+        "throughput=",
+    ):
+        assert field in line, line
+
+
+class _FakeTaggingWorkflow:
+    is_pixlstash_tagger_enabled = False
+    _engine = SimpleNamespace(device="cpu")
+
+    def active_plugin_name(self, engine_override=None):
+        return engine_override or "wd14"
+
+    def ensure_active_plugin_ready(self, engine_override=None):
+        return None
+
+    def tag_images(self, image_paths, **kwargs):
+        return {path: ["tag"] for path in image_paths}
+
+    def pixlstash_tagger_image_size_quality_crop(self) -> int:
+        return 32
+
+    def tag_quality_crops(self, items, **kwargs):
+        return {}
+
+
+class _TagDb:
+    def __init__(self, image_root: str):
+        self.image_root = image_root
+
+    def run_immediate_read_task(self, fn, *args, **kwargs):
+        return {}  # no faces: the crop pass takes the centre-crop fallback
+
+    def run_task(self, fn, payload, **kwargs):
+        # `_add_tags_bulk` gets payload dicts and answers with the ids it
+        # wrote; `_resolve_pending_predictions` gets bare ids and answers
+        # nothing.
+        if payload and isinstance(payload[0], dict):
+            return [item["pic_id"] for item in payload]
+        return None
+
+
+def test_tag_timing_line_splits_the_models_and_the_crop_build(caplog, tmp_path):
+    png = tmp_path / "a.png"
+    Image.new("RGB", (64, 64)).save(png)
+    task = TagTask(
+        database=_TagDb(str(tmp_path)),
+        tagging_workflow=_FakeTaggingWorkflow(),
+        pictures=[SimpleNamespace(id=1, file_path=str(png))],
+        engine_override="wd14",
+    )
+
+    with caplog.at_level(logging.INFO):
+        task._tag_pictures_batch()
+
+    line = _one_line(caplog, "[TAG_TIMING] task_id=")
+    for field in (
+        "n=1",
+        "device=cpu",
+        "preload_wait_s=",
+        "full_pass=wd14",
+        "inference_s=",
+        "wd14_s=",
+        "pixlstash_tagger_s=0.000",
+        "crop_fetch_s=",
+        "crop_build_s=",
+        "crop_inference_s=",
+        "total_s=",
+        "wall_throughput=",
+    ):
+        assert field in line, line

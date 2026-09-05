@@ -8,12 +8,12 @@ names a file always naming a file that exists.
 The two crash-window tests here are the acceptance bar (plan §6 item 3). They do
 not assert the happy path and then claim a guarantee: each one **interrupts** the
 mover inside a specific window and then reads the disk and the hub to see what
-survived. The interruption is raised as a ``BaseException`` subclass on purpose —
+survived. The interruption is raised as a ``BaseException`` subclass on purpose -
 ``except Exception`` handlers do not catch it and no cleanup runs, so what the
 test observes is what a killed process would have left, not what an error handler
 tidied up.
 
-Both windows must leave a **duplicate** — the file readable at both paths, and the
+Both windows must leave a **duplicate** - the file readable at both paths, and the
 row naming one of them that exists. Neither may leave a dangling row.
 
 Environment: no ``Server``. A hub is a stdlib sqlite3 file and the fixtures are
@@ -47,7 +47,7 @@ class Crash(BaseException):
 
     ``BaseException`` rather than ``Exception`` deliberately: the mover catches
     ``OSError`` to report a failed file and would otherwise turn the simulated
-    crash into a tidy, cleaned-up error — which is precisely the state a real
+    crash into a tidy, cleaned-up error - which is precisely the state a real
     crash does *not* leave behind.
     """
 
@@ -99,7 +99,7 @@ def register_file(hub, folder_id, path, relpath, *, sha256="auto"):
 
 
 def locations(hub):
-    """``{(folder_id, relpath): row}`` — every registered copy."""
+    """``{(folder_id, relpath): row}`` - every registered copy."""
     return {
         (row["model_folder_id"], row["relpath"]): row
         for row in hub.fetchall("SELECT * FROM model_file")
@@ -153,14 +153,14 @@ def cross_device(monkeypatch):
 
     ``tmp_path`` puts both directories on one filesystem on every machine this
     suite runs on, so without this the mover would correctly choose ``rename``
-    and the copy/verify/commit/unlink invariant — the thing under test — would
+    and the copy/verify/commit/unlink invariant - the thing under test - would
     never execute.
     """
     monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
 
 
 # ===========================================================================
-# The two crash windows — the acceptance bar (plan §6 item 3)
+# The two crash windows - the acceptance bar (plan §6 item 3)
 # ===========================================================================
 
 
@@ -170,7 +170,7 @@ def test_crash_after_the_copy_and_before_the_commit_leaves_a_duplicate(
     """Window 1. The bytes are at both paths; the row still names the source.
 
     Nothing has been unlinked, because the unlink is last. The residue is a
-    duplicate — one content row, one location row, and a second file on disk
+    duplicate - one content row, one location row, and a second file on disk
     that a **manual** rescan of the destination folder will register as a second
     location of the same model, which is exactly what a duplicate is here.
     ``ModelFolderScanner`` has one caller, ``POST .../rescan``; nothing scans a
@@ -191,7 +191,7 @@ def test_crash_after_the_copy_and_before_the_commit_leaves_a_duplicate(
         mover.execute(plan)
 
     assert os.path.exists(two_folders["source_path"]), (
-        "the source was unlinked before the commit — the invariant is inverted"
+        "the source was unlinked before the commit - the invariant is inverted"
     )
     assert os.path.exists(two_folders["destination_path"])
     rows = locations(two_folders["hub"])
@@ -307,7 +307,7 @@ def test_a_cross_device_move_ends_with_one_copy_and_a_repointed_row(
 
 def test_a_same_drive_move_is_a_rename_and_copies_nothing(two_folders):
     """The ruling: same drive skips the copy, the verify and the space check.
-    Proved by the inode surviving — a copy would allocate a new one — and by no
+    Proved by the inode surviving - a copy would allocate a new one - and by no
     partial file ever appearing."""
     source_inode = os.stat(two_folders["source_path"]).st_ino
 
@@ -374,7 +374,7 @@ def test_a_stale_recorded_hash_stops_the_move(two_folders, cross_device, hub):
 def test_an_unhashed_checkpoint_still_verifies(two_folders, cross_device, hub):
     """A 24 GB checkpoint registers with ``sha256`` NULL. There is no recorded
     hash to compare against, so the verification is source-stream digest against
-    destination re-read — which is the part that actually proves the copy."""
+    destination re-read - which is the part that actually proves the copy."""
     with hub.transaction() as conn:
         conn.execute("UPDATE model SET sha256 = NULL, file_kind = 'checkpoint'")
     mover = ModelMover(hub)
@@ -434,7 +434,7 @@ def test_a_move_carries_the_samples_directory(two_folders, monkeypatch, force_co
 
 def test_the_samples_are_counted_into_the_space_check(two_folders, monkeypatch):
     """15 MB per run against a 1.9 GB copy: small, and not nothing when the
-    destination is nearly full. Only on the copy path — a rename copies nothing,
+    destination is nearly full. Only on the copy path - a rename copies nothing,
     samples included."""
     _with_samples(two_folders, "a.jpg", "b.jpg")
     weights = os.path.getsize(two_folders["source_path"])
@@ -524,7 +524,7 @@ def test_previews_that_arrived_are_not_reported_as_lost(two_folders, monkeypatch
     already at the destination.
 
     Reporting that as "not carried" sends the owner hunting for previews that
-    are exactly where they should be — and their obvious next move, re-running
+    are exactly where they should be - and their obvious next move, re-running
     the move, hits the destination-exists refusal above. What is actually left
     is a duplicate at the source, which is the residue every other interruption
     in this module leaves and which belongs in the log, not the receipt.
@@ -583,7 +583,7 @@ def test_space_is_checked_before_anything_is_written(
     two_folders, cross_device, monkeypatch
 ):
     """Per-file checking would fill the disk and fail on file 1,500 of 1,806,
-    having already moved 1,499 — and there is no undo for shelf operations."""
+    having already moved 1,499 - and there is no undo for shelf operations."""
     import shutil
 
     monkeypatch.setattr(
@@ -646,8 +646,8 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
 
     ``plan`` runs inside the POST and the write runs minutes later on the worker
     thread. Before the execution-time re-check this destroyed the file that
-    arrived in between and reported ``moved``. Reproduced deterministically —
-    write the destination between ``plan`` and ``execute`` — rather than by
+    arrived in between and reported ``moved``. Reproduced deterministically -
+    write the destination between ``plan`` and ``execute`` - rather than by
     threading, because the window is the whole gap and needs no timing to enter.
 
     Publication refuses this too (the test below), so the detail is asserted as
@@ -693,9 +693,9 @@ def test_a_destination_created_at_publication_time_is_refused_not_clobbered(
     source. Only the publication itself can refuse it, which is what
     ``publish_no_clobber`` does.
 
-    Entered deterministically at the instant that matters — the destination is
+    Entered deterministically at the instant that matters - the destination is
     created from inside the publication call, after the copy has been written and
-    verified — rather than by threading. That barrier proves the refusal happens
+    verified - rather than by threading. That barrier proves the refusal happens
     at publication rather than at the check minutes earlier; it cannot prove the
     claim is one syscall, because nothing in-process can be scheduled between a
     syscall's entry and its return. The two tests below cover what a claim that
@@ -746,13 +746,13 @@ def test_a_publication_that_cannot_drop_its_source_leaves_the_name_free(
     fails: a file another process holds open cannot be unlinked, and that is
     exactly what ComfyUI does with a loaded model. Leaving the claim behind would
     put an unregistered copy at the destination *and* make that name refuse every
-    later move of the same model — a move that fails and then cannot be retried.
+    later move of the same model - a move that fails and then cannot be retried.
     So the claim is removed and the failure reported.
     """
     if force_copy:
         monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
 
-    # Only the *drop* fails — the first unlink of the run. The rollback's own
+    # Only the *drop* fails - the first unlink of the run. The rollback's own
     # unlink has to work, which is the whole thing under test, and patching
     # ``os.unlink`` wholesale would break it and pass for the wrong reason.
     real_unlink = os.unlink
@@ -794,7 +794,7 @@ def test_a_move_still_lands_where_hard_links_are_refused(
 ):
     """exFAT, a share, or ``fs.protected_hardlinks`` over a file of another uid.
 
-    ``os.rename`` never needed a link — only write on the two directories — so
+    ``os.rename`` never needed a link - only write on the two directories - so
     refusing to move at all would be this fix breaking folders that worked. The
     reservation is the second attempt and is no-clobber for the same reason:
     ``O_CREAT|O_EXCL`` either creates the name or raises.
@@ -864,7 +864,7 @@ def test_a_destination_row_that_appears_at_commit_time_leaves_no_dangling_row(
     execution-time check and before the commit. ``_repoint``'s UPDATE then
     violates ``UNIQUE(model_folder_id, relpath)``, and an ``IntegrityError`` is
     not an ``OSError``: it used to escape the per-file handler entirely, so the
-    source was never unlinked and — on the rename path — never put back either,
+    source was never unlinked and - on the rename path - never put back either,
     leaving a committed row naming content it does not describe.
 
     Simulated by inserting the racing row from inside ``_repoint``, which is the
@@ -908,9 +908,9 @@ def test_a_destination_row_that_appears_at_commit_time_leaves_no_dangling_row(
     assert os.path.exists(two_folders["source_path"])
     assert not os.path.exists(two_folders["destination_path"])
     assert (two_folders["source_id"], "alice.safetensors") in locations(hub)
-    # The racing row is left for the rescan that owns it — deleting somebody
+    # The racing row is left for the rescan that owns it - deleting somebody
     # else's bookkeeping from inside a failed move is how a tombstone goes
-    # missing — so ``assert_no_dangling_rows`` is deliberately not used here.
+    # missing - so ``assert_no_dangling_rows`` is deliberately not used here.
     assert (two_folders["destination_id"], "alice.safetensors") in locations(hub)
 
 
@@ -922,14 +922,14 @@ def test_forgetting_the_source_folder_mid_move_never_unlinks_the_source(
 
     ``DELETE /model-folders/{id}`` drops the folder and every ``model_file`` row
     in it. If that lands after the copy and before ``_repoint``, the UPDATE
-    matches nothing — and SQL calls that success, so the mover used to unlink the
+    matches nothing - and SQL calls that success, so the mover used to unlink the
     source and report ``moved`` with the destination bytes registered nowhere at
     all (#1017). That is the dangling residue inverted: a file no row names,
     after the only other copy was deleted.
 
     Simulated by running the forget from inside ``_repoint``, which is the exact
-    instant it has to land on. The route cannot reach here any more — it takes
-    ``SHELF_IO_LOCK`` — so this pins the mover's own half of the guard, which is
+    instant it has to land on. The route cannot reach here any more - it takes
+    ``SHELF_IO_LOCK`` - so this pins the mover's own half of the guard, which is
     what has to hold for a delete, a restored hub or a bug that gets there by
     another door.
     """
@@ -962,7 +962,7 @@ def test_forgetting_the_source_folder_mid_move_never_unlinks_the_source(
     )
     # The bytes are where the forget left every other file in that folder: on
     # disk at the source path, unregistered. Renamed back on the rename path,
-    # the copy discarded on the copy path — the undo the ordering already had.
+    # the copy discarded on the copy path - the undo the ordering already had.
     assert os.path.exists(two_folders["source_path"]), (
         "the source was unlinked on the strength of a commit that moved no row"
     )
@@ -981,7 +981,7 @@ def test_a_duplicate_fold_during_the_move_does_not_fail_it(
     ``CheckpointHashTask`` folds two rows that hash the same by rewriting
     ``model_file.model_id`` to the survivor, on the task runner and deliberately
     outside ``SHELF_IO_LOCK``, so it overlaps a multi-minute copy freely. The row
-    is still there and still names this file — only its model was consolidated —
+    is still there and still names this file - only its model was consolidated -
     so the move must commit.
 
     An earlier revision of the guard matched on ``model_id`` as well as the
@@ -1157,7 +1157,7 @@ def test_a_registered_destination_key_with_no_file_is_refused_at_plan_time(
     The `same-model` case is the one that was wrong: the check used to allow an
     existing row whose ``model_id`` matched the file being moved, on the reading
     that a row about the same content is harmless. ``model_file`` is keyed by
-    ``(model_folder_id, relpath)``, so it is not — ``_repoint``'s UPDATE walks
+    ``(model_folder_id, relpath)``, so it is not - ``_repoint``'s UPDATE walks
     into ``UNIQUE`` at commit time, minutes in, instead of a clean 4xx before
     anything is written. Widened to refuse any existing row, and pinned here in
     both shapes because nothing else exercises this branch: deleting it left the
@@ -1197,7 +1197,7 @@ def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
     two_folders,
 ):
     """A mixed selection dropped onto a folder must do the obvious thing rather
-    than error on the files that are already there — **and say so**.
+    than error on the files that are already there - **and say so**.
 
     Dropping them from the plan silently made ``STATUS_SKIPPED`` dead code and
     left a client unable to reconcile the items it sent against the results it
@@ -1258,7 +1258,7 @@ def test_relocating_a_folder_keeps_its_subdirectories(hub, tmp_path, cross_devic
     """``flatten=False``: a folder that moves as a unit moves as a tree.
 
     Flattened, ``runA/model.safetensors`` and ``runB/model.safetensors`` collide
-    on one name, which refuses the relocation permanently — and the refusal's
+    on one name, which refuses the relocation permanently - and the refusal's
     advice ("move them separately") names a verb the shelf does not have.
     """
     store = tmp_path / "store"
@@ -1299,7 +1299,7 @@ def test_relocating_a_folder_keeps_its_subdirectories(hub, tmp_path, cross_devic
 
 
 def test_cancel_stops_the_queue_and_rolls_nothing_back(hub, tmp_path, cross_device):
-    """The ruling. The files already moved stay moved — there is no undo, and a
+    """The ruling. The files already moved stay moved - there is no undo, and a
     rollback would need its own crash-window argument."""
     source_dir = tmp_path / "loras"
     destination_dir = tmp_path / "archive"

@@ -19,11 +19,15 @@ import {
 } from "./utils/apiClient";
 import { getSessionContext } from "./api/session";
 import LoginScreen from "./components/views/LoginScreen.vue";
+import { markEnd, markStart } from "./utils/perfMarks";
 
 const isChecking = ref(true);
 const tokenError = ref(null);
 
 onMounted(async () => {
+  // This gate blocks App.vue from rendering at all until it resolves, so its
+  // cost is pure "blank screen" time - see the boot-breakdown report.
+  markStart("pixlstash:auth-check");
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token");
   if (token) {
@@ -32,11 +36,13 @@ onMounted(async () => {
       sessionContext.value = await getSessionContext();
       isAuthenticated.value = true;
       isChecking.value = false;
+      markEnd("pixlstash:auth-check");
       return;
     } catch {
-      // Invalid token — show login screen with error
+      // Invalid token - show login screen with error
       tokenError.value = "The share link is invalid or has expired.";
       isChecking.value = false;
+      markEnd("pixlstash:auth-check");
       return;
     }
   }
@@ -47,6 +53,7 @@ onMounted(async () => {
     isAuthenticated.value = false;
   }
   isChecking.value = false;
+  markEnd("pixlstash:auth-check");
 });
 </script>
 

@@ -12,7 +12,7 @@ Steps 4-6):**
   ``enforce_picture_scope`` call was removed in Step 5; object authorization now
   lives in the central authz gate. These routes are POST/DELETE/PATCH not in
   ``READ_SAFE_POST_PATHS``, so a real resource-scoped (=READ) share token is
-  middleware-blocked (403) before any handler runs — the live guard, exercised
+  middleware-blocked (403) before any handler runs - the live guard, exercised
   here with a real scoped token. The gate's per-object membership contract is
   proven in ``tests/test_authz_gate_step4.py``.
 - **Batch handlers (``SCOPED_LIST``).** These still filter their own id list
@@ -20,7 +20,7 @@ Steps 4-6):**
   monkeypatch technique (``_scope_to``) that exercises the inline filter directly.
 
 Both directions per CLAUDE.md: a scoped token is denied (403) and the owner still
-succeeds (200) — over-blocking the owner would be its own regression.
+succeeds (200) - over-blocking the owner would be its own regression.
 """
 
 import gc
@@ -71,7 +71,7 @@ def _tables_to_wipe(server):
 
     Every table in the live vault schema, minus the ones that already hold rows
     on a freshly started server (``library_settings``, ``metadata``,
-    ``snapshot``) — those are start-up state, not test state — and minus
+    ``snapshot``) - those are start-up state, not test state - and minus
     ``picture`` itself, whose rows are the fixture library and are restored
     column-by-column by ``_reset_library`` rather than re-imported.
 
@@ -84,8 +84,8 @@ def _tables_to_wipe(server):
     Returned children-first (reverse dependency order), which together with
     restoring ``picture`` before the deletes keeps every foreign key satisfied
     at all times. ``Picture`` points out of the preserved set into the wiped one
-    three times — ``stack_id`` -> ``picturestack``, ``project_id`` -> ``project``
-    and ``reference_folder_id`` -> ``reference_folder`` — and the restore puts
+    three times - ``stack_id`` -> ``picturestack``, ``project_id`` -> ``project``
+    and ``reference_folder_id`` -> ``reference_folder`` - and the restore puts
     all three back to their imported values (NULL, for this fixture) before the
     referenced rows go. Foreign keys really are enforced here
     (``pixlstash/database.py``), so a fixture that imported into a project or a
@@ -135,14 +135,14 @@ def _quiesce_background_work(server):
     pipeline rather than avoiding it: a vault that had just come up had nothing
     to backfill and no models loaded, so the sweeps were still in a long
     backoff when the test ended. A shared server is warm, and the sweeps land
-    *inside* the tests instead — where they rewrite the very rows the fixtures
+    *inside* the tests instead - where they rewrite the very rows the fixtures
     hand-place. ``TagTask`` runs ``delete(Tag).where(picture_id.in_(...))``
     before writing its own labels, ``FaceExtractionTask`` adds ``Face`` rows
     beside the ones a test just created and indexes by position, and the dedup
     sweep stacks pictures, which changes how many rows a bulk delete touches.
 
-    Nothing in this module needs derived data — every assertion is a status
-    code against hand-made objects — so every finder goes, not a curated
+    Nothing in this module needs derived data - every assertion is a status
+    code against hand-made objects - so every finder goes, not a curated
     subset. The planner thread itself keeps running (a route that wakes it must
     still find it alive) and so does the task runner, so routes that submit
     work directly are unaffected. ``detach_finders`` edits the planner's finder
@@ -200,7 +200,8 @@ def _shared_env():
         try:
             client = TestClient(server.api, raise_server_exceptions=True)
             r = client.post(
-                f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
             )
             assert r.status_code == 200, r.text
 
@@ -239,7 +240,7 @@ def _shared_env():
 def _reset_library(shared):
     """Put the shared vault back to its just-imported state.
 
-    Restores the pictures first and deletes everything else second — see
+    Restores the pictures first and deletes everything else second - see
     ``_tables_to_wipe`` for why that order keeps the foreign keys satisfied
     without disabling them.
     """
@@ -282,15 +283,15 @@ def fresh_state(_shared_env):
     produce that same 403 without any scope guard being involved, and each one
     is handled here before the test body runs:
 
-    * a credential a previous test revoked, or a session it killed — so the
+    * a credential a previous test revoked, or a session it killed - so the
       owner logs in again and the share token is minted fresh every time;
-    * a share token that never worked at all — so it is proved on an in-scope
+    * a share token that never worked at all - so it is proved on an in-scope
       read first. If it cannot read, the test does not run;
-    * the target picture having been deleted by a previous test — so the
+    * the target picture having been deleted by a previous test - so the
       owner's listing is checked against the exact fixture *ids*, not a count:
       a missing picture and a scope refusal are indistinguishable from a status
       code;
-    * a backfill finder rewriting the row under the test — so the finders
+    * a backfill finder rewriting the row under the test - so the finders
       ``_quiesce_background_work`` removed are re-checked by name.
     """
     shared = _shared_env
@@ -303,10 +304,10 @@ def fresh_state(_shared_env):
     )
 
     r = shared.client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, (
-        f"owner re-login failed — the shared environment is dirty: {r.text}"
+        f"owner re-login failed - the shared environment is dirty: {r.text}"
     )
 
     listed = shared.client.get(f"{API}/pictures")
@@ -337,7 +338,7 @@ def fresh_state(_shared_env):
     probe = anon.get(f"{API}/pictures", headers=_bearer(token))
     assert probe.status_code == 200, (
         f"the freshly minted share token cannot authenticate ({probe.status_code}: "
-        f"{probe.text}) — every 403 below would prove nothing. An unknown or "
+        f"{probe.text}) - every 403 below would prove nothing. An unknown or "
         "revoked token answers 401 here, not 200."
     )
     assert probe.json() == [], (
@@ -388,7 +389,7 @@ def _scope_to(monkeypatch, modules, allowed_ids):
     # The batch (SCOPED_LIST) handlers still filter inline via
     # fetch_scope_allowed_picture_ids, so patching it here still exercises them.
     # The single-picture (PICTURE_SCOPED) handlers no longer call
-    # enforce_picture_scope inline — that authorization moved to the central gate
+    # enforce_picture_scope inline - that authorization moved to the central gate
     # (Step 5), and those routes are covered by the real-scoped-token tests below.
     if hasattr(helpers_module, "enforce_picture_scope"):
         monkeypatch.setattr(helpers_module, "enforce_picture_scope", fake_enforce)
@@ -406,13 +407,13 @@ def scoped(fresh_state):
 
     Every resource-scoped share token is a READ token, and these mutation routes
     are NOT in ``READ_SAFE_POST_PATHS``, so the auth middleware blocks the token
-    (403) before any handler runs — the live guard against a share token mutating
+    (403) before any handler runs - the live guard against a share token mutating
     someone else's pictures. The routes are also declared ``PICTURE_SCOPED`` in
     ``pixlstash/authz/registry.py``; the gate's per-object membership contract is
     proven in ``tests/test_authz_gate_step4.py``.
 
     Both are minted fresh per test by ``fresh_state``, which also proves the
-    token authenticates before handing it over — a shared credential is exactly
+    token authenticates before handing it over - a shared credential is exactly
     what would turn a later test's 403 from "wrong scope" into "no credential".
     """
     return fresh_state.anon, fresh_state.token
@@ -514,7 +515,7 @@ def test_bulk_delete_scoped_token_blocked(env, scoped):
     """A resource-scoped share token cannot bulk soft-delete: DELETE /pictures is
     not in READ_SAFE, so the middleware 403s the READ token and nothing is deleted
     (fail-closed). The gate additionally declares the route PICTURE_SCOPED with
-    ``body_ids`` — the every-id membership contract is proven in
+    ``body_ids`` - the every-id membership contract is proven in
     tests/test_authz_gate_step4.py."""
     server, client, picture_ids, _ = env
     anon, tok = scoped
@@ -567,7 +568,7 @@ def test_bulk_delete_rejects_oversized_payload(env, monkeypatch):
     one request can't serialise unbounded work on the DB queue."""
     server, client, picture_ids, _ = env
     _scope_to(monkeypatch, [crud_module], None)
-    # 1001 ids (need not exist — the cap is checked before any DB access).
+    # 1001 ids (need not exist - the cap is checked before any DB access).
     r = client.request(
         "DELETE", f"{API}/pictures", json={"picture_ids": list(range(1, 1002))}
     )
@@ -658,7 +659,7 @@ def test_run_plugin_denied_when_any_out_of_scope(env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Character face handlers — BOTH the picture_ids and face_ids branches
+# Character face handlers - BOTH the picture_ids and face_ids branches
 # ---------------------------------------------------------------------------
 
 
@@ -771,10 +772,10 @@ def test_assign_face_owner_not_blocked(env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ComfyUI source-picture reads (CSO finding S2) — i2i uploads source bytes to
+# ComfyUI source-picture reads (CSO finding S2) - i2i uploads source bytes to
 # the ComfyUI host, so it must be scoped. Owner direction: the guard passes, so
 # the request gets past 403 (then fails downstream because the test env has no
-# ComfyUI / workflow — i.e. NOT 403 is the success assertion).
+# ComfyUI / workflow - i.e. NOT 403 is the success assertion).
 # ---------------------------------------------------------------------------
 
 
@@ -843,7 +844,7 @@ def test_comfyui_recipe_read_owner_succeeds(env, monkeypatch):
     _scope_to(monkeypatch, [comfyui_module], None)
     r = client.get(f"{API}/comfyui/pictures/{picture_ids[1]}/recipe")
     # The test fixtures are ordinary photos with no embedded graph, so the
-    # honest answer is a 200 saying so — NOT an error.
+    # honest answer is a 200 saying so - NOT an error.
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["available"] is False
@@ -866,7 +867,7 @@ def test_comfyui_run_recipe_owner_passes_scope_guard(env, monkeypatch):
     _scope_to(monkeypatch, [comfyui_module], None)
     r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": picture_ids[1]})
     # Owner is not scope-blocked; it reaches the handler and is refused for the
-    # real reason — the picture carries no executable graph. Asserting the exact
+    # real reason - the picture carries no executable graph. Asserting the exact
     # status and detail rather than a bare `!= 403` keeps this from passing
     # after the handler it targets stops existing.
     assert r.status_code == 400, r.text

@@ -3,7 +3,7 @@
  * Must be kept in sync with the palette in pixlstash/routes/picture_sets.py.
  */
 
-/** Sentinel value — use the animated card-stack thumbnail instead of an icon. */
+/** Sentinel value - use the animated card-stack thumbnail instead of an icon. */
 export const ICON_CARDS = "cards";
 
 /**

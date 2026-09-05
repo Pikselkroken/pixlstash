@@ -1,4 +1,4 @@
-"""Tests that a cached ``Picture.smart_score`` is invalidated when — and only when —
+"""Tests that a cached ``Picture.smart_score`` is invalidated when - and only when -
 a picture's anomaly/penalised-tag state changes.
 
 ``smart_score`` is a cached derived column and ``SmartScoreTask`` only picks up pictures
@@ -24,7 +24,11 @@ from sqlmodel import select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
-from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.db_models.tag_prediction import (
+    feeds_anomaly_score,
+    qualify_plugin_model_version,
+    TagPrediction,
+)
 from pixlstash.event_types import EventType
 from pixlstash.scoring import (
     fetch_anomaly_confidences,
@@ -49,9 +53,9 @@ from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
 
-# In ANOMALY_PENALTY_TAGS — feeds the smart score's anomaly penalty.
+# In ANOMALY_PENALTY_TAGS - feeds the smart score's anomaly penalty.
 PENALISED_TAG = "watermark"
-# Not in the anomaly vocabulary — a pure content tag the score must ignore.
+# Not in the anomaly vocabulary - a pure content tag the score must ignore.
 CONTENT_TAG = "sunset"
 
 
@@ -74,7 +78,7 @@ def _setup():
 def _upload_picture(client, name="Bad1.png"):
     """Upload one picture and return its id.
 
-    Pass a distinct *name* per call when a test needs several pictures — the importer
+    Pass a distinct *name* per call when a test needs several pictures - the importer
     deduplicates by content, so re-uploading the same file yields the same picture.
     """
     img_path = os.path.join(PICTURES_DIR, name)
@@ -135,6 +139,36 @@ def _seed_tag(server, pic_id, tag):
         session.commit()
 
     server.vault.db.run_task(insert)
+
+
+def _set_model_version(server, pic_id, tag, model_version):
+    """Restamp a seeded prediction so the test can vary only its source."""
+
+    def update(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).one()
+        row.model_version = model_version
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
+def _set_label_state(server, pic_id, tag, label_state):
+    """Flip an existing ledger row's human verdict in place."""
+
+    def update(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).one()
+        row.label_state = label_state
+        session.commit()
+
+    server.vault.db.run_task(update)
 
 
 def _wait_for(predicate, timeout=10.0):
@@ -205,7 +239,7 @@ def test_adding_penalised_tag_invalidates_and_requeues():
 
 
 def test_adding_content_tag_does_not_invalidate():
-    """A non-penalised tag must not invalidate — over-invalidating re-scores the library."""
+    """A non-penalised tag must not invalidate - over-invalidating re-scores the library."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -246,7 +280,7 @@ def test_removing_penalised_tag_invalidates():
 
 
 def test_removing_content_tag_does_not_invalidate():
-    """Removing a content tag leaves the anomaly inputs — and the cached score — alone."""
+    """Removing a content tag leaves the anomaly inputs - and the cached score - alone."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -270,7 +304,7 @@ def test_removing_content_tag_does_not_invalidate():
 
 
 def test_confirm_penalised_prediction_invalidates():
-    """Confirming folds the anomaly probability to 1.0 — the cached score is stale."""
+    """Confirming folds the anomaly probability to 1.0 - the cached score is stale."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -296,7 +330,7 @@ def test_confirm_registers_origin_stamped_rescore_refresh():
 
     Proves the registry wiring end-to-end: the confirm records the id under the editing tab,
     and the background recompute completion emits an immediate origin-stamped
-    ``{fields:["smart_score"], origin_client_id}`` event for just that card — independent of
+    ``{fields:["smart_score"], origin_client_id}`` event for just that card - independent of
     the backfill drain gate (a second unscored picture keeps ``count_remaining() > 0``).
     """
     temp_dir, client, server = _setup()
@@ -345,7 +379,7 @@ def test_confirm_registers_origin_stamped_rescore_refresh():
 
 
 def test_reject_penalised_prediction_invalidates():
-    """Rejecting folds the anomaly probability to 0.0 — the cached score is stale."""
+    """Rejecting folds the anomaly probability to 0.0 - the cached score is stale."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -379,12 +413,12 @@ def test_confirm_content_prediction_does_not_invalidate():
 
 
 def test_delete_anomaly_prediction_invalidates():
-    """Deleting an anomaly prediction drops its probability — the cached score is stale.
+    """Deleting an anomaly prediction drops its probability - the cached score is stale.
 
     ``POST /pictures/{id}/tag_predictions/delete`` bulk-removes the model's predictions so
     the background tagger treats the picture as never seen. Dropping an anomaly-vocabulary
     prediction removes its penalty input, so the stored ``smart_score`` must be NULLed for
-    recompute — the confirmed invalidation gap this fix closes.
+    recompute - the confirmed invalidation gap this fix closes.
     """
     temp_dir, client, server = _setup()
     try:
@@ -406,7 +440,7 @@ def test_delete_anomaly_prediction_invalidates():
 
 
 def test_delete_content_prediction_does_not_invalidate():
-    """Deleting a pure content prediction is outside the anomaly vocabulary — score stands.
+    """Deleting a pure content prediction is outside the anomaly vocabulary - score stands.
 
     Guards the intended narrow scope: over-invalidating here re-scores the whole library on
     a routine prediction reset.
@@ -444,7 +478,7 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
             _set_smart_score(server, pid, 0.5)
 
         # Two pictures get a fresh anomaly confidence; the third only a content tag,
-        # so its anomaly signature — and its cached score — must be untouched.
+        # so its anomaly signature - and its cached score - must be untouched.
         # The anomaly tag is applied to the first two because the scorer only reads a
         # model prediction whose defect is visible in the tag list; without the Tag row
         # the prediction write would (correctly) move nothing.
@@ -540,7 +574,7 @@ def test_sub_threshold_model_prediction_is_not_scored():
             == 0.0
         )
 
-        # Ungated (apply_thresholds=None) it *is* present — proving the gate is what
+        # Ungated (apply_thresholds=None) it *is* present - proving the gate is what
         # removed it, not a missing row.
         raw, _ = server.vault.db.run_task(
             lambda s: fetch_anomaly_confidences(s, [pic_id])
@@ -779,7 +813,7 @@ def test_changed_penalised_tags_includes_family_aliases():
     # "jpeg artifacts" / "compression artifacts" inherit its weight.
     changed = changed_penalised_tags({"blocky": 3}, {"blocky": 5})
     assert {"blocky", "jpeg artifacts", "compression artifacts"} <= changed
-    # Removing it drops the whole family to zero — same requirement.
+    # Removing it drops the whole family to zero - same requirement.
     changed = changed_penalised_tags({"blocky": 3}, {})
     assert {"blocky", "jpeg artifacts", "compression artifacts"} <= changed
     # Merge children are stored under their own name but scored as the parent.
@@ -803,7 +837,7 @@ def test_penalised_tag_config_change_invalidates_only_matching_pictures():
         for pic_id in (carrier_tag, carrier_pred, bystander):
             _set_smart_score(server, pic_id, 0.5)
 
-        # One carries an applied Tag, one only an anomaly TagPrediction — the penalty
+        # One carries an applied Tag, one only an anomaly TagPrediction - the penalty
         # reads both, so invalidation must cover both.
         server.vault.db.run_task(
             lambda s: (
@@ -883,7 +917,7 @@ def test_patch_config_invalidates_only_pictures_with_the_changed_tag():
 #
 # The tagger's ``threshold_offset`` moves both the anomaly apply gate and the penalty's
 # ``u = (p - t)/(1 - t)`` normalisation, so every cached score with an anomaly component
-# goes stale when it changes. Unlike a penalised-tag re-weight it is not scoped by tag —
+# goes stale when it changes. Unlike a penalised-tag re-weight it is not scoped by tag -
 # but it is still bounded to pictures that actually carry an anomaly ``TagPrediction``,
 # because a picture with no anomaly term cannot have moved.
 
@@ -964,7 +998,7 @@ def test_threshold_offset_change_invalidates_anomaly_scores_via_patch():
 
 
 def test_identical_threshold_offset_save_is_a_noop():
-    """Re-saving the same offset must not re-score — the guard is on a real move."""
+    """Re-saving the same offset must not re-score - the guard is on a real move."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -991,7 +1025,7 @@ def test_identical_threshold_offset_save_is_a_noop():
 #
 # ``SmartScoreTask`` runs in the background with no request, so it cannot use the
 # request-scoped ``get_smart_score_penalised_tags_from_request``. It must resolve the
-# owner's table from the DB inside its own read session — this is the wiring that made
+# owner's table from the DB inside its own read session - this is the wiring that made
 # ``User.smart_score_penalised_tags`` reach the scorer at all.
 
 
@@ -1046,7 +1080,7 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
         charged = _get_smart_score(server, pic_id)
         assert charged is not None and 1.0 <= charged <= 5.0
 
-        # 2) Remove the tag from the user's table — the same picture must score higher,
+        # 2) Remove the tag from the user's table - the same picture must score higher,
         #    which is only possible if the background path reads the user's config.
         without_tag = {k: v for k, v in with_tag.items() if k != PENALISED_TAG}
         assert (
@@ -1075,8 +1109,8 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
 def test_on_demand_fetch_resolves_the_users_penalised_tags_from_the_hub():
     """The sort path's scorer config carries the owner's table, not the shipped seed.
 
-    Identity lives in the hub, so resolving it from the scoring session — which is a
-    *vault* session — found no user row on every call and quietly scored with
+    Identity lives in the hub, so resolving it from the scoring session - which is a
+    *vault* session - found no user row on every call and quietly scored with
     ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` while the owner's edited table sat in the hub
     (one ``No user row found`` warning per batch was the only symptom).
     """
@@ -1119,7 +1153,7 @@ def test_on_demand_fetch_resolves_the_users_penalised_tags_from_the_hub():
 #
 # Smart scores are computed outside the write transaction. If a tag edit invalidates a
 # picture (NULLs its score) between compute and persist, ``_persist_scores`` must NOT
-# write the stale value — that would resurrect an invalidated row the finder can never
+# write the stale value - that would resurrect an invalidated row the finder can never
 # re-pick (a NULL score means both "unscored" and "invalidated since claimed", so the
 # finder's ``WHERE smart_score IS NULL`` cannot distinguish them). The guard is a CAS on
 # the anomaly signature captured at fetch time.
@@ -1150,7 +1184,7 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
         )
 
         assert persisted == []
-        # The row must stay NULL — not resurrected with the stale score — so the finder
+        # The row must stay NULL - not resurrected with the stale score - so the finder
         # re-picks it and it rescores from fresh inputs. This is the whole point.
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
@@ -1189,8 +1223,8 @@ def test_persist_writes_score_when_anomaly_state_unchanged():
 # vault backfill drained (``count_remaining() == 0``). A migration NULL-reset keeps a
 # backfill in flight, so an interactive edit's card never refreshed. The
 # ``InteractiveRescoreRegistry`` now lets the completion handler emit an immediate,
-# origin-stamped ``CHANGED_PICTURES`` for the edited card — independent of the drain gate
-# — while bulk backfill work still coalesces into the single drain-time emit.
+# origin-stamped ``CHANGED_PICTURES`` for the edited card - independent of the drain gate
+# - while bulk backfill work still coalesces into the single drain-time emit.
 
 
 def _fake_smart_score_completion(picture_ids, persisted_ids):
@@ -1315,10 +1349,10 @@ def test_full_backfill_emits_once_at_drain_not_per_batch():
 # in the vault, its rescore completion reaches the drain gate (``count_remaining() == 0``).
 # The completion first emits an origin-stamped ``smart_score`` refresh for that id (slick
 # in-place update on the editing tab), then emitted an ADDITIONAL origin-less drain event
-# for the WHOLE batch — re-announcing the very same id with no origin. The editing tab
+# for the WHOLE batch - re-announcing the very same id with no origin. The editing tab
 # therefore also raised the "view changed externally" pill for its own edit. The drain must
 # exclude ids already announced origin-stamped via the interactive registry in this batch,
-# while STILL firing for genuinely unregistered (background) ids — over-suppression is its
+# while STILL firing for genuinely unregistered (background) ids - over-suppression is its
 # own regression.
 
 
@@ -1354,7 +1388,7 @@ def test_own_origin_edit_does_not_also_pill_on_drain():
             _fake_smart_score_completion([edited], [edited]), None
         )
 
-        # Drain gate IS reached, yet only the single origin-stamped refresh fired — the
+        # Drain gate IS reached, yet only the single origin-stamped refresh fired - the
         # editing tab reconciles in place and never sees its own change as external.
         assert server.vault.db.run_task(SmartScoreTask.count_remaining) == 0
         assert events == [
@@ -1417,7 +1451,7 @@ def test_drain_still_fires_for_unregistered_ids_alongside_own_origin():
             "fields": ["smart_score"],
             "origin_client_id": "tab-a",
         } in events
-        # The origin-less drain fired for the background id ONLY — the edited id is not
+        # The origin-less drain fired for the background id ONLY - the edited id is not
         # re-announced origin-less (no self-pill), and the background id is not dropped.
         bulk = [e for e in events if "origin_client_id" not in e]
         assert bulk == [{"picture_ids": [background], "fields": ["smart_score"]}]
@@ -1427,7 +1461,7 @@ def test_drain_still_fires_for_unregistered_ids_alongside_own_origin():
 
 
 def test_cas_skipped_id_is_not_announced_and_stays_registered():
-    """A picture skipped by _persist_scores' CAS is still NULL — never announced rescored."""
+    """A picture skipped by _persist_scores' CAS is still NULL - never announced rescored."""
     temp_dir, client, server = _setup()
     try:
         persisted_pic = _upload_picture(client, "Bad1.png")
@@ -1449,7 +1483,7 @@ def test_cas_skipped_id_is_not_announced_and_stays_registered():
             None,
         )
 
-        # Only the persisted id is announced — never the still-NULL skipped id.
+        # Only the persisted id is announced - never the still-NULL skipped id.
         assert events == [
             {
                 "picture_ids": [persisted_pic],
@@ -1532,7 +1566,7 @@ def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
 # SELECT + 64 UPDATE per batch on the single writer queue, run full-library-wide by
 # migration 0076). The write must still: honour the B1 compare-and-swap, return exactly
 # the ids written (in input order, drift/deleted excluded), and leave ``metadata_hash``
-# untouched — ``smart_score`` is in ``database._HASH_SKIP_COLS``.
+# untouched - ``smart_score`` is in ``database._HASH_SKIP_COLS``.
 
 
 def test_persist_writes_batch_as_single_bulk_statement():
@@ -1576,7 +1610,7 @@ def test_persist_writes_batch_as_single_bulk_statement():
         for pid in pic_ids:
             assert _get_smart_score(server, pid) == id_to_score[pid]
 
-        # Exactly one UPDATE ... smart_score statement carried the whole batch — the
+        # Exactly one UPDATE ... smart_score statement carried the whole batch - the
         # executemany fires a single ``session.execute`` regardless of row count.
         score_updates = [
             s
@@ -1640,7 +1674,7 @@ def test_persist_excludes_picture_deleted_mid_flight():
             before,
         )
         # CAS passes for both (empty signatures match), but the missing row is dropped by
-        # the existence check — preserving the old ``session.get(...) is None`` guard.
+        # the existence check - preserving the old ``session.get(...) is None`` guard.
         assert persisted == [pic_id]
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
@@ -1691,7 +1725,7 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
         finally:
             server.vault.db.run_task = original_run_task
 
-        # Committed synchronously inside the PATCH — asserted WITHOUT polling, because the
+        # Committed synchronously inside the PATCH - asserted WITHOUT polling, because the
         # invalidation shares the IMMEDIATE task's transaction rather than trailing it.
         assert _get_smart_score(server, carrier) is None
         assert _get_smart_score(server, bystander) == 0.5
@@ -1707,3 +1741,133 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
     finally:
         server.close()
         temp_dir.cleanup()
+
+
+# --- Tagger-plugin predictions are fenced out of the anomaly penalty --------------
+# ``TagPrediction`` rows can now come from a third-party tagger plugin, stamped with a
+# qualified ``model_version`` (``<plugin>@<version>``). Raw confidences are not
+# comparable between models - the apply thresholds above are calibrated against the
+# built-in tagger - so a plugin's score must never reach the penalty, or switching
+# tagger would move every affected picture's smart score with nothing on screen to
+# explain it. A *human* verdict still counts whichever row carries it.
+
+
+def test_plugin_sourced_model_prediction_is_not_scored():
+    """A plugin's confidence is dropped even when tagged and above the threshold."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
+        _seed_prediction(server, pic_id, "watermark", confidence=0.8)  # > 0.6
+        _set_model_version(server, pic_id, "watermark", "joycaption@2026-01")
+
+        probs, human = _probs(server, pic_id)
+        assert "watermark" not in probs.get(pic_id, {})
+        assert (
+            anomaly_penalty(
+                probs.get(pic_id, {}),
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
+        )
+
+        # The ungated read drops it too: this is a source fence, not a threshold.
+        raw, _ = server.vault.db.run_task(
+            lambda s: fetch_anomaly_confidences(s, [pic_id])
+        )
+        assert "watermark" not in raw.get(pic_id, {})
+
+        # Control: the identical row unqualified *is* scored, proving the
+        # model_version is what removed it and not the seeding.
+        _set_model_version(server, pic_id, "watermark", "v43")
+        probs, _ = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.8)
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_human_decision_on_a_plugin_row_still_counts():
+    """The fence drops model confidences, never a person's verdict."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_human_prediction(server, pic_id, "watermark", POS, confidence=0.1)
+        _set_model_version(server, pic_id, "watermark", "joycaption@2026-01")
+
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(1.0)
+        assert "watermark" in human[pic_id]
+
+        # And the negative direction, on the same plugin-stamped row.
+        _set_label_state(server, pic_id, "watermark", NEG)
+        probs, _ = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.0)
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_plugin_write_leaves_the_built_in_taggers_predictions_alone():
+    """A plugin run must not delete or overwrite built-in rows as stale.
+
+    One row per ``(picture, tag)`` is all the unique key allows, so without the
+    built-in/plugin split in the stale-row delete, running a plugin would clear the
+    built-in tagger's confidences and take the picture's anomaly penalty with them.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
+        _seed_prediction(server, pic_id, "watermark", confidence=0.8)
+
+        written = server.vault.db.run_task(
+            TagTask._write_predictions_from_tags,
+            {pic_id: {"watermark": 0.05, "bad anatomy": 0.9}},
+            {pic_id: {"watermark"}},
+            "joycaption@2026-01",
+        )
+
+        rows = server.vault.db.run_task(
+            lambda s: {
+                r.tag: (r.model_version, r.confidence)
+                for r in s.exec(
+                    select(TagPrediction).where(TagPrediction.picture_id == pic_id)
+                ).all()
+            }
+        )
+        # The built-in row survives untouched, version and confidence.
+        assert rows["watermark"] == ("test-v1", pytest.approx(0.8))
+        # The plugin's own prediction for a tag nobody owned is still recorded.
+        assert rows["bad anatomy"][0] == "joycaption@2026-01"
+        assert written >= 1
+
+        # And the surviving built-in confidence still drives the penalty.
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.8)
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            > 0.0
+        )
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_model_version_helpers_split_built_in_from_plugin_rows():
+    """The predicate the fence is built on, including the legacy shapes."""
+    assert qualify_plugin_model_version("joycaption", "2026-01") == "joycaption@2026-01"
+    assert qualify_plugin_model_version("joycaption", None) == "joycaption@unknown"
+    assert qualify_plugin_model_version("joycaption", "  ") == "joycaption@unknown"
+
+    # Every row written before plugins could predict at all must keep scoring.
+    assert feeds_anomaly_score("v43")
+    assert feeds_anomaly_score("unknown")
+    assert feeds_anomaly_score("manual")
+    assert not feeds_anomaly_score("joycaption@2026-01")
+    assert not feeds_anomaly_score("joycaption@unknown")

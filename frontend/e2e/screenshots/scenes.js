@@ -8,7 +8,112 @@
 // sets) in a forced dark theme, rendered as the desktop app (title bar + window
 // controls) — see capture.spec.js. ctx = { page, grid, overlay, settings,
 // sidebar, api }.
+import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { expect } from '@playwright/test'
+
+const here = dirname(fileURLToPath(import.meta.url))
+
+// v1.11's "Add a library" reads a real folder on disk, so the scenes for it
+// build one. It lives in the OS temp dir rather than under the repo or the
+// owner's home: the wizard refuses a folder inside the active library, and a
+// capture must never put somebody's own folder names on the marketing site.
+// The shape is the release's own default layout — Project, then Person — so the
+// mapping screen has two levels to propose and a root to leave alone.
+const FOLDER_FIXTURE_ROOT = join(tmpdir(), 'pixlstash-shots-library')
+//: How long the folder read gets. It decodes and samples every picture in the
+//: tree and runs face detection over them, on the CPU-only capture backend and
+//: possibly from a cold model load, so it does not fit the file's default
+//: timeout. Scenes that wait on it declare `timeout` too — the expect timeout
+//: alone cannot outlive the test.
+const READ_TIMEOUT_MS = 600_000
+const FOLDER_FIXTURE_TREE = {
+  'Client · Nordvik': { Mira: 5, Jonas: 4 },
+  'Studio Tests': { Mira: 4, Ines: 4 },
+}
+
+/**
+ * Fill FOLDER_FIXTURE_ROOT with copies of demo-data pictures and return it.
+ * Rebuilt per call so a rerun never reads a half-written tree from the last
+ * one, and so the read's picture counts are the same in every capture.
+ */
+function buildFolderFixture() {
+  const demoImages = join(here, '..', '..', '..', 'demo-data', 'images')
+  const sources = readdirSync(demoImages).filter(
+    (name) => /\.(jpe?g|png)$/i.test(name) && !name.includes('_thumb'),
+  )
+  expect(sources.length, 'demo-data/images must hold pictures to copy').toBeGreaterThan(0)
+
+  rmSync(FOLDER_FIXTURE_ROOT, { recursive: true, force: true })
+  let next = 0
+  for (const [project, people] of Object.entries(FOLDER_FIXTURE_TREE)) {
+    for (const [person, count] of Object.entries(people)) {
+      const dir = join(FOLDER_FIXTURE_ROOT, project, person)
+      mkdirSync(dir, { recursive: true })
+      for (let n = 1; n <= count; n++) {
+        const source = sources[next++ % sources.length]
+        cpSync(join(demoImages, source), join(dir, `${person}-${n}.jpg`))
+      }
+    }
+  }
+  return FOLDER_FIXTURE_ROOT
+}
+
+/**
+ * The wizard's AppDialog, addressed by whichever step is currently mounted.
+ * Not `:has(.choose-step)`: the steps replace each other, so a locator naming
+ * one of them stops matching the moment the wizard advances — which is how the
+ * mapping and preview scenes first failed, waiting inside a dialog that no
+ * longer matched their own selector.
+ */
+function wizardDialog(page) {
+  return page
+    .locator('.app-dialog')
+    .filter({ has: page.locator('.choose-step, .map-tree, .preview-step') })
+}
+
+/**
+ * Open Settings → Libraries → "+ Add a library…" against the fixture folder and
+ * wait for the server's verdict card. Returns the wizard dialog to shoot.
+ */
+async function openAddLibrary({ grid, settings, page }) {
+  await readyGrid(grid)
+  await settings.open()
+  await settings.openTab('Libraries')
+  await page.getByRole('button', { name: '+ Add a library…' }).click()
+
+  const wizard = wizardDialog(page)
+  await expect(wizard).toBeVisible()
+  const field = wizard.getByLabel('Folder')
+  await field.fill(buildFolderFixture())
+  await field.blur() // what triggers the inspect; Enter does the same
+  await expect(wizard.locator('.choose-step__verdict')).toBeVisible()
+  return wizard
+}
+
+/**
+ * Carry the wizard from the verdict through the read to the mapping tree.
+ *
+ * Three gestures, not one: "Bring them in" starts the read, the scan card then
+ * reports what it found and waits, and "Set up my library" is what opens the
+ * mapping tree. The read decodes and samples every picture in the tree, so the
+ * wait between the first two is the long one.
+ */
+async function readFoldersIntoMapping(ctx) {
+  await openAddLibrary(ctx)
+  const wizard = wizardDialog(ctx.page)
+  await wizard.getByRole('button', { name: 'Bring them in' }).click()
+
+  const proceed = wizard.getByRole('button', { name: 'Set up my library' })
+  await expect(proceed).toBeEnabled({ timeout: READ_TIMEOUT_MS })
+  await proceed.click()
+  await expect(ctx.page.locator('.map-tree')).toBeVisible()
+  await ctx.page.waitForTimeout(600) // let the level bands settle
+  return wizard
+}
 
 // listAccelerators() payloads for the desktop bridge, one per GPU vendor. Labels
 // mirror electron/src/config.ts ACCEL_LABELS and the shape mirrors main.ts's
@@ -270,6 +375,86 @@ export const scenes = [
       return settings.card
     },
   },
+  // ── v1.11: adding a library, and reading the folders it already has ──────
+  // Ordered so the three wizard shots read as one walk-through, and placed
+  // after the settings scenes because they all start from the same dialog.
+  {
+    id: 'add-library',
+    assets: ['ScreenshotAddLibrary.jpg'],
+    title: 'Add a library — the folder\'s own verdict',
+    async setup(ctx) {
+      return await openAddLibrary(ctx)
+    },
+  },
+  {
+    id: 'map-tree',
+    assets: ['ScreenshotMapTree.jpg'],
+    title: 'Naming what each folder level is (the mapping tree)',
+    timeout: READ_TIMEOUT_MS + 120_000,
+    async setup(ctx) {
+      return await readFoldersIntoMapping(ctx)
+    },
+  },
+  {
+    id: 'map-preview',
+    assets: ['ScreenshotMapPreview.jpg'],
+    title: 'This is what your folders become (review before the import)',
+    timeout: READ_TIMEOUT_MS + 120_000,
+    async setup(ctx) {
+      const wizard = await readFoldersIntoMapping(ctx)
+      // Stops one screen short of "Yes, build this library" on purpose: the
+      // point of the shot is that nothing has been written yet.
+      await wizard.getByRole('button', { name: 'Review and import' }).click()
+      await expect(wizard.locator('.preview-step')).toBeVisible()
+      await ctx.page.waitForTimeout(600)
+      return wizard
+    },
+  },
+  {
+    id: 'libraries-manage',
+    assets: ['ScreenshotLibrariesManage.jpg'],
+    title: 'Settings → Libraries with a row\'s ⋯ menu open',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openTab('Libraries')
+      // The full menu (open / rename / stop using) only exists on a row that is
+      // NOT the active library, and demo-data registers exactly one. Add a
+      // second so the menu has every verb in it — an EMPTY folder, which is the
+      // one verdict that adds a library outright with no mapping step in the
+      // way. The hub is per-run and thrown away with the work dir, so this
+      // registers nothing outside the capture.
+      const secondRoot = join(tmpdir(), 'pixlstash-shots-second-library')
+      rmSync(secondRoot, { recursive: true, force: true })
+      mkdirSync(secondRoot, { recursive: true })
+      const res = await page.request.post('/api/v1/libraries', {
+        data: { path: secondRoot, name: 'Client work' },
+      })
+      expect(res.ok(), `could not add the second library: ${res.status()}`).toBe(true)
+      await page.reload()
+      await settings.open()
+      await settings.openTab('Libraries')
+      const row = page.locator('.library-row:not(.library-row--active)').first()
+      await row.locator('.library-row__more').click()
+      await expect(page.locator('.library-menu')).toBeVisible()
+      await page.waitForTimeout(300)
+      return settings.card
+    },
+  },
+  {
+    id: 'export-folder',
+    assets: ['ScreenshotExportFolder.jpg'],
+    title: 'Export panel with Export to Folder…',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      await page.locator('.tb-export-btn').first().click()
+      // By class, not accessible name: the activator's own name subsumes the
+      // whole panel's text, so a name-based locator matches two buttons.
+      await expect(page.locator('.tb-export-folder-btn')).toBeVisible()
+      await page.waitForTimeout(300)
+      return null
+    },
+  },
   {
     id: 'privacy',
     assets: ['ScreenshotPrivacy.jpg'],
@@ -296,7 +481,7 @@ export const scenes = [
   },
   {
     id: 'stats-pictures',
-    assets: ['ScreenshotPictureStatistics.png'],
+    assets: ['ScreenshotPictureStatistics.jpg'],
     title: 'Statistics sidebar (pictures)',
     async setup({ grid, page }) {
       await readyGrid(grid)
@@ -308,7 +493,7 @@ export const scenes = [
   },
   {
     id: 'stats-tags',
-    assets: ['ScreenshotTagStatistics.png'],
+    assets: ['ScreenshotTagStatistics.jpg'],
     title: 'Statistics sidebar (tags)',
     async setup({ grid, page }) {
       await readyGrid(grid)
@@ -317,23 +502,6 @@ export const scenes = [
       const tagsTab = grid.statsTabs.filter({ hasText: 'Tags' }).first()
       if (await tagsTab.count()) await tagsTab.click()
       await page.waitForTimeout(700)
-      return grid.statsSidebar
-    },
-  },
-  {
-    id: 'task-manager',
-    assets: ['ScreenshotTaskManager.jpg'],
-    title: 'Task manager in the statistics sidebar',
-    async setup({ grid, page }) {
-      await readyGrid(grid)
-      await grid.statsToggle.click()
-      await expect(grid.statsSidebar).toBeVisible()
-      const tasksTab = grid.statsTabs.filter({ hasText: /Task/i }).first()
-      if (!(await tasksTab.count())) {
-        throw new Error('No "Tasks" tab in the statistics sidebar on this build')
-      }
-      await tasksTab.click()
-      await page.waitForTimeout(500)
       return grid.statsSidebar
     },
   },
@@ -446,9 +614,61 @@ export const scenes = [
       return null
     },
   },
+  {
+    // LAST on purpose: it switches the active library, and every scene above
+    // wants demo-data. An empty folder is the one verdict POST /libraries
+    // attaches outright, with no mapping step in the way; the hub is per-run
+    // and thrown away with the work dir, so nothing outside the capture is
+    // registered.
+    id: 'empty-library',
+    assets: ['ScreenshotEmptyLibrary.jpg'],
+    title: 'The first screen of a new library (three ways in)',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      const root = join(tmpdir(), 'pixlstash-shots-empty-library')
+      rmSync(root, { recursive: true, force: true })
+      mkdirSync(root, { recursive: true })
+      const added = await page.request.post('/api/v1/libraries', {
+        data: { path: root, name: 'New library' },
+      })
+      expect(added.ok(), `could not add the empty library: ${added.status()}`).toBe(true)
+      const { uuid } = await added.json()
+      const switched = await page.request.post('/api/v1/libraries/active', {
+        data: { uuid },
+      })
+      expect(switched.ok(), `could not switch library: ${switched.status()}`).toBe(true)
+      // No reload here: the switch route tells every connected client to
+      // reload itself, and racing it with page.reload() aborts the navigation.
+      // The card is deliberately late (>=350ms after load) so it never flashes
+      // over a library that does have pictures.
+      await expect(page.locator('.library-empty')).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(600)
+      return null
+    },
+  },
 ]
 
 export const manual = {
+  // Dropped as a scene: the panel is empty by the time the captures run.
+  'ScreenshotTaskManager.jpg':
+    'Task manager throughput — demo-data is fully processed before the captures start, ' +
+    'so the panel reads "No active tasks"; needs work in flight to be worth a shot',
+  // The 1.10 illustrations. They went onto the site without script.json being
+  // regenerated, so the guardrail never saw them; the v1.11 regeneration is
+  // what surfaced them. Classified here rather than left unaccounted.
+  'ScreenshotCli.jpg': 'pixlstash-cli --help in a terminal — not the SPA',
+  'ScreenshotCliLibraries.jpg': 'pixlstash-cli libraries in a terminal — not the SPA',
+  'ScreenshotCliPlugins.jpg': 'pixlstash-cli plugins in a terminal — not the SPA',
+  'ScreenshotLibraries.jpg':
+    'Settings → Libraries with two registered libraries — superseded on the site by ScreenshotLibrariesManage.jpg, which the libraries-manage scene reproduces',
+  'ScreenshotModelShelf.jpg':
+    'The model shelf — demo-data registers no model folders, so the shelf renders empty; needs a model-folder fixture',
+  'ScreenshotAiToolkitImport.jpg':
+    'Discovered ai-toolkit training runs — needs a real ai-toolkit output folder to read',
+  'ScreenshotDeleteLora.jpg':
+    'Deleting a model from the shelf — needs the model-shelf fixture above, and the dialog is destructive',
+  'ScreenshotPermissionRepair.jpg':
+    'The desktop start-up permission check — fires only on a library folder another account can write to, which the hardened capture work dir never is',
   'ScreenshotInstallId.jpg':
     'Upgrade dialog offering the anonymous install ID — needs an upgraded-from-older-version state, not a first run',
   'ScreenshotDuplicates.jpg':

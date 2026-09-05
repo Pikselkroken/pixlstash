@@ -60,23 +60,23 @@ class MissingDescriptionFinder(BaseTaskFinder):
         if not pictures:
             return None
 
-        # Group pictures by the engine embedded in their sentinel (None = use
-        # active_description_plugin).  Process only the first group per cycle so
-        # that interactive requests with a specific engine are not starved by a
-        # large backlog of NULL-description pictures.
-        groups: dict[str | None, list] = {}
-        for pic in pictures:
-            engine_name = (
-                parse_engine_from_description_sentinel(pic.description)
-                if is_description_sentinel(pic.description)
-                else None
-            )
-            groups.setdefault(engine_name, []).append(pic)
-
-        # Prefer explicit-engine (sentinel) requests first to avoid starvation
-        # by the NULL-description backlog.
-        first_engine = next((k for k in groups if k is not None), None)
-        first_pics = groups[first_engine] if first_engine is not None else groups[None]
+        # A sentinel is a user's reset (#1162): those pictures come first, as
+        # an urgent task, ahead of the NULL backlog the import left behind.
+        # Group them by the engine embedded in the sentinel (None = use
+        # active_description_plugin) and process one group per cycle.
+        requested = [
+            pic for pic in pictures if is_description_sentinel(pic.description)
+        ]
+        if requested:
+            groups: dict[str | None, list] = {}
+            for pic in requested:
+                engine_name = parse_engine_from_description_sentinel(pic.description)
+                groups.setdefault(engine_name, []).append(pic)
+            first_engine = next((k for k in groups if k is not None), None)
+            first_pics = groups[first_engine]
+        else:
+            first_engine = None
+            first_pics = pictures
         selected = self._filter_and_claim(first_pics, batch_limit)
         if not selected:
             return None
@@ -86,6 +86,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
             workflow=engine.description_workflow,
             pictures=selected,
             engine_override=first_engine,
+            interactive=bool(requested),
         )
 
     @staticmethod
@@ -100,7 +101,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
         # DescriptionTask's write guard (`locked_picture_ids`) does: a picture
         # merely *sharing a stack* with a locked-set member was selected here, ran
         # full captioning inference, had its write skipped, kept its NULL
-        # description, and was selected again next sweep — an unbounded loop.
+        # description, and was selected again next sweep - an unbounded loop.
         not_locked = ~Picture.id.in_(locked_picture_id_subquery())
         return session.exec(
             select(Picture)
@@ -114,6 +115,8 @@ class MissingDescriptionFinder(BaseTaskFinder):
                 ),
                 not_locked,
             )
-            .order_by(Picture.id)
+            # Sentinels (a reset) ahead of NULLs (never captioned), then by id,
+            # so a request never waits behind the backlog.
+            .order_by(Picture.description.is_(None), Picture.id)
             .limit(limit)
         ).all()

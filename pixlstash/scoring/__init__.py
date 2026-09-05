@@ -2,8 +2,8 @@
 
 Two distinct features that formerly shared ``pixlstash.picture_scoring``:
 
-* :mod:`pixlstash.scoring.smart_score` — anchor-based smart-score heuristic.
-* :mod:`pixlstash.scoring.character_likeness` — face↔reference likeness scoring.
+* :mod:`pixlstash.scoring.smart_score` - anchor-based smart-score heuristic.
+* :mod:`pixlstash.scoring.character_likeness` - face↔reference likeness scoring.
 
 This package is the public import path for both. Import the private anchor
 constants (``_BUILTIN_MIN_GOOD`` and friends) from the submodule directly.

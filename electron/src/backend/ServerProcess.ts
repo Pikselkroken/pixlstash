@@ -11,6 +11,19 @@ import {
   parsePermissionRepairRequest,
   PermissionRepairRequiredError,
 } from './StartupPermissions';
+import { parseUnusableVaultReport, VaultUnusableError } from './VaultRecovery';
+
+/**
+ * One-shot authorisations carried into a relaunch, each standing for a native
+ * dialog the user has already answered "yes" to. Never defaulted on: a launch
+ * that sets neither is the ordinary one.
+ */
+export interface StartupRecovery {
+  /** Tighten the file modes the backend refused to start with. */
+  repairPermissions?: boolean;
+  /** Set the unopenable library database aside and start with a new one. */
+  recreateVault?: boolean;
+}
 
 export interface RunningServer {
   url: string;
@@ -20,7 +33,7 @@ export interface RunningServer {
 }
 
 /**
- * In dev (PIXLSTASH_DESKTOP_DEV=1) we run against a local interpreter — the
+ * In dev (PIXLSTASH_DESKTOP_DEV=1) we run against a local interpreter - the
  * repo's .venv by default, or PIXLSTASH_DEV_BACKEND if set. This is the loop
  * used to iterate on the shell without building the bundled runtime.
  */
@@ -60,8 +73,8 @@ async function findFreePort(): Promise<number> {
  * Loopback port for this install, stable across launches.
  *
  * A fresh ephemeral port every launch changed the window's origin every launch,
- * and localStorage is keyed by origin: every `localStorage` value the SPA owns —
- * the 24h version-check throttle, dismissed-update state, one-time notices — was
+ * and localStorage is keyed by origin: every `localStorage` value the SPA owns -
+ * the 24h version-check throttle, dismissed-update state, one-time notices - was
  * silently discarded on restart. The version check therefore fired on every
  * single app start, which inflated the desktop cohort against Docker installs
  * that genuinely report once a day.
@@ -152,27 +165,28 @@ function startupFailureMessage(
   );
 }
 
-/** Preserve repairable permission failures as a typed desktop-shell event. */
+/** Preserve recoverable startup failures as typed desktop-shell events. */
 export function startupFailureError(
   code: number | null,
   signal: NodeJS.Signals | null,
   tail: string,
 ): Error {
   const request = parsePermissionRepairRequest(tail);
-  return request
-    ? new PermissionRepairRequiredError(request)
-    : new Error(startupFailureMessage(code, signal, tail));
+  if (request) return new PermissionRepairRequiredError(request);
+  const unusableVault = parseUnusableVaultReport(tail);
+  if (unusableVault) return new VaultUnusableError(unusableVault);
+  return new Error(startupFailureMessage(code, signal, tail));
 }
 
 /**
  * Issue a kill against the backend's whole process tree. Resolves with a human
- * message when the kill reported a real problem (so the caller can record it —
+ * message when the kill reported a real problem (so the caller can record it -
  * no silent failures), else null.
  *
  * On Windows the backend is spawned non-detached and Windows does NOT reap a
  * child when its parent dies (there is no kill-on-close job object), so an
  * un-awaited stop can leave the bundled python orphaned, holding
- * `resources\python\*.pyd/.dll` open — which is exactly what wedges a later
+ * `resources\python\*.pyd/.dll` open - which is exactly what wedges a later
  * over-the-top update at the "Installing" step (issue #486). We therefore both
  * await the kill here and confirm the exit in `stop()`.
  */
@@ -183,7 +197,7 @@ function killTree(child: ChildProcess, detached: boolean): Promise<string | null
     return new Promise((resolve) => {
       execFile('taskkill', ['/pid', String(pid), '/T', '/F'], (err, _stdout, stderr) => {
         const detail = (stderr || err?.message || '').trim();
-        // taskkill exits non-zero (128) when the process already exited — that's
+        // taskkill exits non-zero (128) when the process already exited - that's
         // success for us. Surface anything else so a stuck kill is diagnosable.
         if (err && !/not found|128|no (running )?tasks/i.test(detail)) {
           resolve(`taskkill for backend pid ${pid} failed: ${detail}`);
@@ -198,7 +212,7 @@ function killTree(child: ChildProcess, detached: boolean): Promise<string | null
       // When we spawned the backend detached it leads its own process group, so
       // a negative pid takes down the whole tree (uvicorn + any workers). When
       // it shares our group (the dev supervisor case) we must target the single
-      // pid — a negative pid would refer to a non-existent group and ESRCH.
+      // pid - a negative pid would refer to a non-existent group and ESRCH.
       process.kill(detached ? -pid : pid, sig);
     } catch {
       try {
@@ -261,7 +275,7 @@ export class ServerProcess {
   async start(
     overlayDir: string | null,
     device?: string,
-    repairPermissions = false,
+    recovery: StartupRecovery = {},
   ): Promise<RunningServer> {
     const python = isDevBackend() ? devInterpreter() : bundledInterpreter();
     if (!existsSync(python)) {
@@ -286,7 +300,7 @@ export class ServerProcess {
       PIXLSTASH_HOST: '127.0.0.1',
       PIXLSTASH_PORT: String(port),
       // Stays 'electron' even on a developer's machine: the backend reads this
-      // exact value as a runtime switch, not just a telemetry label — it gates
+      // exact value as a runtime switch, not just a telemetry label - it gates
       // cookie_secure, the loopback listener and the external-listener startup
       // check. Declaring 'dev' here would stop the window being able to reach or
       // authenticate against its own backend.
@@ -300,14 +314,18 @@ export class ServerProcess {
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
       // Set only after the user accepts the native repair dialog. An explicit
       // value prevents a parent-shell variable from authorising it accidentally.
-      PIXLSTASH_REPAIR_PERMISSIONS: repairPermissions ? '1' : '0',
+      PIXLSTASH_REPAIR_PERMISSIONS: recovery.repairPermissions ? '1' : '0',
+      // Likewise: only after the user has been shown what starting over costs
+      // and has agreed. The backend renames the old database rather than
+      // deleting it, but this is still the one flag that abandons a library.
+      PIXLSTASH_RECREATE_VAULT: recovery.recreateVault ? '1' : '0',
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),
     };
 
     // The desktop app always runs its OWN config (under the pixlstash-desktop
-    // app-data dir), in both dev and packaged runs — never the standalone
+    // app-data dir), in both dev and packaged runs - never the standalone
     // server's config. A standalone pip/Docker server (launched without
     // --server-config) keeps using the plain `pixlstash` config, so the two
     // installs stay fully separate and never read or clobber each other.
@@ -349,14 +367,14 @@ export class ServerProcess {
       this.exited = true;
       this.running = null;
       if (this.stopping) {
-        // We asked it to stop (settings restart / quit) — death is expected.
+        // We asked it to stop (settings restart / quit) - death is expected.
         return;
       }
       if (ready) {
-        // Crashed after a healthy start — let the owner surface it (dialog).
+        // Crashed after a healthy start - let the owner surface it (dialog).
         this.onExit?.(code);
       } else {
-        // Crashed during startup — fail fast with the captured reason.
+        // Crashed during startup - fail fast with the captured reason.
         failStartup?.(startupFailureError(code, signal, tail.text()));
       }
     });

@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase, HubPermissionError
+from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase
 from pixlstash.hub.registry import (
     ActiveLibraryError,
     LibraryError,
@@ -52,6 +52,35 @@ def make_vault_folder(root, name="library", *, with_credentials=False):
         conn.execute("INSERT INTO user VALUES (1, 'someone-else', 'a-real-hash')")
         conn.execute("CREATE TABLE usertoken (id INTEGER PRIMARY KEY, token_hash TEXT)")
         conn.execute("INSERT INTO usertoken VALUES (1, 'another-real-hash')")
+    conn.commit()
+    conn.close()
+    return folder
+
+
+def make_legacy_vault_folder(root, name="legacy"):
+    """A vault from before PixlStash adopted Alembic: no ``alembic_version``.
+
+    This is the ``0001_baseline`` table set as a December-2025 install left it.
+    ``VaultDatabase`` opens exactly this by stamping the baseline and upgrading,
+    so the registry has to let it through - refusing it is what exited the
+    backend during first-run setup instead.
+    """
+    folder = os.path.join(str(root), name)
+    os.makedirs(folder, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+    for table in (
+        "picture",
+        "character",
+        "face",
+        "tag",
+        "quality",
+        "metadata",
+        "pictureset",
+        "picturesetmember",
+        "conversation",
+        "message",
+    ):
+        conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
     conn.commit()
     conn.close()
     return folder
@@ -113,13 +142,17 @@ class TestHubDatabase:
         HubDatabase(path).close()
         assert stat.S_IMODE(os.stat(path).st_mode) == HUB_FILE_MODE
 
-    def test_server_refuses_a_group_readable_hub(self, tmp_path):
+    def test_server_warns_about_a_group_readable_hub(self, tmp_path, caplog):
         path = str(tmp_path / "hub.db")
         HubDatabase(path).close()
         os.chmod(path, 0o640)
 
-        with pytest.raises(HubPermissionError):
-            HubDatabase(path)
+        HubDatabase(path).close()
+        assert any(
+            "should be 600" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
 
     def test_cli_repairs_a_group_readable_hub(self, tmp_path):
         path = str(tmp_path / "hub.db")
@@ -199,6 +232,29 @@ class TestVaultValidation:
 
         with pytest.raises(NotAVaultError):
             validate_vault_folder(str(folder))
+
+    def test_accepts_a_vault_from_before_alembic(self, tmp_path):
+        """The opener stamps and upgrades these; the registry must not refuse them."""
+        folder = make_legacy_vault_folder(tmp_path)
+
+        assert validate_vault_folder(folder).endswith("vault.db")
+
+    def test_a_lone_picture_table_is_still_not_a_vault(self, tmp_path):
+        """The pre-Alembic allowance is a whole schema, not one familiar name."""
+        folder = tmp_path / "impostor-with-pictures"
+        folder.mkdir()
+        conn = sqlite3.connect(str(folder / "vault.db"))
+        conn.execute("CREATE TABLE picture (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(NotAVaultError) as caught:
+            validate_vault_folder(str(folder))
+
+        # "missing alembic_version" on its own reads as an old vault we could
+        # upgrade, and the recovery dialog shows this text verbatim.
+        assert "not a pre-Alembic one either" in str(caught.value)
+        assert "character" in str(caught.value)
 
     def test_rejects_a_missing_folder(self, tmp_path):
         with pytest.raises(NotAVaultError):

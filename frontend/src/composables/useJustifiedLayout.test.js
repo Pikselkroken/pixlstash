@@ -53,7 +53,7 @@ describe("packJustifiedRows", () => {
   });
 
   it("forces a wide panorama that opens a row onto its own row", () => {
-    // ar 8 at target 240 is 1920px wide — wider than the container alone.
+    // ar 8 at target 240 is 1920px wide - wider than the container alone.
     const layout = packJustifiedRows({
       ...base,
       aspectRatios: [8, 1, 1, 1],
@@ -322,7 +322,7 @@ describe("itemCenterX / verticalNeighborIndex", () => {
   });
 
   it("breaks center ties toward the lower index", () => {
-    // Current center 100; target row centers 50 and 150 — equidistant.
+    // Current center 100; target row centers 50 and 150 - equidistant.
     const tie = {
       rowStarts: [0, 1, 3],
       rowHeights: [240, 240],

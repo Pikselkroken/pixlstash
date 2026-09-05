@@ -16,11 +16,11 @@ predictions that already cleared that gate, so the usable range for a tag is
 ``[threshold, 1.0]`` and the threshold varies per label (0.5-0.85 on the shipped model
 once the user's ``threshold_offset`` is applied). Normalising to ``u = (p - t) / (1 - t)``
 before the exponent makes "just over the line" mean the same thing for a tag gated at 0.50
-as for one gated at 0.85 — with a bare exponent on ``p`` it does not, because ``0.86**k``
+as for one gated at 0.85 - with a bare exponent on ``p`` it does not, because ``0.86**k``
 stays close to 1 for any usable ``k`` while ``0.51**k`` collapses. A just-accepted
 detection is charged :data:`EVIDENCE_FLOOR` of full severity (it is a *visible* tag, so it
 is not free), rising to full severity at ``p = 1``. The *severity* of each defect is derived
-from the caller-supplied per-tag weight table — in the app that is the user's edited
+from the caller-supplied per-tag weight table - in the app that is the user's edited
 ``User.smart_score_penalised_tags``, with ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` acting only
 as the seed/fallback. A tag the user removed from that table is not penalised at all. How
 *reliable* the detector is stays a separate axis (the precision discount).
@@ -35,8 +35,8 @@ distinct things are wrong?" are different questions:
 2. **Rank-decayed accumulation across distinct defects.** Each distinct canonical tag in a
    family contributes ``severity × evidence``; contributions are sorted descending and
    summed with a geometric :data:`RANK_DECAY` (``1, 0.4, 0.16, …``). The total therefore
-   keeps *rising* with the number of distinct defects — with diminishing returns, since
-   correlated defects in one family are partly redundant — instead of saturating.
+   keeps *rising* with the number of distinct defects - with diminishing returns, since
+   correlated defects in one family are partly redundant - instead of saturating.
 
 The previous implementation ran noisy-OR across *all* members of a family and multiplied by
 the family's maximum member weight. Both were wrong: with the tagger's near-binary
@@ -84,14 +84,14 @@ DEFAULT_TAG_PRECISION = 0.90
 # Raised from 1.5 to 3.0 together with the switch to threshold-relative normalisation. The
 # reason is measurable: the tagger's accepted confidences are near-binary (median 0.999 on
 # the demo vault, p25 >= 0.87 for every anatomy tag), so a bare exponent on the raw
-# probability is close to a no-op — it can only discount the handful of predictions that
+# probability is close to a no-op - it can only discount the handful of predictions that
 # are numerically low, not the ones that are low *for their own gate*. Normalising first
 # and then applying a steeper exponent is what actually separates a 0.86 "malformed hand"
 # (gate 0.85, u = 0.07) from a 0.999 one.
 CONF_POWER = 3.0
 # Evidence charged to a detection sitting exactly on its acceptance threshold, as a
 # fraction of full severity. It is deliberately non-zero: a prediction that cleared the
-# gate became a *visible* tag, so it must cost something — this is a mildness knob, not a
+# gate became a *visible* tag, so it must cost something - this is a mildness knob, not a
 # second gate. Only applies when the caller supplies the tag's threshold; without one
 # there is no "just accepted" point to anchor to and the raw confidence is used instead
 # (see :func:`_confidence_evidence`).
@@ -133,7 +133,7 @@ COLORFULNESS_LO, COLORFULNESS_HI = 0.40, 0.90
 # --- Families ---------------------------------------------------------------
 # A family groups defects that are manifestations of one underlying problem, so they
 # combine by noisy-OR (not addition). ``corroborate`` names the objective metric, if any,
-# that backs the family. Severity is *not* hard-coded here — it is derived from the per-tag
+# that backs the family. Severity is *not* hard-coded here - it is derived from the per-tag
 # weights below so there is a single editable source of truth.
 ANOMALY_FAMILIES = (
     {
@@ -177,7 +177,7 @@ def normalise_tag_weights(weights: dict | None) -> dict[str, float]:
 
     ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` is only the *seed* for a new user's editable
     table (it is the ``default_factory`` of ``User.smart_score_penalised_tags``). It is
-    used here purely as the fallback for callers that have no user config to offer —
+    used here purely as the fallback for callers that have no user config to offer -
     every scoring path is expected to pass the resolved user table instead.
     """
     source = DEFAULT_SMART_SCORE_PENALIZED_TAGS if weights is None else weights
@@ -219,7 +219,7 @@ def _tag_weight(
     of a sibling, so they inherit the family's maximum present weight.
 
     Absence therefore means "not penalised" at the family level: if no member of a family
-    appears in the user's table, ``family_max`` is 0 and every member — alias or not —
+    appears in the user's table, ``family_max`` is 0 and every member - alias or not -
     contributes nothing. That is the semantic the settings UI implies, since it can only
     express weights 1-5 and removing a row is the only way to say "stop charging this".
     """
@@ -238,8 +238,8 @@ def _tag_severity(
 
     Replaces the old per-*family* severity, which took the family's maximum member weight
     and so punished ``incorrect reflection`` (weight 3) exactly as hard as ``bad anatomy``
-    (weight 5). A weight of 0 — a tag absent from the effective table whose family is also
-    empty, or a legacy explicit 0 such as the default ``silicone breasts`` — yields 0
+    (weight 5). A weight of 0 - a tag absent from the effective table whose family is also
+    empty, or a legacy explicit 0 such as the default ``silicone breasts`` - yields 0
     severity and is skipped by :func:`anomaly_penalty`.
     """
     weight = _tag_weight(tag, family_name, weights, family_max)
@@ -307,15 +307,15 @@ def _confidence_evidence(prob: float, threshold: float | None) -> float:
     """Shape a calibrated probability into evidence in ``[0, 1]``.
 
     With a known acceptance *threshold* the probability is first normalised onto the range
-    the tag can actually occupy — ``u = (p - t) / (1 - t)``, since anything below ``t`` was
-    dropped by the gate — and evidence runs from :data:`EVIDENCE_FLOOR` at ``u = 0`` to
+    the tag can actually occupy - ``u = (p - t) / (1 - t)``, since anything below ``t`` was
+    dropped by the gate - and evidence runs from :data:`EVIDENCE_FLOOR` at ``u = 0`` to
     ``1.0`` at ``u = 1`` with exponent :data:`CONF_POWER`. That makes "barely accepted"
     equally mild for every tag no matter where its gate sits, and leaves full-confidence
     detections untouched at ``1.0``, which is what keeps the calibrated defect-count bands
     where they were.
 
     Without a threshold (``None`` or ``<= 0``) there is no "just accepted" point to anchor
-    the floor to — charging a floor to a 0.05 prediction would be plainly wrong — so the
+    the floor to - charging a floor to a 0.05 prediction would be plainly wrong - so the
     raw probability is shaped directly by :data:`CONF_POWER`. That is the path unit tests
     and any caller with no gate resolved take.
 
@@ -378,17 +378,17 @@ def anomaly_penalty(
             folded human POS/NEG to 1.0/0.0).
         tag_precisions: ``{tag: precision}`` from the latest evaluated TaggerRun; tags
             not present fall back to :data:`DEFAULT_TAG_PRECISION`.
-        tag_weights: the effective ``{tag: weight}`` table — normally the resolved
+        tag_weights: the effective ``{tag: weight}`` table - normally the resolved
             ``User.smart_score_penalised_tags``. A tag absent from it is **not**
             penalised (subject to the family-alias rule in :func:`_tag_weight`).
             ``None`` falls back to ``DEFAULT_SMART_SCORE_PENALIZED_TAGS``, which is only
             correct for callers that genuinely have no user config.
-        tag_thresholds: ``{tag: acceptance threshold}`` — the same gate the caller used to
+        tag_thresholds: ``{tag: acceptance threshold}`` - the same gate the caller used to
             drop sub-threshold predictions, from
             :func:`~pixlstash.utils.service.anomaly_thresholds.resolve_anomaly_apply_thresholds`.
             Confidence is graded relative to it (see :func:`_confidence_evidence`); tags
             missing from it fall back to grading the raw probability.
-        human_tags: set of tags a human verified — these bypass the precision floor and
+        human_tags: set of tags a human verified - these bypass the precision floor and
             count as certain (a human said it is there, regardless of model precision).
         metrics: ``{sharpness, noise_level, colorfulness}`` for objective corroboration.
         cap: maximum summed family penalty before the smart-score weight is applied.
@@ -421,7 +421,7 @@ def anomaly_penalty(
         canonical = _CANONICAL_TAG.get(tag, tag)
         if _tag_severity(canonical, family_name, weights, family_max) <= 0.0:
             # Zero weight means "absent from the user's table (and from its family), or
-            # explicitly de-penalised" — either way, not charged.
+            # explicitly de-penalised" - either way, not charged.
             continue
 
         is_human = tag in human_tags

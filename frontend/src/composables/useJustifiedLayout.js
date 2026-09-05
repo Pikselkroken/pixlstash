@@ -6,16 +6,16 @@
 //
 // Model: every row shares one (per-row) height; images keep their aspect ratio
 // by varying in width. Rows are packed greedily and then scaled so each FULL
-// row spans the container exactly — pixel-exact, so the flex-wrap rendering in
+// row spans the container exactly - pixel-exact, so the flex-wrap rendering in
 // ImageGrid.vue breaks lines at exactly the boundaries computed here and the
 // virtual-scroll spacer arithmetic never drifts from what is painted.
 
-// ── Design constants (provisional — single source for the integrator/designer
+// ── Design constants (provisional - single source for the integrator/designer
 //    to retune; keep them here so JS packing and any CSS mirrors can't drift).
 /** Preferred content height of a row in px, before the info-row addition. */
 export const JUSTIFIED_TARGET_ROW_HEIGHT = 240;
 /** Gap between adjacent items and between rows, in px. */
-// Justified rows sit tighter than the square grid's 4px — packed variable-width
+// Justified rows sit tighter than the square grid's 4px - packed variable-width
 // thumbnails read as a wall, and 4px looked too airy there. Single source of
 // truth: the packing math AND the inline column-/row-gap both read this, so they
 // stay equal (the row-break invariant depends on it).
@@ -40,7 +40,7 @@ export function normalizeAspectRatio(ar) {
 /**
  * Distribute `availableWidth` px across one row's items proportionally to
  * their aspect ratios, in whole pixels that sum EXACTLY to `availableWidth`
- * (largest-remainder rounding, ties broken by lower index — deterministic).
+ * (largest-remainder rounding, ties broken by lower index - deterministic).
  * Whole-pixel widths that sum exactly are what makes flex-wrap line breaking
  * agree byte-for-byte with the packed row model.
  *
@@ -74,13 +74,13 @@ function distributeRowWidths(rowAspects, availableWidth) {
  * Greedy: items accumulate into a row until their natural widths at
  * `targetRowHeight` (plus inter-item gaps) reach `containerWidth`; the row is
  * then closed INCLUDING the overflowing item and scaled down so it spans the
- * container exactly (this lowers the row's height slightly below the target —
+ * container exactly (this lowers the row's height slightly below the target -
  * the Google Photos behaviour). The scaled content height is clamped to
  * [minRowHeight, maxRowHeight]; if the clamp bites (e.g. a row dominated by an
  * extreme panorama), widths are still forced to fill the container exactly and
  * the resulting mild aspect distortion is absorbed by `object-fit: cover`.
  *
- * LAST-ROW RULE: the final, incomplete row is NOT stretched to full width —
+ * LAST-ROW RULE: the final, incomplete row is NOT stretched to full width -
  * its items stay at `targetRowHeight` natural scale. Stretching 1–3 leftover
  * images balloons them; leaving them ragged-right matches Google Photos.
  *
@@ -107,7 +107,7 @@ function distributeRowWidths(rowAspects, availableWidth) {
  *   totalHeight: number,
  * }} Where:
  *   - `rowStarts[r]` is the index of the first image in row `r`;
- *     `rowStarts.length === rowCount + 1` — the sentinel
+ *     `rowStarts.length === rowCount + 1` - the sentinel
  *     `rowStarts[rowCount] === N` makes `[rowStarts[r], rowStarts[r+1])`
  *     slicing and "one past the last visible row" arithmetic branch-free.
  *   - `rowHeights[r]` is row r's total card height in whole px (scaled
@@ -165,7 +165,7 @@ export function packJustifiedRows({
       );
       widths = distributeRowWidths(rowAspects, availableWidth);
     } else {
-      // LAST-ROW RULE: no stretch — natural widths at the target height,
+      // LAST-ROW RULE: no stretch - natural widths at the target height,
       // floored so the row can never round up past the container and wrap.
       contentHeight = Math.round(
         Math.min(maxRowHeight, Math.max(minRowHeight, targetRowHeight)),
@@ -194,8 +194,8 @@ export function packJustifiedRows({
     const count = rowAspects.length;
     // Include inter-item gaps when testing against the container.
     if (naturalWidth + rowGap * (count - 1) >= width) {
-      // Overflow: close the row at whichever break — keeping this last item or
-      // leaving it for the next row — yields a full-row height closest to the
+      // Overflow: close the row at whichever break - keeping this last item or
+      // leaving it for the next row - yields a full-row height closest to the
       // target. A plain greedy break (always keep the overflowing item) makes a
       // full row's height a function of its item count alone: two size levels
       // that happen to pack the same count then render identically (the reported
@@ -243,7 +243,7 @@ export function packJustifiedRows({
 /**
  * Binary search: which row contains vertical offset `y`?
  * Returns the greatest `r` with `rowOffsets[r] <= y`, clamped to
- * `[0, rowCount - 1]` — a `y` inside the gap below row r (or past the end of
+ * `[0, rowCount - 1]` - a `y` inside the gap below row r (or past the end of
  * the layout) still maps to row r, which is the conservative choice for
  * visible-range calculations.
  *
@@ -267,7 +267,7 @@ export function rowAtOffset(rowOffsets, y) {
 /**
  * Horizontal center of item `index` within its row, in px from the row's left
  * edge (widths of the preceding row items + inter-item gaps + half the item's
- * own width). O(row length) — rows are short, so this is cheap enough for
+ * own width). O(row length) - rows are short, so this is cheap enough for
  * keyboard navigation.
  *
  * @param {{rowStarts: number[], itemScaledWidths: number[]}} layout - A layout
@@ -290,7 +290,7 @@ export function itemCenterX(layout, gap, index) {
 /**
  * Geometry-aware vertical navigation: the item `rowDelta` visual rows away
  * from `index` whose horizontal CENTER is nearest the current item's center
- * (ties go to the lower index — deterministic). This is the justified-mode
+ * (ties go to the lower index - deterministic). This is the justified-mode
  * replacement for the uniform grid's `index ± columns` arithmetic, which is
  * meaningless once rows hold varying item counts.
  *

@@ -1,4 +1,4 @@
-"""Tests for scripts/find_orphaned_files.py — the disk→DB orphan scanner.
+"""Tests for scripts/find_orphaned_files.py - the disk→DB orphan scanner.
 
 Builds a minimal image_root (a sqlite ``picture`` table plus files on disk)
 without booting a full Vault, so these stay fast and stdlib-only.
@@ -70,6 +70,7 @@ def vault(tmp_path):
     _touch(os.path.join(root, "vault.db-wal"))
     _touch(os.path.join(root, "snapshots/2026/05/31/abc.sqlite"))
     _touch(os.path.join(root, ".ref_thumbs/ref_thumb.webp"))
+    _touch(os.path.join(root, ".pixlstash-thumbnails/keep_0123456789abcdef_thumb.webp"))
     _touch(os.path.join(root, "tmp/set_thumbnails/cache.webp"))
     return root
 
@@ -108,7 +109,8 @@ def test_ignores_system_dirs_and_db_files(vault):
     orphan_rel = {os.path.relpath(p, vault) for p in mod._iter_orphans(vault, known)}
 
     assert not any(
-        r.startswith(("snapshots", ".ref_thumbs", "tmp")) or r.startswith("vault.db")
+        r.startswith(("snapshots", ".ref_thumbs", ".pixlstash-thumbnails", "tmp"))
+        or r.startswith("vault.db")
         for r in orphan_rel
     ), f"system content must be excluded; got {orphan_rel}"
 

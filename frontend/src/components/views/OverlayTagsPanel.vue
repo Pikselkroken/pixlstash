@@ -13,7 +13,7 @@
           v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
-          title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
+          title="Reset and regenerate tags - deletes all tags and predictions for this picture and requeues it for re-tagging"
           :disabled="isTagsRefreshing"
           @click.stop="refreshPictureTags()"
         >
@@ -77,7 +77,7 @@
           :title="lockNote"
         >
           <v-icon size="12">mdi-lock-outline</v-icon>
-          <span>Locked — read-only. Unlock the set to edit.</span>
+          <span>Locked - read-only. Unlock the set to edit.</span>
         </div>
         <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
           <v-progress-circular
@@ -939,7 +939,7 @@ async function rejectPrediction(tag, { batchId } = {}) {
   ) {
     // Mirror the backend's synthetic 'manual' NEG row (record_human_label):
     // confidence is the tagger's P(applies), which is 0 for a tag it never
-    // predicted — not 1.0. Using 0 keeps the optimistic chip consistent with
+    // predicted - not 1.0. Using 0 keeps the optimistic chip consistent with
     // what a refetch returns (and below the 0.3 near-miss threshold, so a
     // removed manual tag doesn't masquerade as a high-confidence rejection).
     tagPredictions.value = [

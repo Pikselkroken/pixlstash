@@ -54,7 +54,7 @@ def test_likeness_worker():
             # quality so we don't miss completions for fast-running pipelines.
             # get_worker_future resolves on success AND on failure (the worker
             # writes a sentinel row and reports the pid as "changed"), so we
-            # always get a deterministic completion signal — no polling races.
+            # always get a deterministic completion signal - no polling races.
             embedding_pictures = [pic for pic in pictures if pic.file_path]
             params_pictures = [
                 pic for pic in pictures if pic.file_path and pic.width and pic.height
@@ -126,7 +126,6 @@ def test_likeness_worker():
                         Picture.perceptual_hash,
                     ).where(
                         (Picture.image_embedding.is_(None))
-                        | (func.length(Picture.image_embedding) == 0)
                         | (Picture.likeness_parameters.is_(None))
                         | (Picture.perceptual_hash.is_(None))
                     )
@@ -134,7 +133,7 @@ def test_likeness_worker():
                 return [
                     {
                         "id": int(r[0]),
-                        "image_embedding_missing": r[1] is None or len(r[1]) == 0,
+                        "image_embedding_missing": r[1] is None,
                         "likeness_parameters_missing": r[2] is None,
                         "perceptual_hash_missing": r[3] is None,
                     }
@@ -224,7 +223,7 @@ def test_write_blob_updates_skips_hard_deleted_pictures():
                 # Seed pictures that look fully processed to the background
                 # pipeline. The Server runs live finders, and a picture with
                 # pending quality work gets a sentinel Quality written for its
-                # unloadable file — and update_quality resets size_bin_index
+                # unloadable file - and update_quality resets size_bin_index
                 # as part of that, racing (and clobbering) the very column this
                 # test asserts on. Pre-filling metadata, Quality, and likeness
                 # columns keeps every finder idle so only write_blob_updates

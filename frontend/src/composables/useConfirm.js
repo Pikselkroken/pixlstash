@@ -6,7 +6,7 @@ import { readonly, ref } from "vue";
 //
 // SCAFFOLD STATUS: this is the request/resolve state machine plus the host-facing
 // API a future `ConfirmDialog.vue` will consume. The visible dialog surface is
-// NOT built here — that is the maintainer's design pass. Until a host registers
+// NOT built here - that is the maintainer's design pass. Until a host registers
 // itself, `confirm()` PROGRESSIVELY FALLS BACK to the native `window.confirm`,
 // so adoption sites keep their exact current behaviour today and upgrade to the
 // styled dialog automatically once the host mounts. This is a documented default

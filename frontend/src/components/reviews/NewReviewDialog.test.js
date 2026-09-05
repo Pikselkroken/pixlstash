@@ -1,7 +1,7 @@
-// NewReviewDialog — the Set-scope custom listbox and its locked-set handling.
+// NewReviewDialog - the Set-scope custom listbox and its locked-set handling.
 //
 // The set scope is a custom listbox (not a native <select>) so a locked set can
-// render greyed, with a lock icon, and be non-selectable — a <select>'s
+// render greyed, with a lock icon, and be non-selectable - a <select>'s
 // <option>s can't do that. These tests drive that behaviour: a locked set row
 // is present, marked disabled, and clicking it does NOT change the selection;
 // an unlocked set row selects normally.
@@ -40,7 +40,7 @@ function seedStore() {
   const store = useReviewSessionsStore();
   store.healthRows = [];
   // The scope lists are a view onto the shared entity-list cache, so they are
-  // seeded there. One unlocked set and one locked set — `locked` arrives free
+  // seeded there. One unlocked set and one locked set - `locked` arrives free
   // from the API (PictureSetResponse.locked via safe_model_dict), so the dialog
   // reads it off store.sets directly.
   useEntityListsStore().lists = {
@@ -170,7 +170,7 @@ describe("NewReviewDialog set-scope listbox", () => {
 
 // A locked setId can be prefilled straight from the launch context
 // (ReviewSessionsOverlay passes store.healthScope through as `initialScope`),
-// bypassing selectSet()'s click-time guard — so the trigger itself has to show
+// bypassing selectSet()'s click-time guard - so the trigger itself has to show
 // the lock rather than letting the user discover the block on submit.
 describe("NewReviewDialog locked prefilled set scope", () => {
   it("marks the trigger as locked when initialScope prefills a locked set", () => {

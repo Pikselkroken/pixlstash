@@ -72,3 +72,6 @@ from .library_settings import LibrarySettings  # noqa: F401
 from .pending_score_invalidation import PendingScoreInvalidation  # noqa: F401
 from .guest_score import GuestScore  # noqa: F401
 from .snapshot import Snapshot  # noqa: F401
+from .picture_move import PictureMove  # noqa: F401
+from .external_move_review import ExternalMoveReview  # noqa: F401
+from .folder_mapping_commit import FolderMappingCommit  # noqa: F401

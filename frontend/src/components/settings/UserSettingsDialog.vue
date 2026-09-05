@@ -25,7 +25,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   sidebarThumbnailSize: { type: Number, default: 32 },
   dateFormat: { type: String, default: "locale" },
-  themeMode: { type: String, default: "light" },
+  themeMode: { type: String, default: "dark" },
   checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },
@@ -87,8 +87,8 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
-      // Ordered next to Scrapheap and Snapshots — the open library's bin and
-      // its backups — so the container sits with the panes that describe it.
+      // Ordered next to Scrapheap and Snapshots - the open library's bin and
+      // its backups - so the container sits with the panes that describe it.
       // Adjacency is the only cue: the rail is one flat list, deliberately, so
       // nothing here may style an item by its position.
       id: "libraries",
@@ -139,7 +139,7 @@ watch(
   () => dialogOpen.value,
   (isOpen) => {
     if (!isOpen) return;
-    // Only honour a requested tab that actually exists in this session — a
+    // Only honour a requested tab that actually exists in this session - a
     // read-only or browser session hides several entries, and landing on a
     // hidden pane would show an empty dialog body.
     const requested = props.initialTab;

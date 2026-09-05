@@ -75,7 +75,7 @@ def _score_best_faces(
     Combines across queries **per face** and only then takes the maximum over a
     picture's faces.  The reverse order (max over faces first, combine second)
     lets different faces satisfy different queries, which makes ``combine=min``
-    mean something other than its documented "must match all query images" —
+    mean something other than its documented "must match all query images" -
     and leaves no single face to name as the winner.  For a single query
     embedding the two orders are identical.
 
@@ -540,7 +540,7 @@ def register_routes(router, server):
 
             # ── Run face detection via the GPU task queue ──────────────────
             # FaceDetectionTask runs at URGENT priority, loads InsightFace if not
-            # yet initialised, and returns list[list[FaceResult]] — one per image.
+            # yet initialised, and returns list[list[FaceResult]] - one per image.
             if engine is None:
                 raise HTTPException(
                     status_code=503,

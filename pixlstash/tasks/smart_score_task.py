@@ -1,3 +1,4 @@
+import logging
 import time
 
 from sqlalchemy import bindparam, desc, func, update
@@ -43,6 +44,9 @@ class SmartScoreTask(BaseTask):
     """
 
     BATCH_SIZE = 64
+    #: A batch slower than this logs its [SMART_SCORE_TIMING] line at INFO
+    #: instead of DEBUG. Same threshold as FaceExtractionTask.SLOW_BATCH_LOG_S.
+    SLOW_BATCH_LOG_S = 5.0
 
     def __init__(self, vault, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -58,7 +62,7 @@ class SmartScoreTask(BaseTask):
         self._pictures = pictures or []
 
     def _run_task(self):
-        start = time.time()
+        start = time.perf_counter()
         pics = self._pictures
         if not pics:
             return {"changed_count": 0}
@@ -68,11 +72,12 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
-        # The owner's table comes from the hub's user row, never from ``self._db`` —
+        # The owner's table comes from the hub's user row, never from ``self._db`` -
         # that is the vault, and identity does not live there.
         owner_penalised_tags = resolve_penalised_tag_weights(
             getattr(self._vault, "auth_service", None)
         )
+        fetch_start = time.perf_counter()
         good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
                 self._fetch_score_data,
@@ -81,6 +86,7 @@ class SmartScoreTask(BaseTask):
                 owner_penalised_tags,
             )
         )
+        fetch_s = time.perf_counter() - fetch_start
 
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
             good_anchors, bad_anchors, candidates
@@ -90,28 +96,42 @@ class SmartScoreTask(BaseTask):
             logger.debug("SmartScoreTask: no valid candidates in batch, skipping.")
             return {"changed_count": 0}
 
+        inference_start = time.perf_counter()
         scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
             cand_list,
             good_list,
             bad_list,
             config=scorer_config,
         )
+        inference_s = time.perf_counter() - inference_start
 
         id_to_score = {cand_ids[i]: float(scores[i]) for i in range(len(cand_ids))}
 
+        db_start = time.perf_counter()
         persisted_ids = self._db.run_task(
             self._persist_scores,
             id_to_score,
             before_signature,
             priority=DBPriority.LOW,
         )
+        db_s = time.perf_counter() - db_start
 
-        logger.debug(
-            "SmartScoreTask completed in %.2fs with %s updates",
-            time.time() - start,
-            len(persisted_ids),
+        total_s = time.perf_counter() - start
+        n = len(persisted_ids)
+        # The scorer is numpy on the host, whatever queue the task rides on.
+        logger.log(
+            logging.INFO if total_s >= self.SLOW_BATCH_LOG_S else logging.DEBUG,
+            "[SMART_SCORE_TIMING] task_id=%s n=%d device=cpu preload_wait_s=0.000 "
+            "fetch_s=%.3f inference_s=%.3f db_s=%.3f total_s=%.3f throughput=%.1f/s",
+            self.id,
+            n,
+            fetch_s,
+            inference_s,
+            db_s,
+            total_s,
+            n / total_s if total_s > 0 else 0.0,
         )
-        # ``persisted_ids`` is the *actually-written* subset — ids the CAS in
+        # ``persisted_ids`` is the *actually-written* subset - ids the CAS in
         # ``_persist_scores`` skipped (anomaly signature drifted mid-scoring) are left
         # NULL and excluded, so the completion handler never announces a still-NULL score
         # as a finished rescore.
@@ -137,7 +157,7 @@ class SmartScoreTask(BaseTask):
         is captured in the *same* read transaction as the scorer inputs, so it pins the
         exact anomaly state the scores are computed from. :meth:`_persist_scores`
         re-snapshots and compares against it, dropping any write whose inputs a concurrent
-        tag edit moved in between — see that method.
+        tag edit moved in between - see that method.
 
         Args:
             session: Active DB session.
@@ -145,7 +165,7 @@ class SmartScoreTask(BaseTask):
             apply_thresholds: Per-tag confidence gate; see
                 :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`.
             owner_penalised_tags: The owner's ``{tag: weight}`` table, resolved from the
-                hub by the caller — ``session`` is a vault one and holds no identity.
+                hub by the caller - ``session`` is a vault one and holds no identity.
         """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)
@@ -225,7 +245,7 @@ class SmartScoreTask(BaseTask):
 
     @staticmethod
     def _persist_scores(session: Session, id_to_score: dict, before: dict) -> list[int]:
-        """Write each computed ``smart_score`` — but only if its inputs did not move.
+        """Write each computed ``smart_score`` - but only if its inputs did not move.
 
         Scores are computed outside this write transaction. If a concurrent tag edit
         NULLs a picture's ``smart_score`` (via
@@ -236,7 +256,7 @@ class SmartScoreTask(BaseTask):
         scored"). So this is a compare-and-swap: re-snapshot the anomaly signature in this
         transaction and write ``smart_score`` only for pictures whose signature is
         unchanged since :meth:`_fetch_score_data` captured *before*. A picture whose
-        signature moved is **skipped and left NULL** on purpose — the finder re-picks it
+        signature moved is **skipped and left NULL** on purpose - the finder re-picks it
         and it rescores from fresh inputs. Writing the old value here would recreate the
         bug.
 
@@ -249,7 +269,7 @@ class SmartScoreTask(BaseTask):
         Returns:
             The picture ids whose score was actually written this transaction, in input
             order. Ids skipped due to anomaly-state drift (left NULL for recompute) are
-            excluded — the interactive-refresh path keys off this list, so a skipped,
+            excluded - the interactive-refresh path keys off this list, so a skipped,
             still-NULL id is never announced as a finished rescore.
         """
         after = anomaly_state_signature(session, list(id_to_score.keys()))
@@ -257,7 +277,7 @@ class SmartScoreTask(BaseTask):
         # Compare-and-swap (B1): keep only pictures whose anomaly inputs did not move
         # between the read transaction that computed the score and this write. A drifted
         # picture is deliberately left NULL so MissingSmartScoreFinder re-picks it and it
-        # rescores from fresh inputs — writing the stale value would resurrect an
+        # rescores from fresh inputs - writing the stale value would resurrect an
         # invalidated row the finder can never re-pick.
         unchanged: list[int] = []
         skipped = 0
@@ -267,7 +287,7 @@ class SmartScoreTask(BaseTask):
                 continue
             unchanged.append(pic_id)
 
-        # Exclude any picture hard-deleted between compute and persist — the old per-row
+        # Exclude any picture hard-deleted between compute and persist - the old per-row
         # ``session.get(...) is None`` guard. One batched SELECT (<= BATCH_SIZE ids, well
         # under SQLite's bound-variable cap) replaces N ``session.get`` round-trips.
         existing: set = set()
@@ -278,14 +298,14 @@ class SmartScoreTask(BaseTask):
         to_write = [pic_id for pic_id in unchanged if pic_id in existing]
 
         if to_write:
-            # One prepared statement, N parameter sets — replaces the old 64-get + 64-set
+            # One prepared statement, N parameter sets - replaces the old 64-get + 64-set
             # ORM loop on the single writer queue (this task runs full-library-wide via
             # migration 0076). Target ``Picture.__table__`` (Core ``Table``), NOT the ORM
             # ``Picture`` mapper, so SQLAlchemy does not route this through the ORM
             # bulk-by-primary-key path (which clashes with the explicit WHERE bindparam)
             # and so the metadata-hash ``after_flush`` hook does not re-fire. That hook is
-            # a no-op for smart_score either way — ``smart_score`` is in
-            # ``database._HASH_SKIP_COLS`` so the hash value does not depend on it — but
+            # a no-op for smart_score either way - ``smart_score`` is in
+            # ``database._HASH_SKIP_COLS`` so the hash value does not depend on it - but
             # the old ORM loop dirtied each Picture and forced a wasted hash recompute to
             # the same value; this Core path skips that while leaving the stored
             # ``metadata_hash`` identical, matching the previous net behaviour.
@@ -335,7 +355,7 @@ class SmartScoreTask(BaseTask):
         """Fetch pictures that need smart score computation.
 
         Only the ids are loaded. This is an idle probe the WorkPlanner runs on
-        every sweep, and the full-ORM form read every column of every candidate —
+        every sweep, and the full-ORM form read every column of every candidate -
         including ``image_embedding``, ``text_embedding`` and
         ``likeness_parameters``, three LargeBinary columns worth kilobytes each.
         Nothing downstream needs them here: :meth:`SmartScoreTask.__init__` and

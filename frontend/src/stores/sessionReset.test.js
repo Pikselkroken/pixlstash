@@ -1,4 +1,4 @@
-// sessionReset.test.js — every Pinia store holding server-sourced data drops it
+// sessionReset.test.js - every Pinia store holding server-sourced data drops it
 // the instant the auth context changes (issue #655).
 //
 // The completeness discipline in CLAUDE.md applies: this file is the executable
@@ -25,7 +25,7 @@ const { axiosInstance } = vi.hoisted(() => ({
   },
 }));
 
-// The real apiClient is the point of the test — it owns `notifySessionReset`,
+// The real apiClient is the point of the test - it owns `notifySessionReset`,
 // the chokepoint every store registers on. Only the transport is stubbed.
 vi.mock("axios", () => ({ default: { create: () => axiosInstance } }));
 
@@ -54,7 +54,9 @@ import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
+import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
+import { useMovesStore } from "./useMovesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -98,7 +100,7 @@ const STORES = [
   {
     // A move names registered folders by id and shifts files between absolute
     // host paths, so it is owner-only for the same reason the registry is. The
-    // job itself carries on server-side — this session simply stops watching
+    // job itself carries on server-side - this session simply stops watching
     // it, because it no longer has standing to ask.
     name: "useModelMovesStore",
     use: useModelMovesStore,
@@ -111,6 +113,16 @@ const STORES = [
       };
     },
     isEmpty: (s) => s.job === null && s.status === "idle",
+  },
+  {
+    // v1.11 Phase 3: a host path and the read task id that maps it, same
+    // owner-only reasoning as useModelFoldersStore above.
+    name: "useFolderMappingStore",
+    use: useFolderMappingStore,
+    seed: (s) => {
+      s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
+    },
+    isEmpty: (s) => s.pending === null,
   },
   {
     name: "useLockedSetsStore",
@@ -245,6 +257,24 @@ const STORES = [
       s.cliHint === "" &&
       s.hasLoadedSuccessfully === false,
   },
+  {
+    // v1.11 Phase 5. Every row names a picture in the previous credential's
+    // library, so it is exactly the class of server-sourced cache §655 is
+    // about.
+    name: "useMovesStore",
+    use: useMovesStore,
+    seed: (s) => {
+      s.unambiguous = [{ review_id: 1, picture_id: 11 }];
+      s.ambiguous = [{ review_id: 2, picture_id: 12 }];
+      s.offLayout = [{ review_id: 3, picture_id: 13 }];
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.unambiguous.length === 0 &&
+      s.ambiguous.length === 0 &&
+      s.offLayout.length === 0 &&
+      s.loaded === false,
+  },
 ];
 
 beforeEach(() => {
@@ -364,7 +394,7 @@ describe("a response in flight across the reset is discarded", () => {
 // trustworthy if a NEW store cannot quietly skip it, so the directory is walked
 // and every store must appear in exactly one of the two lists. A store added
 // without a decision recorded here fails this test rather than being discovered
-// by a later incident — the same shape as the backend's
+// by a later incident - the same shape as the backend's
 // `test_all_routes_declare_access_policy` guardrail.
 describe("the store matrix is complete", () => {
   // Stores that hold NO server-sourced data, with the reason each is exempt.
@@ -378,7 +408,7 @@ describe("the store matrix is complete", () => {
     "useNoticeStore.js": "transient toast queue",
     "useScrapheapRetentionStore.js":
       "server-level policy from server-config.json, identical for every " +
-      "credential — no scope dimension, so nothing to leak between them",
+      "credential - no scope dimension, so nothing to leak between them",
     "useSearchStore.js": "the user's own query text and history",
     "useSidebarStore.js": "sidebar open/collapsed state",
     "useSortStore.js": "the active sort order",

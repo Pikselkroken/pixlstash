@@ -34,6 +34,10 @@
 21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
+24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
+25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
+26. [The layout and the move engine](#26-the-layout-and-the-move-engine-v111-phase-4b)
+27. [Reconciling moves made outside PixlStash](#27-reconciling-moves-made-outside-pixlstash-v111-phase-5)
 
 ---
 
@@ -152,6 +156,7 @@ pixlstash/
 │   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
 │   ├── dedup_tier_service.py         # Tiered detection, tier policy, cover + evidence (§22)
 │   ├── dedup_verdict_service.py      # Stack / keep-separate verdicts + metadata union (§22)
+│   ├── library_insights_service.py   # "About your library" findings, read-only (v1.11)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -439,6 +444,19 @@ Stack placement for these graphs therefore does **not** come from `build_stack_f
 
 **Seed ranges differ by route.** `run_t2i` / `run_i2i` validate a fixed seed to 32 bits; `run_recipe` allows the full 64-bit range ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and a 32-bit check would reject reproducing our own built-in's default.
 
+### `insights.py`
+`GET /insights` — the v1.11 "About your library" screen. One route, no writes
+anywhere on the surface. Every finding is computed live from data that already
+ships (the tier-1 exact-duplicate key, the captioner's own sentinel predicate,
+face rows and their character assignment, the `Tag` table, and the app's own
+definition of an unassigned picture), so there is no cache to rebuild and no
+background job behind it — "Look again" is this same GET. `owner_only` for the
+`tag_health` reasoning: the numbers **are** the vault-wide aggregate, so a
+narrowed answer would either leak that out-of-scope pictures exist or state a
+wrong total. Findings and the reasoning behind each check live in
+[services/library_insights_service.py](../pixlstash/services/library_insights_service.py);
+the contract is in `docs/integration_architecture.md` §20.
+
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
 
@@ -502,8 +520,13 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                       |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
+| GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                       |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
+| POST   | /api/v1/libraries                                                             | libraries       | Add a library                                               |
 | POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                   |
+| GET    | /api/v1/libraries/inspect                                                     | libraries       | Ask what a folder is                                        |
+| PATCH  | /api/v1/libraries/{library_uuid}                                              | libraries       | Rename a library                                            |
+| DELETE | /api/v1/libraries/{library_uuid}                                              | libraries       | Stop using a library                                        |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                          |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                       |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
@@ -536,6 +559,9 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
 | GET    | /api/v1/models/{model_id}/samples/{filename}                                  | model_shelf     | One training preview stored beside an imported checkpoint   |
+| POST   | /api/v1/moves/apply                                                           | moves           | Apply the given pending moves                               |
+| POST   | /api/v1/moves/dismiss                                                         | moves           | Drop the given pending moves without changing anything      |
+| GET    | /api/v1/moves/pending                                                         | moves           | Moves made outside PixlStash, awaiting reconciliation       |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                     |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                  |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                 |
@@ -564,6 +590,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                  |
 | GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                    |
 | GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                   |
+| POST   | /api/v1/pictures/export/folder                                                | pictures        | Start picture export-to-folder job                          |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                       |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                     |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                          |
@@ -575,6 +602,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                       |
 | POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                  |
 | POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                           |
+| POST   | /api/v1/pictures/layout/move-to-match                                         | pictures        | Move pictures to where the layout would put them            |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                    |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                    |
 | POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                    |
@@ -593,6 +621,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                    |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                      |
 | GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                          |
+| GET    | /api/v1/pictures/{id}/layout                                                  | pictures        | Where this picture is, and where the layout would put it    |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                        |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                          |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                           |
@@ -704,7 +733,14 @@ Detection: id, picture_id, frame_index, detection_index,
              Picture.detections relationship cascades on delete
 
 Character: id, name, description, extra_metadata,
-           reference_picture_set_id, project_id
+           reference_picture_set_id, thumbnail_picture_id, project_id
+           → thumbnail_picture_id pins which picture
+             GET /characters/{id}/thumbnail crops (NULL = automatic).
+             Deliberately NOT a foreign key: pictures are hard-deleted
+             (scrapheap purge, maintenance) and an FK would abort those
+             deletes. The purge clears the pin instead, and the route
+             ignores a pin whose picture no longer carries a face of
+             this character.
 
 Quality: id, picture_id, sharpness, edge_density, contrast,
          brightness, noise_level, colorfulness,
@@ -868,7 +904,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
-**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
+**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
 
 ### Registered tasks
 
@@ -887,7 +923,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `SMART_SCORE` | GPU | `MissingSmartScoreFinder` | Anchor-based heuristic score. Takes a full `Vault` (not just `database`) so it can resolve the tagger's per-label acceptance thresholds for the anomaly penalty, and is therefore registered in `vault.py` rather than `WorkPlanner.work_finders()` — same reason as `GFS_SNAPSHOT` and `TAG_HEALTH_AUTO_REBUILD`. |
 | `TEXT_SCORE` | CPU | `MissingTextScoreFinder` | MSER-based text-in-image score |
 | `WATCH_FOLDERS` | CPU | `MissingWatchFolderImportFinder` | Ingest from watch folders |
-| `COMFYUI_EXTRACTION` | CPU | `MissingComfyUIExtractionFinder` | Parse ComfyUI metadata |
+| `COMFYUI_EXTRACTION` | CPU | `MissingComfyUIExtractionFinder` | Parse ComfyUI metadata, and file the picture's workflow in the hub (see *The workflow scan rides the ComfyUI extraction* below) |
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |
 | `MISSING_FILE_PURGE` | CPU | `MissingFilePurgeFinder` | Remove records for vanished files |
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
@@ -1275,14 +1311,50 @@ folder's absolute host path needs somewhere to be served from, which is why
 `GET /taggers`, which was `ANY_TOKEN` then and is `OWNER_ONLY` now (the same disclosure `GET /pictures/plugins` and
 `GET /comfyui/workflows` had made all along, now removed from both).
 
-**The plugin lifecycle is not fully wired for third parties, and the guide says so.**
-`ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
-registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; and
-`DescriptionWorkflow` charges the VRAM budget for Florence-2 only, so
-`estimated_vram_mb()` is never consulted. Closing either is a separate change to the
-workflow, not to discovery. The third gap listed here — `generate_descriptions` being
-called without a `stop_event` — is closed: `DescriptionWorkflow` now passes one on both
-paths, so a plugin that honours it stops between images instead of running the batch out.
+**The lifecycle methods the contract declares are now called (issue #967).** All three
+gaps the guide used to list are closed, each of them "the host ignores a method it
+declared":
+
+- **`unload()` reaches every plugin**, through `unload_loaded_tagger_plugins()` in the
+  registry. Until this, a plugin's model stayed resident for the life of the process and
+  *Keep models in memory = off* could not free it — a multi-GB problem for a VLM
+  captioner. **Where it is called from is the whole design.** The one caller is
+  `Vault._maybe_aggressive_unload`, the setting's own sweep, which fires only once every
+  worker is idle. Hanging it off `ModelLifecycleManager.aggressive_unload` instead reads
+  as the tidier place and is wrong twice over: the registry is process-wide and bound to
+  the *vault's* engine (`_bind_engine_services`), while `InferenceEngine.close()` is also
+  what `DescriptionTask` and `TagTask` call to reap a throwaway CPU spillover engine —
+  on the hot path, before every batch — so a per-engine walk would unload the GPU
+  engine's Florence-2 immediately before captioning with it. Waiting for idle also keeps
+  the walk away from a plugin's in-flight load, which is memory-unsafe rather than merely
+  wrong (`tests/test_model_unload_race.py`); the built-in services hold one lock across
+  load and unload, and a third-party plugin may not. Each plugin is guarded on its own,
+  and `is_loaded()` gates the call — which is also what keeps the walk off a built-in
+  wrapper with no service bound, whose `unload()` would raise. It never builds the
+  registry: a registry nothing has imported is holding nothing.
+- **`estimated_vram_mb()` is consulted on the description path.**
+  `DescriptionWorkflow.estimate_vram_mb` asks the plugin that will actually run the
+  batch, capped at that plugin's own `effective_batch_size` and asked with the parameters
+  it will run with. Charging the Florence figure for a batch that never loads Florence
+  let the scheduler start a second model alongside the plugin's and OOM. `DescriptionTask`
+  passes its `engine_override` so an overridden batch is billed for the plugin it
+  dispatches to, and `DetectionTask` — which borrows this estimate but always runs
+  Florence-2 — names `florence2` explicitly. Two limits worth naming rather than
+  implying. **First, 0 is ambiguous and the host resolves it against the plugin.**
+  `TaggerPlugin.estimated_vram_mb` documents 0 as "CPU-only" and 0 is also what the
+  base class returns for a plugin that never overrode it, so a 0 on CUDA is read as *no
+  answer* and charged the Florence figure. For a CPU-only plugin that is a harmless
+  over-charge; for a GPU model that returned 0 merely because it was not resident yet it
+  is the under-charge the budget exists to prevent, which is exactly what
+  `JoyCaptionPlugin` used to do — it now bills its full 8 GB footprint until its weights
+  are actually on the CPU. The three docstrings that authors read (`base.py`,
+  `plugin_template.py`, `docs/writing-tagger-plugins.md`) state the ambiguity rather than
+  leaving it to be discovered. Distinguishing "unknown" from "genuinely zero" would need
+  a new sentinel in the published MIT contract, which is a decision for a separate
+  change. **Second**, `TaggingWorkflow.estimated_vram_mb` still bills its own constants
+  without asking a tag plugin, which is the same gap on the other surface.
+- **`generate_descriptions` gets a `stop_event`** on both paths, so a plugin that honours
+  it stops between images instead of running the batch out.
 
 #### Florence-2 checkpoint selection (issue #512)
 
@@ -1305,6 +1377,18 @@ Every plugin declares:
 - **Lifecycle**: `needs_download()`, `download()`, `init(parameters)`, `unload()`, `is_loaded()`.
 - **Inference**: `tag_images(...)` (when `supports_tags`) returns `{path: list[TagResult]}`; `generate_descriptions(...)` (when `supports_descriptions`) returns `{path: caption_str}`. `TagResult` carries `tag` and `confidence` (may be `None` for LLM-based plugins).
 - **VRAM hints**: `estimated_vram_mb()`, `effective_batch_size()`.
+- **`model_version()`** — a string identifying the weights *and how they are run*, defaulting to `""`. See the fence below for why it matters; it must change whenever the numbers do, quantisation and inference runtime included.
+
+### Prediction provenance and the anomaly fence
+
+A tagger plugin whose `TagResult`s carry confidences now gets `TagPrediction` rows like the built-in tagger does — `TaggingWorkflow.tag_images(out_raw_scores=...)` collects them for whichever plugin is active, and `_tag_images_single_plugin` no longer reduces the results to bare tag strings.
+
+Two rules keep that from moving anything it should not, both in `pixlstash/db_models/tag_prediction.py`:
+
+- **Rows are stamped `<plugin>@<version>`** (`qualify_plugin_model_version`), with `unknown` when the plugin declares none. `model_version` is the *sole* staleness key — `TagTask._write_predictions_from_tags` deletes rows whose version differs and rewrites them — so a plugin that cannot version itself keeps its confidences forever. The built-in tagger keeps its bare `v<n>`, so its existing rows are not orphaned and no migration is needed.
+- **Only unqualified rows feed the anomaly penalty** (`feeds_anomaly_score`, enforced in `smart_score.fetch_anomaly_confidences` and `recompute_anomaly_tag_uncertainty`). Raw confidences are not comparable across models and the apply thresholds are calibrated against the built-in tagger, so a plugin's 0.4 reaching the penalty would move every affected picture's smart score with no user action. A **human** verdict is exempt in both directions: `label_source == HUMAN` is tested before the fence, so a person's POS/NEG counts whichever row carries it.
+
+The same built-in/plugin split guards the stale-row delete and the overwrite path (`is_plugin_model_version`): a picture holds one prediction row per tag, so without it a plugin run would clear the built-in tagger's confidences and take the picture's `anomaly_tag_uncertainty` with them. The consequence is that whichever population owns a tag keeps it — a plugin cannot record a prediction for a tag the built-in tagger already has a row for. Widening the unique key to `(picture_id, tag, model_version)` is the upgrade path if per-source predictions are ever needed. Covered by `tests/test_smart_score_invalidation.py::test_plugin_sourced_model_prediction_is_not_scored`, `::test_human_decision_on_a_plugin_row_still_counts` and `::test_plugin_write_leaves_the_built_in_taggers_predictions_alone`.
 
 ### `tagger_settings` JSON column
 
@@ -1358,12 +1442,15 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
 | [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
+| [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and a ComfyUI-PixlStash loader's `*_sha256`) with every parameter and seed nulled; `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
+| [services/workflow_library_service.py](../pixlstash/services/workflow_library_service.py) | **Vault-side reads over the workflow keys `picture` carries.** One function today, and the module exists so it has one home: `topology_picture_counts` excludes soft-deleted pictures, because a workflow whose every picture sits in the Scrapheap has to read as "none kept" rather than as live. Nothing here joins to the hub — the hashes are content addresses, so a hash the attached hub has never seen is a workflow this machine does not have, reported as unknown rather than as an error |
 | [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/stack_detector.py](../pixlstash/services/stack_detector.py) | **Adapter-stack detection for the model shelf (shelf plan F5), read-only in its proposing half.** `propose_stacks` groups *loose* adapters whose names differ only by a training step or by a version token and writes nothing; `apply_stack` is the separate call the UI makes after the owner has seen that dry run — the third instance of the house rule that **detection proposes, it never applies**, after folder monitoring and the ai-toolkit run scan.<br><br>**A stack is a subject, not a training run.** Grouping is on the name with both the step and the version stripped (`split_model_version` in `utils/model_utils.py`), so `Foxglove` and `Foxglove_v2` — separate runs, one character LoRA — land behind one row. Groups come back as `step_group` (one version throughout) or `version_group` (two or more), and a `step_group`'s name keeps its version so a run of `portrait_mix_v2` checkpoints is still called that. **Prefix grouping** (`JimmyVehicle` beside `JimmyVehicle2`) is still absent, and the version rule is careful about it: only an explicit `v<digits>`, optionally with one decimal, counts, because a bare trailing digit could be part of the name and merging on it would invent a subject. That case needs per-group adjudication with counter-evidence — a design question, not missing code.<br><br>Four rules carry the weight and each is mutation-checked. **Grouped per folder**, never shelf-wide: two runs on different disks can share a name, and collapsing across them would invent a run and put one stack's members on two drives. **A group needs a stepped member or two versions**, or a shared name in one folder is a duplicate rather than a subject with a history — and distinctness is compared on the parsed `(major, minor)`, so `Foxglove` beside `Foxglove_v1` is one version and stays a duplicate. **The cover is recomputed server-side** from the filenames (newest version first, then within it the bare final, else the highest step), so a client cannot choose the face of a stack by reordering its request. That is a strict **superset** of `run_importer._cover_first`, which is left alone: it orders one ai-toolkit run, which is single-version by construction, so the two agree on every input it can see — but it is a second function now, not the same rule, and the docs say so rather than asserting a parity a reader would find broken. And **the `stack_id IS NULL` gate is re-read inside the write transaction**, so a row stacked between the dry run and the confirmation is dropped rather than torn out of the stack it already has — the shape the CSO review of `forget_models` established.<br><br>**`fuse` stacks the stacks, and `unstack` takes it back.** `apply_stack(..., fuse=True)` admits already-stacked models and absorbs their stacks **whole** — every member, including ones the caller did not name, because a stack is atomic and a remnant of one is not a stack — then deletes the emptied `adapter_stack` rows and inherits the first surviving name rather than blanking it. The race guard survives the flag: the widened predicate admits a row only from a stack *this call is absorbing*, never from a third that appeared in the gap, and it is still repeated on the UPDATE. **`MAX_MEMBERS_PER_STACK` lives on the service and is counted after the widening**, because the route can only count what it was sent — reported in review of #999 and reproduced at 300 members against a ceiling of 200 from a request naming two ids. `unstack` is the inverse and the shelf's first undo for this: it clears `stack_id`/`stack_position` and drops the row inside one transaction, touching **no file on disk**, and 404s on an unknown id before releasing anything. Its one consequence is stated rather than hidden — released members are loose again, so `propose_stacks` can re-offer them; unstacking undoes a grouping, it does not record a refusal.<br><br>**`set_cover` and `remove_member` curate a stack that already exists**, and both are the owner overruling the filenames. `set_cover` moves one member to `stack_position` 0 and renumbers the rest, which is the only way a cover is ever chosen by hand — `apply_stack` deliberately recomputes the order and ignores the one it was given. **The choice needs no column of its own**: nothing *renumbers* a stack once it is built (detection reads *loose* adapters only, and `run_importer`'s upsert `COALESCE`s an existing `stack_position`), so it survives a re-scan and a re-import — both asserted, the re-import in `tests/test_model_run_import.py`. What can still happen is a member's row *disappearing*: Forget and Delete both end at `model_shelf_service._purge`, and the checkpoint-hash task's duplicate merge deletes the losing row, none of which knows about stacks. That is what **`repair_stacks`** is for, and it is the single statement of the rule — renumber the survivors contiguously, dissolve a stack left with fewer than two members — called by `_purge` and by `remove_member` rather than written twice. It deliberately leaves an *empty* `adapter_stack` row alone: `run_importer` inserts the stack before its members, so deleting empty ones would race a live import into removing the row it is about to point at. `remove_member` releases one file from a run and renumbers the survivors, so removing the cover promotes the member behind it, and **dissolves the stack when it would be left with one member** — a one-member stack is a grouping the shelf draws as a plain row and nobody can see or undo. Both refuse a model that is not in the named stack (404) from inside the transaction, and neither touches a byte on disk |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
 | [services/restore/](../pixlstash/services/restore/) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
 | [services/tagger_run_service.py](../pixlstash/services/tagger_run_service.py) | System-of-record DB side for tagger evaluation runs pushed from PixlTagger: upsert a posted report on the run name and list stored runs for the stats panel |
+| [services/library_insights_service.py](../pixlstash/services/library_insights_service.py) | **"About your library" findings (v1.11 Phase 6), read-only.** Five checks over one gathered pass of the library: the largest folder whose pictures carry no set, project or person; two folders holding mostly the same pictures (grouped on tier 1's own `(pixel_sha, size_bytes)` identity, so the finding is true on a library nobody has swept); uncaptioned; a face nobody has named; untagged.<br><br>**Every check answers in both directions.** A check that finds nothing returns `state="clear"` with the number that made it clear rather than disappearing — a screen where every row is a complaint reads as a nag, and a check that vanishes when it passes cannot be trusted when it fires. **A folder means the owner's folder:** `Picture.file_path` is absolute only for pictures indexed in place, so the folder-shaped checks read `os.path.dirname` and skip the flat `<uuid>.png` a vault-managed picture carries; a library with no folder tree gets one row saying so instead of arithmetic over zero folders. **A finding counts what its own button can show**, and where the two disagreed the CHECK was changed rather than the destination: a number the owner cannot reach reads as the feature being broken. Three consequences, each of which was a real defect first. The unnamed-faces check intersects with *unassigned* (that is what `/character/UNASSIGNED?face=with_face` is) and excludes `face.face_index = -1`, the sentinel row `FaceExtractionTask` writes for a picture holding **no** face — read as an unnamed face it fired on most of a scanned library and opened an empty grid. Counts are in grid **rows**, not pictures, because every grid request carries `fields=grid` (`stack_leaders_only`) and a stack of eight is one row. And the overlap check scopes the duplicate queue to the pair's **common ancestor**, never to one of the two folders (tier 1 applies the scope predicate inside `HAVING count(*) > 1`, so a scope holding one copy of each shared file finds nothing), falling back to the unscoped queue when that ancestor would not narrow anything — two unrelated trees under one home directory are siblings, structurally identical to two folders inside a library, so only `SCOPE_MAX_WIDENING` separates them. Nothing here writes, queues work, or reads a pixel |
 | [services/tag_health_service.py](../pixlstash/services/tag_health_service.py) | Tag health board cache — computes one `TagHealth` row per tag from indexed SQL over `tag_prediction` / `tag` / `tag_suggestion` / `picture` plus stored `PictureLikeness` pairs; rebuilt in the background |
 | [services/tag_suggestion_service.py](../pixlstash/services/tag_suggestion_service.py) | Human half of the tag-suggestion review queue: list ranked suspects and apply (write through to `Tag`) or dismiss them |
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
@@ -1391,6 +1478,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
@@ -1656,6 +1744,108 @@ the sentence above as covering them.
   InsightFace branch runs the *same* guard on the same input, through the shared
   `_validated_destination`, and contains every pack relpath with
   `resolve_path_within` against both roots before it removes a source tree.
+
+### PixlStash Views: the library as folders of links (v1.11 Phase 7)
+
+`pixlstash/services/views_service.py` publishes the library's sets, people and
+projects as a folder tree whose every file is a **link** to the picture where the
+owner already keeps it. Nothing is copied, no original is moved, and deleting the
+whole tree loses nothing — a picture in three projects appears in three view
+folders and its one real file never moves. **Views are additional to the owner's
+tree, never a replacement for it.** Off by default: `LibrarySettings.views_root`
+is NULL until the owner names a folder, and nothing is written until then.
+
+Two routes, both `LOCAL_OWNER_ONLY` (§16.3): `GET /server-config/views` reports
+the folder and kinds, `PATCH /server-config/views` records them and rebuilds.
+Saving *is* rebuilding — a full re-derive of 50,000 links measures 0.46 s to
+create and 0.34 s to remove, so an incremental path would be a correctness risk
+bought for nothing, and "Rebuild now" is the same PATCH with the current values.
+The settings are per **library** rather than per user (`library_settings`,
+migration `0107`), because the tree holds *this* library's people and sets and
+two libraries publishing into one folder would overwrite each other.
+
+**The location decides everything, and it is validated before a byte is
+written.** The spike behind this is `docs/spikes/views-links.md`; the measured
+facts that shape the code:
+
+- Link support belongs to the **view root's** filesystem, not the library's. A
+  symlink is a stored path and crosses devices happily (measured ext4 → a
+  separate NVMe), so a library on a NAS or an external drive is fine as long as
+  the tree lands somewhere with links.
+- **exFAT and VFAT have neither** symlinks nor hard links (`EPERM` on both,
+  measured on freshly formatted volumes). A hard link is therefore *not* the
+  fallback for the external-drive case.
+- A hard link never crosses a device (`EXDEV`, measured against three real
+  drives) and keeps a deleted original's bytes alive under the views folder. It
+  is used only same-device, only when symlinks are unavailable — the
+  Windows-without-Developer-Mode case.
+- Windows symlink creation needs `SeCreateSymbolicLinkPrivilege`. `probe_link_support`
+  **asks** the chosen directory by attempting one link rather than predicting it,
+  and `tests/test_views_links.py::test_this_filesystem_offers_a_link_mode` is
+  that probe running under the gate, so the Windows shards report the real answer
+  on every run.
+
+`check_views_root` refuses four locations by name rather than half-writing a
+tree, and each refusal is a measured failure:
+
+| Refused location | Why |
+|---|---|
+| Inside the library root | `library_backup_service._validate_regular_file` raises `Refusing symlinked library payload`, so backups would fail outright |
+| Overlapping any **other registered** library | The same failure in a library that is not open. Since v1.11 the owner registers several from Settings, so the active `image_root` is no longer the whole answer; the roots come from the hub registry via the route, because this vault cannot see them |
+| Inside a reference folder | `os.walk` lists symlinked *files* (only symlinked *directories* are skipped), so the scan would index every link as a second copy of the picture |
+| Containing the library or a reference folder | The same two problems from the other side |
+| A cloud-sync folder | The client follows a link and uploads the file's content, duplicating the library into the owner's quota. **A precaution, not a measurement** — no sync client was available to the spike, and the refusal exists so the answer never has to be known. Detected by the client's in-tree marker (`.dropbox.cache`, `.tmp.driveupload`, …) or the sync folder's name, and the ancestor walk stops **below** `$HOME`: `~/.dropbox` is the client's *config*, not a sync root, and treating it as one refused every path a Dropbox user could pick |
+
+`reference_folder_scan_task` additionally prunes any directory carrying the
+`.pixlstash-views` marker, because a folder can be registered as a reference
+folder *after* a tree was published inside it. **It remembers the pruned roots
+rather than merely skipping them**, and subtracts them from `removed_paths`:
+"absent from `disk_paths`" is what that task **hard-deletes** a `Picture` row
+for — tags, scores and memberships with it — so pruning alone would have turned a
+marker file appearing over an indexed folder into a silent library deletion, a
+far worse failure than the double-indexing the prune exists to prevent.
+
+**The rebuild deletes links, never last copies.** `shutil.rmtree` is not
+link-aware — it removes a regular file as happily as a symlink — so a rebuild
+built on it would destroy anything the owner dropped into a view folder, which is
+precisely the gesture every line of this feature's copy invites. `_prune`
+therefore decides per entry, on an exact test rather than a heuristic: a symlink
+goes (it is a path), a regular file with `st_nlink > 1` goes (another name for
+those bytes exists, which is what a hard link into the library is), and
+**anything else stays** and is reported to the owner as `kept_by_owner`. A
+directory is `rmdir`-ed bottom-up, so it survives exactly when something inside
+it did. Nothing descends a symlinked directory: a symlink standing where a kind
+folder goes is removed *as a link*, which is what stops one planted in the views
+root from steering the whole rebuild out of it.
+
+**The `.pixlstash-views` marker is the second guard, and it is about adoption
+rather than deletion.** The service writes it when it claims a folder and refuses
+a folder that already has content and no marker, so a views root aimed at
+somebody's pictures folder is never adopted in the first place. `remove()` runs
+the same prune and **keeps the marker whenever anything survived** — dropping it
+over a partial removal would hand every remaining link to the next
+reference-folder scan as a new picture. It never removes the root the owner
+chose.
+
+Every destination path is built with `resolve_path_within` against its kind
+folder, and the kind folder itself against the root; names are reduced to one
+path component, truncated to 80 characters (a component over `NAME_MAX` is
+`ENAMETOOLONG`, and a views path clears Windows' `MAX_PATH` sooner than that) and
+disambiguated by row id, because two characters really can be called the same
+thing.
+
+**A rebuild clears every kind folder, not only the requested ones.** Publishing
+`people` after publishing `people,sets` must not leave `Sets/` behind full of
+links nothing will refresh, and that is also what makes an empty `kinds` mean an
+empty tree. The probe runs *before* the prune, so a folder that turns out not to
+hold links does not cost the owner the tree they already had.
+
+Symlinks are stored **relative** when the view root and the file share a device,
+so a library and its views survive being moved together, and absolute otherwise —
+across drive letters a relative path is impossible. A link that cannot be made is
+counted and its folder named in the publish report rather than failing the whole
+run, which is what a library split across two disks looks like when only hard
+links are available.
 
 ### The shelf's five verbs (shelf plan F3)
 
@@ -2558,11 +2748,207 @@ descriptor before their contents are processed. Every operation is idempotent,
 so a crash between copy, stamp, archive replacement, and marker update converges
 toward redundant sanitation rather than credential loss or reintroduction.
 
+**Vault loss is read-only-validated first, then recovered only from a folder
+with content in it.** Opening a vault creates the file, so the active library's
+fingerprint is checked read-only before anything opens it
+(`prevalidate_library_fingerprint`); a stamped registration whose `vault.db` is
+gone would otherwise become an unrecognisable vault on every later start. What
+happens next depends on the folder. A folder that still holds files (a restored
+or hand-copied picture folder) is treated as an import folder: startup logs a
+warning, `LibraryRegistry.forget_vault_fingerprint` clears `vault_uuid`, a
+fresh vault is created and stamped with the library's own uuid, and the app
+opens on an empty library whose folder is full of pictures, which is what makes
+the folder-mapping wizard offer them. An *empty* folder is refused as before,
+with the attached libraries that do open named in the error and offered in an
+interactive terminal: an unmounted external drive looks exactly like an empty
+folder, and a fresh vault inside the mount point would lock the real library
+out once the drive came back.
+
+**A vault that is present but will not open is a question, not a crash.** It is
+the third case beside "gone" and "fine", and it used to be neither: `attach`
+raised `NotAVaultError` out of `Server.__init__`, `app.main` had no clause for
+it, and the desktop shell showed a Python traceback over the first-run setup
+window. Two things fix it.
+
+*What counts as a vault.* `validate_vault_folder` accepts a pre-Alembic vault —
+`_LEGACY_VAULT_MARKER_TABLES`, the `0001_baseline` table set — as well as one
+carrying `alembic_version`. `VaultDatabase` has always known how to open that
+file (it stamps the baseline and upgrades to head), so refusing it in the
+registry made that branch unreachable for every library the hub owns, and a
+December-2025 folder read as "not a PixlStash vault". The legacy set is
+deliberately wide: one stray table named `picture` is still not a library.
+
+*What happens when it genuinely will not open.* `_register_first_library` and
+`_offer_a_usable_library` raise `UnusableVaultError` (a `HubBootstrapError`)
+carrying the folder, the file and the reason. `app.main` catches it, explains
+what starting over costs, and asks — inline on a TTY, and for Electron by
+printing the single-line `PIXLSTASH_VAULT_UNUSABLE=` record the shell parses
+(`electron/src/backend/VaultRecovery.ts`), exactly as the permission repair
+does. A yes relaunches with `PIXLSTASH_RECREATE_VAULT=1`, the only value
+`set_aside_unusable_vault` acts on; it **renames** `vault.db` and its sidecars
+to `vault.db.unusable-<timestamp>` and never deletes them. A vault we cannot
+read is not a vault that holds nothing, and somebody who is shown a traceback
+instead of an offer deletes the file by hand to get the app started. A
+*fingerprint conflict* is not this case — that vault loads fine, and the answer
+is to put the right one back.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub
 owner, and requires the owner to register again; passwords and token/share-link
 values cannot be recovered without a hub backup.
+
+#### The workflow library's hub tables (v1.11)
+
+`workflow_topology`, `workflow_recipe` and `workflow_recipe_graph` are hub tables,
+and **that location is the irreversible decision in the release** (workflow
+library plan §4, which carries the measurement). Most structural recipes recur
+across more than one of a user's libraries, so a per-vault store would hold the
+same workflow several times and could never answer "have I built this before",
+which is the question the feature exists to answer. The backfill that fills them is a one-time pass
+over every picture in every library: writing the rows into a vault and moving
+them later means re-running it, and re-running it after pictures have been
+deleted cannot recover those pictures' rows at all.
+
+**Identity is the content, so nothing crosses the database boundary.** A vault
+refers to a recipe by its structural hash — not a foreign key, no coordinated
+migration, and it still resolves after a library has been detached and
+reattached on another machine. The two hashes come from
+`services/workflow_hash.py` (§10); `hub/workflows.py` is the thin store, and
+every write is `INSERT OR IGNORE`, so the backfill is re-runnable and one recipe
+is shared by three libraries without any of them owning it.
+
+`workflow_recipe_graph` is named for what it holds: the **recipe's** graph, not
+the file that was imported. Parameters and seeds are already nulled and any
+field named like a credential is dropped.
+
+**Prompt-free was never the whole of the §5 boundary, and an earlier draft of
+this section said it was.** Bucket TA survives the nulling by design, and TA is
+model and image filenames — which on a real shelf name people (a character LoRA
+is named after its subject) and state content. So the document names every
+asset by an opaque `asset_reference` and **`workflow_recipe_asset` is the only
+home of the readable name**: `(structural_hash, widget_name,
+normalized_filename)`, the triple rather than the pair because one widget name
+can carry two files (two `LoraLoader` nodes). Forgetting a model name is then a
+row delete — `hub/workflows.forget_asset_names` — and **no stored graph is
+rewritten and no `document_sha256` is invalidated**, which is the property the
+boundary actually needs. The substitution is uniform, digests included, because
+"the document holds references, never asset values" is one rule and "filenames
+but not digests" is two. Neither hash moves: both key `reduce_api_graph`, not
+this rendering. The table is also the substrate for the model-companions plan's
+Workflow sets — "which recipes use this model" is an index lookup on it.
+
+This was worth doing before B3's backfill ran rather than after: once
+`workflow_recipe_graph` is populated the same change becomes a rewrite of every
+row plus a digest migration, which is the one genuinely irreversible thing in
+this step. It is also why this row cannot be handed
+back to ComfyUI as a runnable workflow: the verbatim import store is a different
+thing on a later step, belongs beside the workflow file, and the name
+`workflow_document` is deliberately left free for it. One row per recipe, keyed
+on the structural hash, because the same workflow rebuilt from scratch has
+different node ids and so different document *text* at the same identity.
+
+The **instance** tier has no table here, and that is deliberate now that ingest
+computes an instance hash. The hash is a value on a picture
+(`picture.workflow_instance_hash`): two pictures share an instance exactly when
+they share it, which is the whole of what v1.11 asks of the tier — "Covered
+only" needs an equivalence, not a row. A hub-side `recipe_instance` table is
+AI-toolkit Phase 2 and moved to v1.12 with the rest of it, so **nothing in this
+release stores an instance row anywhere**, and
+`test_no_hub_table_stores_an_instance` guards that rather than leaving it
+remembered. Its location is not in question when it does arrive, since §4 puts
+the whole family here.
+
+The counts, the tier collapse and the cross-library figure are in
+`pixlstash-workflow-extraction-measurement.md` and the library plan, which asks
+that they be cited rather than restated. What is worth recording here is that
+the shipped implementation was run over the same libraries and lands on the same
+order of magnitude as the probe those documents were written from, and that all
+six of the hash spec's §Node identity invariants hold on real graphs drawn at
+random rather than only on fixtures.
+
+#### The workflow scan rides the ComfyUI extraction (v1.11)
+
+**There is no second backfill, and that is a decision rather than an economy**
+(implementation plan §B3). `tasks/comfyui_extraction_task.py` already opens
+every picture, calls `ImageUtils.extract_embedded_metadata()` and parses the
+embedded graph; a backfill of its own would re-open every file in every library
+to parse the chunk that task has just parsed, and would have to reinvent the
+resumability, cancellation, progress reporting and finder it inherits by living
+here. So the task reads the same metadata dict a second way —
+`find_comfy_api_prompt` for the executable `prompt` chunk — and hands the graph
+to `hub/workflows.record_api_graph`.
+
+**Four columns on `picture`, and the last is the one that matters.**
+
+| Column | Meaning |
+|---|---|
+| `workflow_topology_hash` | The topology key, or NULL |
+| `workflow_structural_hash` | The recipe key, or NULL |
+| `workflow_instance_hash` | The instance key, or NULL — that recipe with one set of parameters, the prompt included and the seed excluded, because a generation is an instance plus a seed |
+| `workflow_hash_version` | **NULL means never scanned.** Set means scanned, with every hash NULL when the picture carried no executable graph |
+
+Roughly a third of a real library carries no API graph at all — verification
+before this shipped measured 64.5% of PNGs keying, and the share swings widely
+with how much of a library was generated rather than imported — so without a
+scanned-marker the backfill would re-read that third on every run, forever. That is the same
+convention `comfyui_models` states in its own comments (NULL means never
+checked, `"[]"` is the checked-but-empty sentinel), but a magic string is the
+wrong sentinel for a hash column, which is why the marker is its own column. It
+earns its place twice: it is also the re-hash selector, so
+`WHERE workflow_hash_version = 'v1'` names exactly the rows a change of rule
+affects. **Re-queueing them is not free and is not surgical**, because they go
+back through this same task: it rewrites `comfyui_models` / `comfyui_loras` and
+NULLs `text_embedding` on every picture that has ComfyUI data, so a rule bump
+also costs a text-embedding recompute across the ComfyUI half of the library.
+A rule bump that wants to avoid that needs its own finder; the column is the
+selector, not the mechanism.
+
+All three hashes are indexed, and a fourth partial index
+(`ix_picture_workflow_unscanned`) serves the finder's idle probe in the column
+order `0095` measured and explains. `MissingComfyUIExtractionFinder`'s predicate
+**replaces** rather than ORs: `workflow_hash_version` is written in the same
+batch as `comfyui_models` and is the newer column, so every picture the old
+predicate matched is already matched by the new one, and the probe stays a
+single indexed `IS NULL` term.
+
+**Without a hub the columns are left alone.** A `Vault` opened without a hub
+registration (the CLI tools, most tests) has nowhere to file a workflow, so the
+finder keeps its pre-B3 predicate and the task records nothing — a vault that
+later gains a hub is scanned then, rather than having been marked scanned with
+nothing behind it. `vault.py` re-registers the finder with the hub when there is
+one, which is where `CHECKPOINT_HASH` and `GFS_SNAPSHOT` are registered and for
+the same reason.
+
+**The rule the marker turns on: a property of the picture marks it scanned, a
+failure of our own machinery does not.** No graph, an unreadable file, a video
+and a graph the hash layer *refuses* are all facts about the picture that a
+re-read cannot change, so the marker goes down — a refusal logs at WARNING
+rather than sharing absence's silence, because the library then under-counts by
+one and somebody has to be able to see why. A hub write that fails is neither,
+so the picture is left unmarked. That would otherwise be an unbounded loop, and
+was reproduced as one: the finder would re-open, re-decode and re-parse every
+image in the library on every planning cycle. So the first failed write
+**stands the workflow scan down for the process** — the finder narrows back to
+its pre-B3 predicate, which the ComfyUI half has already satisfied, so the sweep
+drains and goes quiet. A restart is what tries again, because a restart is what
+proves the hub is writable.
+
+**The hub rows outlive the picture, and that is the point of the whole
+feature.** Every user-facing deletion — the Scrapheap, `purge_scrapheap_pictures`,
+`MissingFilePurgeFinder` — ends at a soft delete or at the `picture` row going
+away, and neither can reach `workflow_topology`, `workflow_recipe` or
+`workflow_recipe_graph`: they are in a different database and the reference runs
+the other way, as a content address rather than a foreign key. Without that,
+dehydrating a stack would destroy the graph its own rehydrate promise depends
+on. `tests/test_workflow_library.py::test_hub_rows_outlive_the_pictures_they_came_from`
+is the assertion, and it takes a picture through both steps — soft delete, then
+the row destroyed — rather than only the second.
+
+**Any count of pictures per workflow excludes soft-deleted pictures.**
+`services/workflow_library_service.py` is the one place that query lives, for
+that reason: a workflow whose every picture sits in the Scrapheap has to read as
+"none kept", and counting the scrapheap in would make it read as live.
 
 #### Engine and connection settings
 
@@ -2739,6 +3125,57 @@ this record and needs its own independent adversarial sign-off.
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
+### The library layout (v1.11 Phase 4a)
+
+`utils/library_layout.py` is the model of **where a picture belongs and whether
+it still belongs there**. Model only: no move engine, no file writes, no UI —
+see Phase 4b for those. The rule it implements, and its case table, are in
+`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
+detail, so this section is the map rather than a second copy of it.
+
+A `Layout` is an ordered list of segments, one folder level each. A segment
+holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
+picture has a value for wins; a segment nothing fills is **skipped rather than
+left as an empty folder**, which keeps the tree two deep instead of five. A new
+library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
+
+| Function | Answers |
+|---|---|
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
+| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
+
+The release rests on `is_true`, and on one property of it: **a path that does
+not parse against the layout can never be false.** A file at the library root
+matches no segment, so an existing flat library needs no migration; a file the
+owner dragged into a folder of their own contradicts nothing, so it stays there
+permanently and the override needs no setting.
+
+The three properties a reader is most likely to get wrong:
+
+- **Truth is membership, not equality with `render`.** The folder `Mira/` says
+  "this is a Mira picture" and stays true while Mira is one of the picture's
+  people, whoever `render` would pick today. That is what makes adding a second
+  project or person move nothing.
+- **`known_names` is not optional.** Only the library's whole vocabulary
+  separates *this folder names a project the picture is no longer in* (false, it
+  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
+  moves). Deleting an entity takes its name out of the language and freezes the
+  folders named after it.
+- **Reading stops at the first component the vocabulary cannot read**, and it is
+  not positional. Everything from that component down is the owner's own, so
+  `2024 Shoots/Mira/2026-08` is judged on its first two components while
+  `Holiday/2024 Shoots` is judged on none of them.
+
+Every name reaching a path goes through `folder_name()` — including
+`Layout.unfiled`, which is validated against it on construction because it is
+the one field a settings screen will let a user type and it reaches `render`'s
+output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
+`A_B`), which is the collision the filesystem would force anyway; comparison is
+additionally case-folded and NFC-normalised for Windows and macOS. Every
+ambiguity here resolves towards *not* moving a file.
+
+`tests/test_library_layout.py` covers it, unparseable-path cases first.
+
 ---
 
 ## 14. Server Lifecycle
@@ -2750,6 +3187,19 @@ this record and needs its own independent adversarial sign-off.
     - Instantiates `Vault` (opens `VaultDatabase` and runs Alembic), then stamps/validates `library_settings.library_uuid` and completes crash-safe legacy blanking before authentication starts.
     - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
+**Every interactive start-up question holds the log while it is on screen**
+(`pixl_logging.hold_log_output`). Three of the four are asked from inside
+`Server.__init__` and the fourth (`_prompt_bootstrap_credentials`) after it
+returns, so by then the boot log is running and the background workers have
+started: the first-run credentials prompt was written between two INFO lines,
+and a snapshot task logged its progress onto the same line while the prompt
+waited for an answer. The context manager swaps the root handlers for a
+buffering one and replays every held record, in order, once the question has
+been answered - held, never dropped. It only covers the logging path, so a bare
+`print` from another thread can still reach the terminal; that narrows the
+window rather than sealing it. The credentials prompt also prints its own
+heading, so it reads as a question rather than as one more line of start-up.
+
 4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
@@ -2790,6 +3240,114 @@ previous vault only after the coordinator verifies registry/vault/auth
 coherence. A recovery failure poisons the handles, enters terminal
 `UNAVAILABLE`, returns 503 before auth, closes sockets, and signals every
 retained listener to exit; it can never republish `READY` around a mixed tuple.
+
+### The library lifecycle over HTTP
+
+`routes/libraries.py` covers the whole registry, not only the two routes the MVP
+shipped. Every verb is a route over `LibraryRegistry`, which already implements
+it and raises a typed, user-facing error for each refusal; the handlers surface
+those errors and re-derive no rule.
+
+| Route | Registry call | Refusals it surfaces |
+|---|---|---|
+| `GET /libraries` | `list_libraries` | — |
+| `GET /libraries/inspect?path=` | `list_libraries`, `overlapping`, `validate_vault_folder` | blocklisted or relative path (400), no such folder (404) |
+| `POST /libraries` | `attach` for a vault, `create` otherwise | already attached / covered / name taken (409), not a vault (400), no such folder (404) |
+| `PATCH /libraries/{library_uuid}` | `rename` | name taken (409), empty name (400) |
+| `DELETE /libraries/{library_uuid}` | `detach` | it is the active library (409) |
+| `POST /libraries/active` | `LibrarySwitchService.switch_to` | unopenable target (409) |
+
+`inspect` is what lets one picker answer "what is this folder?" instead of
+asking the owner to choose a mode first. It returns exactly one of five
+verdicts — `attached`, `overlaps`, `vault`, `pictures`, `empty` — with a
+`headline` and a `detail` written server-side, so the sentence naming the
+library that covers a folder exists once. Three of the five are addable and are
+the same `POST /libraries` with a different consequence; the other two are
+refusals, and `can_add` is the only field a client branches on. The order is
+load-bearing: `attached` and `overlaps` are decided before anything else,
+because a folder already covered by a library is covered whatever else it also
+is, and offering to add a vault nested inside one would leave two libraries
+indexing the same pictures.
+
+**The two routes that take a path resolve it before they validate it.**
+`validate_reference_folder_path` compares against a literal blocklist, so
+checking the string the caller sent lets `~/link-to-etc` through — and `POST
+/libraries` then chmods that folder 0700 and writes a database into it. The
+sibling that gets this right is `validate_reference_folder_accessible`, which
+realpaths first; `_safe_folder` follows it, not `GET /filesystem/browse`'s
+ordering. A relative path is refused explicitly before resolution, because
+`resolve_path` calls `abspath` and would otherwise resolve it against the
+*server's* working directory. `filesystem_roots` is honoured for the same reason
+`POST /filesystem/folders` honours it: an operator who confined the picker did
+not mean "except for the route that can write a vault anywhere".
+
+`POST /libraries` **re-inspects the path itself** rather than trusting the
+picker's answer, so a folder that became covered in between is still refused —
+without walking the tree a second time (`_inspect(count=False)`; only the two
+refusals decided above the count change what it does). It requires the folder to
+exist and creates no directory — `POST /filesystem/folders`, which the picker's
+`New folder` already uses, is where that authority lives — which keeps this
+route's write authority to the one folder the owner named.
+
+`PATCH` and `DELETE` resolve through `by_uuid` and refuse a **detached** row.
+`by_uuid` returns detached rows on purpose — that is how a uuid stays meaningful
+across a detach for the tokens stamped with it — but these routes want the
+attached set, the one `GET /libraries` shows: otherwise a second `DELETE`
+answers 200 for a no-op, and `PATCH` renames a row nobody can see onto the name
+of one they can. The empty branch calls `create`, **not**
+`register_pending`, despite the v1.11 plan's route table naming the latter:
+`register_pending` records a row whose vault does not exist, and the switch
+revalidates the folder and insists on a real vault, so the library the owner
+just added would render as "Not found" and refuse to be opened.
+
+`library_access=HUB_ONLY` on all four new routes: they read and write the
+registry, never the active vault, so they need no library lease. That also
+exempts them from the gate's switch 503, deliberately — the registry has to stay
+answerable when no vault is open, which is the state an owner recovers from by
+attaching or switching. **`DELETE` is the one that cannot take the exemption**
+and refuses in its own handler while a switch is in flight: it reads `is_active`
+to refuse the active library, and mid-swap that flag is moving, so a detach
+landing in the window could forget the library the switch is about to publish.
+
+`library_independent` is a different knob and is left at its safe default
+`False`: it governs the token pin, not the 503, so an ALL token stamped for
+another library is refused here exactly as on a data route. A route is pinned by
+omission as an undeclared one is denied by omission.
+
+**A library name is unique among attached libraries, and the registry now
+enforces it.** `library.uuid` and `library.path` carry unique indexes; `name`
+does not, so the `sqlite3.IntegrityError` that `rename` and `_register` catch
+could never fire for a name, and both documented a `LibraryExistsError` for one
+anyway. That is not cosmetic: `LibraryRegistry.get` refuses a name matching more
+than one row, so every CLI verb that takes a name stops working for both
+libraries the moment the second is registered. `_refuse_duplicate_name` is
+checked in `_register`, `_revive`, `rename` and at the top of `create` (before
+the vault is written, so a refused create leaves no vault behind). It is a check
+rather than a new unique index because a hub written before this could already
+hold a duplicate, and a migration that cannot build its index fails a startup
+instead of a rename.
+
+Two placements in it are load-bearing:
+
+- **In `_register`, before the UPDATE that frees a detached row's path.** That
+  UPDATE rewrites the path to `<path>#detached-<uuid>` and commits; a refusal
+  after it would leave the row at a path `_find_by_path` can never match again,
+  stranding its uuid and every share token stamped with it — precisely what
+  `detach` documents cannot happen.
+- **Inside the transaction that writes.** `HubDatabase.transaction` opens
+  `BEGIN IMMEDIATE`, so a check on the same connection as the write is atomic;
+  the same check on its own connection is check-then-write and two concurrent
+  adds of one name both pass. `create`'s early call is the deliberate exception
+  and is advisory — its job is to fail before a vault is built.
+
+**`register_pending` opts out** (`unique_name=False`). Its caller is start-up:
+`bootstrap._register_first_library` passes the hardcoded `"Library 1"` and does
+not catch `LibraryExistsError`, so refusing there would turn a duplicate label —
+a nuisance — into a server that will not boot. `record_legacy_preparation`
+writes its row directly and is outside the check for the same reason. The rule
+is *verbs a person types a name at refuse; start-up records what it was given*,
+and the ceiling that leaves is the pre-existing one: a hub can still hold a
+duplicate, and `get` by name still refuses both.
 
 `GET /libraries` returns an `active_share_links` count on every library entry.
 It is owner metadata with no host path sensitivity and is available before the
@@ -2835,24 +3393,25 @@ a promise that Tailscale is local for every authentication mechanism.
 - All `EventType` values in [event_types.py](../pixlstash/event_types.py) are emitted internally by `Vault`, but only a subset is forwarded to WebSocket clients by the broadcaster in `server.py` (see `_should_send_ws_update`). The table below is auto-generated from the source:
 
 <!-- AUTOGEN:start name="events" -->
-| Event                  | WebSocket   |
-| ---------------------- | ----------- |
-| `CHANGED_PICTURES`     | ✓ broadcast |
-| `PICTURE_IMPORTED`     | ✓ broadcast |
-| `PLUGIN_PROGRESS`      | ✓ broadcast |
-| `CHANGED_TAGS`         | ✓ broadcast |
-| `CHANGED_CHARACTERS`   | ✓ broadcast |
-| `CHANGED_DESCRIPTIONS` | ✓ broadcast |
-| `CHANGED_FACES`        | ✓ broadcast |
-| `QUALITY_UPDATED`      | ✗ internal  |
-| `CLEARED_TAGS`         | ✓ broadcast |
-| `SNAPSHOT_CREATED`     | ✗ internal  |
-| `SNAPSHOT_DELETED`     | ✗ internal  |
-| `RESTORE_STARTED`      | ✗ internal  |
-| `RESTORE_COMPLETED`    | ✗ internal  |
-| `RESTORE_FAILED`       | ✗ internal  |
-| `LIBRARY_SWITCHED`     | ✓ broadcast |
-| `VRAM_OOM`             | ✓ broadcast |
+| Event                    | WebSocket   |
+| ------------------------ | ----------- |
+| `CHANGED_PICTURES`       | ✓ broadcast |
+| `PICTURE_IMPORTED`       | ✓ broadcast |
+| `PLUGIN_PROGRESS`        | ✓ broadcast |
+| `CHANGED_TAGS`           | ✓ broadcast |
+| `CHANGED_CHARACTERS`     | ✓ broadcast |
+| `CHANGED_DESCRIPTIONS`   | ✓ broadcast |
+| `CHANGED_FACES`          | ✓ broadcast |
+| `QUALITY_UPDATED`        | ✗ internal  |
+| `CLEARED_TAGS`           | ✓ broadcast |
+| `SNAPSHOT_CREATED`       | ✗ internal  |
+| `SNAPSHOT_DELETED`       | ✗ internal  |
+| `RESTORE_STARTED`        | ✗ internal  |
+| `RESTORE_COMPLETED`      | ✗ internal  |
+| `RESTORE_FAILED`         | ✗ internal  |
+| `LIBRARY_SWITCHED`       | ✓ broadcast |
+| `VRAM_OOM`               | ✓ broadcast |
+| `EXTERNAL_MOVES_PENDING` | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).
@@ -3004,6 +3563,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 - [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
 - [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
 - [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
+- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§25).
 
 **Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`, so they do not themselves verify that the caller is *unscoped*. A plain `ALL` token leaves `token_scope = None` (the middleware builds a `TokenScope` only for non-`ALL` tokens — the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)) and is treated as owner-equivalent here, which is correct: `ALL == owner` (below). The danger *used* to be that an `ALL`+`resource_type` token **masqueraded** as that plain-owner shape — it also left `token_scope = None` — letting a nominally "restricted" token drive filesystem authority. That vector (the §16.2 item 4 footgun, applied to owner-only operations rather than picture-scoped reads) is now **closed**: `create_token` refuses to mint it and the middleware fail-closed-rejects any already-existing row before these handlers run. The correct *explicit* gate for this class is still `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py); moving to it (below) is still wanted as defense in depth, but it is no longer closing an open hole.
 
@@ -3090,6 +3650,9 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
 
   - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-23 (v1.11 Phase 7, PixlStash Views) — the locality total is now `43 = 37 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` after merging the library-lifecycle block, not carried forward: those four routes and these two landed independently, so the figure this paragraph would have named alone (`39 = 33 + 6`) was never true of a merged tree. `GET` and `PATCH /api/v1/server-config/views` publish the library's sets, people and projects as folders of **links** to the files the owner already keeps. The PATCH is the **third** route on this tier for both reasons at once: it takes a caller-supplied host path like `POST /model-folders`, and it writes a folder tree into it like `POST /model-moves`. It is here for the authority and **not** for destruction — it creates only links, and the one thing it unlinks is a name that is not the last one: a symlink, or a regular file with `st_nlink > 1`. `shutil.rmtree` is deliberately not used, because it is not link-aware and would delete a file the owner had dropped into a view folder; anything that is not a link is reported back as `kept_by_owner` and left standing. A folder that already has content and no `.pixlstash-views` marker is refused rather than adopted, so a views root aimed at somebody's pictures folder never becomes one in the first place. Every destination is built with `resolve_path_within` against its kind folder and each kind folder against the root, and a symlink standing where a kind folder goes is unlinked *as a link* rather than descended, so neither a vault-supplied name nor a planted symlink can take the rebuild outside the views root; and five location classes are refused outright before a byte is written — inside the library, inside **any other registered** library (the same broken backup in one that is not open), inside a reference folder (the scan lists symlinked *files*, so every link would be indexed as a second copy), the containing cases of each, and a cloud-sync folder (the client uploads what the link points at). **The GET is the control-surface argument that put `GET /model-moves` here rather than one tier down**: it names the host folder the tree went to, and the tier that alone may publish it is the tier that may see where it landed. It is also on `READ_BLOCKED_GET_PATHS`, so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand that path back to every share token. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_37_local_6_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-08-24 (v1.11 Phase 4b, the move engine) — the locality total is now `48 = 42 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` rather than added to the line above, which is one branch behind: Phase 2's three folder-structure routes landed in between and took the local tier to 40 without a bullet of their own. This change adds **+2**: `GET` and `PATCH /api/v1/server-config/layout`. **Neither takes a host path at all** — the root is the library's own, and there is no field in which a caller could name another — and the PATCH moves nothing when it is called, because the release's rule is that every path already in the library is true the moment it is written, so choosing a layout reorganises no folder that exists. What puts the pair on this tier is the authority the PATCH *hands out*: from then on a background task (`LayoutMoveTask`) renames the owner's own files into the folder names the layout renders, so the tier that may decide those names is the tier that holds host-filesystem authority. The GET is its control surface by the `GET /model-moves` argument, and is on `READ_BLOCKED_GET_PATHS` so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand the shape of the owner's folder tree to every share token. **The move itself is deliberately NOT on this tier.** `POST /api/v1/pictures/layout/move-to-match` is `picture_scoped`, on the `POST /api/v1/pictures/rotate` line: the caller names pictures, the server derives the root from each picture's own row and the destination from a layout only this tier could have set, so what a caller exercises is authority over pictures it already reaches. Its planner refuses a source that resolves outside its root and refuses a symlink outright — `publish_no_clobber` links the *target*, so moving a link would pull a file from anywhere on the machine into the library under the link's name, the #1024 shape one sink over — and a destination whose name is taken is declined rather than overwritten. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_42_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -3465,6 +4028,69 @@ All snapshot routes require `auth.require_unscoped_owner` — scoped tokens are 
 Two writers create rows — the scrapheap purge (`routes/pictures/_crud.py::delete_rows`) and the missing-file purge (`tasks/missing_file_purge_task.py`). Both **dedup by `path_sha`**, and on a genuine hard delete they **upgrade** an existing `file_removed=False` row to `True` (they never downgrade `True`→`False`), so a kept path that is later truly purged is recorded truthfully rather than relying solely on restore's ledger-independent missing-file pass.
 
 **Explicit re-import overrides the ledger; a routine sync does not.** The reference-folder scanner (`tasks/reference_folder_scan_task.py`) normally skips any disk path present in the ledger — no fully-automatic re-import of a removed-but-kept file. The override fires **iff** a dedicated one-shot signal is set: `reference_folder.pending_reimport` (migration `0078_add_reference_folder_pending_reimport`, default `False`). That flag is written `True` in exactly one place — the deliberate folder-add endpoint `create_reference_folder` (`routes/reference_folders.py`); **no** routine path (sync-toggle, rename, relocate, mount-recovery, the filesystem watcher, or a periodic re-scan) ever sets it. On an explicit re-import the scanner re-imports files found on disk and **clears** their matching ledger rows so restore can resurface them, then clears `pending_reimport` in the same transaction that completes the scan (one-shot; a mount_error exit leaves it set so the intent survives until a real scan consumes it). This replaces an earlier `last_scanned IS NULL` + no-pictures heuristic that the watcher (it resets `last_scanned`) could spoof — closing the edge where an already-emptied folder whose `last_scanned` was reset would have auto-resurfaced removed-but-kept files. **Invariant:** the override only ever clears rows for paths drawn from `disk_paths` (files actually present on disk), so genuinely-gone content — absent on disk, `file_removed=True` — is never in the disk set, is never cleared, and stays permanently guarded by restore.
+
+**A move inside a reference folder is followed, not re-imported.** A file moved
+within the scanned tree arrives as one path in `removed_paths` and another in
+`new_paths` in the *same* pass. Taken in that order it is a delete plus a
+re-add, which frees the picture id and everything hanging off it — tags, smart
+score, faces, likeness pairs, project/set/stack membership, review state — so
+reorganising a reference folder used to discard everything PixlStash had added
+to it. `_match_moved_paths` pairs the two halves before the removal block runs
+and updates `file_path` on the existing row instead.
+
+- **The key is `(pixel_sha, size_bytes)`, and the match must be 1:1 with no
+  unchanged file sharing that key.** `pixel_sha` alone is not an identity:
+  `ImageUtils.calculate_hash_from_file_path` samples 8 x 8 KiB windows of
+  anything over 128 KiB and does not mix the size into the digest, which is why
+  import de-duplication treats it as a candidate key. A false pair here is worse
+  than the bug being fixed — a lost row is visible, one picture's curation
+  silently rebound onto another picture's file is not — so every ambiguous group
+  logs and falls through to the previous delete-and-re-add.
+- **Confirmation stops at the size.** Import de-dup follows a candidate match
+  with a full-byte hash of *both* sides; here one side is a file that no longer
+  exists, so the stored columns are all there is to compare.
+- **Every thumbnail lives in `image_root/.pixlstash-thumbnails/` (#1164).**
+  `ImageUtils.get_thumbnail_path` names it `<stem>_<sha256(stored file_path)[:16]>_thumb.webp`
+  for managed and reference pictures alike; the hash is of the STORED path
+  (relative for a library picture, absolute for a reference one), so callers hand
+  it that form and never the resolved one. Before 1.11.1 a managed picture's
+  bitmap sat beside it as `<stem>_thumb.webp` and a reference picture's under
+  `.ref_thumbs/`. Nothing migrates them in one go: `find_thumbnail` moves a
+  legacy bitmap home the first time it is looked for, the startup pass in
+  `maintenance.py` looks for every one, and `remove_thumbnail` deletes at every
+  location a picture's bitmap could be. `is_pixlstash_thumbnail` keeps excluding
+  the old siblings from every walk until they have all moved.
+- **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
+  `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
+  alongside the picture rather than abandoned: nothing sweeps
+  `.pixlstash-thumbnails` by anything but a row's *current* `file_path`, so a
+  bitmap left at the old name would never be reachable and never be collected. Only when there is nothing to
+  carry, or the rename fails, are `thumbnail_width` / `thumbnail_height` blanked
+  so `MissingThumbnailFinder` renders a fresh one.
+- **`original_file_name` follows too**, matching the explicit move route
+  (`routes/reference_folders.py`), so a renamed file does not keep downloading
+  under its old name.
+- **Scrapheap rows are never the source of a move.** `fetch_existing` loads
+  `deleted=True` rows deliberately; a hidden soft-deleted row whose file really
+  was deleted would otherwise swallow an unrelated new file of the same content,
+  and the user would get a picture they cannot see instead of a new one. They do
+  still count as unchanged files *blocking* a match, since their file is on disk.
+- **A present file with a NULL `pixel_sha` blocks matching for the whole pass.**
+  The column is nullable and `MissingPixelShaFinder` backfills it, so an
+  un-hashed unchanged file is invisible to the ambiguity count — and it is
+  exactly the file whose existence would have refused the match. NULL there
+  means "unknown", not "no collision".
+- **A followed move emits `CHANGED_PICTURES`** (`moved_picture_ids` in the task
+  result, `Vault._on_task_completed`), and deliberately not `PICTURE_IMPORTED`:
+  `file_path` changed on a row an open grid may already be showing, but nothing
+  was imported.
+- **Scoped to one folder, and to one pass.** The scan covers a single reference
+  folder, so a move *between* two folders is a removal in one scan and an
+  addition in another with no shared pass to match in. Two races remain open and
+  are marked at the helper: `os.walk` is not atomic, and `MissingFilePurgeTask`
+  can delete the row in the up-to-`_RESCAN_INTERVAL_S` window before the
+  rescuing scan runs. Both degrade to the old delete-and-re-add; the second logs
+  a warning when it is observed.
 
 ---
 
@@ -3921,8 +4547,7 @@ worth knowing:
   the same validity rule as the watermark cache — the cached file must be at
   least as new as the source, so the next rotate invalidates it by rewriting the
   original. Reference-folder pictures are rendered per request instead: this
-  library does not write beside the user's own files, the same rule that puts
-  their thumbnails under `.ref_thumbs`.
+  library does not write beside the user's own files.
 - **Re-encoding drops PNG text chunks, so they are carried across explicitly.**
   This response is what "Save image as" hands the user, and a saved copy of a
   rotated picture that had quietly lost its `workflow` / `prompt` would be a
@@ -5191,6 +5816,1034 @@ Both are covered in both directions by
 
 ---
 
-*Last updated: 2026-08-02. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 24. The folder-structure read (v1.11 Phase 2)
+
+`pixlstash/services/folder_structure_service.py`, exposed by
+`pixlstash/routes/folder_structure.py`. The wire contract is
+`docs/integration_architecture.md` §20; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 2. This section is the part
+that is not on the wire: why the signals are shaped the way they are, and what
+they cost.
+
+**It reads. It never writes.** No `Picture`, `Project`, `PictureSet`,
+`Character` or `Tag` row is created, and no file is opened for writing, moved or
+renamed. That is not an implementation detail to preserve by care — it is the
+release's headline (*"import moves zero files"*), and Phase 3 is the only thing
+that commits anything.
+
+### The eight signals
+
+| Signal | Scope | Cost | Proposes |
+|---|---|---|---|
+| `cardinality` | one level | free (it is arithmetic over the walk) | `tag`, or *not* `tag` |
+| `sidecars` | one folder | free (the walk already listed the folder) | `set` |
+| `faces` | one folder | **`SAMPLED_PER_FOLDER` decodes + one detection batch** | `person` |
+| `name_match` | one folder | one query for the whole read | that entity's kind |
+| `leaf` | one folder | free (the walk) | `set` |
+| `container` | one folder, read off the level below | free (arithmetic over the rows) | `project`, or `project`/`set` for a bare year |
+| `capture_day` | one folder | free (EXIF from the opens the face sample already makes) | `set` |
+| `batch_numbering` | one folder | free (the listing) | `set`, only where nothing else spoke |
+
+Only `faces` is expensive, and it is the reason the constants are constants.
+`SAMPLED_PER_FOLDER = 20` is what makes the pass two minutes rather than an
+hour: a few hundred folders × 20 pictures is a few thousand detections, and the
+folders themselves hold tens of thousands. `MIN_FACE_SAMPLE = 5` keeps the
+signal quiet on folders too small to say anything — *"one face, 2 of 3"* is not
+evidence — and `FACE_MAJORITY = 0.7` is the share of the *sampled* pictures that
+must carry the same identity.
+
+`SAME_IDENTITY_COSINE = 0.35` is deliberately strict. ArcFace embeddings arrive
+L2-normalised, so identity comparison is a dot product and the whole folder is
+one `n×n` matrix over at most 20 vectors — 400 products, nothing. The threshold
+is set where a **missed** Person costs the owner one dropdown and a **wrong**
+one costs them trust in every other row on the screen. The identity itself is a
+medoid vote, not a clustering library: for each sampled face, count the faces
+within the threshold of it, and take the largest count. That is the number the
+evidence string says out loud (`"one face, 19 of 20"`).
+
+The sample is **evenly spaced through the folder's sorted filenames**, never the
+first 20. The first twenty files of a shoot are frequently one burst of the same
+frame, and a date-ordered folder would otherwise be judged on its first minute.
+
+`faces` runs through the shipped `FaceDetectionTask` on the shared GPU queue
+rather than opening its own InsightFace session, so there is one model in memory
+rather than two. **It does not queue politely**: `FaceDetectionTask.priority` is
+`URGENT` — "user-triggered interactive tasks, skip ahead of everything" — so
+every batch of the read jumps ahead of background work. That is arguably right
+(the owner is watching a progress bar) but it is worth knowing rather than
+assuming, and it is the reason the read has a deadline: an URGENT task that
+cannot finish starves the queue it jumped.
+
+### The shape signals: what a photo library looks like
+
+The first four signals leave a photo library — no captions, no existing
+entities — reading as Person-or-nothing. The other four read the *shape* of the
+tree, and they are what makes `root/ClientA/shoot1/*.jpg` come back as a
+Project over Sets. All of them skip the root row: the root is the library
+itself, not a thing in it.
+
+**`leaf`** — `MIN_LEAF_PICTURES` (3) or more direct pictures and no folders
+below → Set, evidence *"pictures and no folders below"*. The floor exists for
+the reason `MIN_SIDECAR_PICTURES` does. Names are read three ways here, and the
+split is the owner's correction, not a refinement:
+
+- A **bare date** (`2006-09-08`, `2006-09`, `20060908`, an importer's
+  `2006-09-08_1`) is a **date bucket**. Lightroom, phones and Google Photos
+  exports all file by capture day whether or not the pictures belong together,
+  so the name says *when*, never *what*: the leaf rule stays silent, the row
+  proposes nothing, and it carries a `date_bucket` evidence line
+  (*"filed by date"*) so the tooltip explains the blank. A level whose folders
+  are mostly bare dates says so at level scope too (*"3 of 3 folders filed by
+  date"*) and does **not** fall through to the *"used once each, so not labels"*
+  candidates line — the owner sets the whole level in one gesture if they do
+  want a Set per day.
+- A **date with other words** (`2006-09-08 Anna wedding`, `2024-03 Iceland`) is
+  a name somebody chose. The leaf rule fires with *"dated and named, pictures
+  and no folders below"*.
+- Either form keeps the existing Person veto: a date is not a name anybody has.
+
+**`container`** — the other level-scoped signal, and the only one that needs
+another level read first, which is why `_build_result` builds rows **deepest
+first**. When at least 60% (`_LEVEL_VOTE_SHARE_PCT`) of a level's rows read as
+Set or Person — a row's `kind`, or every one of its `candidates` — or are
+bare-date buckets, each parent with subfolders and few pictures of its own
+(direct at most `_CONTAINER_MAX_DIRECT_PCT` = 10% of its recursive count)
+proposes Project with *"groups 2 folders read as Set"* / *"… filed by date"*.
+Children of mixed kinds count, and the text says *"read as Set or Person"*. The
+one exception is deliberate and written in the code: a container whose bare
+name is a **year** (`2009`) comes back as `candidates: [project, set]` rather
+than Project, because the owner of the library this was built against files
+year folders as Sets and a year is the one container name that says nothing
+about what it groups. The level above then reads Project through the ordinary
+level vote (*"2 of 2 folders read as Project"*).
+
+**`capture_day`** — EXIF `DateTimeOriginal` (falling back to `DateTime`) from
+**the same sample the face pass opens**. `_load_sample` reads the tag before it
+decodes, and with no inference engine it opens the file for the tag alone, so
+the sample pass now runs whether or not `detect_faces` is available and only
+the detection is optional; the stage is still reported as `faces` on the wire.
+One or two distinct days (`_CAPTURE_MAX_DAYS`) across a sample of at least
+`MIN_FACE_SAMPLE` → Set, *"shot on 1 day"*. It never fires when fewer than half
+the sample carried a date (`_CAPTURE_MIN_DATED_PCT`), and it is silent on a
+bare-date folder and on any folder directly under a level of them, where one
+day is true by construction and says nothing.
+
+**`batch_numbering`** — from the listing alone: when 80% (`_BATCH_SHARE_PCT`)
+of a folder's direct picture stems match `<prefix><digits>` with one prefix
+(`IMG_0412`, `DSC01234`, `00017-1234` — the prefix may be empty, the digits are
+at least three), evidence *"numbered as one batch (IMG_0001…)"*. It is
+additional evidence: it proposes Set only where nothing else spoke and never
+contradicts another signal's kind, so a Person folder of `IMG_` files stays a
+Person and a date bucket of them stays a bucket.
+
+**They disagree the way the older signals do.** A leaf of one person's pictures
+is `candidates: [person, set]` with both evidence lines — the leaf is genuinely
+either, and picking would be the guess the evidence rule exists to prevent.
+**A single name match outranks all of them.** It is a lookup and they are
+inferences, so when exactly one entity kind matched by name the shape signals
+still append their evidence lines but add no competing kind: a leaf folder
+named after an existing Person is `kind: person` with its `match` intact and
+`leaf` under it as a reason. `faces` keeps its own rule (it only adds `person`
+when absent). A name that matched two kinds is already narrowed, and there the
+shape signals add kinds as anywhere else.
+
+**`faces` outranks the shape signals too.** It is evidence about the pictures
+(one identity across the sample); `leaf`, `capture_day` and `batch_numbering`
+are priors about the folder, and a person's folder is a leaf of pictures by
+construction. When `faces` has proposed Person, the shape signals still append
+their evidence lines but propose no kind, so the folder reads as a Person with
+"pictures and no folders below" under it rather than as "Person or Set".
+`sidecars` is not a shape signal: a caption file beside every picture is a
+filesystem fact rather than a prior, and it keeps its existing standing
+against `faces` (the two still narrow to candidates).
+
+### Why cardinality is level-scoped and nothing else is
+
+Cardinality is a property of a *level* — "four names under 118 parents" cannot
+be said about one folder — so it speaks in a level's
+`proposal` (`container` is the other level-scoped reading, above), and a level of one folder (the root) never carries a reading at all.
+Its **negative** matters as much as its positive: names used once each are not
+labels, which rules `tag` out and rules nothing in, and that is what produces a
+level with `candidates` and no `kind`.
+
+A level with no cardinality reading is answered by its rows instead, when at
+least 60% of them agree on one kind. That branch states its own count
+(*"31 of 149 folders read as Set"*) rather than inheriting the rows' evidence,
+because a level-wide claim needs a level-wide reason.
+
+**The share is compared as integers, not as `round(0.6 * n)`.** `round(0.6 * 4)`
+is `2`, which would quietly make a rule written as sixty percent a fifty-percent
+rule on a level of four — and at fifty percent a 2–2 split is a *tie*, which
+`Counter.most_common` breaks by insertion order, which here is folder sort
+order. The same tree would then answer "Set" or "Person" depending on what the
+folders happened to be called. At a true 60% a tie is arithmetically
+unreachable: two kinds would need 120% of the level. The exact comparison is
+therefore not pedantry, it is the whole of why there is no tie-break to get
+wrong, and it is asserted in the code.
+
+### Evidence, and the refusal to guess
+
+Every proposal carries the evidence that produced it, and **a signal that cannot
+state its reason proposes nothing**. Two consequences fall out rather than being
+designed in:
+
+1. `kind: null` with `evidence: []` is the *normal* answer for an ordinary
+   folder name. `Mira` could be a person, a project or a client, and no LLM
+   ships with PixlStash (release plan §5).
+2. Two signals that disagree — a folder read as one person whose name is also an
+   existing project — return **both** kinds as `candidates` and no `kind`.
+   Picking one would be exactly the guess the evidence rule exists to prevent.
+
+`kind: "folder"` ("just a folder") is in the enum because the *owner* chooses it
+on the mapping screen and Phase 3 sends it back. **No signal proposes it**, and
+no code path here emits it, because no signal can prove a negative about a
+string. A row the backend had nothing to say about is `kind: null`.
+
+The other four kinds are `Facet` (`pixlstash/utils/library_layout.py`, Phase 4a)
+and are read out of that enum rather than written again, so a facet renamed for
+the layout cannot leave this read proposing a word the layout no longer places.
+`tests/test_folder_structure_read.py::test_the_read_speaks_the_layout_s_facet_vocabulary`
+fails the build on the drift, which is the only way anyone would notice: the
+symptom otherwise is a picture that quietly fails to move, one release later.
+
+### Folding a name
+
+**There are two name folds in v1.11 and they disagree on purpose.**
+`library_layout._match_key` (Phase 4a) is NFC + casefold: accents and separators
+survive, so `José` and `Jose` are two folders. It has to be exact, because it
+decides whether a picture **moves**. `normalise_name` here folds accents and
+separator runs as well, because it only decides what to **propose** on a screen
+the owner then confirms — a wrong guess costs one dropdown, a missed one costs a
+lookup they wanted. They are not a duplicated helper waiting to be reconciled:
+merging them would either start moving files on a fuzzy match, or stop the read
+recognising `2024_Shoots` as the project the owner already has.
+
+`normalise_name` is Unicode-aware, and that is a correctness requirement rather
+than a nicety. An ASCII-only character class does not merely *miss* a Cyrillic or
+CJK name — it folds every one of them to the **same empty string**, at which
+point a level of fifteen distinct people has one distinct name, `cardinality`
+sees names repeating under many parents, and a Russian or Japanese owner's
+library is confidently proposed as a single Tag level with the evidence
+*"1 names under 3 parents"*. The fold also runs NFKD and drops combining marks,
+so `José` and `Jose` are the same name; without that, the accented spelling
+matches nothing and the *unaccented* one matches a person who does not exist.
+
+### The bounds
+
+Three bounds, and each one has a way of saying it was hit.
+
+`MAX_FOLDERS = 20_000` bounds the walk. The path comes from the caller and can be
+`/`; the result is a JSON document a browser has to hold. Hitting the bound
+truncates and sets `truncated`, which the screen must show — a truncated read
+presented as a complete one is worse than a refusal.
+
+`DEFAULT_DEADLINE_S` (30 minutes) bounds the *read*, not a batch. The face
+signal has a per-batch timeout — `_FACE_BATCH_TIMEOUT_S`, 180 s — but a per-batch
+timeout is the wrong bound on its own: 180 s × 20,000 folders is **41 days**, and
+the single read slot would leave the feature dead for the process lifetime while
+reporting `running`. Past the deadline the read stops where it is and returns
+what it has, which is the same shape a cancel produces.
+
+**The partial result has to be a usable one**, which is why the recursive
+picture counts are summed in `_build_result` and not at the end of the walk. A
+cancel or a deadline raises from *inside* the walk loop, so a version that summed
+there returned every row at `picture_count: 0` beside a real
+`direct_picture_count` — a partial map saying the library is empty, on the one
+path whose entire justification is that the partial map is showable.
+
+`skipped_folders` counts what the walk deliberately did not enter: dot-folders
+(a vault's own caches) and, separately, directories on the system blocklist found
+*below* the root. **The blocklist is re-checked per directory**, because
+validating only the path the caller named is a check on one string and not
+containment: `POST {"path": "/"}` names no restricted directory and would
+otherwise walk every one of them, decoding image-extensioned files out of
+`/etc`, `/proc` and `/root`. A route that recurses cannot borrow
+`GET /filesystem/browse`'s root-only check, because browse lists one level and
+this does not.
+
+`unreadable_folders` counts what the walk could not open. **`os.walk` swallows
+every `scandir` error by default** — no exception, no return value, the subtree
+simply is not there — so an `onerror` callback is not optional here: without it a
+library with one root-owned import folder in it comes back as a *complete* map
+that is quietly missing a subtree, and the owner accepts a mapping built on it.
+Each skip is logged at warning and counted, and the count is on the wire.
+
+`os.walk(followlinks=False)` is load-bearing for a fourth reason: a symlink loop
+under a caller-supplied path would otherwise walk forever.
+
+A corrupt or unreadable picture decodes to `None` and is sampled as
+*no face*, logged at warning with its basename. A whole folder's detection batch
+failing is logged and costs that folder its face evidence — never the read.
+
+### Authorization
+
+All three routes are `LOCAL_OWNER_ONLY` (§16.3), and the `GET` is on that tier
+for the reason `GET /model-moves` is: what it carries **is** the answer — a map
+of the owner's folder names, tree shape and picture counts — so polling must not
+be a lower bar than starting.
+
+`POST` runs `validate_reference_folder_path` on the **realpath**, which is
+deliberately stricter than `GET /filesystem/browse`, which validates the raw
+string the caller sent. Browse lists one directory; this walks a subtree
+recursively and decodes image files out of it, so a symlink pointing at a
+restricted directory is the difference between one listing and a recursive read
+of `/etc`. `validate_reference_folder_accessible` is the shipped helper that
+already does realpath-then-blocklist, and its comment — *"Canonicalize before
+touching the filesystem"* — is describing exactly this. `filesystem_roots`
+containment is the same as browse's, and note that it is **empty by default**,
+so it is not the containment that holds on an unconfigured install. What holds is
+the blocklist — run on the realpath at the root *and* again on every directory
+the walk descends into, which is the pair that makes it a property of the whole
+traversal rather than of one string.
+
+The status route is on `READ_BLOCKED_GET_PATHS` as well, so the documented
+`AUTHZ_GATE_ENFORCING = False` rollback does not hand the folder map to a share
+token. **That belt is GET-only** (`auth.py` checks it for GETs), so under a
+rollback the `POST` and `DELETE` are covered by the gate alone. The gate is the
+live enforcement and ships enforcing; the belt is the extra layer, and it can
+only ever be an extra layer for the reads.
+
+### One read at a time
+
+`Server.folder_structure_read` is a single slot, not a dict. The mapping screen
+only ever shows one read, and a second concurrent one would fight the first for
+the same GPU queue for no gain, so a second `POST` while one runs is a **409**.
+A cancelled read keeps its partial result: the screen can still show what was
+found, which is what makes Cancel safe to offer for the whole two minutes.
+
+The slot's cost is one result document plus the `FolderStructureRead`, held until
+the next read replaces it. The per-folder **filename lists are dropped** once the
+rows are built — they were only ever input to the signals, and a 28,000-picture
+library would otherwise pin all 28,000 filenames for the process lifetime.
+
+The lock covers the 409 check-and-set and nothing else. The worker writes
+`result` before it writes `status`, and the status handler reads `status` first
+and serves `result` only once the read has settled, which is what keeps §20's
+*"`result` is null until the read has settled"* true without taking a lock on
+every poll.
+
+### Ambiguity in `name_match`
+
+`PictureSet.name` carries no unique constraint and a real vault has duplicates
+immediately. §20 promises that `match.id` is *that row's real primary key*, so
+when two entities of the same kind share a name the read returns the **kind**
+(which is genuinely known) with `match: null` and evidence saying
+`"matches 2 existing sets"`. Handing back whichever row the query ordered first
+would aim Phase 3's attach at an arbitrary set, confidently, with evidence. Two
+different *kinds* sharing a name is the other case and is already a narrowing:
+`candidates`, no `kind`.
+
+## 25. The folder-structure commit (v1.11 Phase 3)
+
+`pixlstash/services/folder_structure_commit_service.py`, exposed by the
+`/folder-structure/commit` routes added to `pixlstash/routes/folder_structure.py`.
+Wire contract `docs/integration_architecture.md` §22; release plan
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24's read only ever
+proposes; this is the one module anything from the mapping screen writes.
+
+### Reuse, not a second walker
+
+The commit does not walk the filesystem a second time. §24 already measured
+that cost and the release plan's whole argument for the two-minute read is that
+it is paid *once*. Instead the accepted root is registered as an ordinary
+`ReferenceFolder`, and the existing, already-shipped `ReferenceFolderScanTask`
+does the only filesystem *read* left: indexing every file into a `Picture`
+row, in place, exactly as it does for any other reference folder.
+`register_reference_folder` is deliberately **not** the same function as
+`routes.reference_folders.create_reference_folder` — it is a smaller,
+one-directional insert kept separate because the two entry points validate
+different things upstream (that route re-derives accessibility from a
+caller-supplied path and checks conflicts against every other registered
+folder, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has
+no UI for; this one starts from a path a settled read already walked) — and
+because their **conflict answers differ**. `create_reference_folder` 409s
+outright on an existing path. `register_reference_folder`'s `fetch_or_create`
+is narrower: it reuses an existing row **only** when that row has never
+completed a scan (`last_scanned is None`) — the shape of a commit that
+registered the folder and then crashed before the first scan finished, safe to
+resume because nothing has been indexed under it yet that a fresh wait could
+miss. A row that **has** completed a scan — an unrelated pre-existing
+reference folder, or an earlier commit of this same path from a since-cancelled
+read run again — is refused with a `CommitError` rather than silently reused,
+because reusing it would apply this mapping to whatever happens to be indexed
+under it already, not to what the read the owner just accepted actually found.
+"Cancel and organise later" during `Main` or `MapTree` therefore leaves
+nothing committed and nothing registered at all — there is no reference folder
+row yet at that point for a resumed commit to collide with — and the narrow
+crash-recovery case above is the only path re-use is safe.
+
+`wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
+the field the model's own docstring names as "unix timestamp of the last
+**completed** scan pass" — not a picture count, because a count can plateau
+mid-batch for reasons that have nothing to do with completion. It has a
+30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24's read has a
+deadline: a stuck scan must fail the commit rather than hang the screen
+forever.
+
+**`local_import_pictures` wakes the planner after every chunk it inserts.**
+The rows are visible to the finders the moment a chunk's transaction commits,
+but the WorkPlanner only sweeps on a wake or when its backoff expires, and an
+idle library has that backoff parked at `MAX_INTERVAL_S` (10 s). The only wake
+the commit used to send was the `CHANGED_PICTURES` notify at the end of
+`_run_commit`, so for any import shorter than the remaining backoff the AI
+workers started the same second the commit reported `done`. A `vault.wake()`
+per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
+running on the first chunk while the walk continues; it is a scheduler poke,
+not an event, so the SPA is still told about the import once, at the end.
+
+### A read commits once, enforced
+
+`apply_mapping` is not idempotent, and cannot cheaply be made so: it walks
+every picture currently under the reference folder and unconditionally
+creates the accepted `Project`/`Character`/`PictureSet` rows and
+`PictureProjectMember`/`pending_character_id`/`PictureSetMember`/`Tag` writes
+for each one, on every call. Running it twice over the same read would create
+duplicate entities and duplicate membership/tag rows — not a data-loss bug,
+but a data-*doubling* one, and a quiet one, since neither the entities nor the
+memberships carry a uniqueness constraint that would surface it as an error.
+
+So the route, not this module, owns the one-shot guarantee: `server.folder_
+structure_read`'s slot gains a `committed` flag, set **the instant a commit
+starts** — inside the same lock acquisition that checks it, so two requests
+racing the same `task_id` cannot both pass — rather than once the commit
+*finishes*. A commit already running must refuse a second `POST` against its
+own read exactly as a completed one does; the difference between "running"
+and "done" is not a difference in whether a second commit may start, only in
+what the client is told. Checked and set separately from — and nested inside
+— the single global "a commit is already running" reservation, so a `POST`
+that loses to an *unrelated* read's in-flight commit is refused before it
+spends the read's one commit on a 409 it never got to act on.
+
+### Person is `pending_character_id`, not a fabricated Face
+
+A folder accepted as Person has no detected face to attach to — the read's own
+`faces` signal is sampled at 20 pictures and never claims to have looked at the
+rest, and a folder-derived assignment is the owner's decision, not a detection.
+The commit does **not** invent a `Face` row with no bounding box to represent
+it. It sets `Picture.pending_character_id`, the same field
+`routes.characters_faces.assign_face_to_character` already sets when a
+picture-id assignment arrives before face extraction has run
+(`pixlstash/db_models/picture.py`'s own docstring: *"cleared, and the best face
+assigned, when `FaceExtractionTask` completes for the picture"*). Every picture
+this commit indexes is brand new, so this is *always* the deferred path, never
+the immediate one — the existing background pipeline reconciles the assignment
+against a real detected face once extraction runs, on its own schedule, with no
+new code here to do it.
+
+### Nearest-ancestor-wins, tags are not exclusive
+
+A picture is filed under the **closest** accepted Project, Person or Set above
+it — first-match-wins walking from the picture's folder up to the root,
+mirroring `library_layout`'s segment resolution — because the common shape is
+one kind per level and a nested override should shadow, not stack. Tag is the
+one exception: **every** accepted Tag ancestor along the path applies, because
+a picture can legitimately carry more than one label (`final` under `raw` under
+a shoot folder is two tags, not the nearer one winning). `_resolve_folder`
+computes this once per distinct folder, not once per picture, since the
+`ReferenceFolderScanTask`-created rows already state which folder each is in
+via their own `file_path` — no second read of `FolderStructureRead`'s
+internal `_folders` list, which §24 already documents as dropped once the
+proposal document is built.
+
+### Entity identity is (kind, name), not (kind, relative_path)
+
+Two folders accepted as the same kind with the same name — `Mira` appearing
+under two different parents, or a folder whose owner picked the same
+`name_match` twice — resolve to the **one** row, not two. That is
+`library_layout.folder_name`'s own reasoning read in reverse: on-disk folder
+naming already collapses two spellings that differ only in punctuation to one
+path component, so this module collapses two *paths* that name the same thing
+back to one entity, for the same reason — a picture in either folder should
+read as true of the same Project, Person or Set. `project_cache` /
+`character_cache` / `set_cache` key on `match_id` when the owner supplied one
+and on the folder's own name otherwise, scoped to the one commit — a
+name that happens to collide with something created by an *earlier* commit is
+not merged, only within-batch repeats are.
+
+`Project.name` carries a real unique constraint; `Character.name` and
+`PictureSet.name` do not (§24's own note on `name_match`'s ambiguity is why —
+a real vault has duplicate set names on day one). A newly-created Project whose
+name collides with an existing one the owner did not explicitly `match_id`
+would raise on `session.flush()`, surfacing as a failed commit rather than a
+silent skip — that is deliberate: **it reads as the owner asking to reuse a
+project name without saying so**, and a `match_id` is exactly how the mapping
+screen already lets them say so on purpose.
+
+### What this does not do
+
+- **No layout write.** The accepted mapping places the pictures this commit
+  indexes; it does not set the library's `Layout` for what comes in *next* —
+  that is Phase 4, and `library_layout.py` is untouched by this module.
+- **No project/character/set membership reconciliation.** These are all
+  brand-new pictures with no prior assignment to reconcile away from, so
+  `project_membership_service.set_character_projects` /
+  `set_picture_set_projects` are called once, at creation, never for an
+  existing entity's membership change.
+
+## 26. The layout and the move engine (v1.11 Phase 4b)
+
+`pixlstash/utils/library_layout.py` decides *where* a picture belongs and
+whether it still does; `pixlstash/services/layout_move_service.py` decides
+*whether to act* and then acts. The wire contract is
+`docs/integration_architecture.md` §23; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
+
+Everything here is downstream of one sentence:
+
+> **A picture moves only when its folder stops being true.**
+
+Not whenever something about it changes. Three properties fall out of that
+rather than being designed in, and they are what the section is for:
+
+1. **Import moves zero files.** Assignments are derived *from* the paths, so
+   every path is true the moment it is written.
+2. **Nothing is re-derived**, so a picture in three projects never needs a
+   winner picked. The many-to-many problem does not arise.
+3. **A path the layout cannot read can never be false**, so it never moves. An
+   existing flat library needs no migration and a hand-placed file is a
+   permanent override that needs no setting.
+
+### Where a layout lives, and why in two places
+
+| Root | Column | Governs |
+|---|---|---|
+| The library's own picture root | `library_settings.layout` / `layout_unfiled` | pictures with `reference_folder_id IS NULL` (`Picture.file_path` relative) |
+| A reference folder | `reference_folder.layout` / `layout_unfiled` | that folder's pictures (`Picture.file_path` absolute) |
+
+NULL in both means **no layout**, which is every root that exists today: with
+none, nothing is placed by the layout and nothing is moved by it, whatever
+changes about the pictures. Opt-in is not a setting bolted on — it is the
+absence of a row value, so the safe state is also the default state.
+
+Two locations rather than one because they are two different trees and the
+engine has to know which one a picture is in anyway (`Picture.reference_folder_id`
+answers that already). `LayoutRoot` is the one abstraction over both, and the
+only thing it has to reconcile is the stored-path convention: absolute for a
+reference picture, relative for a library one, which is the same branch
+`ImageUtils.get_thumbnail_path` already makes.
+
+### The two jobs
+
+**Placement on write.** `resolve_placement` is the one call every creation site
+makes, and it answers `None` — write where you always did — for a root with no
+layout and for a file that is not going into the library's own root at all (a
+ComfyUI edit or a plugin output written beside its original in a reference
+folder is already where the owner's tree put it). `ImageUtils.create_picture_from_bytes`
+takes the answer as `subfolder` and keeps the stored path **relative**, so the
+picture is still a library picture and its thumbnail is still keyed by that
+relative path;
+only `output_dir` makes a path absolute, and that means a reference folder.
+
+Wired at every site that writes into the library root: the staged import, the
+one-shot upload, the ComfyUI ingest, the watch-folder import and the image
+plugins. The two `vault.py` calls are deliberately not — they write PixlStash's
+own bundled logo and tagger-test images, into a folder of their own.
+
+It uses only the assignments that are *already* true — the project and the set.
+A drop-to-person import carries a **pending** character id and the picture has
+no faces yet, so writing it into that person's folder would make the folder
+false the moment anything read it. A site that knows no assignments at all (a
+watch folder, a plugin output) gets the unfiled folder, which is not a fallback
+but the drawn behaviour: the picture leaves it one debounce after the assignment
+that follows lands.
+
+**The truth check.** `relocate` returns `None` for every case the rule calls
+still true and the destination otherwise. The destination **keeps the owner's
+own folders below the layout**: a picture in `2024 Shoots/Mira/2026-08` whose
+project changes goes to `Client · Nordvik/Mira/2026-08`. Flattening it would
+collapse a date tree into one folder and make two files of the same name
+collide — a curated library's structure destroyed by a rule that promised to
+preserve it.
+
+### The trigger, and why it is a flush hook
+
+`database._before_flush_layout_tracker` / `_after_flush_layout_marker` stamp
+`Picture.layout_check_due_at` when a picture's project, set or person membership
+changes. They sit beside the metadata-hash hooks on every writer-thread session
+because the alternative — a call at each mutation site — cannot be kept in step:
+a picture gains a project through the import route, the CRUD route, the
+membership service, a plugin, the ComfyUI ingest, stack propagation and a
+restore, and the one that gets missed is a picture whose folder has quietly
+stopped being true and that nothing ever revisits.
+
+The hook narrows hard. `session.dirty` means "something on this object changed",
+not "this column did", so a rating, a caption or a thumbnail write on a
+`Picture` would otherwise stamp the whole library; `_attribute_changed` reads
+the attribute history instead. And the whole stamp is gated on
+`_library_has_layout`, cached per session, so a library that has chosen no
+layout pays one small indexed read per task and never a write.
+
+**The debounce IS the stamp.** Each change writes `now + CHECK_DEBOUNCE_S`, so a
+second change pushes the check out again rather than queueing a second one. That
+is what makes a remove-then-add **one** move: swapping a picture's project is
+two requests a fraction of a second apart, and acting on the first would take
+the file through the unfiled folder on its way to the right one.
+
+### Doing it: order, refusals, and what is never done
+
+`LayoutMoveFinder` → `LayoutMoveTask` plans the whole batch, **logs the count
+before executing it**, moves, and records one `pictures.layout.move` operation
+so the batch is one Ctrl+Z. Per picture the order is: claim the destination,
+drop the source name, carry the thumbnail and sidecars, write the row.
+
+- **The claim is `publish_no_clobber`** — the model shelf's single-syscall
+  primitive — so a name that appeared since the plan was made is refused rather
+  than overwritten. This walks the owner's own library and there is no file in
+  it the engine is entitled to destroy. A taken destination is *declined*, never
+  uniquified: renaming the owner's file to make room is a bigger liberty than
+  not moving.
+- **The rollback covers the caller's whole transaction, not the move loop.**
+  Everything after `apply_moves` can raise — two state captures, the operation
+  row, the flag clear, the commit — and the writer thread then rolls the session
+  back. A row left naming a path with no file at it is not a cosmetic
+  inconsistency: `MissingFilePurgeFinder` deletes that row within the hour and
+  takes the picture's tags, sets and score with it. So the caller passes its own
+  `applied` list, every move is appended as it reaches the disk, and
+  `rollback_applied_moves` puts them back — the thumbnail included, because a
+  bitmap left at the new name is stranded while the restored row still claims
+  one.
+- **The residue no ordering removes** is a power loss between the last rename
+  and the commit: the file is at the new path and the row still names the old
+  one. It is the same residue `POST /reference-folders/{id}/move-pictures` has
+  always carried. In a reference folder the scan repairs it by `pixel_sha` every
+  300 s, well inside the purge sweep's hour; in the library's own root there is
+  no scan, which is why the batch is 200 files rather than the whole library.
+- **A symlinked source is refused.** `os.link` follows the link, so moving one
+  would pull whatever it points at — anywhere on the machine — into the library
+  under the link's name. That is a read escape wearing a write sink's clothes,
+  the shape #1024 closed for the rotate sink.
+- **A destination that resolves out of the root is refused too**, and the source
+  check does not cover it. The rendered folder names cannot escape lexically —
+  `folder_name` strips every separator — but a directory that already exists
+  inside the root can be a symlink, and `os.makedirs(exist_ok=True)` traverses
+  one; the file would land on another volume while the row went on naming a path
+  inside the library. `_destination_stays_inside` resolves the **deepest
+  ancestor that exists**, which is the only part a link can hide in, since
+  everything below it is created here as a plain directory. Strict
+  `resolve_path_within`, as the rotate sink uses — and affordable here in a way
+  it was contentious there: refusing means the picture stays in its current
+  folder, which is this engine's default answer to almost everything, not a
+  photo the owner can no longer turn.
+- **A source that resolves outside its root is refused**, which is not tidiness:
+  everything below it moves a file.
+- **An emptied folder is kept.** Nothing in the module calls `rmdir`. A folder
+  the owner made is theirs, and one PixlStash made may already hold something we
+  cannot see.
+
+Undo is `FACET_LOCATION` on the operation log, applied by `restore_location`.
+Like the orientation facet it is **absolute, not a delta** — the recorded value
+is a path, so applying it twice is a no-op and a file something else has since
+moved converges instead of drifting — and it makes every one of the refusals
+above again, because an undo is a move.
+
+Undoing a move deliberately does **not** re-arm the check: the engine spent the
+stamp when it moved, and nothing re-stamps a picture whose memberships did not
+change. A picture the owner has undone therefore stays where they put it back,
+which is the same override an off-layout folder gets.
+
+### Renaming an entity renames its folder
+
+`rename_entity_folders` renames the directories named after a project, set or
+person and repoints the rows under them. It moves no files, and that is not a
+nicety: a project with three thousand pictures would otherwise rewrite three
+thousand paths on disk to say the same thing in different words.
+
+It is also not optional. `is_true` reads a folder name against the library's
+**current** vocabulary, so a folder still carrying the old name names nothing
+PixlStash knows — unreadable, permanently frozen, and quietly outside the layout
+from then on. The rename is what keeps those pictures inside the language. Only
+directories at a depth some segment of the root's layout could put that facet at
+are considered, so a folder of the owner's own that happens to share the name is
+left alone.
+
+**A name the library cannot attribute is refused.** A folder is only a name and
+says nothing about which facet wrote it: under the default `Project / Person or
+Set` a person and a set both sit one level down, so renaming a person called
+*Summer* would otherwise rename the *set* Summer's folder, drag its rows with
+it, and leave the engine planning a second move to put them back — two file
+operations for a change to an entity nobody touched. Character names are only
+unique *within a project*, so two people called Mira in different projects
+collide the same way. `_name_is_ambiguous` declines those. The cost is that
+those folders drop out of the layout's language; the alternative costs the owner
+moved files, and this design errs the other way every time.
+
+The renames and the `file_path` rewrites that describe them commit **together**,
+inside `rename_entity_folders` itself, and the directories are renamed back if
+that commit fails. A half-applied rename would leave every picture under the
+folder naming a path that does not exist, which is the purge sweep's input.
+
+### What Phase 6 sees once a layout is on
+
+`library_insights_service` gates its folder-shaped findings on a picture's path
+having a directory component, on the stated premise that a vault-managed picture
+stores a flat `<uuid>.png` — storage, not organisation. **A layout makes that
+premise false**: the same picture stores `<Project>/<Person>/<uuid>.png`, so
+those checks now also see folders PixlStash wrote.
+
+That is the right behaviour rather than a hole — under a layout those folders
+*are* the organisation, named after the very projects, people and sets the
+findings are about, so skipping them would be blind to exactly the libraries
+v1.11 is for. It is recorded here because the two phases landed independently
+and neither could have tested the combination: a folder-shaped finding in a
+laid-out library may restate a membership the owner can already see, and the
+wording is worth a look on a real library once both are in.
+
+### The move journal, and why it is Phase 4b's job
+
+Every move the engine makes writes a `picture_move` row **before** anything
+walks the tree again, and `ReferenceFolderScanTask` claims the pairs that are
+ours. Without it the scan reads PixlStash's own write as the owner reorganising
+their library: Phase 5 turns that into an assignment change, which makes the
+folder untrue, which moves the file again, and the two flip each other for ever
+over real files on a real disk. Building it here rather than there is what makes
+Phase 5 a feature instead of a fix.
+
+The row is keyed by the two **paths** rather than by the picture id, because the
+scan pairs a vanished path with an arrived one by pixel content and has no
+picture id in hand until after it has decided the pairing. A claimed row is
+marked consumed and rows are pruned after `RETENTION_S`: a pair is not unique
+over time, and a row kept for ever would let a genuine owner move between the
+same two folders next month be dismissed as ours.
+
+`ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
+moves it attributes to the owner — which is exactly Phase 5's input.
+
+### Moving an existing library onto its layout (v1.11 Phase 4c)
+
+`pixlstash/services/layout_migration_service.py`, two routes on
+`/server-config/layout/migration`. Offered whenever a layout is set or changed
+— a flat library choosing one for the first time, or a library whose layout the
+owner edits afterwards — and never automatic, never on import.
+
+> **It is not the move-when-false rule and must not be described as one.** Under
+> that rule a flat path parses against nothing, can never be false, and never
+> moves, which is exactly why old libraries need no migration. This is the owner
+> asking for something else: *make it all match, now.*
+
+That difference is one function, `library_layout.migrate_destination`, and it is
+the only new decision the phase contains. It asks `render` where the layout would
+put the picture rather than asking `_walk` whether the folder has stopped being
+true, and the answer is the destination whole: nothing of the old path is kept.
+It answers `None`, leave it, in three cases. **Nothing files the picture** and
+`sweep_unfiled` is off, so `render` would answer the unfiled folder and sweeping
+it there was not asked for; with the flag on, every such picture lands in the
+unfiled folder (`Unassigned` by default), which is the owner choosing one folder
+of everything the layout has no name for over loose files left in the old date
+tree. The flag is an option on the gesture, sent with the preview and with every
+pass, not a stored setting. **It is already where the layout wants it.** Or its
+path carries `.`/`..` and is refused whole exactly as `is_true` refuses it.
+
+What it deliberately does *not* share with `relocate` and `match_destination` is
+the override: a folder of the owner's own stays put under the rule and under the
+drift offer, and is flattened into the layout here. The first version kept the
+override, and that made the migration a no-op on the library it exists for. A
+library filed by year and date has every picture in a folder the layout owns no
+part of, so the excuse covered all of them and "Move them now" moved nothing
+(decided 2026-09-01). The two readings of the tree are reconciled by who is
+acting: the rule runs on its own, so it must not touch what the owner arranged;
+the migration is the owner asking for exactly that, previewed, consented and one
+undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg`,
+`Unassigned/2026-08` at `<rendered>`, and two files of one name arriving at one
+folder are told apart by the suffix rule below rather than refused.
+
+Everything that touches a file is §26's: the same `_prepare_move` refusals, the
+same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`
+undo. What a whole-library move needs and a one-picture move does not is four
+things.
+
+**Preview before consent.** `GET .../migration` plans the library and moves
+nothing, answering the count, the number of destination folders, a sample of
+before/after paths, and the refusals below. Consent to move 4,109 files is not
+consent anybody can give from a sentence that does not say 4,109. Every path in
+the answer is relative to the library root, never absolute.
+
+It plans **in the run's own windows**, not in one pass. That is not tidiness:
+`picture_facets` and the size lookup pass their ids to a raw `IN`, which Phase
+4b never had to think about because it only ever handed them a 200-id batch, and
+a whole-library `IN` is the SQLite bound-parameter ceiling — the reason
+`scope_id_subquery` exists. Windowing keeps every clause the size the engine was
+written for. The cost is that two pictures colliding across a window boundary
+are not counted as a collision here, only at the run; `publish_no_clobber` still
+refuses the overwrite and the run still suffixes it, so the count can be low and
+the behaviour cannot be wrong.
+
+**A collision rule, decided once.** Two folders' worth of `0001.png` render onto
+one path. `_free_name` suffixes `-2`, `-3`… and `_prepare_move` grew a
+`uniquify` flag rather than a second planner, so the automatic path keeps
+refusing outright — the rule's own moves must not start renaming anything. What
+is suffixed is the file **being moved**, never the file already sitting at the
+destination: renaming somebody else's file to make room is the liberty this
+module does not take, and the count is in the preview so it is applied visibly.
+The suffix reaches the picture's sidecars too, because a sidecar pairs with its
+picture by *stem* — `0001.txt` travelling unchanged would land beside
+`0001-2.png`, naming nothing, on top of the sidecar of whatever file was
+already there. It is the only case in which a layout move changes a file name
+at all, which is why `_sidecar_plan` had to learn about it.
+
+**Cross-volume detection, and the answer the plan did not predict.** The plan
+assumed a mount point inside the library turns a rename into a *copy* — minutes
+instead of the 0.19 s it measured for 28,412 same-volume renames. It does not:
+`publish_no_clobber` claims the destination with `os.link` and falls back to
+`os.replace`, and **both raise `EXDEV` across a device**, so such a move cannot
+happen at all. Copying across the boundary would be a new capability with its
+own verification and is deliberately not in this phase.
+
+So the detection is real and the consequence is different: `_same_volume`
+(`model_mover.same_device`, which already owns the `st_dev` reasoning about bind
+mounts and symlinked folders, and the seam a test needs to force the branch on a
+single-volume machine) refuses those pictures **in the plan**, with reason
+`destination_other_volume`. They are counted in the preview, they are in
+`skipped`, and they stay exactly where they are. Discovering it per file inside
+`apply_moves` — which is what happens without this — leaves the picture in
+neither `moved_picture_ids` nor `skipped` while the pass reports a clean finish.
+
+For the same reason the run reports every picture it planned and did not move,
+as `move_failed`: a name that appeared at the destination since the plan, a file
+locked on Windows, a folder gone read-only. `apply_moves` logs and carries on,
+which is what makes a failing run finishable — but a client about to stop
+looping has to be told, or the miss is a log line nobody reads.
+
+**Resumability, and why the run is in passes.** `POST .../migration` examines
+`MIGRATION_BATCH` pictures, moves what the layout would move, commits, and
+answers `next_after_id` and `done`; the client loops. That is the progress bar
+and the resumability at once — and it is deliberately *not* one transaction over
+28k pictures on the single DB writer thread. Two properties make it safe:
+
+1. **Every pass shares one server-minted `batch_id`**, so the whole run is one
+   undo. A batch is a single undo unit (`_batch_members_in_session`), which
+   means undoing any member reverts them all and one Ctrl+Z puts every file back
+   at the path it had — the acceptance criterion, without holding one
+   transaction open across the whole library. The id is minted here and echoed
+   back by the client, and validated on the way in against
+   `_MIGRATION_BATCH_ID_RE`. That check is on the **shape, not the provenance**
+   — it cannot tell an id this server minted from a well-formed one a client
+   composed — and it is there for what `OriginClientMiddleware` validates the
+   `X-Operation-Batch-Id` header for: `batch_id` decides what one undo reverses,
+   so it stays bounded, safe and inside this feature's namespace rather than
+   being free text that could join a migration's passes to another gesture's
+   undo unit. A caller who composes one can only regroup its own migrations, and
+   reaching the route needs a local owner.
+2. **The plan is idempotent**, so there is no checkpoint to keep. A picture
+   already where the layout wants it plans no move, so a pass that dies on file
+   27,000 leaves a tree that is half-moved and wholly consistent, and re-running
+   finishes it rather than restarting it.
+
+The asymmetry is deliberate and worth naming, because it looks like a
+contradiction: the **undo** of a migration *is* one transaction over the whole
+batch (`undo_in_session` → `_batch_members_in_session` → one `commit`). That is
+the existing batch machinery and it is a different shape of work — it applies
+recorded absolute paths and re-plans nothing, so it has no planner, no vocabulary
+load and no per-picture facet query. Splitting the undo would mean giving up the
+one-Ctrl-Z guarantee that is the acceptance criterion, which is not a trade this
+phase gets to make. The rollback window is unchanged from `move_to_match`'s: a
+failure rolls back **one pass**, not the run, so the residue `apply_moves`
+documents stays bounded at `MIGRATION_BATCH` files however long the migration is.
+
+Only the library's **own** picture root is migrated. A reference folder is a
+tree the owner arranged and PixlStash indexes in place, and
+`PATCH /server-config/layout` — the gesture this hangs off — says nothing about
+one; migrating a reference folder would need its own consent on its own route,
+naming that folder.
+
+Both routes are `LOCAL_OWNER_ONLY` (§16.3), and the POST is the strongest
+host-filesystem authority any route in this library exercises. It is above
+`POST /pictures/layout/move-to-match` for exactly the reason that one is
+`picture_scoped`: there the caller names the pictures, so the per-object check
+is the check that matters; here the caller names none and the scope is the whole
+library, so there is nothing for the gate to bound and the tier carries it. The
+GET is on `READ_BLOCKED_GET_PATHS` beside `GET /server-config/layout`.
+
+## 27. Reconciling moves made outside PixlStash (v1.11 Phase 5)
+
+`pixlstash/utils/library_layout.py::reconcile_move` decides what an owner-made
+move implies; `pixlstash/services/move_reconciliation_service.py` queues the
+fact, classifies it live and applies what is asked. The wire contract is three
+routes in `pixlstash/routes/moves.py`; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 5; the design reference is
+the Moves artboard in `design/1.11-existing-library/`.
+
+> **The mirror of §26's rule.** PixlStash moves a file when an assignment
+> change makes its folder stop being true; when the *owner* moves a file,
+> PixlStash reconsiders an assignment when the move makes it stop being true.
+
+### The queue is a fact, not a verdict
+
+`ExternalMoveReview` (migration `0109`) holds exactly `(picture_id, old_path,
+new_path, detected_at)` — the raw fact a move happened, nothing derived.
+`ReferenceFolderScanTask.apply_moves` writes one row per picture in its
+`external` list, in the same transaction that updates `Picture.file_path`, and
+only when the reference folder's own `layout` column is set
+(`record_pending_reviews`): a root with no layout has no vocabulary a folder
+name could contradict, so queuing for the rest would grow the table for
+nothing ever readable off it. The task's result carries
+`external_moves_queued_for_review`, a subset of `external_moved_picture_ids`
+for exactly this reason — the two differ whenever the move happened in a root
+with no layout.
+
+**Classification never touches the row it reads until it deletes it.**
+`pending_summary_in_session` reclassifies every row against the picture's
+*current* facets and the root's *current* layout on every call — there is no
+cached verdict to invalidate, so a picture whose memberships changed between
+the move and the review is judged on what is true now. `reconcile_move` reuses
+`layout_move_service.layout_roots` / `library_vocabulary` / `picture_facets`,
+the same reads §26's engine uses, rather than a second query surface.
+
+### `reconcile_move`: the three outcomes, and a fourth
+
+`reconcile_move(old_folder, new_folder, facets, layout, known_names)` is pure
+— no database, no filesystem, argument shape borrowed from `relocate` — and
+returns a `ReconciledMove(outcome, removals, additions)`:
+
+1. **Read both folders against the layout's vocabulary**
+   (`read_named_components`, the reverse of `render`: given a path, which
+   entity does each leading component name, regardless of who currently holds
+   it). Stops at the first component naming nothing known, same as `is_true`.
+2. **Diff the two readings.** A `(facet, name)` the old folder named and the
+   new one does not, that the picture is *currently* a member of, is a
+   candidate **removal** — "the owner left this folder". One the new folder
+   names and the old one does not, that the picture is *not* currently a
+   member of, is a candidate **addition**. Either set can be empty.
+3. **Classify:**
+   - **`OFF_LAYOUT`** — the new folder's leading component names nothing the
+     layout's vocabulary knows (including landing at the root). Touches
+     nothing at all, not even a removal on the old side: the path was already
+     followed by the scan, and an unreadable destination is a permanent
+     override under §26's rule too.
+   - **`AMBIGUOUS`** — at least one candidate removal is for a facet the
+     picture currently has **more than one** value of. A folder holds a
+     picture once; a project (or set, or person) can share it, so leaving one
+     folder cannot say which the owner meant. The whole picture is held for
+     review — an addition riding alongside an ambiguous removal is not
+     applied piecemeal, because the two buttons the screen offers
+     ("Only X now" / "Keep both") act on the picture as a unit.
+   - **`UNAMBIGUOUS`** — every candidate removal is for a facet with exactly
+     one current value. An addition is *never* ambiguous by itself — gaining a
+     membership cannot make any existing folder untrue — so a picture with
+     additions and no removals is always unambiguous.
+   - **`NONE`** — no removals and no additions (most commonly: only the
+     owner's own subfolder below the layout changed). Not one of the plan's
+     three named outcomes because it is not shown at all;
+     `pending_summary_in_session` deletes the row rather than surfacing it.
+4. **Arriving at the literal unfiled folder** (`layout.unfiled`) is read as a
+   deliberate "nothing files this" signal, not as an unreadable destination —
+   the one component check `reconcile_move` makes before the general
+   off-layout test.
+
+Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
+91–100% of assigned pictures have exactly one project or set, so `AMBIGUOUS`
+is the minority outcome by construction, not by a threshold this module
+chose.
+
+### Applying: three memberships, deliberately not four
+
+`move_reconciliation_service` turns `removals`/`additions` into writes for
+`Facet.PROJECT`, `Facet.SET` and `Facet.PERSON` only:
+
+- **Project** copies `routes/pictures/_crud.py::set_project_for_pictures`'s
+  own add/remove mechanics — including the primary-project fallback on
+  removal — but **deliberately does not stack-expand.**
+  `set_project_for_pictures` propagates because there the owner is making one
+  decision for a group they are looking at; here the signal is one specific
+  picture's *file* having moved on disk, and stack siblings whose own files
+  did not move must not have their assignments rewritten on that picture's
+  say-so — that would make a sibling's still-true folder wrong for a reason
+  that has nothing to do with it. This does not leave a moved stack
+  inconsistent: every stacked picture is its own `Picture` row with its own
+  `file_path`, so a stack move that happens together produces one
+  `ExternalMoveReview` per member (the scan follows each file independently)
+  and each is reconciled on its own — stack coherence falls out of the
+  per-picture trigger rather than needing code of its own.
+- **Set** is a plain `PictureSetMember` insert/delete; there is no primary set
+  to maintain.
+- **Person** reuses the two mechanisms `POST /characters/{id}/faces` already
+  has: assign the picture's largest **unassigned** real face (`Face.find`,
+  area-ranked, no likeness comparison — a folder move is not the manual
+  assignment UI) when one exists, or defer via `Picture.pending_character_id`
+  when face extraction has not run yet. **Never a face that already names
+  someone** — an addition is supposed to be the safe half of a
+  reconciliation (`reconcile_move`'s whole argument for treating it as
+  automatically unambiguous is that gaining a membership cannot make an
+  existing folder untrue), and that only holds if it never costs another
+  person their face. A group shot with Sara's face largest and Mira's
+  smallest, moved into a folder that adds Mira, gains Mira without losing
+  Sara. If every real face already names someone, the addition is a safe
+  no-op rather than a reassignment. Removal clears `Face.character_id` (and a
+  matching pending assignment) back to `None`.
+- **Tag is not reconciled.** The default layout never places by tag and Phase
+  4c (custom layouts) has not shipped, so a tag-typed layout segment is
+  unreachable through the product today; `reconcile_move` still classifies a
+  hypothetical one correctly, the applier just skips and logs it.
+  `ponytail:` marked in the service module for when 4c ships a layout builder
+  that can select `Facet.TAG`.
+
+**Both a project and a set/person name are resolved by unique-name lookup, and
+a collision is refused rather than guessed — twice over.** `Project.name` is
+DB-unique; `PictureSet.name` and `Character.name` are not (§26, "Renaming an
+entity renames its folder" already declines the equivalent ambiguity for a
+rename). `_resolve_entity_id` refuses a name matching more than one row. That
+alone is not sufficient: two *distinct* names can render to the same folder
+(`folder_name` is documented many-to-one — `Client: Nordvik` and
+`Client_ Nordvik` both become `Client_ Nordvik`), and by the time
+`_resolve_entity_id` sees an exact, non-colliding string the wrong one could
+already have been picked upstream. `read_named_components` closes that:
+building its key→name map, two different names landing on the same key mark
+that key **unreadable** rather than keeping whichever the vocabulary query
+happened to return last — the same safe direction as an unparseable
+component, not a coin flip between two real entities. A name refused at
+either layer is logged and the one change it belonged to is skipped; the rest
+of the review's changes (and every other review in the batch) still apply.
+**A review whose only change was refused is still cleared from the queue**
+(it was explicitly acted on by id) but is reported back as
+`skipped_review_ids`, distinct from `applied_picture_ids`, so an apply that
+silently changed nothing does not read the same as one that worked.
+
+**Reconciliation is recomputed fresh inside the mutation's own DB-queue slot,
+never trusted from an earlier GET.** `apply_reviews` wraps its mutation in
+`operation_log_service.run_recorded_metadata_task` — capture, reclassify,
+mutate and record land in one queued task, the same atomicity guarantee
+`layout_move_service`'s own vault-taking entry points rely on — so a picture
+whose memberships changed in the gap between a GET and the Apply click is
+applied against what is true at mutation time, not at list time. A review row
+is deleted whether or not anything was actually applied (the picture or its
+layout may have vanished in the interval): once acted on by id, the row's job
+is done either way. `dismiss_reviews` is the same shape without a mutation —
+clear the rows, touch nothing.
+
+**Every query built from the queue's own ids is chunked**
+(`pixlstash/utils/sql_chunking.py`, `SQLITE_ID_CHUNK`), not just the picture
+facets read: reorganising a folder queues hundreds of rows at once (the
+release plan's own framing), and this is the one query surface Phase 5 adds
+that can see the *whole* queue in one call rather than `layout_move_service`'s
+own `BATCH_SIZE=200`-bounded caller.
+
+**`off_layout` rows age out on their own.** They carry no decision — nothing
+here ever waits on a human for one — so unlike `unambiguous`/`ambiguous` they
+are not kept indefinitely: a row is shown for `PictureMove.RETENTION_S` (the
+same window the move journal keeps a claimed row for) and pruned past it,
+whether or not anyone opened the screen. The frontend's own reachability rule
+follows from this — see `docs/frontend_architecture.md` §9.4.
+
+### The route surface
+
+Three `OWNER_ONLY` routes (`pixlstash/routes/moves.py`), vault-wide like
+`operations.py` — none of this is boundable to a single resource-scoped grant:
+
+| Route | Backs onto |
+|---|---|
+| `GET /moves/pending` | `pending_summary_in_session`, bucketed `unambiguous` / `ambiguous` / `off_layout` |
+| `POST /moves/apply` | `apply_reviews` — pass every currently-unambiguous `review_id` for the bulk "Apply all N", or one ambiguous id to resolve it |
+| `POST /moves/dismiss` | `dismiss_reviews` — "Keep both" on one row, or "Leave everything as it was" on the whole strip |
+
+`EventType.EXTERNAL_MOVES_PENDING` is emitted from `Vault._on_task_completed`
+when a `ReferenceFolderScanTask` result carries a non-empty
+`external_moves_queued_for_review`, broadcast like `VRAM_OOM` (machine/vault
+fact, not a grid view a client's filters could exclude it from). It carries no
+count — the payload is a "look again" nudge, and the client re-fetches
+`GET /moves/pending` for the real, live-classified numbers, the same reason
+the queue itself keeps no cached verdict.
+
+---
+
+*Last updated: 2026-08-24. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

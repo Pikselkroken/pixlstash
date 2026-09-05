@@ -115,11 +115,11 @@ class SimpleMissingFinder(BaseTaskFinder, ABC):
 
     Subclasses must implement (in addition to ``finder_name``):
 
-    - ``_batch_size() -> int`` — number of pictures per task.
-    - ``_fetch_candidates(session, limit: int) -> list`` — DB query; called as
+    - ``_batch_size() -> int`` - number of pictures per task.
+    - ``_fetch_candidates(session, limit: int) -> list`` - DB query; called as
       a bound method so it receives ``session`` as the first argument when
       invoked through ``run_immediate_read_task``.
-    - ``_create_task(pictures: list)`` — construct and return the task.
+    - ``_create_task(pictures: list)`` - construct and return the task.
     """
 
     def __init__(self, database):

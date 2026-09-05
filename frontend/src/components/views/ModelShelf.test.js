@@ -22,7 +22,7 @@ const listEngines = vi.fn();
 // default (#927): one route, one more result set, its own double.
 const listUnclassified = vi.fn();
 // And the support block: two `file_kind`s behind one checkbox, so one double
-// answers both requests. Same reason again — without it every
+// answers both requests. Same reason again - without it every
 // `listAdapters.mockResolvedValue` here would answer them with adapter rows.
 const listSupport = vi.fn();
 const deleteModels = vi.fn();
@@ -39,7 +39,7 @@ vi.mock("../../api/modelShelf", () => ({
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
   // The shelf's destructive verb. Mocked for the same reason the folder reads
-  // are — it is a network call on a user gesture — and because a suite that
+  // are - it is a network call on a user gesture - and because a suite that
   // really called it would be asserting the server's gate rather than the
   // view's.
   deleteModels: (...args) => deleteModels(...args),
@@ -51,13 +51,13 @@ vi.mock("../../api/modelShelf", () => ({
 
 // The shelf reads the drives to band its folder groups. Left unmocked this
 // reaches the network, and the failure that comes back is routed as a session
-// reset — which empties the shelf store MID-TEST and made an unrelated sort
+// reset - which empties the shelf store MID-TEST and made an unrelated sort
 // assertion read the default view back.
 const listModelFolderDevices = vi.fn();
 const listModelFolders = vi.fn();
 // `onMounted` calls `moves.adopt()`, which reads the move job so a move
 // started before a reload is picked up. Left unmocked it reaches the network,
-// fails, and `console.warn`s from a promise nothing in the test awaits — which
+// fails, and `console.warn`s from a promise nothing in the test awaits - which
 // lands AFTER the file tears down and kills the whole vitest run with
 // `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending`.
 // Every file passed and the runner still exited 1 (#880's first CI run). It is
@@ -83,7 +83,7 @@ vi.mock("../../api/modelFiles", () => ({
 const createStack = vi.fn();
 const unstackStack = vi.fn();
 // The two verbs that act inside a run: choosing its cover, and taking one file
-// back out of it. Mocked for the same reason — the assertion worth having is
+// back out of it. Mocked for the same reason - the assertion worth having is
 // which stack and which model reach the route.
 const setStackCover = vi.fn();
 const removeStackMember = vi.fn();
@@ -97,7 +97,7 @@ vi.mock("../../api/modelStacks", () => ({
 // The shelf reads `route.name` to decide which of its two views is showing, so
 // the suite drives the tab by writing `nav.route.name`. REACTIVE, not a plain
 // object with a getter: the tab is a `computed`, and a non-reactive source
-// simply never re-evaluates — which reads in a test exactly like the panel
+// simply never re-evaluates - which reads in a test exactly like the panel
 // failing to swap. Mocked rather than given a real router, because these tests
 // mount the view alone and a router would have to carry every app route.
 const nav = vi.hoisted(() => ({ route: null, push: null }));
@@ -130,7 +130,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
 // The names, colours and thumbnails behind the assignment rings (#892/#904).
 // Mocked for the same reason the folder reads are: unmocked they reach the
 // network from `onMounted`, and the rejection lands in a `console.warn` from a
-// promise no test awaits — which is the teardown race noted above.
+// promise no test awaits - which is the teardown race noted above.
 const listCharacters = vi.fn();
 const listPictureSets = vi.fn();
 vi.mock("../../api/characters", async (importOriginal) => ({
@@ -140,6 +140,26 @@ vi.mock("../../api/characters", async (importOriginal) => ({
 vi.mock("../../api/pictureSets", async (importOriginal) => ({
   ...(await importOriginal()),
   listPictureSets: (...args) => listPictureSets(...args),
+}));
+
+// The thumbnail verb's library route: the picker hands back a picture, the view
+// fetches ITS BYTES and posts them to the icon store. Both halves are doubled
+// here - the read because it is a network call on a user gesture, and the write
+// because a suite that really called it would be asserting the server's gate
+// rather than this view's wiring.
+const getPictureThumbnailBlob = vi.fn();
+// `importOriginal` spread, like its two neighbours: a bare replacement leaves
+// every OTHER export of that module `undefined` across this view's whole module
+// graph, so the next child to import `pictureThumbnailUrl` would die with a
+// bare "is not a function" in a suite that has nothing to do with thumbnails.
+vi.mock("../../api/pictures", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getPictureThumbnailBlob: (...args) => getPictureThumbnailBlob(...args),
+}));
+const setModelIcon = vi.fn();
+vi.mock("../../api/modelIcons", async (importOriginal) => ({
+  ...(await importOriginal()),
+  setModelIcon: (...args) => setModelIcon(...args),
 }));
 
 import ModelShelf from "./ModelShelf.vue";
@@ -171,6 +191,17 @@ const globalOpts = {
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
       FolderBrowser: true,
+      // The library picture picker the thumbnail verb opens. Its own suite
+      // mounts it; real here it would drag Vuetify's dialog provider into a
+      // suite that installs none, and read the shared entity lists on every
+      // mount. The stub RENDERS ITS SLOTS rather than being `true`, because the
+      // `Choose a file…` route this change deliberately keeps lives in one -
+      // and a `true` stub would let that route be deleted with the suite green.
+      PicturePicker: {
+        name: "PicturePicker",
+        props: ["open"],
+        template: "<div class='picker-stub'><slot name='footer-start' /></div>",
+      },
       ProgressOverlay: true,
       // The picker inside the selection bar, which the bar's own suite covers.
       // Left real it would read the shared entity lists on every mount here.
@@ -228,6 +259,11 @@ beforeEach(() => {
   listSupport.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
+  // The thumbnail verb's two halves. Reset here rather than per-test: a
+  // rejection armed for the unreachable-file case would otherwise still be
+  // armed for whatever ran next.
+  getPictureThumbnailBlob.mockReset();
+  setModelIcon.mockReset();
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
   nav.route.name = "models";
@@ -239,7 +275,7 @@ beforeEach(() => {
     kind: "source",
   });
   // `idle` is what a machine with no move in flight reports, and `adopt()`
-  // adopts nothing from it — so the mount path stays silent instead of warning
+  // adopts nothing from it - so the mount path stays silent instead of warning
   // from an unawaited promise.
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
@@ -270,18 +306,18 @@ describe("a row with nothing in its header", () => {
     // says so in words rather than leaving a cell that reads as a gap. The date
     // is the exception and deliberately so: it is a FIGURE, like the size
     // beside it, and a figure nobody recorded is left blank rather than
-    // dashed — this fixture carries no `added_at`.
+    // dashed - this fixture carries no `added_at`.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
     expect(cells).toEqual(["LoRA", "not set", "342.1 MB", ""]);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
-    // Rank is size, weight and tracking, never opacity (§5.1) — and 37% of
+    // Rank is size, weight and tracking, never opacity (§5.1) - and 37% of
     // rows faded would be a column of ghosts rather than a signal.
     const wrapper = await mountShelf([
       adapter({ id: 1, display_name: null }),
       adapter({ id: 2, display_name: "Clementine" }),
-      // Nothing survives the strip, so this one IS the filename — the positive
+      // Nothing survives the strip, so this one IS the filename - the positive
       // control, or the two negatives below would also pass with the tag ripped
       // out of the component altogether.
       adapter({ id: 3, display_name: null, filename: "000002750.st" }),
@@ -489,7 +525,7 @@ describe("editing a base model in place", () => {
 
   it("commits when the field loses focus, and only once", async () => {
     // The riskiest line in the gesture: clicking away writes, with no undo and
-    // no prompt. It has to fire — and it must not fire a second time behind the
+    // no prompt. It has to fire - and it must not fire a second time behind the
     // Enter that already wrote, which is why the field closes before it writes.
     const wrapper = await mountShelf([adapter({ id: 7 })]);
     const store = useModelShelfStore();
@@ -520,7 +556,7 @@ describe("editing a base model in place", () => {
 
   it("hands focus back to the row on a key, and leaves it alone on a click", async () => {
     // The grid's tab stop roves, so a field that closes without giving focus
-    // back drops a keyboard reader at the top of the document — the defect the
+    // back drops a keyboard reader at the top of the document - the defect the
     // rename path fixed and this one had to inherit. A blur is the opposite
     // case: the reader has already chosen where to go.
     const wrapper = await mountShelf([adapter({ id: 7 })], [], [], {
@@ -641,8 +677,8 @@ describe("location state", () => {
   });
 
   it("says where the file is on an axis that draws no folder header", async () => {
-    // Only `groupBy: 'folder'` puts the folder on screen. Every other axis —
-    // and `none`, the default this mounts with — left the reader with no way
+    // Only `groupBy: 'folder'` puts the folder on screen. Every other axis -
+    // and `none`, the default this mounts with - left the reader with no way
     // to tell a copy on the spare disk from one in the ComfyUI tree.
     const wrapper = await mountShelf([
       adapter({
@@ -658,7 +694,7 @@ describe("location state", () => {
   });
 
   it("names THIS copy on a folder-grouped row, not the other folder's", async () => {
-    // The draw stands for one copy — that is why it already reports that
+    // The draw stands for one copy - that is why it already reports that
     // copy's state rather than the merged one. A tooltip reading the merged
     // array put a path where the file IS on the row that says it is gone.
     const wrapper = await mountShelf([
@@ -821,7 +857,7 @@ describe("keyboard", () => {
   });
 
   it("gives the rows ONE tab stop between them, not 1,800", async () => {
-    // The rule that used to read "rows are not focus stops" — 1,800 empty stops
+    // The rule that used to read "rows are not focus stops" - 1,800 empty stops
     // is a trap. F3 gave a row something to do, so it is now a roving tabindex
     // rather than no tabindex: exactly one row is reachable by Tab and the
     // arrows move which one.
@@ -1019,8 +1055,8 @@ describe("the column headings", () => {
     expect(store.view.sortKey).toBe("size");
     expect(store.view.sortDirection).toBe("desc");
 
-    // Name is drawn on its own rather than from the column list — it is the
-    // flexible track, with no width and no grip — so it is asserted separately
+    // Name is drawn on its own rather than from the column list - it is the
+    // flexible track, with no width and no grip - so it is asserted separately
     // or the one heading written by hand is the one nothing covers.
     await wrapper
       .find(".shelf-head-col--label .shelf-head-cell")
@@ -1168,7 +1204,7 @@ describe("resizing the columns", () => {
     // The separator ANNOUNCES that limit rather than the store's absolute
     // ceiling: a reader told the maximum is 400 and stopped at 144 has been
     // told the wrong thing about the control in their hand. 204 because the
-    // stubbed track never shrinks — it is the live measurement that is being
+    // stubbed track never shrinks - it is the live measurement that is being
     // asserted here, not the arithmetic.
     expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("204");
 
@@ -1236,7 +1272,7 @@ describe("resizing the columns", () => {
     expect(grip.attributes("tabindex")).toBe("0");
     expect(grip.attributes("aria-valuenow")).toBe("64");
 
-    // The keys move the separator, so Left widens — the same mapping the
+    // The keys move the separator, so Left widens - the same mapping the
     // pointer has, because the grip is the column's left edge.
     await grip.trigger("keydown", { key: "ArrowLeft" });
     expect(store.view.columnWidths.kind).toBe(72);
@@ -1257,7 +1293,7 @@ describe("resizing the columns", () => {
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "base");
     // Home is the separator as far left as it goes, which is the column at its
-    // widest — the store's sanity ceiling here, because jsdom lays nothing out
+    // widest - the store's sanity ceiling here, because jsdom lays nothing out
     // and an unmeasured Name track means unlimited.
     await grip.trigger("keydown", { key: "Home" });
     expect(store.view.columnWidths.base).toBe(400);
@@ -1458,7 +1494,7 @@ describe("selecting rows", () => {
 
   it("takes every shown model on Ctrl+A, and the browser's select-all with it", async () => {
     // The bug was never that the chord did nothing: unclaimed it reached the
-    // browser's own select-all, which — `.shelf` being `user-select: none` —
+    // browser's own select-all, which - `.shelf` being `user-select: none` -
     // highlighted every part of the app EXCEPT the rows it was aimed at. Both
     // halves are asserted, because the selection can be right with that
     // highlight still there. The press starts with NOTHING selected, which is
@@ -1487,7 +1523,7 @@ describe("selecting rows", () => {
 
   it("leaves Ctrl+A to a field being typed in", async () => {
     // Select-all inside a text field is the field's. Asserted from a field
-    // OUTSIDE the shelf — the sidebar's search box, the app bar — because that
+    // OUTSIDE the shelf - the sidebar's search box, the app bar - because that
     // is the only place `isTypingTarget` is what declines: the shelf's own
     // rename field stops the event (`onRenameKeydown`) and the base-model field
     // carries `@keydown.stop`, so neither ever reaches this window listener,
@@ -1515,7 +1551,7 @@ describe("selecting rows", () => {
   it("swallows Ctrl+A with nothing drawn, and keeps the selection", async () => {
     // `selectedIds` is pruned against a FETCH and never against the `Show`
     // narrowing, so a selection outlives a narrowing that empties the list.
-    // `selectVisible()` there would replace it with an empty set — a silent
+    // `selectVisible()` there would replace it with an empty set - a silent
     // clear from a key that says "select", with the pill gone (it is gated on
     // `selectedRows`) so nothing on screen could have done it on purpose. The
     // press is still claimed, or it falls back to the native select-all.
@@ -1696,7 +1732,7 @@ describe("drive bands", () => {
 
   it("says what kind of drive it is on the glyph, and nothing when unsure", async () => {
     // The kind rides the mark the band already carries, because the row has no
-    // horizontal room for a chip — which is the whole reason this exists. A
+    // horizontal room for a chip - which is the whole reason this exists. A
     // null kind is the normal answer on macOS and for any filesystem the
     // backend will not vouch for, and it must draw the plain disk rather than
     // the word "Unknown".
@@ -1749,7 +1785,7 @@ describe("drive bands", () => {
 
   it("drops the mount point when it is already the band's name", async () => {
     // With no volume label the name IS the mount point, and drawing both
-    // rendered `/` twice — which reads as a rendering fault, not as detail.
+    // rendered `/` twice - which reads as a rendering fault, not as detail.
     listModelFolderDevices.mockResolvedValue([
       {
         device_id: "9",
@@ -2166,7 +2202,7 @@ describe("focus under folder grouping, where a model is drawn twice", () => {
 
   it("still keeps exactly one tab stop across both draws", async () => {
     // Keyed by model id, BOTH draws satisfied `row.id === rovingRowId` and both
-    // carried tabindex="0" — two focusable options for one listbox position.
+    // carried tabindex="0" - two focusable options for one listbox position.
     const wrapper = await mountGrouped([twiceDrawn()]);
     const stops = wrapper
       .findAll(".shelf-row")
@@ -2193,7 +2229,7 @@ describe("focus under folder grouping, where a model is drawn twice", () => {
 
   it("gives every drawn row a key, including in the ungrouped default", async () => {
     // `rowKey` was set only where a model can be drawn twice, so in the default
-    // view the list's v-for key — and everything else keyed per drawn row — was
+    // view the list's v-for key - and everything else keyed per drawn row - was
     // undefined for every row.
     const flat = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
     const keys = flat
@@ -2356,7 +2392,7 @@ describe("a registered folder holding no models", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
     await wrapper.vm.$nextTick();
 
-    // A row, because a grid takes nothing else — but never a SELECTABLE one:
+    // A row, because a grid takes nothing else - but never a SELECTABLE one:
     // no `aria-selected` and no tab stop, since there is no model here to act
     // on. Its one cell spans the width rather than pretending to have columns.
     const note = wrapper.find(".shelf-empty-folder");
@@ -2412,7 +2448,7 @@ describe("dragging models onto a folder", () => {
 
   it("marks its payload so no other drop target can claim it", async () => {
     // A model dropped on a set or character row has no meaning at all, and
-    // `types` is the only thing readable during dragover — so the marker key is
+    // `types` is the only thing readable during dragover - so the marker key is
     // what refuses it, before the pointer suggests the drop would work (#757).
     const wrapper = await shelfWithFolders([
       adapter({ locations: present(1, "/models/loras") }),
@@ -2469,7 +2505,7 @@ describe("dragging models onto a folder", () => {
 
   it("accepts the drag on a folder it may write to, and only there", async () => {
     // preventDefault() is what ACCEPTS a drop, so it is called inside the
-    // handler for the payloads this target takes — never as a `.prevent`
+    // handler for the payloads this target takes - never as a `.prevent`
     // modifier, which would accept a picture drag from the grid too.
     const wrapper = await shelfWithFolders([
       adapter({ locations: present(1, "/models/loras") }),
@@ -2660,7 +2696,7 @@ describe("dropping onto the capacity meter", () => {
   });
 
   it("resolves a band drop to the first folder on that drive a move may go to", async () => {
-    // A band is a disk and a move needs a folder, so one is chosen — safely,
+    // A band is a disk and a move needs a folder, so one is chosen - safely,
     // because the drop does not move on release: the dialog states the
     // destination and its select corrects it.
     const wrapper = await twoDrives({ slowFree: 400 * GB });
@@ -2673,8 +2709,8 @@ describe("dropping onto the capacity meter", () => {
   });
 
   it("counts a move within one drive as nothing to copy", async () => {
-    // Those are renames — the server reports `bytes_to_copy` of zero for them
-    // — so projecting 100 GB onto the disk the bytes are already on would
+    // Those are renames - the server reports `bytes_to_copy` of zero for them
+    // - so projecting 100 GB onto the disk the bytes are already on would
     // refuse a move that costs nothing.
     const wrapper = await twoDrives({ slowFree: 400 * GB });
     await dragOnto(wrapper, "Fast");
@@ -2735,7 +2771,7 @@ describe("a run's disclosure", () => {
 
   it("keeps the count a drawn figure and not a second control", async () => {
     // The defect the review of #881 found. A grid row would now TOLERATE a
-    // control, unlike the listbox option this used to be — but the row is
+    // control, unlike the listbox option this used to be - but the row is
     // still the disclosure, and a focusable second way to open the same run is
     // the dialect this list stopped speaking.
     const wrapper = await mountShelf(run());
@@ -2756,7 +2792,7 @@ describe("a run's disclosure", () => {
     expect(controls[0].classes()).toContain("shelf-stack-badge");
     // ...and it does not pick the row. The badge sits inside the one thing a
     // click on a row already does, so without `@click.stop` opening a run
-    // would also select it — which is the gesture a reader uses to LOOK before
+    // would also select it - which is the gesture a reader uses to LOOK before
     // deciding whether to act.
     await controls[0].trigger("click");
     expect(useModelShelfStore().selectedRows).toHaveLength(0);
@@ -2766,7 +2802,7 @@ describe("a run's disclosure", () => {
   it("labels a member by version when the stack spans versions", async () => {
     // A stack is a subject now, not one training run: `Foxglove` and
     // `Foxglove_v2` sit behind one row. Neither carries a step, so the old
-    // label called both of them "Final" — which is the one place the reader
+    // label called both of them "Final" - which is the one place the reader
     // looks to tell a stack's members apart, saying nothing.
     const wrapper = await mountShelf([
       adapter({
@@ -2793,7 +2829,7 @@ describe("a run's disclosure", () => {
 
   it("treats v2 and V2.0 as ONE version, as the server does", async () => {
     // The parity case. Comparing raw tokens here would count two versions and
-    // prefix every member of what is really a single-version run — the noise
+    // prefix every member of what is really a single-version run - the noise
     // the label exists to avoid, in the case the guard was written for.
     const wrapper = await mountShelf([
       adapter({
@@ -2875,7 +2911,7 @@ describe("a run's disclosure", () => {
 
   it("heads the columns on every grid a reader may land in, and draws the strip once", async () => {
     // The point of #891: a `columnheader` heads the grid it is in and nothing
-    // else, and grouping makes one grid per group — so every group carries the
+    // else, and grouping makes one grid per group - so every group carries the
     // row, and every one of them is visually-hidden. What the eye sees is the
     // single `.shelf-head` strip above the whole list, which is a control group
     // and not the grid's header row precisely so it does not have to repeat.
@@ -2932,7 +2968,7 @@ describe("the date column", () => {
   it("heads itself with the axis it is drawn in, and sorts on that", async () => {
     // The one heading in the strip that renames itself: there are two date
     // sort keys and one column, so the label and the key it presses move
-    // together — otherwise the heading would name an axis the cells under it
+    // together - otherwise the heading would name an axis the cells under it
     // are not showing.
     const wrapper = await mountShelf([adapter({ added_at: ADDED })]);
     const store = useModelShelfStore();
@@ -3010,7 +3046,7 @@ describe("the date column", () => {
   });
 
   it("gives a stack the run's date and each step its own", async () => {
-    // A stack's date is its newest member's, never its cover's — the same rule
+    // A stack's date is its newest member's, never its cover's - the same rule
     // the sort orders on. The steps under it differ from each other, which is
     // the one field on a member row that is not simply the run's.
     const prefs = useUserPrefsStore();
@@ -3024,7 +3060,7 @@ describe("the date column", () => {
         newest_member_at: naive(2026, 3, 4),
       }),
       // `newest_member_at` is a JOIN in the list query, so every member row
-      // carries the stack's — which is exactly why a member has to be read for
+      // carries the stack's - which is exactly why a member has to be read for
       // its own date rather than for the first one it can answer with.
       adapter({
         id: 2,
@@ -3047,7 +3083,7 @@ describe("the date column", () => {
     // there is nothing for the cover to inherit and nothing for a member to be
     // shielded from: each answers for itself, which is what the sort orders
     // each of them on. Pinned because the two aggregates are shaped
-    // differently — if `newest_file_mtime` ever became a stack aggregate like
+    // differently - if `newest_file_mtime` ever became a stack aggregate like
     // its sibling, every step would start printing the run's date and only
     // this assertion would notice.
     const prefs = useUserPrefsStore();
@@ -3097,7 +3133,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     const mark = wrapper.find(".mmark");
     // The greyscale test, as arithmetic: strip the hue and the ring still
     // carries a STYLE, and the mark still says who out loud. Both attachments
-    // are named even though one ring is drawn — the mark has one edge.
+    // are named even though one ring is drawn - the mark has one edge.
     expect(mark.attributes("title")).toBe("Ada (person), Beach (set)");
     expect(textOf(mark)).toContain("Ada (person), Beach (set)");
     expect(mark.classes()).toContain("mmark--ring");
@@ -3132,7 +3168,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     // Not an EMPTY one. `var(--mmark-ring, transparent)` takes its fallback
     // only when the property is unset; set-but-empty resolves to nothing, which
     // is invalid at computed-value time and drops the whole `border` shorthand
-    // — the 2px width with it, leaving the dashed ring a different size from
+    // - the 2px width with it, leaving the dashed ring a different size from
     // every other ring on the shelf.
     const wrapper = await mountShelf([adapter({ attachments: [] })]);
     expect(wrapper.find(".mmark").attributes("style")).toBeUndefined();
@@ -3162,7 +3198,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
   it("borrows the assigned face when the model has no picture of its own", async () => {
     // A LoRA of Sarah with no icon is far better identified by Sarah's
     // reference face than by the letters the generator would draw, and the ring
-    // around it is already her colour — so the two halves say one thing.
+    // around it is already her colour - so the two halves say one thing.
     listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
     const wrapper = await mountShelf([
       adapter({ attachments: [{ entity_type: "character", entity_id: 7 }] }),
@@ -3174,7 +3210,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
 
   it("keeps the model's own icon ahead of the face it is assigned to", async () => {
     // Somebody chose that picture for this file. The assignment is still drawn
-    // — it is the ring — so nothing is lost by the icon winning the middle.
+    // - it is the ring - so nothing is lost by the icon winning the middle.
     listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
     const wrapper = await mountShelf([
       adapter({
@@ -3188,35 +3224,238 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
   });
 });
 
-describe("the icon verb", () => {
-  it("offers Set icon for one model and refuses it for two", async () => {
+describe("the thumbnail verb", () => {
+  it("marks every selected model with the one picture", async () => {
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "c".repeat(64),
+    });
     const wrapper = await mountShelf([
       adapter({ id: 1 }),
       adapter({ id: 2, sha256: "b".repeat(64) }),
     ]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
-    await wrapper.vm.$nextTick();
-    const setIcon = () => wrapper.find('[data-verb="set-icon"]');
-    expect(setIcon().attributes("disabled")).toBeUndefined();
-
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
-    expect(setIcon().attributes("disabled")).toBeDefined();
+
+    await wrapper
+      .findComponent({ name: "PicturePicker" })
+      .vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // One read of the picture, one write per model: the icon store is
+    // content-addressed, so the repeated bytes collapse to one file.
+    expect(getPictureThumbnailBlob).toHaveBeenCalledTimes(1);
+    expect(setModelIcon).toHaveBeenCalledWith(1, bytes);
+    expect(setModelIcon).toHaveBeenCalledWith(2, bytes);
   });
 
-  it("offers Clear icon only when something has one", async () => {
+  it("asks before a bulk set overwrites marks, and opens nothing on no", async () => {
+    // The images survive in the content-addressed store, but which model wore
+    // which does not - the same test the bulk clear falls on.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, icon_sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    // `useConfirm` has no host mounted and falls back to `window.confirm`,
+    // which shows the MESSAGE and nothing else - so the counts have to be
+    // there, not in the title the fallback throws away.
+    expect(confirmSpy.mock.calls[0][0]).toContain("All 2 selected models");
+    expect(confirmSpy.mock.calls[0][0]).toContain("the 1 that already");
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      false,
+    );
+
+    // And the other direction: saying yes opens the picker. Over-blocking is
+    // its own regression.
+    confirmSpy.mockReturnValue(true);
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      true,
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("does not ask when the selection has no marks to overwrite", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(wrapper.findComponent({ name: "PicturePicker" }).props("open")).toBe(
+      true,
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("marks every model in a ticked run, not just its cover", async () => {
+    // A fully-selected stack is ONE row whose id is the cover's. Iterating
+    // rows would silently skip the other two.
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "e".repeat(64),
+    });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 9, stack_position: 0 }),
+      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+    ]);
+    const store = useModelShelfStore();
+    store.selectVisible();
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+
+    await wrapper
+      .findComponent({ name: "PicturePicker" })
+      .vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(setModelIcon.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("offers Clear thumbnail only when something has one", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
     const clear = () =>
-      wrapper.findAll("button").find((b) => b.text().includes("Clear icon"));
+      wrapper.findAll("button").find((b) => b.text().includes("Clear thumbnail"));
     expect(clear()).toBeUndefined();
 
     store.rows = [adapter({ id: 1, icon_sha256: "a".repeat(64) })];
     await wrapper.vm.$nextTick();
     expect(clear()).toBeDefined();
+  });
+
+  it("sends the chosen picture's BYTES, never a reference to it", async () => {
+    // The icon store is content-addressed and lives beside the hub, while a
+    // picture is a vault row - nothing keys across the two. So the library
+    // route has to copy pixels, and the thumbnail is the copy it sends.
+    const bytes = new Blob(["webp"], { type: "image/webp" });
+    getPictureThumbnailBlob.mockResolvedValue(bytes);
+    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "c".repeat(64) });
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    await wrapper.findComponent({ name: "PicturePicker" }).vm.$emit("pick", {
+      id: 55,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Cache-busted: these bytes get STORED, so an hour-old thumbnail is the
+    // wrong thing to keep.
+    expect(getPictureThumbnailBlob).toHaveBeenCalledWith(55, {
+      cacheBuster: expect.any(Number),
+    });
+    expect(setModelIcon).toHaveBeenCalledWith(1, bytes);
+  });
+
+  it("keeps Escape and Delete away from the rows while the picker is up", async () => {
+    // The picker is one of the shelf's OWN dialogs, and the window-level guard
+    // lists those by ref rather than by target: a press with nothing focused
+    // inside a dialog targets `<body>`, which no ancestor test can see. Without
+    // the ref, Escape over the picker would also wipe the selection underneath
+    // it and Delete would open the delete confirmation for it.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    wrapper.findComponent({ name: "PicturePicker" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    // Sanity: with the picker shut, Escape is the shelf's and clears.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+  });
+
+  it("keeps the picker open behind the file chooser, and shuts it on a file", async () => {
+    // `Choose a file…` is the shipped route this change deliberately does not
+    // remove, and it lives in the picker's footer slot. Cancelling the OS
+    // chooser must land the reader back in the picker rather than on a bare
+    // shelf, so the picker is closed by a file ARRIVING, never by the chooser
+    // opening.
+    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "d".repeat(64) });
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const picker = () => wrapper.findComponent({ name: "PicturePicker" });
+    expect(picker().props("open")).toBe(true);
+    const chooseAFile = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Choose a file"));
+    expect(chooseAFile).toBeDefined();
+
+    const input = wrapper.find('input[type="file"]');
+    const clicked = vi.spyOn(input.element, "click");
+    await chooseAFile.trigger("click");
+    expect(clicked).toHaveBeenCalled();
+    // Still open: nothing has come back from the chooser yet.
+    expect(picker().props("open")).toBe(true);
+
+    const file = new File(["png"], "mark.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(picker().props("open")).toBe(false);
+    expect(setModelIcon).toHaveBeenCalledWith(1, file);
+  });
+
+  it("keeps the picker open when the picture's bytes cannot be read", async () => {
+    // A thumbnail is generated FROM the file, so an unplugged drive 404s. The
+    // refusal must not land over a shelf the reader has to reopen the picker
+    // from to try again.
+    getPictureThumbnailBlob.mockRejectedValue(new Error("nope"));
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="set-icon"]').trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const picker = () => wrapper.findComponent({ name: "PicturePicker" });
+    picker().vm.$emit("pick", { id: 55 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(picker().props("open")).toBe(true);
+    expect(setModelIcon).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
   });
 
   it("accepts only the image types the store will take", async () => {
@@ -3264,7 +3503,7 @@ describe("the manual stack verb", () => {
     await stack().trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 0));
     // `fuse: false` explicitly, because nothing selected is stacked. The flag
-    // is not cosmetic — with it on, this call would absorb whole stacks — so
+    // is not cosmetic - with it on, this call would absorb whole stacks - so
     // the default path has to be pinned rather than left to a truthiness test.
     expect(createStack).toHaveBeenCalledWith([1, 2], null, { fuse: false });
     confirmSpy.mockRestore();
@@ -3298,7 +3537,7 @@ describe("the manual stack verb", () => {
     const store = useModelShelfStore();
     // Picked the way the list picks: a collapsed row takes its whole run, and
     // Ctrl keeps the first one while the second is added. Ticking the cover's
-    // id alone is a different gesture now — it means that one file.
+    // id alone is a different gesture now - it means that one file.
     store.selectFromClick(1, { ctrl: true });
     store.selectFromClick(3, { ctrl: true });
     await wrapper.vm.$nextTick();
@@ -3344,7 +3583,7 @@ describe("the manual stack verb", () => {
     const store = useModelShelfStore();
     // Picked the way the list picks: a collapsed row takes its whole run, and
     // Ctrl keeps the first one while the second is added. Ticking the cover's
-    // id alone is a different gesture now — it means that one file.
+    // id alone is a different gesture now - it means that one file.
     store.selectFromClick(1, { ctrl: true });
     store.selectFromClick(3, { ctrl: true });
     await wrapper.vm.$nextTick();
@@ -3395,7 +3634,7 @@ describe("the model-folders door", () => {
   // assertion and a detached wrapper has none. Both doors are asserted: the
   // toolbar button rides the fallback, and the Add item names the Add button
   // because the item itself unmounts with the menu. Deleting either half of
-  // the plumbing — the `folderInvoker` write or the `.focus()` — fails this.
+  // the plumbing - the `folderInvoker` write or the `.focus()` - fails this.
   async function closeFoldersFrom(wrapper, opener) {
     await opener.trigger("click");
     wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
@@ -3427,7 +3666,7 @@ describe("the model-folders door", () => {
 
   it("returns to the empty-state button, until the first scan unmounts it", async () => {
     // The empty state is the one door that can disappear underneath its own
-    // dialog. While it is still there it gets focus back like any other — a
+    // dialog. While it is still there it gets focus back like any other - a
     // reader who opened it to look and closed without adding must not be
     // thrown to a toolbar icon they never pressed. Once a scan has found
     // something the button is gone, and THAT is what the `isConnected`
@@ -3460,7 +3699,7 @@ describe("the model-folders door", () => {
 
 describe("Escape", () => {
   // The key is handled on the WINDOW, so every assertion here needs a real
-  // event path out of the shelf — a detached wrapper's keydown bubbles into
+  // event path out of the shelf - a detached wrapper's keydown bubbles into
   // nothing and would pass or fail for the wrong reason.
   async function mountAttachedShelf() {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
@@ -3470,7 +3709,7 @@ describe("Escape", () => {
 
   it("clears the selection from anywhere in the shelf, not only from a row", async () => {
     // It used to be handled on the row, so it only worked while a row held the
-    // roving tab stop — not after a click moved focus, and not from the
+    // roving tab stop - not after a click moved focus, and not from the
     // toolbar. "Escape clears the selection" has to mean everywhere.
     const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
@@ -3486,7 +3725,7 @@ describe("Escape", () => {
   it("clears the selection when focus has left the shelf entirely", async () => {
     // The listener used to sit on the shelf's own root, so the key only
     // reached it while focus was inside that subtree. Click the sidebar, the
-    // app bar, or anything else after picking rows and Escape did nothing —
+    // app bar, or anything else after picking rows and Escape did nothing -
     // which is how "Escape clears the selection" reads as broken.
     const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
@@ -3585,7 +3824,7 @@ describe("Escape", () => {
 
   it("leaves the key to a full-screen surface over the shelf", async () => {
     // The review overlay renders outside `App.vue`'s view switch, so the shelf
-    // is still mounted underneath it — and a selection nobody can see must not
+    // is still mounted underneath it - and a selection nobody can see must not
     // be cleared by the press that dismisses what is covering it.
     const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
@@ -3626,7 +3865,7 @@ describe("Escape", () => {
 describe("the training step", () => {
   it("shows the step on a row whose name had it stripped", async () => {
     // `deriveModelName` drops the trailing step on the stated grounds that it
-    // "is parsed into its own field" — and nothing rendered that field outside
+    // "is parsed into its own field" - and nothing rendered that field outside
     // an expanded stack, so two checkpoints of one run read identically.
     const wrapper = await mountShelf([
       adapter({
@@ -3637,14 +3876,14 @@ describe("the training step", () => {
       }),
     ]);
     // `cleanAssetName` turns separators into spaces, so the derived name is
-    // spaced — the point is that the step is no longer lost from it.
+    // spaced - the point is that the step is no longer lost from it.
     expect(wrapper.get(".shelf-row-name").text()).toContain(
       "clementine zib 3b",
     );
     // `toLocaleString()` rather than a written-out "2,500": the separator
     // follows the runtime locale, so hard-coding it fails on a machine that
     // groups differently while the component is behaving correctly. Scoped to
-    // the element for the same reason the negatives below are — "Step" also
+    // the element for the same reason the negatives below are - "Step" also
     // appears in the shelf's own help paragraph.
     expect(wrapper.get(".shelf-chip--step").text()).toBe(
       `Step ${(2500).toLocaleString()}`,
@@ -3652,7 +3891,7 @@ describe("the training step", () => {
   });
 
   it("says nothing when the file records no step", async () => {
-    // A hand-made adapter has no step, and "Step —" would invent one.
+    // A hand-made adapter has no step, and "Step - " would invent one.
     const wrapper = await mountShelf([
       adapter({ id: 602, display_name: "Portrait mix", training_step: null }),
     ]);
@@ -3768,7 +4007,7 @@ describe("Add file", () => {
 
   it("returns focus to the ⋯ trigger when opened from the overflow menu, not the folded Add button", async () => {
     // The bug this guards: the ⋯ row used to call `openAddFile()` with no
-    // invoker, so `closeAddFile` always named `addBtnRef` — which is exactly
+    // invoker, so `closeAddFile` always named `addBtnRef` - which is exactly
     // the button `shelf-fold-680` hides at the width the ⋯ exists to serve.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     document.body.appendChild(wrapper.element);
@@ -3834,7 +4073,7 @@ describe("the two kinds of absence", () => {
     ]);
     const banner = wrapper.find(".shelf-banner");
     expect(banner.exists()).toBe(true);
-    expect(textOf(banner)).toContain("/mnt/7 is offline — 2 models");
+    expect(textOf(banner)).toContain("/mnt/7 is offline - 2 models");
     // Once, not once per row.
     expect(wrapper.findAll(".shelf-banner")).toHaveLength(1);
   });
@@ -3875,7 +4114,7 @@ describe("a long move, in the panel that is running it", () => {
   it("dims and inerts the list without touching the toolbar", async () => {
     // #900: the panel dims, not the app. The veil is INSIDE `.shelf-body`, so
     // Show and Sort still answer while files are in flight, and `inert` is
-    // what actually stops the rows — a veil that only looks disabled leaves
+    // what actually stops the rows - a veil that only looks disabled leaves
     // every one of them clickable and in the tab order.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const moves = useModelMovesStore();
@@ -3915,7 +4154,7 @@ describe("a long move, in the panel that is running it", () => {
 });
 
 // #938-follow-up: the shelf is a destination like Duplicates, so it carries the
-// app-wide tail — Settings and the stats toggle — rather than dropping both the
+// app-wide tail - Settings and the stats toggle - rather than dropping both the
 // moment the grid unmounts. Undo is the exception: nothing on this screen writes
 // to the operation log, so there is nothing here for it to take back.
 describe("the app-wide toolbar tail", () => {
@@ -3946,7 +4185,7 @@ describe("the app-wide toolbar tail", () => {
     // TbGlobalActions is multi-root; its Settings button is a stable anchor.
     const settings = wrapper.find("button[title='Settings']").element;
     const separator = wrapper.find(".shelf-bar-cluster .bar-separator").element;
-    // The Show menu — the LAST of this view's own controls, and the one the
+    // The Show menu - the LAST of this view's own controls, and the one the
     // tail has to come after. (`.bar-btn--boxed` alone would find the stack
     // sweep, which sits outside the cluster and proves nothing.)
     const showBtn = wrapper
@@ -4098,7 +4337,7 @@ describe("Delete", () => {
 
   it("counts a run's members, and deletes exactly what it counted", async () => {
     // The wrong-count-in-a-destructive-prompt case. A stack is ONE row standing
-    // for its whole run, and the call sends every member — so a prompt counting
+    // for its whole run, and the call sends every member - so a prompt counting
     // rows would offer "Move this model to the Trash?" over six checkpoints and
     // tens of gigabytes.
     listModelFolders.mockResolvedValue([FOLDER]);
@@ -4154,8 +4393,8 @@ describe("Delete", () => {
 
     await pressDelete();
     // And says WHICH folder. The sentence this replaced claimed PixlStash
-    // "only removes files from your own model folders", which is untrue — the
-    // managed store and PixlStash's own download folder are neither — and
+    // "only removes files from your own model folders", which is untrue - the
+    // managed store and PixlStash's own download folder are neither - and
     // named nothing the reader could go and act on.
     const said = useNoticeStore().notices.at(-1).text;
     expect(said).toContain("/hf");
@@ -4307,7 +4546,7 @@ describe("the two views of the shelf", () => {
   it("hides the row-list controls on the runs tab", async () => {
     // Group, Sort and Show all act on the shelf's rows. On the
     // runs tab that list is not on screen, so they are gone rather than
-    // disabled — a disabled control owes an explanation, and these are not
+    // disabled - a disabled control owes an explanation, and these are not
     // about a selection the reader just made.
     const wrapper = await mountShelf([adapter()]);
     const labels = () =>
@@ -4329,7 +4568,7 @@ describe("the two views of the shelf", () => {
 
   it("keeps Add and Model folders on both tabs", async () => {
     // These open something, write nothing on the press, and have no selection
-    // to hang on, so they are view-independent — and keeping them fixed is what
+    // to hang on, so they are view-independent - and keeping them fixed is what
     // stops the left group reflowing on every switch.
     const wrapper = await mountShelf([adapter()]);
     const has = (needle) =>
@@ -4369,7 +4608,7 @@ describe("the two views of the shelf", () => {
       .map((b) => b.attributes("title"));
     expect(folded).toEqual([
       "Add models to the shelf",
-      "Model folders — add, rescan, move or forget a folder",
+      "Model folders - add, rescan, move or forget a folder",
     ]);
 
     await wrapper.find(".tbo-trigger").trigger("click");
@@ -4401,7 +4640,7 @@ describe("the two views of the shelf", () => {
 describe("the view switcher does not resize when you switch", () => {
   // Twice now the tabs have shoved the whole left group of the toolbar sideways
   // on every switch, because the selected state changed something that costs
-  // layout — first `font-weight`, which makes the label wider. The selected
+  // layout - first `font-weight`, which makes the label wider. The selected
   // segment may change COLOUR all it likes; it may not change its box.
   // Read from the project root rather than via `import.meta.url`: this suite
   // runs in the jsdom environment, where `import.meta.url` is an http: URL and
@@ -4498,7 +4737,7 @@ describe("acting inside a run", () => {
 
   it("picks ONE file when a member is clicked, not the whole run", async () => {
     // The distinction the strip exists for. Clicking the collapsed row still
-    // takes the run whole — that is asserted by the delete suite — and this is
+    // takes the run whole - that is asserted by the delete suite - and this is
     // the second gesture, reachable only with the run open.
     const wrapper = await openRun();
     const store = useModelShelfStore();

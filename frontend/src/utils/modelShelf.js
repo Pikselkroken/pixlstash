@@ -1,7 +1,7 @@
 // Model-shelf row helpers: the name fallback chain, size, and location state.
 //
 // 37% of real adapters carry no title, no base model and no trigger word at
-// all, so none of this is edge-case handling — it is what most of the column
+// all, so none of this is edge-case handling - it is what most of the column
 // renders. Two rules follow from that and are load-bearing:
 //
 //   * The derived name is computed HERE, at render, never stored. That is what
@@ -61,14 +61,14 @@ export function deriveModelName(filename) {
  *
  * The chain is: the name the user gave, else a readable one we made from the
  * filename, else the filename itself, else nothing. `state` is the whole point
- * — the row draws each of the four differently, because "somebody named this"
+ * - the row draws each of the four differently, because "somebody named this"
  * and "we guessed" and "there is nothing here to read" are three different
  * things to a reader deciding what to fix, and the shelf used to render all of
  * them as one string.
  *
  * The last state returns an EMPTY string on purpose. A row with no filename
  * used to read `no name in file`, which looks like a name, sorts like a name
- * and reads as inert — so the one row that most needs naming was the one that
+ * and reads as inert - so the one row that most needs naming was the one that
  * least invited it. The row renders the empty case as a field.
  *
  * @param {Object} model - a row from `/adapters` or `/checkpoints`.
@@ -83,7 +83,7 @@ export function modelName(model) {
   // string, so nothing on disk says this. It must not be mistaken for a title.
   if (derived) return { text: derived, state: "derived" };
   // Nothing survived the strip (a file called `000002750.safetensors`). The
-  // raw filename is the only honest thing left to show — and it is the file's
+  // raw filename is the only honest thing left to show - and it is the file's
   // string verbatim, which is what the row says out loud.
   if (filename) return { text: filename, state: "from-file" };
   return { text: "", state: "needs-a-name" };
@@ -108,7 +108,7 @@ export const SORT_LABELS = {
  *
  * The column FOLLOWS the sort. Two of the five keys are dates, and a column
  * that always showed `added_at` would read as unordered the moment the shelf
- * was sorted on the other one — the reader would be looking at a column of
+ * was sorted on the other one - the reader would be looking at a column of
  * dates in what looks like no order at all. Every non-date key falls back to
  * `added_at`, which is the shelf's own default axis.
  *
@@ -135,7 +135,7 @@ export function dateColumnKey(sortKey) {
  * `newest_file_mtime` is grouped by MODEL rather than by stack (`_LOCATION_JOIN`
  * in `model_shelf_service.py`), so a cover answers for itself, which is also
  * what the sort orders that row on. Taking a maximum across the members here
- * would print a date the sort does not use — the disagreement this whole
+ * would print a date the sort does not use - the disagreement this whole
  * function exists to prevent. Opening the run is what shows a step that was
  * written later.
  *
@@ -195,8 +195,8 @@ export function sortDirectionLabel(key, direction) {
  * Carrying the previous key's direction over is what a plain toggle would do,
  * and it is wrong at the moment it matters most: arriving at Name from "Date
  * added, newest first" would hand back Z to A, which nobody asked for and
- * reads as a broken sort. A name starts at A, a size starts at the big files —
- * the reason anyone sorts a shelf by size is to find what is eating the disk —
+ * reads as a broken sort. A name starts at A, a size starts at the big files -
+ * the reason anyone sorts a shelf by size is to find what is eating the disk -
  * and a date starts at the newest, which is the shelf's own default.
  *
  * @param {string} key - a `SORT_LABELS` key.
@@ -220,7 +220,7 @@ export const GROUP_BY_LABELS = {
  * The screen's words, not the database's: `model_capability` stores machine
  * vocabulary (`captioner`, `scorer`) because a stored value is not a thing a
  * designer gets to change, and these are. Named for the FEATURE rather than the
- * ML task for the same reason the classifier is — nobody who switched
+ * ML task for the same reason the classifier is - nobody who switched
  * captioning on thinks they have an `image-to-text` model.
  *
  * An unrecognised value falls through to itself rather than to a placeholder:
@@ -265,7 +265,7 @@ export function capabilityLabel(capability) {
  * Not exported, for `ADAPTER_KIND_LABELS`' reason one table down: `file_kind`
  * is owner-correctable over `PATCH /models` and carries no CHECK, so a caller
  * indexing this raw with a row storing `constructor` gets `Object`'s
- * constructor FUNCTION — truthy, so a `|| ""` fallback never fires, and it
+ * constructor FUNCTION - truthy, so a `|| ""` fallback never fires, and it
  * lands in a group label where `localeCompare` throws and takes the whole
  * `groups` computed with it. `fileKindLabel` is the only way in.
  */
@@ -292,7 +292,7 @@ export function fileKindLabel(fileKind) {
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by
  * strings that come off the wire or out of a file header. `kind` reaches this
- * as `constructor` and the index returns `Object`'s constructor FUNCTION —
+ * as `constructor` and the index returns `Object`'s constructor FUNCTION -
  * truthy, so `|| key` never fires, and it lands in a group label where
  * `localeCompare` throws and takes the whole `groups` computed with it.
  */
@@ -313,7 +313,7 @@ const ADAPTER_KIND_LABELS = {
   loha: "LoHa",
   dora: "DoRA",
   oft: "OFT",
-  // `KIND_UNKNOWN` — `detect_adapter_kind` found adapter markers but no
+  // `KIND_UNKNOWN` - `detect_adapter_kind` found adapter markers but no
   // algorithm it knows. A real thing to filter on ("which of these could we
   // not identify") and a real thing to print in the Kind cell, so it is
   // spelled here like the rest. It is only the GROUP axis that declines it,
@@ -325,8 +325,8 @@ const ADAPTER_KIND_LABELS = {
 /**
  * Fold one stored `model.kind` to the value everything keys on.
  *
- * `model.kind` is free text — the scanner writes a constant, but `PATCH
- * /models` stores whatever reaches it verbatim — so `LoRA`, `lora` and ` lora `
+ * `model.kind` is free text - the scanner writes a constant, but `PATCH
+ * /models` stores whatever reaches it verbatim - so `LoRA`, `lora` and ` lora `
  * are one algorithm spelled three ways. The shelf folds them here, once: the
  * group key, the `Show` panel's checkbox list and the kind filter all read this
  * rather than the raw column, or the panel offers two boxes labelled `LoRA`
@@ -364,9 +364,9 @@ export function adapterKindLabel(kind) {
  *
  * Not a new icon family. Where the product already marks a feature, that mark
  * is the one used here and it is not re-drawn somewhere else: the face from
- * `ImageOverlay` and the toolbar, the SHAPE from the same two — it is what
+ * `ImageOverlay` and the toolbar, the SHAPE from the same two - it is what
  * "Object boxes" and "Detect objects" wear, so `detector` takes it and the
- * catch-all does not — the tag, the star and the caption box from the operation
+ * catch-all does not - the tag, the star and the caption box from the operation
  * log's icon rules. The two features nothing else in the app marks take glyphs
  * nothing else in the app uses: a whole packaged model for `checkpoint` (NOT
  * the cube, which is the base-model axis's), and the overflow dots for `other`.
@@ -466,7 +466,7 @@ export function compareGroups(a, b) {
  * Add a group for every registered folder that has none.
  *
  * Groups are built from `model_file` rows, so a folder holding nothing produces
- * no group at all — and the managed store holds nothing on every fresh install,
+ * no group at all - and the managed store holds nothing on every fresh install,
  * despite being the ruled default destination for a drop or an import. A
  * destination you cannot see is not a destination.
  *
@@ -475,7 +475,7 @@ export function compareGroups(a, b) {
  * act on. `last_checked` is the discriminator for that pair rather than a zero
  * count: a folder that has never been walked has no count to be zero.
  *
- * `file_count` decides something else — whether the folder is empty at all.
+ * `file_count` decides something else - whether the folder is empty at all.
  * Absence from `groups` cannot answer that, because `groups` is built from the
  * visible rows and a filter can empty a folder that is full.
  *
@@ -491,7 +491,7 @@ export function withEmptyFolders(groups, folders) {
     if (!key || held.has(key)) continue;
     // "Has no group" is NOT "is empty". `groups` is built from the VISIBLE
     // rows, so a folder full of adapters has no group at all while Show is
-    // narrowed to checkpoints — and calling that folder empty would be a plain
+    // narrowed to checkpoints - and calling that folder empty would be a plain
     // lie about the disk. The registry knows better: `file_count` counts the
     // copies registered under the folder in any state, so a folder that holds
     // something is skipped and simply stays absent from a filtered view, which
@@ -542,7 +542,7 @@ export const FOLDER_LAYOUT_LABELS = {
  * Shared with `ModelFoldersDialog`, which is where these glyphs started: the
  * shelf header and the dialog row are two views of the same registry, and two
  * copies of the map would be two vocabularies for one fact. Nothing here is
- * hand-drawn — the header used to have no tier mark at all, and the mock that
+ * hand-drawn - the header used to have no tier mark at all, and the mock that
  * proposed one built a folder out of a div and a `::before` tab, which is a
  * second icon family by construction.
  *
@@ -558,7 +558,7 @@ export const FOLDER_TIERS = {
     note: "PixlStash keeps its own models here.",
   },
   // The only kind the owner can neither scan nor forget, so it is the only one
-  // that gets the lock — the same rule the folders dialog's glyph column uses.
+  // that gets the lock - the same rule the folders dialog's glyph column uses.
   foreign: {
     icon: "mdi-folder-lock-outline",
     chip: "Locked",
@@ -625,7 +625,7 @@ function isInside(path, parent) {
  *
  * **Every distinction here survives greyscale.** The drive is a hue on the rail
  * AND a chip that names the volume; the tier is a glyph shape AND a word; the
- * offline state is a DASHED rail and muted ink — never the error colour, for
+ * offline state is a DASHED rail and muted ink - never the error colour, for
  * the reason the offline row treatment is not the error colour either. Nothing
  * is carried by hue alone.
  *
@@ -702,8 +702,8 @@ export function withFolderSignals(
  *
  * Two levels, which is what the plan allows and no more: the band is the drive
  * and the header under it is the folder. Groups are RE-ORDERED so a band's
- * folders are contiguous — a band drawn over a non-contiguous run would claim
- * a grouping the list does not have — and each group is tagged with the band it
+ * folders are contiguous - a band drawn over a non-contiguous run would claim
+ * a grouping the list does not have - and each group is tagged with the band it
  * opens, so the caller draws a band header exactly when `bandStart` is set
  * rather than nesting the markup.
  *
@@ -721,7 +721,7 @@ export function withFolderSignals(
 /**
  * The band a folder belongs to.
  *
- * The drive when one was measured, the folder itself when none was — the same
+ * The drive when one was measured, the folder itself when none was - the same
  * rule {@link bandGroups} keys on, exported so a caller asking "is this copy
  * already on that drive?" cannot answer it with a second, drifting copy of the
  * rule.
@@ -739,7 +739,7 @@ export function bandGroups(groups, deviceByFolderId) {
   const byBand = new Map();
   // Not every folder group names a folder. A model whose folders have all been
   // forgotten falls into "No registered copy", which has no `folderId` and is
-  // not on a drive at all — banding it would put a disk glyph and a capacity
+  // not on a drive at all - banding it would put a disk glyph and a capacity
   // line over the one group that exists precisely because there is no disk.
   // It stays unbanded and sorts last, the same place `compareGroups` already
   // puts the absence of a value.
@@ -759,7 +759,7 @@ export function bandGroups(groups, deviceByFolderId) {
         // header out; the precise string stays available as the tooltip.
         label: device?.label || device?.mount_point || group.label,
         mountPoint: device?.mount_point || group.label,
-        // `local`, `network`, `removable`, `ramdisk` — or null, which is the
+        // `local`, `network`, `removable`, `ramdisk` - or null, which is the
         // answer on macOS and for any filesystem the backend will not classify.
         // Null is normal and draws the plain disk glyph; see `device_kind`.
         kind: device?.kind || null,
@@ -805,7 +805,7 @@ export function bandGroups(groups, deviceByFolderId) {
  * A percentage is wrong in both directions on exactly the hardware this
  * feature targets. Ten per cent of a 4 TB model drive is 400 GB, which is not a
  * problem and would cry wolf on the drive people actually keep models on; ten
- * per cent of a 256 GB SSD is 25 GB, which IS a problem — but so is 60 GB free
+ * per cent of a 256 GB SSD is 25 GB, which IS a problem - but so is 60 GB free
  * on that same disk, and the fraction calls that fine.
  */
 export const LOW_FREE_BYTES = 50 * 1024 ** 3;
@@ -813,8 +813,8 @@ export const LOW_FREE_BYTES = 50 * 1024 ** 3;
 /**
  * How a drive's space divides into the three things a reader asks about.
  *
- * The meter answers two questions at once — "how full is this disk" and "how
- * much of that is us" — and it can only answer the second if the shelf's share
+ * The meter answers two questions at once - "how full is this disk" and "how
+ * much of that is us" - and it can only answer the second if the shelf's share
  * is drawn as its OWN segment rather than as a fill overlaid on the used one.
  * Overlaying was the original shape and it made the two questions the same
  * pixel: a reader could see one boundary and had no way to know which of the
@@ -827,7 +827,7 @@ export const LOW_FREE_BYTES = 50 * 1024 ** 3;
  * into range before it is relied on:
  *
  *   * `free` to `total`, because the two are separate reads of the device and
- *     a filesystem can genuinely report more free than it holds — thin
+ *     a filesystem can genuinely report more free than it holds - thin
  *     provisioning and transparent compression (ZFS, btrfs) do it by design,
  *     and a network mount's `statvfs` can simply be wrong. Unclamped that
  *     yields `freePct > 100` and a segment running off the end of the track.
@@ -864,7 +864,7 @@ export function bandUsage(band) {
  * What a drive would hold after a drop, and whether the drop fits.
  *
  * The meter is the drop target (#894), so the consequence has to be drawable
- * *before* the pointer is released — which means a fourth segment carved out of
+ * *before* the pointer is released - which means a fourth segment carved out of
  * the free one rather than a fifth number in the label. `freePct` is therefore
  * already reduced by the projection and the four still sum to exactly 100, so
  * the caller lays them out in the same flex row with no rounding sliver at the
@@ -884,8 +884,8 @@ export function bandUsage(band) {
  * on the same object as segments drawn from after it, and the first caller to
  * read `meter(band).lowFree` next to a projected bar gets an answer about a
  * different drive state than the one on screen. Nothing reads them off this
- * object today — the band's low treatment deliberately goes through `bandUsage`
- * — and that is exactly why the inconsistency would be found late.
+ * object today - the band's low treatment deliberately goes through `bandUsage`
+ * - and that is exactly why the inconsistency would be found late.
  *
  * A drive that could not be measured returns `null`, exactly as `bandUsage`
  * does: a projection onto an unknown capacity is a guess, and the caller must
@@ -923,11 +923,32 @@ export function bandProjection(band, addedBytes) {
 }
 
 /**
+ * How many copies of this model are actually on the disk right now.
+ *
+ * Only `present` copies count. A `missing` or `not_downloaded` row is a
+ * registration, not bytes, so folding it in would report a model as taking
+ * twice the disk it takes and offer the reader nothing to delete.
+ *
+ * Two or more is the definition of a duplicate everywhere on the shelf: the hub
+ * is content-addressed, one `model` row per SHA-256, so a second `present` copy
+ * IS the same bytes written twice. That is why this counts copies rather than
+ * comparing anything - the comparison already happened, upstream, by hash.
+ *
+ * @param {Array<Object>} locations - the row's `locations` array.
+ * @returns {number} copies on disk; 0 for a row whose every copy is a promise.
+ */
+export function presentCopies(locations) {
+  return (Array.isArray(locations) ? locations : []).filter(
+    (loc) => loc?.state === "present",
+  ).length;
+}
+
+/**
  * Reduce a row's copies to the one state worth reporting.
  *
  * `missing` is a fact (the folder was readable and the file was not in it);
  * `unreachable` is the absence of one (we could not look). They must not read
- * the same, and one present copy makes both moot — the file is usable.
+ * the same, and one present copy makes both moot - the file is usable.
  *
  * `not_downloaded` is neither: it is a file PixlStash declares and fetches on
  * demand, which nothing has needed yet. Only an ALL-`not_downloaded` row reports
@@ -953,7 +974,7 @@ export function locationState(locations) {
  *
  * A path with nothing after it is a claim that the file is THERE. Three of the
  * four states are the claim that it is not, and the shelf spends a rail, a
- * glyph and a word telling them apart on the row (#898) — a tooltip that
+ * glyph and a word telling them apart on the row (#898) - a tooltip that
  * rendered all four as bare identical lines would be the one place they read
  * the same. `present` adds nothing, because that is what a path already says.
  *
@@ -988,8 +1009,8 @@ function copyStateNote(state) {
  * Where a row's copies sit, one path per line, each saying what is there.
  *
  * The folder is only on screen under `groupBy: 'folder'`, where the header
- * names it. Group by base model or by feature — or not at all, which is the
- * default — and the shelf stops saying where anything is, which is the first
+ * names it. Group by base model or by feature - or not at all, which is the
+ * default - and the shelf stops saying where anything is, which is the first
  * question of a reader with the same adapter on two disks. So the file line
  * carries the answer as its tooltip on every axis, including `folder`, where
  * the header names the folder but nothing names the SUBDIRECTORY under it.
@@ -1010,7 +1031,7 @@ function copyStateNote(state) {
  * "where is this file" with the one thing that is not a location.
  *
  * @param {Array<Object>} locations - the row's `locations` array.
- * @returns {string} the paths, newline-separated, or `""` when there are none —
+ * @returns {string} the paths, newline-separated, or `""` when there are none -
  *   which the caller must bind as no tooltip at all rather than an empty one.
  */
 export function copyPathsTitle(locations) {
@@ -1035,8 +1056,8 @@ export function copyPathsTitle(locations) {
  * each one takes with it.
  *
  * This is what lets an unplugged drive state its scope ONCE. `unreachable` is
- * the common case for anyone keeping adapters on an external disk — the whole
- * folder flips together (`ModelFolderScanner._mark_unreachable`) — and 300 rows
+ * the common case for anyone keeping adapters on an external disk - the whole
+ * folder flips together (`ModelFolderScanner._mark_unreachable`) - and 300 rows
  * each carrying their own mark is 300 statements of one fact.
  *
  * A folder qualifies only when NOTHING under it was readable. One `present`
@@ -1049,7 +1070,7 @@ export function copyPathsTitle(locations) {
  *
  * @param {Array<Object>} rows - shelf rows, each with `locations`.
  * @returns {Array<{folderId: number, path: string, count: number}>} sorted by
- *   path, so the banner reads the same on every render — under the shelf's one
+ *   path, so the banner reads the same on every render - under the shelf's one
  *   collation, numeric and case-insensitive, so `/mnt/2` precedes `/mnt/10`
  *   here as it does in every other list on the screen.
  */
@@ -1099,7 +1120,7 @@ export function offlineFolders(rows) {
  *
  * The source deletion is named only when something actually landed. The server
  * unlinks last and only after each row is committed, so "nothing imported" and
- * "the run is gone" cannot both be true — saying it anyway would tell the
+ * "the run is gone" cannot both be true - saying it anyway would tell the
  * reader their run had been deleted for nothing.
  *
  * @param {Object} report - the body of `POST /model-imports`.
@@ -1120,7 +1141,7 @@ export function importReceipt(report) {
       `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
     );
   }
-  // A checkpoint whose previews did not copy is still `imported` — losing a
+  // A checkpoint whose previews did not copy is still `imported` - losing a
   // preview must not cost the weights, so the server does not fail the file for
   // it. Which means the status counts above cannot see it, and a receipt built
   // from them alone would call a run whose samples were lost a clean import.
@@ -1152,7 +1173,7 @@ export function importReceipt(report) {
  *   readable and the file was not in it; `unreachable` says we could not look.
  *   Sending either would be asking the server to copy bytes nobody has seen.
  * - **PixlStash's own folder.** Those files are ours, declared rather than
- *   scanned, and every engine loader looks for them at a fixed path — moving
+ *   scanned, and every engine loader looks for them at a fixed path - moving
  *   one out breaks the tagger and re-downloads it on the next run.
  * - **An `external` folder.** The HuggingFace cache and insightface's store are
  *   shared with other software. Taking a file out of one is not ours to do.
@@ -1160,7 +1181,7 @@ export function importReceipt(report) {
  * Per COPY and not per model: `model_file`'s primary key is
  * `(folder_id, relpath)`, so a model registered in three folders offers three
  * copies and the caller moves the ones it named. That is also why the size is
- * summed off the row rather than off the copy — the hub records one
+ * summed off the row rather than off the copy - the hub records one
  * `file_size` per model, and every copy of it is that size.
  *
  * @param {Array<Object>} rows - shelf rows, each with `locations`.
@@ -1208,8 +1229,8 @@ export function movableCopies(rows, foldersById = null) {
  *
  * A label, never a decision: what actually happens is `permanent`, which the
  * server echoes back. The browser's platform is a good-enough proxy for the
- * server's here because the delete route is `LOCAL_OWNER_ONLY` — it is refused
- * outright unless the caller is on the same machine or the same network — so
+ * server's here because the delete route is `LOCAL_OWNER_ONLY` - it is refused
+ * outright unless the caller is on the same machine or the same network - so
  * the two differ only in a mixed-OS LAN, where the cost is one wrong noun.
  *
  * @param {Object} [nav=navigator] - injectable for tests.
@@ -1226,7 +1247,7 @@ export function trashName(
  * The selected models a delete could actually act on.
  *
  * Every gate the route enforces, checked here so the verb is never offered
- * where it could only come back refused — and per MODEL rather than per copy,
+ * where it could only come back refused - and per MODEL rather than per copy,
  * because the server deletes a model whole or not at all: unlinking the
  * reachable half of a model that also lives in the HuggingFace cache would
  * leave the row the owner wanted gone still on the shelf.
@@ -1255,7 +1276,7 @@ export function deletableModels(rows, foldersById = null) {
     const parts = row?.members?.length ? row.members : [row];
     return parts.every((part) => {
       // An engine is declared again on every start, so deleting one removes a
-      // file that comes straight back — after the feature broke.
+      // file that comes straight back - after the feature broke.
       if (part?.file_kind === "engine") return false;
       return (part?.locations || []).every((loc) => {
         // "We could not look", not "it is gone": an unplugged drive must never
@@ -1275,8 +1296,8 @@ export function deletableModels(rows, foldersById = null) {
  * and never from a drive that is not plugged in", which was two thirds of one
  * gate and untrue on its face: the shelf deletes from the managed store and
  * from PixlStash's own download folder, neither of which is a folder the owner
- * registered. It also named no folder, so the one thing the reader wanted — WHY
- * this file and what to do instead — was the thing it left out.
+ * registered. It also named no folder, so the one thing the reader wanted - WHY
+ * this file and what to do instead - was the thing it left out.
  *
  * The folder is named by its PATH rather than by a kind, because the path is
  * the answer: `~/.cache/huggingface/hub` explains itself, and no vocabulary of
@@ -1351,7 +1372,7 @@ export function undeletableNotice(rows, foldersById = null) {
  * Fold each stack's members into the one row that stands for them.
  *
  * A stack is many `model` rows and the list query returns all of them, so
- * without this a six-step run reads as six unrelated adapters — which is the
+ * without this a six-step run reads as six unrelated adapters - which is the
  * state the shelf shipped in until F5.
  *
  * The **cover** is `stack_position` 0, which the backend already ordered: the
@@ -1363,14 +1384,14 @@ export function undeletableNotice(rows, foldersById = null) {
  *
  * `memberIds` is the whole point of the fold and not decoration: stacks are
  * **atomic** here exactly as they are for pictures (`services/stack_membership`
- * — "applied to EVERY member of its stack, so state can never go partial"), so
+ * - "applied to EVERY member of its stack, so state can never go partial"), so
  * selecting a collapsed row has to select the run, or Move would take the cover
  * and leave five steps behind.
  *
  * @param {Array<Object>} rows - shown rows, already narrowed by the filters.
  * @returns {Array<Object>} one row per unstacked model and per stack, each
  *   stacked row carrying `memberIds`, `memberCount`, `members` and
- *   `spansVersions`. All four describe what is SHOWN — a filter that hides half
+ *   `spansVersions`. All four describe what is SHOWN - a filter that hides half
  *   a stack changes them, which is deliberate and is why they are recomputed
  *   here rather than read off the payload.
  */
@@ -1394,7 +1415,7 @@ export function collapseStacks(rows) {
     if (emitted.has(row.stack_id)) continue;
     emitted.add(row.stack_id);
     // A member with no position sorts LAST, matching the server's
-    // `ORDER BY stack_position IS NULL, stack_position` — `?? 0` put it level
+    // `ORDER BY stack_position IS NULL, stack_position` - `?? 0` put it level
     // with the cover and, on a stable sort, ahead of it, so an unpositioned
     // row could be drawn as the face of a run the server does not agree it
     // covers.
@@ -1414,7 +1435,7 @@ export function collapseStacks(rows) {
       memberCount: members.length,
       // Computed ONCE per stack, here, rather than per member row at render:
       // the member label needs to know whether the stack spans versions, and
-      // asking that question inside the label made it O(n²) in the members —
+      // asking that question inside the label made it O(n²) in the members -
       // 200 members is 40,000 filename parses, redone on every re-render.
       //
       // Compared on the PARSED version, matching `propose_stacks`, so `v2` and
@@ -1434,8 +1455,8 @@ export function collapseStacks(rows) {
  * stacked between the dry run and the confirmation comes back 409 and is
  * counted rather than throwing, or one stale group would discard the others.
  *
- * "Stacks", not "runs": a stack can span training runs now — several versions
- * of one character LoRA — so calling every one of them a run would be false.
+ * "Stacks", not "runs": a stack can span training runs now - several versions
+ * of one character LoRA - so calling every one of them a run would be false.
  *
  * @param {number} grouped - stacks made.
  * @param {number} failed - groups the server refused.
@@ -1510,7 +1531,7 @@ export function releaseReceipt(released, dissolved, failed) {
  * The training step a filename records, or null for a bare final file.
  *
  * Mirrors `_step_of` in `pixlstash/services/stack_detector.py`, and reads the
- * same trailing token {@link deriveModelName} strips — so a file is never
+ * same trailing token {@link deriveModelName} strips - so a file is never
  * labelled by a suffix the name derivation cannot also explain. `step00500` and
  * `000000500` both give 500; `portrait mix v2` gives null, because `v2` is not
  * training bookkeeping and the name keeps it.
@@ -1542,7 +1563,7 @@ const VERSION_SUFFIX_RE = /^v(\d+)(?:\.(\d+))?$/i;
  * same as `Foxglove_v2`.
  *
  * **Returned exactly as the file wrote it**, `V2.1` and all, because this token
- * is shown to a reader. Never compare two of these as strings — put them
+ * is shown to a reader. Never compare two of these as strings - put them
  * through {@link versionSortKey}, which is what agrees with the server about
  * `v2` and `V2.0` being one version.
  *
@@ -1598,7 +1619,7 @@ function initialsOf(text) {
 }
 
 // The mark's tile keeps its palette entry's HUE and pins saturation and
-// lightness, exactly as `applyStackBadgeTint` does for a stack badge — the
+// lightness, exactly as `applyStackBadgeTint` does for a stack badge - the
 // established way in this codebase to take a colour chosen for identity and
 // renormalise it for a job that also has to be legible. The values differ
 // because the job differs: the badge tints a GLYPH light (72%) against a dark
@@ -1653,8 +1674,8 @@ export function markForeground() {
 /**
  * The mark a model wears when it has no icon.
  *
- * **Unset is never blank.** A checkpoint never has a sample — PixlStash
- * registers it in place and generates nothing for it — and 37% of real adapters
+ * **Unset is never blank.** A checkpoint never has a sample - PixlStash
+ * registers it in place and generates nothing for it - and 37% of real adapters
  * carry no title, base model or trigger either, so an empty identity slot is
  * the common case rather than the edge one.
  *
@@ -1662,11 +1683,11 @@ export function markForeground() {
  * use.** `character_color` takes the *first unused* colour from this same list,
  * which needs a bounded set and a moment of assignment. Models are unbounded
  * and have no such moment, and a mark that shifted when a neighbour was deleted
- * would be worse than no mark — so this is a pure function of the row. The two
+ * would be worse than no mark - so this is a pure function of the row. The two
  * must not be unified, however similar the palettes look.
  *
  * **Keyed on the FOLDED base model**, so every spelling of FLUX.2 lands on one
- * colour instead of scattering across the palette — which is the whole reason
+ * colour instead of scattering across the palette - which is the whole reason
  * the folding table exists. A row recording no base model hashes on the empty
  * string and so shares one colour with every other unset row: correct, because
  * they genuinely are one group, and the shelf already treats "not set" as a
@@ -1693,7 +1714,7 @@ export function generatedMark(row) {
  *
  * Four treatments, and dotted is deliberately not among them: a 24px mark's ring
  * is roughly 75px of edge, so 2px dotted is about 37 dots and reads as a faded
- * solid ring rather than as its own thing — it fails exactly where it has to
+ * solid ring rather than as its own thing - it fails exactly where it has to
  * work, at a glance in a list.
  *
  * Style MULTIPLIES the palette rather than replacing it: four styles against the
@@ -1706,7 +1727,7 @@ export const RING_STYLES = ["solid", "dashed", "thick", "double"];
  * `id -> row` for an entity list, built once per list rather than once per row.
  *
  * `assignmentRing` is called from a `v-for` over the whole shelf, so rebuilding
- * the maps inside it made the column cost rows x entities — 1,800 rows against a
+ * the maps inside it made the column cost rows x entities - 1,800 rows against a
  * few hundred characters, on every render. Keyed on the ARRAY, which the entity
  * store replaces wholesale on every refresh (`lists.value = { ...lists.value }`)
  * and never mutates in place, so a new list is a new key and the cache cannot go
@@ -1748,13 +1769,13 @@ const ATTACHMENT_KIND = {
  *
  * `attachments` carries `entity_type` and `entity_id` and nothing else, so the
  * names and colours come from the shared entity lists the sidebar already
- * fetches. An id the lists do not answer still gets a ring — the vault is the
+ * fetches. An id the lists do not answer still gets a ring - the vault is the
  * authority on what is attached, and dropping the ring would say "not
  * assigned", which is a different and wrong fact. It reads `#12` in the label
  * until the list lands, which is a loading state rather than a lie.
  *
  * **Colour is never the only carrier.** The hue is the entity's own, so a
- * character wears the same one here as in the sidebar — but the STYLE is what
+ * character wears the same one here as in the sidebar - but the STYLE is what
  * makes the ring survive greyscale, and the label is what makes it readable
  * aloud. Hue, style and label always travel together.
  *
@@ -1774,10 +1795,10 @@ const ATTACHMENT_KIND = {
  * @returns {{style: string, hue: string, type: string, id: ?number,
  *   icon: string, iconHue: string, label: string, count: number}} `icon` is
  *   the mdi name a picture set carries instead of its thumbnail, empty
- *   otherwise, and `iconHue` is that set's own colour — empty when it has none,
+ *   otherwise, and `iconHue` is that set's own colour - empty when it has none,
  *   which is theme ink and NOT the ring's hashed fallback. `style`
  *   is `"none"` and `hue` empty when nothing is attached, which is the dashed
- *   grey ring — never an absent ring, because a mark with no edge at all would
+ *   grey ring - never an absent ring, because a mark with no edge at all would
  *   read as a rendering gap rather than as a state.
  */
 export function assignmentRing(

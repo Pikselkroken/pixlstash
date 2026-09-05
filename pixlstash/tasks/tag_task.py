@@ -8,6 +8,7 @@ import time
 from sqlalchemy.exc import IntegrityError
 
 from PIL import Image as PILImage
+from PIL import ImageOps
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
@@ -17,7 +18,11 @@ from pixlstash.db_models import (
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
 )
-from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.db_models.tag_prediction import (
+    feeds_anomaly_score,
+    is_plugin_model_version,
+    TagPrediction,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
@@ -50,8 +55,8 @@ def _is_transient_load_error(exc: BaseException) -> bool:
     """True when *exc* means the machine failed, not that the file is corrupt.
 
     This is the gate on `mark_unprocessable`. A mark suppresses the picture in
-    `base_task_finder._filter_and_claim`, i.e. for **every** batch finder —
-    thumbnails, embeddings and quality as well as tagging — until the file's
+    `base_task_finder._filter_and_claim`, i.e. for **every** batch finder -
+    thumbnails, embeddings and quality as well as tagging - until the file's
     mtime/size changes, and `vault._count_missing_*` subtracts suppressed ids
     from the "remaining" counters, so the loss does not even show in the UI.
     Marking a good picture because the machine ran out of file descriptors would
@@ -59,7 +64,7 @@ def _is_transient_load_error(exc: BaseException) -> bool:
 
     `OSError.errno` is the discriminator, and it is exact: a real filesystem or
     resource failure carries one (``EMFILE`` 24, ``EIO`` 5, ``ESTALE`` 116),
-    while PIL's decode failures do not — both `UnidentifiedImageError` and the
+    while PIL's decode failures do not - both `UnidentifiedImageError` and the
     ``"image file is truncated"`` `OSError` leave it `None`.
     """
     if isinstance(exc, MemoryError):
@@ -204,14 +209,14 @@ class TagTask(BaseTask):
         Returns:
             ``(file_path, image, undecodable)``. ``undecodable`` is True **only**
             when the file's bytes were readable and still could not be decoded by
-            any loader — the sole condition under which the caller may mark it in
+            any loader - the sole condition under which the caller may mark it in
             the unprocessable registry (see `_is_transient_load_error` for why
             that distinction has to be exact).
 
         The extension only picks which decoder is tried first. Whatever it says,
         a failure falls back to `ImageUtils.load_image_or_video`, the loader the
         thumbnail, quality and embedding tasks use, so this path can never
-        suppress a picture those pipelines are able to read — a real mp4 named
+        suppress a picture those pipelines are able to read - a real mp4 named
         `.png` is common enough with re-encoded downloads to matter.
         """
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
@@ -235,7 +240,26 @@ class TagTask(BaseTask):
                     file_path,
                 )
             else:
-                return file_path, PILImage.open(file_path).convert("RGB"), False
+                # exif_transpose, because everything this image is measured
+                # against is already transposed. Face bboxes come from
+                # `load_image_bgr_reduced`, which transposes: a phone photo with
+                # orientation 6 is 4608x2592 on disk and 2592x4608 to anyone
+                # looking at it, so a recorded bbox at y=3699 lands past the
+                # bottom of the frame this loader used to return.
+                # `expand_bbox_to_square` then clamped one edge and not the
+                # other, and PIL refused the crop ("Coordinate 'lower' is less
+                # than 'upper'").
+                #
+                # The refusal was the loud half. The quiet half is worse: with
+                # the face nearer the top the box stayed valid and the crop came
+                # out of the wrong part of a sideways picture - and the
+                # whole-image tagging pass ran on that same sideways image, for
+                # every rotated photo in the library.
+                return (
+                    file_path,
+                    ImageOps.exif_transpose(PILImage.open(file_path)).convert("RGB"),
+                    False,
+                )
         except Exception as exc:
             if _is_transient_load_error(exc):
                 logger.warning(
@@ -279,7 +303,7 @@ class TagTask(BaseTask):
         `expand_bbox_to_square`, and a bbox whose JSON is malformed raises on
         attribute access alone. Inline in the caller's loop, one such row escaped
         to the pass-level handler and cost **every remaining picture in the task**
-        its quality crop — silently, because those pictures are still written as
+        its quality crop - silently, because those pictures are still written as
         tagged, so no finder re-selects them.
         """
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
@@ -336,7 +360,7 @@ class TagTask(BaseTask):
 
         Mirrors `thumbnail_generation_task` / `quality_task`: the registry is
         optional on the database object, and its absence degrades to a warning
-        rather than a crash. Only ever called for a genuinely undecodable file —
+        rather than a crash. Only ever called for a genuinely undecodable file -
         see `_load_pic`'s ``undecodable`` flag.
         """
         registry = getattr(self._db, "unprocessable_images", None)
@@ -496,8 +520,8 @@ class TagTask(BaseTask):
 
         # Human labels outrank the tagger in the ground-truth Tag table (mirrors the
         # prediction-status invariant / not_human_labeled): a tag the user confirmed
-        # (POS) stays applied even when the fresh pass can't reproduce it — e.g. a
-        # manually-added 'watermark' the model has no vocabulary for — and a tag the
+        # (POS) stays applied even when the fresh pass can't reproduce it - e.g. a
+        # manually-added 'watermark' the model has no vocabulary for - and a tag the
         # user rejected (NEG) is never re-applied. Without this, re-tagging silently
         # drops a human-accepted tag that the model doesn't emit.
         human_pos_by_pic: dict[int, set[str]] = {}
@@ -545,7 +569,7 @@ class TagTask(BaseTask):
             pics_to_update.append((pic_id, effective_tags))
 
         # A locked set freezes a picture's CONFIRMED tags (the Tag table, not just
-        # predictions), so the background tagger must never rewrite them — even if
+        # predictions), so the background tagger must never rewrite them - even if
         # a retag sentinel somehow landed on a locked picture (e.g. a reset that
         # slipped through). Skip locked pictures from the confirmed-Tag rewrite;
         # MissingTagFinder also excludes them so they are not re-queued.
@@ -553,7 +577,7 @@ class TagTask(BaseTask):
             locked = locked_picture_ids(session, [pid for pid, _ in pics_to_update])
             if locked:
                 logger.info(
-                    "Tagger: preserving frozen confirmed tags — skipping "
+                    "Tagger: preserving frozen confirmed tags - skipping "
                     "rewrite for %d locked picture(s) %s",
                     len(locked),
                     sorted(locked),
@@ -725,15 +749,17 @@ class TagTask(BaseTask):
                 logger.debug("Tagging %s images", len(image_paths))
                 logger.debug("Tagging image paths: %s", image_paths)
                 # Collect raw confidence scores in the same GPU pass as tagging.
+                # Whatever the active tagger is: a plugin that reports
+                # confidences gets prediction rows too, fenced out of the
+                # anomaly score by ``feeds_anomaly_score`` because raw
+                # confidences are not comparable between models.
                 full_scores_by_path: dict = {}
                 use_pixlstash_tagger = active_workflow.is_pixlstash_tagger_enabled
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
                     preloaded_images=preloaded_images,
-                    out_raw_pixlstash_scores=full_scores_by_path
-                    if use_pixlstash_tagger
-                    else None,
+                    out_raw_scores=full_scores_by_path,
                     engine_override=self._engine_override,
                 )
                 inference_s = time.perf_counter() - inference_start
@@ -745,6 +771,7 @@ class TagTask(BaseTask):
                 # image resolution can still be detected.
                 crop_inference_s = 0.0
                 crop_fetch_s = 0.0
+                crop_build_s = 0.0
                 try:
                     crop_fetch_start = time.perf_counter()
                     pic_ids = [p.id for p in batch]
@@ -760,6 +787,10 @@ class TagTask(BaseTask):
                     # Paths whose crop is the faceless centre-crop fallback; these are
                     # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
                     centre_crop_paths: set = set()
+                    # CPU work, and it sits between the two GPU timers: PIL
+                    # crops and resizes, plus a decode for any picture the
+                    # preload missed.
+                    crop_build_start = time.perf_counter()
                     for pic in batch:
                         built = self._build_quality_crop(
                             pic,
@@ -774,6 +805,7 @@ class TagTask(BaseTask):
                         key_to_path[key] = file_path
                         if is_centre_crop:
                             centre_crop_paths.add(file_path)
+                    crop_build_s = time.perf_counter() - crop_build_start
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
@@ -808,7 +840,7 @@ class TagTask(BaseTask):
                                 )
                         # Crops are ground truth for the tags they own: strip those tags
                         # if the full-image pass produced them, then add only what the
-                        # crop confirmed.  Applies to every picture that produced a crop —
+                        # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
                         # fallback (which leaves face tags from the full-image pass alone).
                         for path, crop_quality in quality_tags_by_path.items():
@@ -897,20 +929,9 @@ class TagTask(BaseTask):
                                 u["pic_id"]: set(u.get("tags") or [])
                                 for u in update_payloads
                             }
-                            model_version = "unknown"
-                            try:
-                                version_fn = getattr(
-                                    active_workflow._engine,
-                                    "pixlstash_tagger_version",
-                                    None,
-                                )
-                                if callable(version_fn):
-                                    model_version = f"v{version_fn()}"
-                            except Exception:
-                                logger.warning(
-                                    "pixlstash_tagger_version() failed, using 'unknown' model version",
-                                    exc_info=True,
-                                )
+                            model_version = active_workflow.active_model_version(
+                                self._engine_override
+                            )
                             db_pred_start = time.perf_counter()
                             self._db.run_task(
                                 self._write_predictions_from_tags,
@@ -932,18 +953,34 @@ class TagTask(BaseTask):
                         if device is not None
                         else "unknown"
                     )
+                    # The full-image pass runs exactly one plugin, so
+                    # `inference_s` is all WD14 or all PixlStash tagger; the
+                    # crop pass is always the PixlStash tagger. Split so the
+                    # two models and the CPU crop build are separate numbers.
+                    full_pass = active_workflow.active_plugin_name(
+                        self._engine_override
+                    )
+                    wd14_s = inference_s if full_pass == "wd14" else 0.0
+                    pixlstash_tagger_s = (
+                        inference_s if full_pass == "pixlstash_tagger" else 0.0
+                    ) + crop_inference_s
                     logger.info(
                         "[TAG_TIMING] task_id=%s n=%d device=%s "
-                        "preload_wait_s=%.3f inference_s=%.3f "
-                        "crop_fetch_s=%.3f crop_inference_s=%.3f "
+                        "preload_wait_s=%.3f full_pass=%s inference_s=%.3f "
+                        "wd14_s=%.3f pixlstash_tagger_s=%.3f "
+                        "crop_fetch_s=%.3f crop_build_s=%.3f crop_inference_s=%.3f "
                         "db_tags_s=%.3f db_resolve_s=%.3f db_pred_s=%.3f "
                         "total_s=%.3f gpu_throughput=%.1f/s wall_throughput=%.1f/s",
                         self.id,
                         n,
                         device,
                         preload_wait_s,
+                        full_pass,
                         inference_s,
+                        wd14_s,
+                        pixlstash_tagger_s,
                         crop_fetch_s,
+                        crop_build_s,
                         crop_inference_s,
                         db_tags_s,
                         db_resolve_s,
@@ -995,7 +1032,7 @@ class TagTask(BaseTask):
         if not picture_ids:
             return 0
 
-        # Filter to pictures that still exist — a reference folder removal can
+        # Filter to pictures that still exist - a reference folder removal can
         # delete pictures while a tag task is already in flight, causing FK
         # violations when TagPrediction rows are flushed for a gone picture.
         existing_picture_ids: set[int] = set(
@@ -1032,19 +1069,27 @@ class TagTask(BaseTask):
         # --- Bulk delete stale model-version rows ---
         # Never delete a human-labeled row: its label_state/label_source is durable
         # supervision the tagger must not clobber (mirrors not_human_labeled()).
-        stale_ids = [
-            row.id
+        # Never delete across the built-in/plugin split either: a picture holds one
+        # row per tag, so a plugin run would otherwise clear the built-in tagger's
+        # confidences and silently zero the picture's anomaly_tag_uncertainty.
+        writing_as_plugin = is_plugin_model_version(model_version)
+        stale_rows = [
+            row
             for row in existing_rows
             if row.model_version != model_version
             and row.model_version != "manual"
             and row.label_source != "human"
+            and is_plugin_model_version(row.model_version) == writing_as_plugin
         ]
-        if stale_ids:
-            session.exec(delete(TagPrediction).where(TagPrediction.id.in_(stale_ids)))
+        if stale_rows:
+            session.exec(
+                delete(TagPrediction).where(
+                    TagPrediction.id.in_([row.id for row in stale_rows])
+                )
+            )
             # Remove from map so they are not treated as existing below.
-            for row in existing_rows:
-                if row.id in set(stale_ids):
-                    existing_map.pop((row.picture_id, row.tag), None)
+            for row in stale_rows:
+                existing_map.pop((row.picture_id, row.tag), None)
 
         # --- Bulk fetch applied tags for anomaly uncertainty computation ---
         tag_rows = session.exec(
@@ -1069,6 +1114,20 @@ class TagTask(BaseTask):
             for tag, confidence in label_scores.items():
                 status = "CONFIRMED" if tag in applied_tags else "REJECTED"
                 existing = existing_map.get((picture_id, tag))
+                if (
+                    existing is not None
+                    and existing.model_version != "manual"
+                    and is_plugin_model_version(existing.model_version)
+                    != writing_as_plugin
+                ):
+                    # A row from the other population (built-in vs plugin) owns
+                    # this tag, and the unique key allows only one.  Leave it:
+                    # overwriting would swap a confidence the anomaly score is
+                    # calibrated against for one that is not comparable to it.
+                    # ponytail: whoever got there first wins; widen the unique
+                    # key to (picture_id, tag, model_version) if predictions
+                    # from several taggers ever need to coexist per tag.
+                    continue
                 if existing is None:
                     session.add(
                         TagPrediction(
@@ -1135,6 +1194,12 @@ class TagTask(BaseTask):
 
             # Compute anomaly_tag_uncertainty using the already-fetched applied tags
             # (avoids a redundant SELECT per picture inside recompute_anomaly_tag_uncertainty).
+            # Only the built-in tagger's confidences may: they are what the anomaly
+            # score is calibrated against, and a plugin's 0.4 does not mean the same
+            # thing.  Leave the stored value alone rather than zeroing it, so a run
+            # under a plugin does not discard the built-in tagger's assessment.
+            if not feeds_anomaly_score(model_version):
+                continue
             pic_applied = applied_tags_by_pic.get(picture_id, set())
             anomaly_scores: list[float] = []
             for tag, confidence in label_scores.items():
@@ -1149,7 +1214,7 @@ class TagTask(BaseTask):
                     max(anomaly_scores) if anomaly_scores else 0.0
                 )
 
-        # One bulk UPDATE for the whole batch — a write per picture here would
+        # One bulk UPDATE for the whole batch - a write per picture here would
         # saturate the single DB writer queue on a large re-tag.
         invalidate_changed_anomaly_scores(
             session, picture_ids, before_anomaly, context="tagger prediction rewrite"

@@ -4,7 +4,7 @@ This module is the single, reusable source of truth for "which endpoints does
 the built app actually expose". Phase 1 of the backend refactor (the
 ``authz/`` registry + gate startup assertion) and the CI guardrail in
 ``tests/test_architecture_guardrails.py`` both consume this enumeration so the
-coverage matrix is arithmetic, not judgement — see
+coverage matrix is arithmetic, not judgement - see
 ``docs/backend_architecture.md`` §16.2 and the backend refactor plan §3.4.
 
 It is deliberately dependency-free (no ``authz`` import, no ``Server`` import):
@@ -16,7 +16,7 @@ FastAPI (0.138.x) that is *false*: ``include_router`` leaves a lazy
 ``_IncludedRouter`` placeholder in ``app.routes`` and resolves the real routes
 on demand. A naive ``isinstance(route, starlette.routing.Route)`` walk therefore
 finds only the ~14 app-level routes and silently misses every router-module
-endpoint — a false-"coverage" trap for a security matrix. We instead flatten
+endpoint - a false-"coverage" trap for a security matrix. We instead flatten
 through FastAPI's own resolver, :func:`fastapi.routing.iter_route_contexts`
 (the same helper that powers ``/openapi.json`` generation), which yields the
 effective, prefix-resolved ``(method, path)`` for every mounted route. The
@@ -43,12 +43,12 @@ from starlette.routing import WebSocketRoute
 # Fail loud if the FastAPI internal we depend on to flatten lazily-included
 # routers ever disappears. Without this, a version bump that renamed/removed the
 # helper would make enumeration fall back to under-counting and report false
-# "complete coverage" — the exact silent failure a security matrix must never
+# "complete coverage" - the exact silent failure a security matrix must never
 # have. See the module docstring and the principal-engineer decision memo.
 #
 # Resolved with getattr rather than imported by name ON PURPOSE. A plain
 # ``from fastapi.routing import iter_route_contexts`` raises ImportError on the
-# import line itself, so this message — the whole point of the guard — could
+# import line itself, so this message - the whole point of the guard - could
 # never be reached. That is exactly how it failed: a workstation installed from
 # requirements.txt (then pinned at fastapi 0.135.1, three minors below the floor)
 # got a bare "cannot import name 'iter_route_contexts'" with no hint of the
@@ -62,7 +62,7 @@ if iter_route_contexts is None:  # pragma: no cover - import-time invariant
         "the route inventory cannot enumerate lazily-included routers. Upgrade "
         "with `pip install -U 'fastapi>=0.138.0'`. If this is a NEWER FastAPI "
         "that renamed or removed the helper, fix pixlstash/route_inventory.py "
-        "before trusting any route-coverage claim — see "
+        "before trusting any route-coverage claim - see "
         "docs/backend_architecture.md §16.2."
     )
 
@@ -74,11 +74,11 @@ if iter_route_contexts is None:  # pragma: no cover - import-time invariant
 # ``fastapi.dependencies.utils.get_flat_dependant``. That helper was removed in
 # FastAPI 0.141. ``Dependant`` itself is a plain dataclass whose
 # ``*_params``/``dependencies`` fields are what FastAPI's own flattening has
-# always walked, and they survived that removal — so depending on the shape is
+# always walked, and they survived that removal - so depending on the shape is
 # both more stable than depending on the helper and, when it does break, breaks
 # naming the missing field.
 #
-# **Checked here, raised in the function** — not at import. The removed helper
+# **Checked here, raised in the function** - not at import. The removed helper
 # was guarded by a module-scope ``raise``, so its disappearance took down every
 # importer of this module: ``authz.gate`` imports it, ``server`` imports that,
 # ``conftest`` imports that, and an entire CI shard failed at collection over a
@@ -126,7 +126,7 @@ def iter_api_route_contexts(app) -> Iterator[RouteContext]:
     endpoints exist. See ``docs/backend_architecture.md`` §16.2 and the backend
     refactor plan §3.3 / §3.4.
 
-    One tuple is produced per (method, path) pair — a route serving both GET and
+    One tuple is produced per (method, path) pair - a route serving both GET and
     POST yields two contexts sharing the same route object. Auto-added
     HEAD/OPTIONS methods are excluded (see ``AUTO_METHODS``); WebSocket and Mount
     routes carry no HTTP methods and are naturally skipped.
@@ -144,7 +144,7 @@ def iter_api_route_contexts(app) -> Iterator[RouteContext]:
 def iter_api_endpoints(app) -> Iterator[Endpoint]:
     """Yield every ``(method, path_template)`` HTTP endpoint mounted on ``app``.
 
-    One tuple is produced per (method, path) pair — a route that serves both GET
+    One tuple is produced per (method, path) pair - a route that serves both GET
     and POST yields two endpoints, matching the registry's ``(method, path)``
     keying. Paths are effective (prefix-resolved), e.g.
     ``/api/v1/pictures/{picture_id}/thumbnail``. Auto-added HEAD/OPTIONS methods
@@ -165,7 +165,7 @@ def api_endpoint_set(app) -> set[Endpoint]:
 def flatten_dependant_fields(dependant, field_name: str) -> list:
     """Return ``dependant.<field_name>`` plus every nested ``Depends(...)``'s.
 
-    ``field_name`` is one of :data:`_DEPENDANT_FIELDS` — in practice
+    ``field_name`` is one of :data:`_DEPENDANT_FIELDS` - in practice
     ``"query_params"`` (the project-filter coverage guardrail, §16.6) or
     ``"body_params"`` (the body project-reference guardrails). A parameter
     contributed one level down in a shared dependency is therefore enumerated
@@ -174,7 +174,7 @@ def flatten_dependant_fields(dependant, field_name: str) -> list:
 
     This is the same traversal FastAPI performs internally, kept here rather than
     borrowed because the helper that used to expose it
-    (``fastapi.dependencies.utils.get_flat_dependant``) was removed in 0.141 —
+    (``fastapi.dependencies.utils.get_flat_dependant``) was removed in 0.141 -
     see :data:`_DEPENDANT_FIELDS`. Repeats are skipped by dependant identity, so
     a dependency shared by several sub-dependencies is walked once and a
     pathological tree cannot blow up; every caller reduces to a set of names, so
@@ -182,7 +182,7 @@ def flatten_dependant_fields(dependant, field_name: str) -> list:
     observable in the result.
 
     Raises ``RuntimeError`` if the installed FastAPI's ``Dependant`` no longer
-    carries the fields this walks — see :data:`_DEPENDANT_FIELDS` for why that is
+    carries the fields this walks - see :data:`_DEPENDANT_FIELDS` for why that is
     raised here and not at import.
     """
     if _MISSING_DEPENDANT_FIELDS:  # pragma: no cover - depends on FastAPI version
@@ -244,7 +244,7 @@ def route_module_names(app) -> set[str]:
     Each mounted route module contributes at least one endpoint whose handler
     lives under ``pixlstash.routes.``. Comparing this count against the expected
     number of mounted route modules is the decisive cross-check that a whole
-    router has not silently disappeared behind a FastAPI internal change — it is
+    router has not silently disappeared behind a FastAPI internal change - it is
     independent of any hardcoded endpoint total. App-level routes
     (``pixlstash.server``) and FastAPI internals (``/docs`` etc.) are excluded.
     """
@@ -262,7 +262,7 @@ def iter_websocket_endpoints(app) -> Iterator[WebSocketEndpoint]:
 
     WebSockets are outside the HTTP authz gate's scope; they are enumerated only
     so the coverage matrix can acknowledge them explicitly rather than silently
-    imply they are gated (plan §6 — the WS chokepoint is
+    imply they are gated (plan §6 - the WS chokepoint is
     ``authenticate_websocket``). Both app-level and *included* WS routes are
     found. For included WS routes ``iter_route_contexts`` does not resolve the
     effective prefixed path (yields ``""``); we fall back to the route's own

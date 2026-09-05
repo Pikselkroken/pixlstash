@@ -43,16 +43,23 @@ class ClipEmbeddingWorkflow:
         """Load the CLIP model if not already loaded."""
         self._engine.clip_service.ensure_ready()
 
-    def encode_images(self, images: list) -> Optional[np.ndarray]:
+    def preprocess_images(self, images: list) -> Optional[list]:
+        """CPU preprocessing for :meth:`encode_images`; ``None`` if not loaded."""
+        return self._engine.clip_service.preprocess_images(images)
+
+    def encode_images(
+        self, images: list, tensors: Optional[list] = None
+    ) -> Optional[np.ndarray]:
         """Encode a batch of PIL images into normalised CLIP visual embeddings.
 
         Args:
             images: List of ``PIL.Image`` objects.
+            tensors: Their :meth:`preprocess_images` output, if already done.
 
         Returns:
             Float32 numpy array of shape ``(N, D)`` or ``None`` on failure.
         """
-        return self._engine.clip_service.encode_image_batch(images)
+        return self._engine.clip_service.encode_image_batch(images, tensors=tensors)
 
     def suggested_batch_size(self) -> int:
         """Return the VRAM-budget-constrained batch size for a CLIP inference pass.

@@ -1,4 +1,4 @@
-// useScrapheapRetentionStore.js — the scrapheap auto-empty retention window.
+// useScrapheapRetentionStore.js - the scrapheap auto-empty retention window.
 //
 // Server-level setting (persisted to server-config.json, not per-user), read
 // from and written to `/server-config/scrapheap-retention` via
@@ -6,7 +6,7 @@
 //
 // It lives in a store rather than in the settings section because three
 // surfaces read the same value: the Settings control that edits it, the
-// scrapheap view header that states the active policy, and — indirectly — the
+// scrapheap view header that states the active policy, and - indirectly - the
 // per-tile countdown, which needs to know whether a policy is active at all.
 // One fetch, one truth, no prop-drilling between the settings dialog and the
 // grid.
@@ -55,7 +55,7 @@ export const useScrapheapRetentionStore = defineStore(
     /** Human label for the active policy, e.g. "30 days" / "Never". */
     const label = computed(() => retentionLabel(retentionDays.value));
 
-    /** True when the policy is "Never" — nothing is auto-removed. */
+    /** True when the policy is "Never" - nothing is auto-removed. */
     const isNever = computed(() => retentionDays.value === null);
 
     // De-duplicates concurrent first loads (the settings section and the grid

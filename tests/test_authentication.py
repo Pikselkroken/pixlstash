@@ -55,7 +55,7 @@ def reset_auth(server):
     # _clear_all_sessions also drops the session→token maps, which a bare
     # active_session_ids = {} would leave behind.
     server.auth._clear_all_sessions()
-    # Go through the flush helper so the revocation epoch is bumped too — a
+    # Go through the flush helper so the revocation epoch is bumped too - a
     # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
     # The login lockout counter is process-wide, so a test that exercises
@@ -521,7 +521,7 @@ DESKTOP_TOKEN = "desktop-session-token-0123456789abcdef"
 
 
 def test_seed_desktop_session_authenticates_loopback_owner(server, monkeypatch):
-    """A seeded desktop token logs the local window straight in — no /login."""
+    """A seeded desktop token logs the local window straight in - no /login."""
     monkeypatch.setenv(server.auth.DESKTOP_SESSION_ENV, DESKTOP_TOKEN)
 
     seeded = server.auth.seed_desktop_session()
@@ -626,7 +626,7 @@ def test_registration_blocked_from_lan_ip(server, monkeypatch):
     the owner credentials and take over the library (BLOCKER 1). Registration is
     pinned to loopback.
     """
-    # Public IP — registration must be refused.
+    # Public IP - registration must be refused.
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
     client = TestClient(server.api)
     response = client.post(
@@ -637,7 +637,7 @@ def test_registration_blocked_from_lan_ip(server, monkeypatch):
     # The account must remain unclaimed.
     assert server.auth.get_user().password_hash is None
 
-    # Private RFC 1918 LAN IP — also refused.
+    # Private RFC 1918 LAN IP - also refused.
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     response = client.post(
         f"{API_PREFIX}/login",
@@ -665,7 +665,7 @@ def test_login_with_existing_credentials_allowed_from_lan(server, monkeypatch):
 
     The loopback gate only protects first-owner *registration* (claiming the empty
     account). After credentials are set, remote-access policy is governed by the
-    separate require_local_for_write check, not the registration gate — so a valid
+    separate require_local_for_write check, not the registration gate - so a valid
     password login over the LAN must still authenticate (it would otherwise be an
     over-block regression).
     """
@@ -720,13 +720,13 @@ def test_change_password_on_unclaimed_account_blocked_from_lan(server, monkeypat
 
     payload = SimpleNamespace(current_password=None, new_password="newownerpass")
 
-    # Public IP — refused.
+    # Public IP - refused.
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
     with pytest.raises(Exception) as public_exc:
         server.auth.change_password(_fake_request("8.8.8.8"), payload)
     assert getattr(public_exc.value, "status_code", None) == 403
 
-    # Private RFC 1918 LAN IP — also refused.
+    # Private RFC 1918 LAN IP - also refused.
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     with pytest.raises(Exception) as lan_exc:
         server.auth.change_password(_fake_request(LAN_IPV4), payload)
@@ -802,11 +802,11 @@ def test_ws_desktop_session_rejected_from_non_loopback(server, monkeypatch):
     monkeypatch.setenv(server.auth.DESKTOP_SESSION_ENV, DESKTOP_TOKEN)
     server.auth.seed_desktop_session()
 
-    # Public IP — rejected.
+    # Public IP - rejected.
     public_ws = _fake_websocket(DESKTOP_TOKEN, "8.8.8.8")
     assert server.auth.authenticate_websocket(public_ws) is None
 
-    # Private RFC 1918 LAN IP — also rejected.
+    # Private RFC 1918 LAN IP - also rejected.
     lan_ws = _fake_websocket(DESKTOP_TOKEN, LAN_IPV4)
     assert server.auth.authenticate_websocket(lan_ws) is None
 
@@ -930,7 +930,7 @@ def test_env_claim_rejects_password_over_72_bytes(server, monkeypatch, caplog):
 
 def test_env_claim_rejects_password_below_login_floor(server, monkeypatch, caplog):
     """An env password under the login endpoint's 8-char floor would provision
-    an account that can never log in (422 at /login) — refuse it loudly."""
+    an account that can never log in (422 at /login) - refuse it loudly."""
     _set_initial_creds(monkeypatch, server, "dockerowner", "short7c")
     with caplog.at_level(logging.ERROR, logger="pixlstash.server"):
         assert server.auth.claim_owner_from_env() is False
@@ -1005,7 +1005,7 @@ def test_registration_still_allowed_from_loopback_in_docker(server, monkeypatch)
 
 
 def test_secure_endpoint_works_on_loopback_with_require_ssl(server, monkeypatch):
-    """require_ssl drives the external listener — it must NOT 403 the HTTP loopback.
+    """require_ssl drives the external listener - it must NOT 403 the HTTP loopback.
 
     The desktop window always reaches the backend over plain-HTTP loopback while
     require_ssl may be enabled for the external listener. Secure-required
@@ -1050,7 +1050,7 @@ def test_login_lockout_response_carries_retry_after(server):
     Regression for #1097: a custom CORS exception handler rebuilt every
     HTTPException as a fresh JSONResponse and dropped exc.headers, so
     Retry-After never reached a client. Only the login 429 and the authz
-    gate's 503 raise HTTPException(headers=...) — the other backoff paths
+    gate's 503 raise HTTPException(headers=...) - the other backoff paths
     (rate_limiter, restore, library admission) build their response directly
     and never pass through an exception handler at all.
 

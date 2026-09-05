@@ -1,15 +1,15 @@
 """Add partial indexes for the hot idle work probes and the character listing.
 
 Schema-only (issue #651). Three indexes, no data touched and no reprocessing
-reset — nothing about the meaning of any column changes, so no ``Missing*Finder``
+reset - nothing about the meaning of any column changes, so no ``Missing*Finder``
 needs to re-run.
 
-``ix_picture_thumbnail_missing`` — ``picture (thumbnail_width, deleted, id)
+``ix_picture_thumbnail_missing`` - ``picture (thumbnail_width, deleted, id)
 WHERE thumbnail_width IS NULL``. Serves
 ``MissingThumbnailFinder._fetch_missing``: ``WHERE thumbnail_width IS NULL AND
 deleted IS 0 AND file_path IS NOT NULL ORDER BY id``.
 
-``ix_picture_smart_score_missing`` — ``picture (smart_score, deleted, id) WHERE
+``ix_picture_smart_score_missing`` - ``picture (smart_score, deleted, id) WHERE
 smart_score IS NULL``. Serves
 ``SmartScoreTask.find_pictures_missing_smart_score``: ``WHERE image_embedding IS
 NOT NULL AND smart_score IS NULL AND deleted IS 0 ORDER BY id``.
@@ -17,7 +17,7 @@ NOT NULL AND smart_score IS NULL AND deleted IS 0 ORDER BY id``.
 Both are *idle probes*: the WorkPlanner sweeps every finder on a short interval,
 so they run continuously on a fully-processed library where they match nothing.
 Before this migration SQLite served both from ``ix_picture_deleted`` and walked
-EVERY non-deleted row to prove there was no work — the cost of "is there
+EVERY non-deleted row to prove there was no work - the cost of "is there
 anything to do?" was proportional to library size, paid several times a second.
 
 Column order is load-bearing. The intuitive ``(id) WHERE <col> IS NULL`` form is
@@ -33,7 +33,7 @@ free (no temp B-tree). Measured on 200k rows with 3 matching, no ``sqlite_stat1`
 thumbnail probe 17.9 ms -> under 0.01 ms, smart-score probe 67.5 ms -> under
 0.01 ms.
 
-``ix_face_character_features`` — ``face (character_id) WHERE features IS NOT
+``ix_face_character_features`` - ``face (character_id) WHERE features IS NOT
 NULL``. Answers "which characters have a face carrying an embedding?" behind
 ``GET /characters``. Plain ``ix_face_character_id`` covers every face, embedded
 or not, and needs one table lookup per row to test ``features IS NOT NULL``;

@@ -10,14 +10,14 @@ get wrong), and produces exactly the ``{before, after}`` payload the DAM roadmap
 specifies for the audit log.
 
 Scope discipline (DAM 1.2, binding): only the **metadata** facets in
-:data:`FACETS` are captured and reversible — tags, the tag-prediction rows and
+:data:`FACETS` are captured and reversible - tags, the tag-prediction rows and
 their human-label ledger, caption/description, rating, picture-set / project /
 character membership, stacking, and the scrapheap soft-delete state. A facet is
 either whole or absent: a tag decision that also writes the ledger records both
 sides, because restoring the tag and leaving the ledger's rejection standing
 would look undone while the tagger still treated the tag as refused (§21.2).
-Values *derived* from those facets — ``anomaly_tag_uncertainty`` and the cached
-``smart_score`` — are deliberately NOT snapshotted; they are recomputed and
+Values *derived* from those facets - ``anomaly_tag_uncertainty`` and the cached
+``smart_score`` - are deliberately NOT snapshotted; they are recomputed and
 invalidated on restore through the same guards the forward path uses, because a
 snapshot of a derived value is a second source of truth waiting to drift.
 
@@ -40,7 +40,7 @@ the snapshot and the mutation and gets silently attributed to this operation.
 
 Origin discipline (§15, binding): ``source`` / ``origin_client_id`` are passed in
 **explicitly** by the caller, which read them from the request at request time.
-This module never reads ``origin_client_id_var`` — the contextvar is dead on the
+This module never reads ``origin_client_id_var`` - the contextvar is dead on the
 DB worker thread and on the broadcaster's loop, and a read here would be the same
 silent-attribution bug ``test_source_origin_read_from_data_only`` exists to
 prevent. Events emitted after an undo carry the origin in the event ``data`` dict
@@ -80,6 +80,10 @@ from pixlstash.db_models.operation import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import (
+    restore_location,
+    rollback_applied_moves,
+)
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -106,7 +110,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Facets — the metadata scope DAM 1.2 makes reversible
+# Facets - the metadata scope DAM 1.2 makes reversible
 # ---------------------------------------------------------------------------
 
 FACET_TAGS = "tags"
@@ -124,6 +128,14 @@ FACET_DELETED = "deleted"
 # FILE, and it is reversible for the reason the rest are: the recorded value is
 # the whole prior state, not a delta.
 FACET_ORIENTATION = "orientation"
+# Where the picture's FILE is (``Picture.file_path``), so the v1.11 layout
+# engine's batch of moves is one Ctrl+Z (§4 of the release plan). The second
+# facet whose applier writes to the filesystem, and reversible for the reason
+# the orientation is: the recorded value is the whole prior state - a path - and
+# putting a file back at a path it just came from loses nothing. Captured for
+# every operation, so a move made by any recorded route is undoable, not only
+# the engine's own.
+FACET_LOCATION = "location"
 
 FACETS = (
     FACET_TAGS,
@@ -138,6 +150,7 @@ FACETS = (
     FACET_STACK,
     FACET_DELETED,
     FACET_ORIENTATION,
+    FACET_LOCATION,
 )
 
 # Operation types the scrapheap lifecycle records. Named constants because the
@@ -186,6 +199,7 @@ _FACET_EVENTS = {
     FACET_PENDING_CHARACTER_ID: (EventType.CHANGED_CHARACTERS,),
     FACET_STACK: (EventType.CHANGED_PICTURES,),
     FACET_DELETED: (EventType.CHANGED_PICTURES,),
+    FACET_LOCATION: (EventType.CHANGED_PICTURES,),
 }
 
 
@@ -219,7 +233,7 @@ def _naive_utc_iso(value: Optional[datetime]) -> Optional[str]:
     """Serialise a ``deleted_at`` stamp for the recorded state.
 
     Every ``Picture.deleted_at`` in the DB is **naive UTC** (SQLAlchemy's SQLite
-    ``DateTime`` drops the offset on write — see ``scrapheap_service._naive_utc``),
+    ``DateTime`` drops the offset on write - see ``scrapheap_service._naive_utc``),
     but a value just assigned in-session is still aware. Normalising both to
     naive-UTC ISO here keeps the before/after comparison honest: without it the
     same instant would compare unequal across a commit boundary and every capture
@@ -290,6 +304,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             # by ``apply_orientation`` and backfilled by
             # ``MissingOrientationFinder``.
             FACET_ORIENTATION: picture.orientation,
+            FACET_LOCATION: picture.file_path,
             FACET_TAGS: [],
             FACET_TAG_PREDICTIONS: {},
             FACET_SETS: [],
@@ -346,7 +361,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
     ).all():
         state[str(int(picture_id))][FACET_TAG_PREDICTIONS][tag] = {
             # The tagger's own live fields. Captured so a row the operation itself
-            # invented can be rebuilt on redo — never written back onto a row that
+            # invented can be rebuilt on redo - never written back onto a row that
             # still exists (see :func:`_apply_tag_predictions`).
             "model_version": model_version,
             "confidence": confidence,
@@ -427,7 +442,7 @@ def diff_states(
         after: Snapshot taken after it.
 
     Returns:
-        ``(before_delta, after_delta)`` — same keys on both sides, each mapping a
+        ``(before_delta, after_delta)`` - same keys on both sides, each mapping a
         picture id to only its changed facets. A facet missing on one side (the
         picture did not exist yet, or no longer does) is recorded as ``None`` so
         the applier can tell "unchanged" from "absent".
@@ -461,7 +476,7 @@ def diff_states(
 
 # A summary is either a fixed sentence or a ``(before_delta, after_delta) -> str``
 # builder evaluated once the diff is known. The callable form exists for handlers
-# whose real target count is not knowable at call time — a bulk soft-delete that
+# whose real target count is not knowable at call time - a bulk soft-delete that
 # skips locked pictures, or a "restore everything" that never named an id.
 SummarySpec = Union[str, Callable[[dict, dict], Optional[str]], None]
 
@@ -469,10 +484,10 @@ SummarySpec = Union[str, Callable[[dict, dict], Optional[str]], None]
 SERVER_BATCH_ID_PREFIX = "srv-"
 """Namespace for a batch id the *server* minted.
 
-A batch id can also arrive from a client — the ``cli-`` shape, validated at
+A batch id can also arrive from a client - the ``cli-`` shape, validated at
 both request boundaries (the ``X-Operation-Batch-Id`` header in
 ``utils/request_origin.py``, the dedup verdict body field in
-``routes/dedup.py``) — and the two must be distinguishable in the log: an
+``routes/dedup.py``) - and the two must be distinguishable in the log: an
 un-namespaced id makes a client-supplied grouping key indistinguishable from a
 server-minted one, so a client could graft its rows into what reads as a
 server batch. Every minting site in the backend goes through
@@ -489,7 +504,7 @@ def lifecycle_split(state: dict[str, dict]) -> tuple[list[int], list[int]]:
     """Split *state* into the pictures it scrapheaps and the ones it restores.
 
     Args:
-        state: A recorded (already-diffed) state — the side about to be written.
+        state: A recorded (already-diffed) state - the side about to be written.
 
     Returns:
         ``(scrapheaped_ids, restored_ids)``: pictures whose :data:`FACET_DELETED`
@@ -557,7 +572,7 @@ def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict
 
     Call this **in the handler**, on the request's own task. The values are then
     passed explicitly down to the recorder and, later, into the WS event ``data``
-    dict — the §15 threading rule: the ``origin_client_id`` contextvar is dead on
+    dict - the §15 threading rule: the ``origin_client_id`` contextvar is dead on
     the DB worker thread and on the broadcaster's loop, so nothing downstream may
     read it.
 
@@ -571,7 +586,7 @@ def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict
 
     Args:
         request: The FastAPI request (duck-typed; only ``request.state`` is used).
-        fallback_batch_id: Batch id to use when the caller sent no usable header —
+        fallback_batch_id: Batch id to use when the caller sent no usable header -
             for a handler that is a bulk action in its own right and mints a
             server-side batch id (``srv-…``) regardless.
 
@@ -628,8 +643,8 @@ def record_operation_in_session(
         empty_diff_target_ids: Normally an empty diff records nothing (a no-op
             endpoint must not consume a Ctrl+Z). Pass the affected ids here for
             an operation whose *entire* reversible state lives outside the
-            picture facets — the dedup keep-separate verdict is the case in
-            point — and the row is recorded anyway, with empty before/after
+            picture facets - the dedup keep-separate verdict is the case in
+            point - and the row is recorded anyway, with empty before/after
             payloads and these target ids, so undo/redo still find it and its
             registered post-restore hook performs the whole restore. Ignored
             when the diff is non-empty.
@@ -667,8 +682,8 @@ def record_operation_in_session(
         )
 
     # A new operation invalidates the redo stack: anything previously undone can
-    # no longer be replayed onto a history that has moved on. The rows stay —
-    # this is an append-only audit log — only their status marker advances.
+    # no longer be replayed onto a history that has moved on. The rows stay -
+    # this is an append-only audit log - only their status marker advances.
     superseded = session.exec(
         select(Operation).where(Operation.status == STATUS_UNDONE)
     ).all()
@@ -753,7 +768,7 @@ def run_recorded_metadata_task(
             unsnapshotted renumber is a change undo could not reverse.
         resolve_picture_ids: Optional ``(session) -> ids`` run **before** the
             mutation, on the mutation's own session, for handlers whose targets
-            are not knowable from the request alone — a request addressed by face
+            are not knowable from the request alone - a request addressed by face
             id, or a replace-all that evicts members it was never told about. Its
             result is unioned with *picture_ids*; without it those pictures fall
             outside the snapshot and the operation records a half-change that
@@ -854,7 +869,7 @@ def _apply_tag_predictions(session: Session, picture_id: int, predictions) -> No
        A user decision is the one thing that can *create* a prediction row
        (``record_human_label`` invents a ``model_version='manual'`` row for a tag
        the tagger never predicted), so that is the only kind an undo may remove.
-       A real tagger row written since the recording is left alone and logged —
+       A real tagger row written since the recording is left alone and logged -
        deleting it would silently discard model output nobody asked to revert.
 
     Args:
@@ -1002,8 +1017,8 @@ def _apply_stack(
         stack: The recorded facet value, ``{"id", "name", "position"}``.
         vacated_stack_ids: Collector for the ids of stacks this restore moves
             pictures OFF of. Whether such a stack ends up empty cannot be
-            decided here — this runs per picture, and a later picture of the
-            same restore may still land on the stack — so the restore checks
+            decided here - this runs per picture, and a later picture of the
+            same restore may still land on the stack - so the restore checks
             the collected ids once every state is applied
             (:func:`delete_emptied_stacks`).
     """
@@ -1035,7 +1050,7 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
     The symmetric counterpart of the recreate branch in :func:`_apply_stack`:
     undoing a dissolve recreates the stack row, so undoing a stack *creation*
     (members restored to ``stack_id=None`` or to another stack) must delete the
-    row it empties — otherwise every undone stacking leaves an orphaned empty
+    row it empties - otherwise every undone stacking leaves an orphaned empty
     ``PictureStack`` behind (issue #643, CSO finding C3 in the dedup sign-off).
     Public (no underscore) because the dedup clear-decision path applies a
     recorded stack state outside a restore and owes the same hygiene.
@@ -1056,7 +1071,7 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
     for stack_id in sorted(stack_ids):
         stack = session.get(PictureStack, stack_id)
         if stack is None:
-            # Already gone — e.g. the restore replayed a dissolve, whose forward
+            # Already gone - e.g. the restore replayed a dissolve, whose forward
             # path deleted the row itself. Nothing to clean up; logged so the
             # skip is visible rather than silent.
             logger.debug(
@@ -1077,7 +1092,7 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
             )
             continue
         logger.info(
-            "operation_log: deleting stack %d (name=%r) — the restore moved its "
+            "operation_log: deleting stack %d (name=%r) - the restore moved its "
             "last member off it, and an empty stack row would otherwise be left "
             "orphaned",
             stack_id,
@@ -1089,7 +1104,7 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
 # The built-in rotate plugin owns the corner-rotation maths (all four corners
 # rotated as points, then the axis-aligned box of the result). Its folder name
 # carries a hyphen, so it is reachable only through ``importlib``; the call is
-# cached in ``sys.modules`` and paid once per process. Reusing it is the point —
+# cached in ``sys.modules`` and paid once per process. Reusing it is the point -
 # a second copy of the formula is a second thing to get wrong, and this one is
 # already exercised by the copy-producing rotate plugin.
 _ROTATE_PLUGIN_MODULE = "pixlstash.image_plugins.built-in.rotate"
@@ -1105,7 +1120,7 @@ _TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
 def _clockwise_steps(current: int, target: int) -> Optional[int]:
     """Quarter turns clockwise taking *current* to *target*, or ``None``.
 
-    ``None`` means the two orientations are not a rotation apart — they differ in
+    ``None`` means the two orientations are not a rotation apart - they differ in
     mirroring, which nothing in this codebase writes. The caller turns the file
     anyway and leaves the boxes alone rather than moving them by a transform it
     cannot derive.
@@ -1123,9 +1138,9 @@ def _rotate_picture_boxes(
 ) -> None:
     """Turn every stored face/detection box with the picture's display.
 
-    Both box tables are stored in **EXIF-corrected** space — the extraction tasks
+    Both box tables are stored in **EXIF-corrected** space - the extraction tasks
     load through ``load_image_bgr_reduced``, which runs ``ImageOps.exif_transpose``
-    — so a change of orientation moves them even though not one pixel moved.
+    - so a change of orientation moves them even though not one pixel moved.
     ``Picture.width`` / ``height`` are RAW and stay as they are; the display size
     the transform needs is those two swapped when the *current* orientation is a
     quarter turn.
@@ -1184,7 +1199,7 @@ def apply_orientation(
     * ``thumbnail_width`` / ``thumbnail_height``, NULLed so
       ``MissingThumbnailFinder`` regenerates the bitmap;
     * ``image_embedding`` / ``perceptual_hash``, NULLed so
-      ``MissingImageEmbeddingFinder`` recomputes them — both describe the decoded
+      ``MissingImageEmbeddingFinder`` recomputes them - both describe the decoded
       image, which now decodes at a different rotation.
 
     ``Picture.width`` / ``height`` are deliberately untouched: they describe the
@@ -1222,7 +1237,7 @@ def apply_orientation(
     # user's own files, managed outside the library: we do not write to them.
     if picture.reference_folder_id is not None:
         logger.warning(
-            "operation_log: refusing to set orientation %s on picture %s — it "
+            "operation_log: refusing to set orientation %s on picture %s - it "
             "lives in a reference folder, whose files this library does not "
             "write to; rotate it as a copy instead",
             orientation,
@@ -1233,7 +1248,7 @@ def apply_orientation(
     file_path = ImageUtils.resolve_picture_path(image_root, picture.file_path)
     if not file_path or not os.path.exists(file_path):
         logger.error(
-            "operation_log: cannot set orientation %s on picture %s — %r does not "
+            "operation_log: cannot set orientation %s on picture %s - %r does not "
             "resolve to a readable file, so the file and the stored mirror will "
             "disagree until the picture is rotated again",
             orientation,
@@ -1251,15 +1266,15 @@ def apply_orientation(
     # for it. Reference folders are already refused above, so the vault root is
     # the only legitimate location left.
     #
-    # Containment here is STRICT — `resolve_path_within`, which realpaths both
-    # sides — and not `path_is_within`, which answers True on a purely lexical
+    # Containment here is STRICT - `resolve_path_within`, which realpaths both
+    # sides - and not `path_is_within`, which answers True on a purely lexical
     # pass before any symlink is resolved (#1024). What that lenience costs is
     # not what the name suggests: a symlink planted inside the library cannot
     # carry the *write* out of it, because `write_orientation` renames a
     # `mkstemp` sibling over the path and `os.replace` replaces a symlink rather
     # than following it. `read_orientation` does follow it, though, so the
-    # outside file's bytes — and, through `_carry_file_identity`, its mode and
-    # owner — would be copied into the library under the link's name. That is a
+    # outside file's bytes - and, through `_carry_file_identity`, its mode and
+    # owner - would be copied into the library under the link's name. That is a
     # read escape wearing a write sink's clothes, and this is the sink that can
     # close it.
     #
@@ -1271,7 +1286,7 @@ def apply_orientation(
     # docstring promises.
     if not image_root:
         logger.error(
-            "operation_log: refusing to set orientation %s on picture %s — no "
+            "operation_log: refusing to set orientation %s on picture %s - no "
             "library root was supplied, so its stored path %r cannot be confirmed "
             "to be inside one; the file is not touched",
             orientation,
@@ -1283,7 +1298,7 @@ def apply_orientation(
         file_path = resolve_path_within(image_root, os.path.abspath(file_path))
     except ValueError as exc:
         logger.error(
-            "operation_log: refusing to set orientation %s on picture %s — its "
+            "operation_log: refusing to set orientation %s on picture %s - its "
             "stored path %r resolves through to %s, which is outside the library "
             "root %r (%s); the file is not touched",
             orientation,
@@ -1345,7 +1360,7 @@ def apply_orientation(
     # picture that no longer exists. Left stale they are worse than absent: the
     # near-duplicate tiers compare a turned picture against its own pre-turn
     # neighbours and mis-group it. NULLing re-queues them the way every other
-    # regeneration in this codebase is triggered — `ImageEmbeddingTask.fetch_work`
+    # regeneration in this codebase is triggered - `ImageEmbeddingTask.fetch_work`
     # selects on `image_embedding IS NULL`, and that one task owns the perceptual
     # hash as well, so this is one finder and one pass rather than two.
     picture.image_embedding = None
@@ -1372,8 +1387,8 @@ def _enforce_scrapheap_targets_exist(
     """Raise ``410`` if a picture this state would move in/out of the scrapheap is gone.
 
     The one edge case a scrapheap undo has that a metadata undo does not: the
-    picture may have been **permanently purged** since — by the 30-day retention
-    sweep or by Empty Scrapheap — and a purge destroys the file, so no undo can
+    picture may have been **permanently purged** since - by the 30-day retention
+    sweep or by Empty Scrapheap - and a purge destroys the file, so no undo can
     bring it back. Fail closed and refuse the whole request, exactly as the
     locked-set guard above does: the operation stays ``applied``, nothing is
     committed, and the caller is told which pictures are gone rather than being
@@ -1382,7 +1397,7 @@ def _enforce_scrapheap_targets_exist(
     Only pictures carrying the :data:`FACET_DELETED` facet are checked. A purged
     picture that merely appears in some *other* operation's recorded state (a tag
     edit, a stack renumber) keeps the long-standing skip-with-a-warning
-    behaviour — there is no lifecycle promise to break there.
+    behaviour - there is no lifecycle promise to break there.
 
     Args:
         session: Pre-opened DB session.
@@ -1410,7 +1425,7 @@ def _enforce_scrapheap_targets_exist(
     if not missing:
         return
     logger.warning(
-        "operation_log: refusing to %s — %d of %d scrapheap target(s) %s were "
+        "operation_log: refusing to %s - %d of %d scrapheap target(s) %s were "
         "permanently purged and cannot be brought back; the operation stays "
         "applied and nothing was written",
         action,
@@ -1455,6 +1470,7 @@ def apply_state_in_session(
     origin_client_id: Optional[str] = None,
     vacated_stack_ids: Optional[set[int]] = None,
     image_root: Optional[str] = None,
+    applied: Optional[list] = None,
 ) -> list[int]:
     """Write a recorded metadata state back onto its pictures.
 
@@ -1481,7 +1497,7 @@ def apply_state_in_session(
             restore invalidates refreshes the initiating tab's card immediately
             instead of waiting for the whole backfill to drain.
         origin_client_id: The tab that asked for the undo/redo, stamped onto that
-            refresh. Passed in explicitly (§15) — never read from a contextvar.
+            refresh. Passed in explicitly (§15) - never read from a contextvar.
         vacated_stack_ids: Optional collector, forwarded to :func:`_apply_stack`,
             of the stacks this state moves pictures off of. The caller decides
             after ALL states are applied whether those stacks ended up empty and
@@ -1567,14 +1583,14 @@ def apply_state_in_session(
                     # Deliberately NOT guarded on `value is not None` like its
                     # siblings. A recorded `None` means the row predates the
                     # orientation mirror being backfilled, so its undo genuinely
-                    # cannot turn the file — and `apply_orientation` says so, at
+                    # cannot turn the file - and `apply_orientation` says so, at
                     # warning level, naming the picture. Skipping here instead
                     # would make an incomplete undo indistinguishable from a
                     # complete one, and silence the one message that explains it.
                     #
                     # This is also the only facet whose write leaves the
                     # database, so the only one that can fail for reasons the
-                    # rest of the batch has nothing to do with — a read-only
+                    # rest of the batch has nothing to do with - a read-only
                     # file, a full disk, a photo replaced by something that is no
                     # longer an image. The forward path degrades those to
                     # `skipped`; letting them out of this loop instead would fail
@@ -1602,6 +1618,34 @@ def apply_state_in_session(
                             "it has until the picture is turned again",
                             value,
                             picture_id,
+                            exc,
+                        )
+                elif facet == FACET_LOCATION:
+                    # Not guarded on ``value is not None``: a recorded None
+                    # means the picture had no path at all, and
+                    # ``restore_location`` says so rather than silently doing
+                    # nothing. Like the orientation above it, this applier
+                    # leaves the database, so it fails for reasons the rest of
+                    # the batch has nothing to do with - a destination taken
+                    # since, a read-only folder, a file the owner has since
+                    # moved themselves. Those degrade to a logged skip instead
+                    # of failing an undo that also has tags and memberships in
+                    # it.
+                    try:
+                        restore_location(
+                            session,
+                            picture_id,
+                            value,
+                            image_root=image_root,
+                            applied=applied,
+                        )
+                    except (OSError, ValueError) as exc:
+                        logger.error(
+                            "operation_log: could not move picture %d back to "
+                            "%r (%s); the rest of this restore still applies "
+                            "and the file keeps the path it has.",
+                            picture_id,
+                            value,
                             exc,
                         )
                 elif facet == FACET_DELETED:
@@ -1651,7 +1695,7 @@ def serialize(operation: Operation, include_state: bool = False) -> dict:
     Args:
         operation: The row to serialize.
         include_state: Include the full ``before``/``after`` payloads. Off by
-            default — the list endpoint would otherwise ship a whole library's
+            default - the list endpoint would otherwise ship a whole library's
             metadata to the client.
     """
     data = {
@@ -1679,7 +1723,7 @@ def serialize(operation: Operation, include_state: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Post-restore hooks — reopening the domain state an operation also decided
+# Post-restore hooks - reopening the domain state an operation also decided
 # ---------------------------------------------------------------------------
 
 RESTORE_UNDO = "undo"
@@ -1691,8 +1735,8 @@ RESTORE_REDO = "redo"
 #
 # Why hooks exist at all: the recorded before/after state covers the reversible
 # *picture* facets (:data:`FACETS`). An operation may additionally have decided
-# something that is not a picture facet — the v1.9 duplicate verdict is the first
-# — and restoring the pictures without reopening that decision leaves the two
+# something that is not a picture facet - the v1.9 duplicate verdict is the first
+# - and restoring the pictures without reopening that decision leaves the two
 # halves disagreeing. The hook runs inside the restore's own transaction, after
 # every state has been applied, so the decision and the pictures commit together
 # or not at all.
@@ -1808,6 +1852,7 @@ def _restore(
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
     image_root: Optional[str] = None,
+    applied: Optional[list] = None,
 ) -> tuple[list[int], set[str], dict[str, list[int]]]:
     """Apply the before- (undo) or after- (redo) state of *operations* in order.
 
@@ -1824,7 +1869,7 @@ def _restore(
 
     Returns:
         ``(touched_ids, facets, lifecycle)`` where *lifecycle* is
-        ``{"scrapheaped": [...], "restored": [...]}`` — the pictures this
+        ``{"scrapheaped": [...], "restored": [...]}`` - the pictures this
         restoration moves into and out of the scrapheap, so the caller can
         announce them as ``removed`` / ``restored`` instead of ``updated``.
     """
@@ -1840,7 +1885,7 @@ def _restore(
         )
         if not state:
             # An operation recorded through the empty-diff path (its whole
-            # reversible state lives outside the picture facets — the dedup
+            # reversible state lives outside the picture facets - the dedup
             # keep-separate verdict). Its restore is entirely its post-restore
             # hook's, but the pictures it named still change domain state, so
             # they are returned and announced like any other restore target.
@@ -1855,6 +1900,7 @@ def _restore(
                 origin_client_id=origin_client_id,
                 vacated_stack_ids=vacated_stack_ids,
                 image_root=image_root,
+                applied=applied,
             )
         )
         for picture_facets in state.values():
@@ -1887,7 +1933,7 @@ def _emit(
     """Announce a restored state on the WS envelope.
 
     ``origin_client_id`` is carried in the event ``data`` dict, never read from a
-    contextvar — this runs on the DB worker thread where the contextvar is dead
+    contextvar - this runs on the DB worker thread where the contextvar is dead
     (§15, ``test_source_origin_read_from_data_only``).
 
     ``change_kind`` follows the scrapheap lifecycle rather than being a blanket
@@ -1946,7 +1992,7 @@ def _emit(
         vault.notify(event, data)
 
     # Restoring an orientation rewrites the FILE, so the card's thumbnail URL
-    # changes — and that URL comes from the batch-thumbnail endpoint, not from
+    # changes - and that URL comes from the batch-thumbnail endpoint, not from
     # `GET /pictures/{id}/metadata`. A bare `updated` therefore makes the client
     # re-read metadata it already has and go on painting the pre-rotate bitmap,
     # which is exactly what `stack_count` below exists to solve for a different
@@ -1957,7 +2003,12 @@ def _emit(
     # mixed batch re-reads a few thumbnails it did not need to. That costs one
     # request against a conditional-GET-friendly URL; guessing wrong the other
     # way leaves a visibly stale photo on screen.
-    updated_fields = ["pixels"] if FACET_ORIENTATION in facets else None
+    # A restored location moves the FILE, so the card's thumbnail URL changes
+    # for exactly the reason a restored orientation does - the URL is derived
+    # from the path, not from ``GET /pictures/{id}/metadata``.
+    updated_fields = (
+        ["pixels"] if facets & {FACET_ORIENTATION, FACET_LOCATION} else None
+    )
     for event in events:
         _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
@@ -2076,16 +2127,27 @@ def undo_in_session(
     members = [member for member in members if member.undoable]
     if not members:
         raise OperationLogError("Nothing to undo")
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=True,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    _mark_undone(session, members)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=True,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        _mark_undone(session, members)
+        session.commit()
+    except BaseException:
+        # An undo renames files before this transaction commits, and everything
+        # between - the post-restore hooks, the emptied-stack sweep, the commit
+        # itself - can raise. The writer then rolls the session back while the
+        # files stay where the undo put them, and a row naming a path with no
+        # file at it is what ``MissingFilePurgeTask`` deletes a picture over.
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
@@ -2109,16 +2171,22 @@ def undo_batch_in_session(
     if not members:
         raise OperationLogError(f"Batch {batch_id} has nothing to undo")
     _enforce_latest_undo_unit(session, members[0])
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=True,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    _mark_undone(session, members)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=True,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        _mark_undone(session, members)
+        session.commit()
+    except BaseException:
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
@@ -2139,19 +2207,25 @@ def redo_in_session(
     members = _batch_members_in_session(session, operation, STATUS_UNDONE)
     # Redo replays in application order, the mirror of undo's reverse order.
     members = sorted(members, key=lambda op: op.id or 0)
-    touched, facets, lifecycle = _restore(
-        session,
-        members,
-        to_before=False,
-        registry=registry,
-        origin_client_id=origin_client_id,
-        image_root=image_root,
-    )
-    for member in members:
-        member.status = STATUS_APPLIED
-        member.undone_at = None
-        session.add(member)
-    session.commit()
+    applied: list = []
+    try:
+        touched, facets, lifecycle = _restore(
+            session,
+            members,
+            to_before=False,
+            registry=registry,
+            origin_client_id=origin_client_id,
+            image_root=image_root,
+            applied=applied,
+        )
+        for member in members:
+            member.status = STATUS_APPLIED
+            member.undone_at = None
+            session.add(member)
+        session.commit()
+    except BaseException:
+        rollback_applied_moves(applied, image_root)
+        raise
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 

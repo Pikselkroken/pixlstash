@@ -15,7 +15,12 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <script>
+      try {
+        if (localStorage.getItem("pixlstash-theme") === "light")
+          document.documentElement.setAttribute("data-theme", "light");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── upgrade.html page-specific ── */
@@ -397,30 +402,33 @@
       </div>
 
       <div id="upgrade-notice" class="method-warning upgrade-notice">
-        ⚠️ <strong>Upgrading to 1.10?</strong> The library upgrade is not
-        backwards compatible: once a library has been opened by 1.10, an older
-        version cannot open it again. Back it up first by copying the library
-        folder somewhere safe while PixlStash is stopped.
+        ⚠️ <strong>Back your library up first</strong> by copying the library
+        folder somewhere safe while PixlStash is stopped. Opening a library with
+        1.11 adds columns to its database. And if you are coming from 1.9 or
+        earlier, the 1.10 library upgrade is not backwards compatible: once a
+        library has been opened by 1.10 or later, an older version cannot open
+        it again.
       </div>
 
       <a class="whatsnew-banner" href="whatsnew.html">
         <div>
-          <span class="whatsnew-kicker">New in 1.10</span>
+          <span class="whatsnew-kicker">New in 1.11</span>
           <h2 class="whatsnew-title">
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            Several picture libraries in one installation, a model shelf for your
-            checkpoints and LoRAs, ai-toolkit training run import, a
-            pixlstash-cli command line for backups and plugins, and a start-up
-            check on your library folder's permissions.
+            Add a library from Settings and let the folder answer for itself:
+            PixlStash reads a folder of pictures where it sits and turns your
+            folder names into projects, people and sets, without moving or
+            renaming a file. Plus a folder layout for the pictures a library
+            writes next and export straight into a folder.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
-            src="assets/ScreenshotLibraries.jpg"
-            alt="PixlStash 1.10: Settings with two registered picture libraries and the active one marked"
+            src="assets/ScreenshotMapTree.jpg"
+            alt="PixlStash 1.11: a folder of pictures being read, with each folder level labelled as a project, a person or a set"
           />
         </div>
       </a>
@@ -687,19 +695,21 @@
       // links and bold. Italics are deliberately left alone because release
       // text is full of literal asterisks (globs like *-win-x64.exe).
       function inlineMarkdown(escaped) {
-        return escaped
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          // Release notes link into the README by relative path, which resolves
-          // to nothing here. Send those to the file on GitHub.
-          .replace(
-            /\[([^\]]+)\]\((README\.md(?:#[^\s)]*)?)\)/g,
-            '<a href="https://github.com/pikselkroken/pixlstash/blob/main/$2" target="_blank" rel="noopener">$1</a>',
-          )
-          .replace(
-            /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-            '<a href="$2" target="_blank" rel="noopener">$1</a>',
-          )
-          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        return (
+          escaped
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            // Release notes link into the README by relative path, which resolves
+            // to nothing here. Send those to the file on GitHub.
+            .replace(
+              /\[([^\]]+)\]\((README\.md(?:#[^\s)]*)?)\)/g,
+              '<a href="https://github.com/pikselkroken/pixlstash/blob/main/$2" target="_blank" rel="noopener">$1</a>',
+            )
+            .replace(
+              /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener">$1</a>',
+            )
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        );
       }
 
       function formatItem(raw) {

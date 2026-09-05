@@ -1,8 +1,8 @@
-// Collapsing loose adapters into stacks — /model-stacks.
+// Collapsing loose adapters into stacks - /model-stacks.
 //
 // `createStack` is the only call that builds one, from a selection the owner
 // made. The rest edit a stack that exists: `unstackStack` breaks one up, and
-// `setStackCover` / `removeStackMember` act on one file inside it — the two
+// `setStackCover` / `removeStackMember` act on one file inside it - the two
 // gestures the expanded strip is for.
 
 import { apiClient } from "../utils/apiClient";
@@ -40,7 +40,7 @@ export async function createStack(
 /**
  * Break a stack apart, leaving its members loose on the shelf.
  *
- * **Nothing on disk is touched** — two hub columns are cleared and one row is
+ * **Nothing on disk is touched** - two hub columns are cleared and one row is
  * deleted. The released files reappear as the individual adapters they were,
  * which also means detection can offer to regroup them: this undoes a grouping,
  * it does not record a refusal.
@@ -83,7 +83,7 @@ export async function setStackCover(stackId, modelId) {
  * promotes whichever member was behind it.
  *
  * A stack of one is not a stack, so taking out the second-to-last member
- * dissolves the whole thing and both files go loose — which is what
+ * dissolves the whole thing and both files go loose - which is what
  * `dissolved` reports.
  *
  * @param {number} stackId - hub `adapter_stack.id`.

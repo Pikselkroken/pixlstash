@@ -1,7 +1,7 @@
 // The grid toolbar's app-wide tail and its ⋯ overflow.
 //
 // jsdom does not evaluate container queries, so the width steps themselves are
-// not simulated here — they are covered by the CSS being SHARED (the same
+// not simulated here - they are covered by the CSS being SHARED (the same
 // scoped @container rules ship to both bars). What these tests pin is the part
 // jsdom can see: the canonical tail order, the fold pairs existing with the
 // same v-if on both sides, and read-only degrading the rows exactly as it
@@ -99,7 +99,7 @@ function mountToolbar(props = {}, stubs = {}) {
   });
 }
 
-describe("Toolbar — icon menu attachment", () => {
+describe("Toolbar - icon menu attachment", () => {
   it("keeps Search, Export, and Import end-clamped while pointing at each icon centre", async () => {
     const wrapper = mountToolbar(
       {},
@@ -149,7 +149,7 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-describe("Toolbar — narrow-screen composition", () => {
+describe("Toolbar - narrow-screen composition", () => {
   it("offers a real navigation control when the sidebar is forced into a drawer", async () => {
     const sidebar = useSidebarStore();
     sidebar.sidebarForcedHidden = true;
@@ -181,11 +181,11 @@ describe("Toolbar — narrow-screen composition", () => {
   });
 });
 
-describe("Toolbar — the shell band's one box recipe", () => {
+describe("Toolbar - the shell band's one box recipe", () => {
   // jsdom computes no layout, so rendered heights cannot be asserted; what
   // CAN be pinned is the coupling itself. `.selection-bar-overlay` is the
   // point of truth for the 36px band recipe and `.dq-toolbar` and
-  // `.shelf-toolbar` copy it — the drift this guards against: the dq bar
+  // `.shelf-toolbar` copy it - the drift this guards against: the dq bar
   // shipped with `min-height` + vertical padding on a content-box, which
   // rendered 41px next to the grid's exact 36px once the 32px app-wide tail
   // buttons landed, and the shelf bar shipped at `--bar-height` (48px), which
@@ -220,8 +220,12 @@ describe("Toolbar — the shell band's one box recipe", () => {
       "src/components/views/ModelShelf.vue",
       ".shelf-toolbar",
     );
+    const insights = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-toolbar",
+    );
 
-    for (const block of [grid, dq, shelf]) {
+    for (const block of [grid, dq, shelf, insights]) {
       expect(block).toContain("height: 36px");
       expect(block).toContain("box-sizing: border-box");
       // min-height + vertical padding is exactly the recipe that drifted.
@@ -243,7 +247,7 @@ describe("Toolbar — the shell band's one box recipe", () => {
 
     // The RIGHT insets must be the same token: the app-wide tail is a stable
     // anchor only if its icons land at the identical distance from the edge
-    // in every view. (The dq and shelf bars' LEFT insets may differ — each
+    // in every view. (The dq and shelf bars' LEFT insets may differ - each
     // aligns with its own view's content gutter.) Shorthand forms accepted:
     // `0 X` (right = X) and `0 R 0 L` (right = first var).
     const rightInset = (block) => {
@@ -253,6 +257,7 @@ describe("Toolbar — the shell band's one box recipe", () => {
     };
     expect(rightInset(dq)).toBe(rightInset(grid));
     expect(rightInset(shelf)).toBe(rightInset(grid));
+    expect(rightInset(insights)).toBe(rightInset(grid));
 
     // Two of the three bars LEAD with an identity (the queue's count, the
     // shelf's title) and each carries a quieter count beneath it. They read as
@@ -278,14 +283,27 @@ describe("Toolbar — the shell band's one box recipe", () => {
       ".shelf-sub",
     );
 
+    const insTitle = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-title",
+    );
+    const insSub = blockOf(
+      "src/components/views/LibraryInsights.vue",
+      ".ins-sub",
+    );
+
     expect(decl(shelfTitle, "font-size")).toBe(decl(qtitle, "font-size"));
     expect(decl(shelfTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
     expect(decl(shelfSub, "font-size")).toBe(decl(qsub, "font-size"));
     expect(decl(shelfSub, "color")).toBe(decl(qsub, "color"));
+    expect(decl(insTitle, "font-size")).toBe(decl(qtitle, "font-size"));
+    expect(decl(insTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
+    expect(decl(insSub, "font-size")).toBe(decl(qsub, "font-size"));
+    expect(decl(insSub, "color")).toBe(decl(qsub, "color"));
   });
 });
 
-describe("Toolbar — Recently changed stacks", () => {
+describe("Toolbar - Recently changed stacks", () => {
   const options = [
     { label: "Date Created", value: "DATE" },
     { label: "Recently changed stacks", value: "STACK_UPDATED_AT" },
@@ -334,11 +352,11 @@ describe("Toolbar — Recently changed stacks", () => {
   });
 });
 
-describe("Toolbar — the canonical app-wide tail", () => {
+describe("Toolbar - the canonical app-wide tail", () => {
   // The decision record: every toolbar that writes the operation log ends
   // [separator][UndoControl][TbGlobalActions] (the model shelf does not write
   // it and carries no undo, amendment #4); the ⋯ (amendment #2) is NOT part of
-  // the tail — a burger stands at the end of the group it collapses, the left
+  // the tail - a burger stands at the end of the group it collapses, the left
   // action run.
   it("orders the tail separator → UndoControl → TbGlobalActions", () => {
     const wrapper = mountToolbar();
@@ -354,7 +372,7 @@ describe("Toolbar — the canonical app-wide tail", () => {
   });
 
   // Amendment #2: the burger lives at the END of the left group, where the
-  // controls it collapses stood — never in the right tail.
+  // controls it collapses stood - never in the right tail.
   it("mounts the ⋯ as the left group's last child, not in the tail", () => {
     const wrapper = mountToolbar();
     expect(wrapper.find(".selection-bar-left .tb-overflow").exists()).toBe(
@@ -368,7 +386,7 @@ describe("Toolbar — the canonical app-wide tail", () => {
   });
 
   // The separator amendments: a rule marks a SEMANTIC boundary, not a group
-  // edge — the elastic gap already draws left|right. Two rules remain, and
+  // edge - the elastic gap already draws left|right. Two rules remain, and
   // with the burger anchoring the action run (amendment #2) BOTH render at
   // all widths: G-S1's flanks stay populated down to the [Search][⋯] floor,
   // so it carries no fold class any more.
@@ -389,7 +407,7 @@ describe("Toolbar — the canonical app-wide tail", () => {
     );
   });
 
-  it("mounts UndoControl exactly once — the left-group copy is gone", () => {
+  it("mounts UndoControl exactly once - the left-group copy is gone", () => {
     const wrapper = mountToolbar();
     expect(wrapper.findAllComponents({ name: "UndoControl" })).toHaveLength(1);
   });
@@ -411,7 +429,7 @@ describe("Toolbar — the canonical app-wide tail", () => {
 // The zip holds the grid's selection when there is one (ImageGrid's
 // exportCurrentViewToZip sends the selected ids and nothing else), so the
 // control has to name that subset instead of promising the whole grid.
-describe("Toolbar — the export control names what it will export", () => {
+describe("Toolbar - the export control names what it will export", () => {
   const exportTitle = (wrapper) =>
     wrapper
       .findAll("button.tb-export-btn")
@@ -448,14 +466,14 @@ describe("Toolbar — the export control names what it will export", () => {
   });
 });
 
-describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
+describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
   async function openOverflow(wrapper) {
     await wrapper.find(".tbo-trigger").trigger("click");
     return wrapper.find(".tbo-panel");
   }
 
   // Amendment #2: the burger holds ONLY its own group's members. Review,
-  // Settings, Stats and History never appear here — Review stays a visible
+  // Settings, Stats and History never appear here - Review stays a visible
   // button at all widths, Settings/Stats never fold, and below 480 the
   // History popover is simply unavailable (accepted, documented loss).
   it("carries rows for its own group's foldables and nothing else", async () => {

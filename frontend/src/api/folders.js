@@ -1,4 +1,4 @@
-// Folders resource — /reference-folders, /import-folders, and /filesystem/*.
+// Folders resource - /reference-folders, /import-folders, and /filesystem/*.
 //
 // Two folder KINDS share one shape: reference folders (watched, read in place,
 // optionally sidecar-synced) and import folders (watched, contents ingested).

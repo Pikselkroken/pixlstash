@@ -7,7 +7,7 @@ at zero ground truth ``tag_scan_service.scan_tag`` takes its confidence-only
 fallback branch, whose candidate query mirrors the board's ``est_missing``
 aggregate, so ``ground_truth == 0 and est_missing == 0`` proves an empty scan.
 
-Additive column on a derived cache — ``tag_health`` rows are wholesale replaced
+Additive column on a derived cache - ``tag_health`` rows are wholesale replaced
 by every rebuild (``tag_health_service.rebuild_tag_health`` DELETEs the table
 before reinserting), so no backfill is needed. ``computed_at`` is reset to the
 epoch so ``is_stale`` reports the cache as stale and the auto-rebuild finder
@@ -20,7 +20,7 @@ board's zero-yield gate (``tagHealthBoardLogic.zeroYieldReason``) treats
 nothing and disables "Start review". Backfilling ``0`` would therefore disable
 the button vault-wide for every pre-existing row until the next rebuild landed.
 ``NULL`` serializes as ``null``/``undefined``, which the gate already treats as
-"no measurement yet" and leaves the button enabled — absence of evidence is not
+"no measurement yet" and leaves the button enabled - absence of evidence is not
 evidence of emptiness.
 
 Revision ID: 0075_add_tag_health_ground_truth

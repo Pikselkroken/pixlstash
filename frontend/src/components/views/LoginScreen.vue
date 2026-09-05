@@ -107,7 +107,7 @@ async function submitLogin() {
 }
 
 // A form with a submit button submits on Enter as well as on click, and the
-// registration branch of this one claims ownership of the library — so a second
+// registration branch of this one claims ownership of the library - so a second
 // press while the first is in flight is exactly the double-create #647 is about.
 const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
 </script>
@@ -144,7 +144,7 @@ const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
 }
 
 /* The login screen paints `dark-surface` in BOTH themes, so its status hues come
-   from the `dark-surface-<status>` family, not the theme's canvas-tuned ones —
+   from the `dark-surface-<status>` family, not the theme's canvas-tuned ones -
    the light theme's deepened `error` measures 3.12:1 here. notice-surface.md §3.3. */
 .token-error-banner {
   display: flex;
@@ -251,7 +251,7 @@ form {
 /* Pending is not disabled: the login button only ever goes disabled because a
    request is in flight, so it keeps full strength and says "working" with the
    spinner and the cursor rather than by fading (visual-language.md §11). The
-   spin survives reduced motion — a frozen mdi-loading reads as a broken glyph,
+   spin survives reduced motion - a frozen mdi-loading reads as a broken glyph,
    and @mdi/font puts the animation on ::before, where the global reset lands. */
 .login-button:disabled {
   cursor: progress;

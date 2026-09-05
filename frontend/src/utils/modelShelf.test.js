@@ -118,7 +118,7 @@ describe("modelName", () => {
   });
 
   it("separates the file's own string from one we made", () => {
-    // Nothing survived the strip, so what is shown IS the filename — a
+    // Nothing survived the strip, so what is shown IS the filename - a
     // different piece of news from `derived`, and the row says which.
     expect(modelName({ filename: "000002750.safetensors" })).toEqual({
       text: "000002750.safetensors",
@@ -154,7 +154,7 @@ describe("adapterKindLabel", () => {
 
   it("returns a STRING for a key that names something on Object.prototype", () => {
     // `kind` is free text, and a plain index on an object literal answers
-    // `constructor` with a FUNCTION — truthy, so a `|| key` fallback never
+    // `constructor` with a FUNCTION - truthy, so a `|| key` fallback never
     // fires. That value became a group label, where `localeCompare` throws and
     // takes the whole `groups` computed with it.
     expect(adapterKindLabel("constructor")).toBe("constructor");
@@ -221,8 +221,8 @@ describe("copyPathsTitle", () => {
   });
 
   it("keeps a Windows path a Windows path, both halves of it", () => {
-    // The two halves come from different places — the folder as registered, the
-    // relpath as the scanner wrote it — so a forward-slashed relpath under a
+    // The two halves come from different places - the folder as registered, the
+    // relpath as the scanner wrote it - so a forward-slashed relpath under a
     // backslashed folder is the case that comes back half-slashed.
     expect(
       copyPathsTitle([
@@ -257,7 +257,7 @@ describe("copyPathsTitle", () => {
   });
 
   it("skips a copy missing either half rather than half-naming it", () => {
-    // Both are NOT NULL on the wire, so this is a broken row — and `a.st` on
+    // Both are NOT NULL on the wire, so this is a broken row - and `a.st` on
     // its own answers "where is this file" with the one thing that is not a
     // location.
     expect(
@@ -271,7 +271,7 @@ describe("copyPathsTitle", () => {
 
   it("appends nothing for a state that names something on Object.prototype", () => {
     // `state` comes off the wire, and a plain index answers `constructor` with
-    // a FUNCTION — truthy, so the note would be Object's constructor source
+    // a FUNCTION - truthy, so the note would be Object's constructor source
     // pasted after the path. Same hole `labelFrom` closes for the two label
     // tables. A state this build has simply never seen appends nothing either:
     // machine vocabulary after a path reads as a fault.
@@ -319,7 +319,7 @@ describe("locationState", () => {
 
   it("does not call an engine nobody has needed yet a fault", () => {
     // #926: a declared engine that was never fetched used to reach the shelf as
-    // `missing` — error rail, "The file is not where it was" — on a machine
+    // `missing` - error rail, "The file is not where it was" - on a machine
     // with nothing wrong with it.
     expect(locationState([{ state: "not_downloaded" }])).toBe("not_downloaded");
     // One genuinely missing copy still states the fault...
@@ -350,7 +350,7 @@ describe("offlineFolders", () => {
 
   it("is silent about a folder that was readable", () => {
     // One `present` copy means the drive IS plugged in, and one `missing` copy
-    // means the folder WAS read — a different fact, and not one to fold into
+    // means the folder WAS read - a different fact, and not one to fold into
     // "offline". Either disqualifies the whole folder.
     expect(
       offlineFolders([
@@ -378,8 +378,8 @@ describe("offlineFolders", () => {
   });
 
   it("leaves a row alone whose other folder is fine", () => {
-    // The offline folder is still named — the copy on it genuinely cannot be
-    // read — but the row is usable, which is the reader's actual question and
+    // The offline folder is still named - the copy on it genuinely cannot be
+    // read - but the row is usable, which is the reader's actual question and
     // the reason this is a mount-level statement rather than a row-level one.
     const rows = [
       { id: 1, locations: [at(7, "unreachable"), at(8, "present")] },
@@ -658,7 +658,7 @@ describe("bandProjection", () => {
 
   it("clamps the bar but not the verdict when the drop does not fit", () => {
     // A bar cannot draw past its own track, so the segment stops at the free
-    // space — but `fits` is decided on the unclamped figure, or an over-full
+    // space - but `fits` is decided on the unclamped figure, or an over-full
     // drop would quietly stop looking wrong at exactly 100%.
     const projected = bandProjection(
       { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
@@ -695,7 +695,7 @@ describe("bandProjection", () => {
 
   it("cannot say for a drive it could not measure, which is not a refusal", () => {
     // Null rather than `fits: false`. "We do not know" must not be drawn as
-    // "does not fit" — the drop is left to the server to judge.
+    // "does not fit" - the drop is left to the server to judge.
     expect(bandProjection({ totalBytes: null, freeBytes: null }, 100)).toBe(
       null,
     );
@@ -714,7 +714,7 @@ describe("withEmptyFolders", () => {
 
   it("adds the registered folder that produced no group", () => {
     // The managed store is exactly this on a fresh install: registered, ruled
-    // to be the default drop destination, and holding nothing — so it has no
+    // to be the default drop destination, and holding nothing - so it has no
     // rows, no group, and no way to be seen.
     const arranged = withEmptyFolders(
       [group("/models/loras")],
@@ -906,7 +906,7 @@ describe("withFolderSignals", () => {
       offlineFolderIds: new Set([2]),
     });
     expect(only.offline).toBe(true);
-    // A different GLYPH, so the reachability survives greyscale — and the tier
+    // A different GLYPH, so the reachability survives greyscale - and the tier
     // is still stated, because a locked folder is locked whether or not the
     // disk is plugged in.
     expect(only.icon).toBe("mdi-lan-disconnect");
@@ -940,7 +940,7 @@ describe("withFolderSignals", () => {
   });
 
   it("leaves a group that is not a folder alone", () => {
-    // "No registered copy" has no folder id, no disk and no tier — decorating
+    // "No registered copy" has no folder id, no disk and no tier - decorating
     // it would put a drive rail over the one group that exists because there is
     // no drive.
     const [only] = withFolderSignals([{ key: "none", label: "x", rows: [] }], {
@@ -1033,8 +1033,8 @@ describe("importReceipt", () => {
   });
 
   it("names a checkpoint that landed without its previews", () => {
-    // The server keeps such a file `imported` on purpose — losing a preview must
-    // not cost the weights — so the status counts cannot see it, and a receipt
+    // The server keeps such a file `imported` on purpose - losing a preview must
+    // not cost the weights - so the status counts cannot see it, and a receipt
     // built from them alone would call this a clean import. It is not folded
     // into the failure count either: the checkpoint is genuinely on the shelf.
     expect(
@@ -1106,7 +1106,7 @@ describe("collapseStacks", () => {
   it("sorts a member with no position LAST, as the server does", () => {
     // NULL sorts first in SQLite too, and the server spells `stack_position IS
     // NULL` to stop that. `?? 0` here put an unpositioned member level with
-    // the cover and, on a stable sort, ahead of it — so the two ends disagreed
+    // the cover and, on a stable sort, ahead of it - so the two ends disagreed
     // about which file is the face of the run.
     const out = collapseStacks([
       member(1, 7, 0),
@@ -1221,8 +1221,8 @@ describe("the generated mark's contrast", () => {
 
 describe("stackReceipt", () => {
   it("reports the stacks that landed and the ones that did not", () => {
-    // "Stacks", not "runs": a stack can span training runs — several versions
-    // of one character LoRA — so calling every one a run would be false.
+    // "Stacks", not "runs": a stack can span training runs - several versions
+    // of one character LoRA - so calling every one a run would be false.
     expect(stackReceipt(3, 0)).toBe("Grouped 3 stacks.");
     expect(stackReceipt(2, 1)).toBe(
       "Grouped 2 stacks. 1 stack could not be grouped; something changed them first.",
@@ -1299,7 +1299,7 @@ describe("trainingStep", () => {
   });
 
   it("reports no step for a bare final, and for a version suffix", () => {
-    // `v2` is not training bookkeeping — `deriveModelName` keeps it, so this
+    // `v2` is not training bookkeeping - `deriveModelName` keeps it, so this
     // must not read it as a step.
     expect(trainingStep("JimmyVehicle.safetensors")).toBe(null);
     expect(trainingStep("portrait_mix_v2.safetensors")).toBe(null);
@@ -1323,7 +1323,7 @@ describe("modelVersion", () => {
     expect(key("Foxglove_v2.safetensors")).toBe("2.0");
     expect(key("Foxglove_V2.safetensors")).toBe("2.0");
     expect(key("Foxglove_v2.0.safetensors")).toBe("2.0");
-    // And an unversioned file reads as v1, exactly as the server reads it —
+    // And an unversioned file reads as v1, exactly as the server reads it -
     // which is what stops `Foxglove` + `Foxglove_v1` looking like two versions.
     expect(key("Foxglove.safetensors")).toBe("1.0");
     expect(key("Foxglove_v1.safetensors")).toBe("1.0");
@@ -1513,9 +1513,9 @@ describe("assignmentRing", () => {
     // icon name would draw an mdi glyph that does not exist.
     //
     // The literal is pinned HERE, once, and the fixtures use the constant.
-    // What they stand for is a value the BACKEND stored — `picture_sets.py`
+    // What they stand for is a value the BACKEND stored - `picture_sets.py`
     // hardcodes `!= "cards"` too, and rows written before any rename would
-    // still hold the old string — so a suite built only from `ICON_CARDS`
+    // still hold the old string - so a suite built only from `ICON_CARDS`
     // would rename itself alongside the source and stay green while the two
     // sides had stopped agreeing. One pin closes that without making every
     // fixture repeat the string.
@@ -1635,7 +1635,7 @@ describe("deletableModels", () => {
 
   it("refuses an engine PixlStash downloaded for itself", () => {
     // It is declared again on every start, so the file would come straight back
-    // — after whatever needed it had broken.
+    // - after whatever needed it had broken.
     const engine = { ...at(1), file_kind: "engine" };
     expect(deletableModels([engine], folders)).toEqual([]);
   });
@@ -1699,8 +1699,8 @@ describe("undeletableNotice", () => {
 
   it("names the folder and what to do instead", () => {
     // The sentence this replaced said PixlStash "only removes files from your
-    // own model folders", which is untrue — it deletes from the managed store
-    // and from its own download folder — and named nothing the reader could
+    // own model folders", which is untrue - it deletes from the managed store
+    // and from its own download folder - and named nothing the reader could
     // act on.
     const text = undeletableNotice([at(3)], folders);
     expect(text).toContain("/home/u/.cache/huggingface/hub");
@@ -1766,7 +1766,7 @@ describe("the date column's value", () => {
       ),
     ).toBe("2024-01-09T08:00:00.000Z");
     // A row with no present copy cannot answer, and an empty cell is what says
-    // so — the same thing the size column does with a size nobody recorded.
+    // so - the same thing the size column does with a size nobody recorded.
     expect(modelDate({ added_at: ISO }, "file_mtime")).toBe("");
     // A value out of `Date`'s range comes back empty rather than throwing:
     // `toISOString` throws on one, and this runs inside render, so one corrupt
@@ -1781,7 +1781,7 @@ describe("the date column's value", () => {
     expect(dateColumnKey("size")).toBe("added_at");
     expect(dateColumnKey("file_mtime")).toBe("file_mtime");
     expect(modelDate({ added_at: ISO }, "size")).toBe(ISO);
-    // A stack's date is its newest member's, never its cover's — and a member
+    // A stack's date is its newest member's, never its cover's - and a member
     // read for its own is read for its own.
     const member = { added_at: ISO, newest_member_at: "2026-09-01T00:00:00" };
     expect(modelDate(member, "added_at")).toBe("2026-09-01T00:00:00");

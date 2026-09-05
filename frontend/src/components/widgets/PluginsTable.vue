@@ -8,7 +8,7 @@
  *
  * Replaces the former TagPluginsTable / DescriptionPluginsTable, which were the
  * same table twice over: they differed only in which capability flag they
- * filtered on, which config key they wrote, and — as pure drift, not intent — a
+ * filtered on, which config key they wrote, and - as pure drift, not intent - a
  * 52px vs 44px radio column and the error line's spacing. Those two now render
  * identically, which is the point of having one component.
  */
@@ -202,7 +202,7 @@ function onParamsSaved({ name, params }) {
 /* Sticky because the table is scrolled inside its Settings column (see
    BehaviourSection): the scroll box wraps the whole table, so an unpinned
    header row would scroll out of a viewport only a few rows tall. The rule
-   under it is a box-shadow rather than a border — `border-collapse: collapse`
+   under it is a box-shadow rather than a border - `border-collapse: collapse`
    hands the border to the table, which does not travel with a sticky cell. */
 .pt-table th {
   position: sticky;
@@ -241,7 +241,7 @@ function onParamsSaved({ name, params }) {
 
 /* The name column is whatever these three leave it, and inside a ~280px
    Settings column that is the difference between a plugin name on one line and
-   two — so the fixed-width columns take the tighter padding step. */
+   two - so the fixed-width columns take the tighter padding step. */
 .pt-table .pt-col-active,
 .pt-table .pt-col-loaded,
 .pt-table .pt-col-actions {

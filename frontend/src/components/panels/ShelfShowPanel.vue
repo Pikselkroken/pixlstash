@@ -59,7 +59,7 @@
             :checked="filters.adapterKinds.includes(kind)"
             @change="toggleKind(kind, $event.target.checked)"
           />
-          <!-- The label, not the stored word — the capability boxes below have
+          <!-- The label, not the stored word - the capability boxes below have
                always done this, and the shelf now spells the algorithm `LoRA`
                on both the row and the group header. A raw `lokr` here was the
                third spelling of one thing on one screen. -->
@@ -89,7 +89,7 @@
            answering with a list mostly made of them. -->
       <label
         class="tbm-check"
-        title="VAEs and text encoders — the files a generation graph loads beside a checkpoint"
+        title="VAEs and text encoders - the files a generation graph loads beside a checkpoint"
       >
         <input
           type="checkbox"
@@ -129,7 +129,7 @@
         Unclassified
       </label>
       <!-- Engines: PixlStash's own taggers and scorers, the InsightFace packs
-           and the HuggingFace cache. On by default, unlike Unclassified — they
+           and the HuggingFace cache. On by default, unlike Unclassified - they
            are the answer to "where did my disk go", and off by default is
            exactly how they stayed invisible while the architecture note said
            they were on the shelf. -->
@@ -156,7 +156,7 @@
            under Adapters, and greyed rather than cleared the same way.
            These match "HAS this capability", not "IS this kind": one model can
            serve several features and is listed under each, so ticking
-           `Captioning` keeps Florence-2 — which also detects — in view. -->
+           `Captioning` keeps Florence-2 - which also detects - in view. -->
       <div v-if="store.capabilityOptions.length" class="shelf-show-nested">
         <label
           v-for="capability in store.capabilityOptions"
@@ -173,6 +173,26 @@
           {{ capabilityLabel(capability) }}
         </label>
       </div>
+    </div>
+
+    <!-- Copies. Its own section rather than a sixth box under Types, because
+         it does not narrow WHAT a row is - it narrows to the rows that are on
+         the disk more than once, whatever kind they are. `refetch: false`: the
+         count is computed from the `locations` every row already carries, so
+         there is nothing to ask the server for. -->
+    <div class="tbm-section">
+      <span class="tbm-label">Copies</span>
+      <label
+        class="tbm-check"
+        title="Files stored more than once - the same bytes, under one name or two"
+      >
+        <input
+          type="checkbox"
+          :checked="filters.duplicatesOnly"
+          @change="store.setFilters({ duplicatesOnly: $event.target.checked })"
+        />
+        Only duplicates
+      </label>
     </div>
 
     <!-- Base model. "Not set" is an option, not an omission: a null base model

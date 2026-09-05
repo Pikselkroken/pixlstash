@@ -8,7 +8,7 @@ export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
 /**
  * The accepted {@link Accel} values, as a runtime array (the union type is erased
  * at compile time). The single source of truth for validating any externally
- * supplied accelerator string — keep it in step with the `Accel` union above.
+ * supplied accelerator string - keep it in step with the `Accel` union above.
  */
 export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu128', 'rocm', 'metal'];
 
@@ -28,7 +28,7 @@ export function isAccel(value: unknown): value is Accel {
  *
  * SECURITY: the value is validated against the {@link Accel} enum and anything
  * else is rejected (returns `null` after a warning). This flag must NEVER feed an
- * install index — the download still resolves only through the hardcoded
+ * install index - the download still resolves only through the hardcoded
  * {@link TORCH_INDEX} map keyed by the validated `Accel`, so an arbitrary string
  * can never become an arbitrary-wheel-install vector. Returns the validated
  * `Accel`, or `null` when no (valid) override is present.
@@ -95,7 +95,7 @@ export const TORCH_INDEX: Record<Accel, string | null> = {
 export const ONNX_PACKAGE: Record<Accel, string> = {
   cpu: 'onnxruntime',
   cu128: 'onnxruntime-gpu',
-  rocm: 'onnxruntime', // ROCm onnxruntime is not on PyPI — bundled CPU ORT.
+  rocm: 'onnxruntime', // ROCm onnxruntime is not on PyPI - bundled CPU ORT.
   metal: 'onnxruntime',
 };
 
@@ -103,23 +103,23 @@ export const ONNX_PACKAGE: Record<Accel, string> = {
  * Exact `onnxruntime-gpu` version per overlay accelerator. The bundle's ORT
  * version CANNOT be used here because onnxruntime-gpu has a hidden CUDA-flavor
  * axis the version number doesn't express: PyPI serves exactly one CUDA flavor
- * per release, and it moved generations — 1.27.0 is a CUDA 13 build linking
+ * per release, and it moved generations - 1.27.0 is a CUDA 13 build linking
  * `libcudart.so.13`, while a cu128 overlay's whole nvidia stack is CUDA 12
  * (only `libcudart.so.12` on disk). Installing it makes `import onnxruntime`
  * throw ImportError at module load, and since insightface imports onnxruntime
  * inside pixlstash's startup import chain, the entire backend exits code 1
  * (live incident, 2026-07-20). So each overlay accel pins the last PyPI build
  * of its own CUDA generation: 1.26.0 is the last CUDA-12 release (verified
- * working through the cu128 overlay — CUDAExecutionProvider available). A
+ * working through the cu128 overlay - CUDAExecutionProvider available). A
  * future cu13x accel gets its own entry here. Deliberately resolved from PyPI
  * with NO extra package index (the ORT azure cuda-12 feed was considered and
  * rejected: a new supply-chain trust surface for zero need while 1.26.0 works).
  * Every accel that maps to `onnxruntime-gpu` in {@link ONNX_PACKAGE} MUST have
- * an entry here — {@link buildOverlayPipArgs} throws if one is missing.
+ * an entry here - {@link buildOverlayPipArgs} throws if one is missing.
  */
 export const ORT_GPU_PIN: Partial<Record<Accel, string>> = {
   cu128: '1.26.0',
-  // rocm: no entry — ONNX_PACKAGE.rocm is the bundled CPU 'onnxruntime'.
+  // rocm: no entry - ONNX_PACKAGE.rocm is the bundled CPU 'onnxruntime'.
 };
 
 /**
@@ -165,7 +165,7 @@ export function readRuntimeInfo(): RuntimeInfo | null {
  *
  * Everywhere else the installed image is read-only (a Linux AppImage is a squashfs
  * mount, a notarized macOS .app must not be modified) or we're running unpacked in
- * dev — there is no writable "install folder" to use — so overlays stay under the
+ * dev - there is no writable "install folder" to use - so overlays stay under the
  * app-data dir, as before. Users who want them elsewhere can still pick a custom
  * location (see {@link backendsRoot}).
  */
@@ -175,8 +175,8 @@ export function computeDefaultBackendsRoot(
   resourcesPath: string,
   userData: string,
 ): string {
-  // Use the target platform's path semantics (so the win32 branch is correct —
-  // and unit-testable — even when this runs on a POSIX host in CI).
+  // Use the target platform's path semantics (so the win32 branch is correct -
+  // and unit-testable - even when this runs on a POSIX host in CI).
   const p = platform === 'win32' ? pathWin32 : pathPosix;
   if (platform === 'win32' && isPackaged) {
     return p.join(p.dirname(resourcesPath), 'backends');
@@ -285,7 +285,7 @@ export function installLogPath(): string {
 
 /**
  * The desktop app's own server config, kept under the app data dir and separate
- * from any standalone pip/Docker install's config — the two never overwrite each
+ * from any standalone pip/Docker install's config - the two never overwrite each
  * other. Seeded once by the first-run wizard (which can import an existing
  * config's values), then owned by the app. Its existence marks setup as done.
  */

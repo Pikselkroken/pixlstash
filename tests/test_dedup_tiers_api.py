@@ -4,9 +4,9 @@ Every route is declared ``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` and
 enforced by the central authz gate, so these assert **both directions** per the
 CLAUDE.md security review process:
 
-* negative — a resource-scoped READ share token gets 403 on every route, via the
+* negative - a resource-scoped READ share token gets 403 on every route, via the
   ``Authorization`` header and via the ``?token=`` query-parameter path;
-* positive — the owner cookie session reaches every route and gets a complete
+* positive - the owner cookie session reaches every route and gets a complete
   answer (over-blocking is its own regression).
 
 Plus the contract the frontend reads: the policy is served rather than
@@ -107,7 +107,8 @@ def _env():
     client = TestClient(server.api)
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )
@@ -361,7 +362,7 @@ def test_the_queue_page_carries_cover_evidence_and_progress():
         assert cover["tag_count"] == 1
         assert cover["cover_score"] > 0
         # The ranking signals ship null-safe: nothing in this env has a smart
-        # score or a quality row yet, so both serve null — a dash in Compare,
+        # score or a quality row yet, so both serve null - a dash in Compare,
         # never a fake zero.
         assert "smart_score" in cover and cover["smart_score"] is None
         assert "sharpness" in cover and cover["sharpness"] is None
@@ -540,7 +541,7 @@ def test_scrapheaping_a_member_below_two_drops_the_group_from_the_counts():
     """The badge follows a soft-delete immediately, not at the next scan.
 
     prune_stale_groups only runs on a verdict or a scan, so the counts and
-    the open queue filter on LIVE membership instead of waiting for it — and
+    the open queue filter on LIVE membership instead of waiting for it - and
     a restore brings the group straight back, no rescan needed.
     """
     temp_dir, client, server, ids, _token, _set_id = _env()
@@ -570,7 +571,7 @@ def test_a_group_already_stacked_together_stops_posing_a_decision():
     The grid's own stack actions never touch dedupgroup, so an exact pair the
     user stacked from the grid stayed "unresolved" and was re-offered forever
     (the owner's #670/#1746 report). A group where a stack would still fold
-    something in — a stack plus a loner — keeps counting.
+    something in - a stack plus a loner - keeps counting.
     """
     temp_dir, client, server, ids, _token, _set_id = _env()
     try:
@@ -658,7 +659,7 @@ def test_the_decided_page_orders_by_recent_activity_first():
 
     It used to reuse the queue's `(confidence DESC, id ASC)` ordering, which is
     meaningless for a review list (every exact group ties at 1.0, so the list
-    came out in group-id order regardless of when anything was decided — the
+    came out in group-id order regardless of when anything was decided - the
     user's "very weird" report, 2026-07-30). Both directions are asserted: the
     Initially that is `decided_at` across both verdict kinds; a later stack
     change has its own explicit regression below. The OPEN queue keeps its
@@ -672,7 +673,7 @@ def test_the_decided_page_orders_by_recent_activity_first():
         assert len(open_order) == 3
 
         # The other direction first: the OPEN queue still orders by
-        # (confidence DESC, id ASC) — the fix must not leak into it.
+        # (confidence DESC, id ASC) - the fix must not leak into it.
         def db_order(session):
             rows = session.exec(
                 select(DedupGroup).where(DedupGroup.resolved.is_(False))
@@ -844,7 +845,7 @@ def test_redo_restamps_the_decision_so_it_returns_to_the_top():
 
     Non-vacuous by construction: the undone verdict's stamp is backdated an
     hour below its sibling's, so a redo that restored the old stamp would sort
-    it UNDER the sibling — only the 2026-07-30 re-stamp puts it on top, which
+    it UNDER the sibling - only the 2026-07-30 re-stamp puts it on top, which
     is where the user who just pressed redo looks for it.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
@@ -935,7 +936,7 @@ def test_decided_rows_carry_the_display_ready_decision_stamp():
         assert decided_rows()[sig_b]["decided_at"] == restamped.isoformat()
 
         # The stale edge: a resolved group whose verdict is no longer live
-        # (reopened directly, group left resolved) still lists — in the tail —
+        # (reopened directly, group left resolved) still lists - in the tail -
         # with BOTH fields null. The server never invents a stamp.
         def go_stale(session):
             row = session.exec(
@@ -1106,7 +1107,7 @@ def test_a_non_numeric_scope_id_is_a_400_on_every_route():
     ``picture_predicate()`` calls ``int(scope_id)`` for project / set / character.
     Leaving that unvalidated turned a bad request into an unhandled 500 on three
     read routes, and `POST /dedup/scan` returned 200 while **persisting** the
-    unparseable scope — a self-inflicted poison row that made every later
+    unparseable scope - a self-inflicted poison row that made every later
     `GET /dedup/groups` for that scope 500 too. Validation now happens at the
     boundary, before any write.
     """
@@ -1406,7 +1407,7 @@ def test_an_undo_does_not_reopen_a_group_it_never_touched():
 
     The two verdicts here share no gesture id, so each sits in its own
     server-minted batch: undoing the newest (the stack) reverses only the stack.
-    The keep-separate stands — not because it is irreversible (it has been
+    The keep-separate stands - not because it is irreversible (it has been
     undoable since 2026-07-30), but because its own operation was not undone.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
@@ -1490,7 +1491,7 @@ def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
     Until 2026-07-30 the keep-separate half recorded no operation and the stack
     hook deliberately left it standing (CSO R5: nothing may be reversed
     *silently*). The owner's override makes keep-separate record its own
-    operation, so the shared batch now reverses both halves — each through its
+    operation, so the shared batch now reverses both halves - each through its
     own operation, explicitly listed in the undo response, which is what R5
     actually demanded. Redo re-applies both.
     """
@@ -1580,7 +1581,7 @@ def test_two_clients_cannot_interleave_inside_an_atomic_verdict_gesture(
         assert (
             client_b.post(
                 f"{API}/login",
-                json={"username": "owner", "password": "ownerpass1"},
+                json={"username": "owner", "password": "example-owner-password"},
             ).status_code
             == 200
         )
@@ -1754,7 +1755,7 @@ def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
     Verdicts used to emit nothing, so a second tab's grid, queue and counts had
     no signal to refresh on. Both paths now raise the same
     ``pictures_changed``-family event every other mutation raises, with the
-    caller's ``origin_client_id`` carried in the event data (§15) — and the
+    caller's ``origin_client_id`` carried in the event data (§15) - and the
     op-log restore announces the keep-separate's targets on undo/redo even
     though its recorded diff is empty.
     """
@@ -1811,7 +1812,7 @@ def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
         redo_ids = {pid for kind in emitted for pid in (kind.get("picture_ids") or [])}
         assert redo_ids == set(by_signature[kept_separate]), emitted
 
-        # A clear announces itself too — it changes state other tabs render
+        # A clear announces itself too - it changes state other tabs render
         # (the stacked clear also unstacks pictures).
         emitted.clear()
         response = client.post(REOPEN_URL, json={"signature": stacked}, headers=headers)

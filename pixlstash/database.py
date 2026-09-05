@@ -8,6 +8,7 @@ import os
 import struct
 import threading
 import queue
+import time
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,6 +40,9 @@ from pixlstash.db_models import Character, Face  # noqa: F401
 from pixlstash.db_models import PictureLikeness, PictureSet, Picture, Quality, Tag, User  # noqa: F401
 from pixlstash.db_models import Snapshot  # noqa: F401
 from pixlstash.db_models import PictureProjectMember, PictureSetMember
+from pixlstash.db_models import LibrarySettings, ReferenceFolder  # noqa: F401
+from pixlstash.db_models.picture_move import CHECK_DEBOUNCE_S
+from pixlstash.db_models.picture_move import PictureMove  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +59,7 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         "text_embedding",
         "image_embedding",
         "metadata_hash",
-        # Derived/regenerable scores — excluded so that recalculating them
+        # Derived/regenerable scores - excluded so that recalculating them
         # does not make a snapshot appear as changed.
         "aesthetic_score",
         "smart_score",
@@ -78,7 +82,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
 
     Batched equivalent of :func:`_compute_picture_metadata_hash`: five queries
     per chunk of ``_HASH_ID_CHUNK`` ids instead of five queries per picture.
-    The digest input is byte-for-byte identical to the per-picture version —
+    The digest input is byte-for-byte identical to the per-picture version -
     ``metadata_hash`` is persisted into snapshots and compared against live
     rows, so any change to the canonical string would make every picture in
     every existing snapshot compare as "changed".
@@ -107,7 +111,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         chunk = ids[start : start + _HASH_ID_CHUNK]
         # ORM entity select (NOT a Core column select): the returned instances
         # come from the session's identity map, so ``getattr`` below sees the
-        # same in-memory values ``session.get`` used to return — including the
+        # same in-memory values ``session.get`` used to return - including the
         # ndarray columns that must be skipped and the datetimes that must be
         # ``isoformat``-ed. A Core select would hand back raw driver values and
         # silently change the digest.
@@ -151,7 +155,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         pic = pictures.get(pid)
         if pic is None:
             continue
-        # Iterate only persisted columns — NOT ``model_fields``, which also
+        # Iterate only persisted columns - NOT ``model_fields``, which also
         # contains SQLModel relationship fields (``tags``, ``faces``,
         # ``project``, ...). ``getattr`` on a relationship triggers a lazy load
         # whose ORM objects aren't JSON-serialisable; ``json.dumps(...,
@@ -170,12 +174,12 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
             col_vals[col] = val
         # Face-derived state: the before-flush hash tracker dirties on Face
         # mutations (a Face add / remove / character reassignment is a
-        # user-visible change), so the digest must include face state — else
+        # user-visible change), so the digest must include face state - else
         # the recompute would round-trip to the same value and the UI's
         # identical-state detection would lie for face-only edits.  We hash
         # the bbox + character_id of every face, sorted so the digest is
         # insensitive to row order.  ``features`` (the embedding BLOB) is
-        # deliberately excluded — it's a derived column the WorkPlanner
+        # deliberately excluded - it's a derived column the WorkPlanner
         # regenerates and is not user-visible.
         #
         # LOAD-BEARING: ``str(tuple(...))`` is not cosmetic. The original
@@ -191,7 +195,7 @@ def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int,
         faces = [str(face) for face in sorted(faces_by_pid.get(pid, ()))]
         # Picture-set and project membership are user-visible and reverted by a
         # full restore, but live in their own tables (not Picture columns), so
-        # they must be folded in explicitly — otherwise a picture whose only
+        # they must be folded in explicitly - otherwise a picture whose only
         # change is being moved between sets/projects hashes identically and
         # the restore preview / identical-state detection would wrongly report
         # "unchanged".
@@ -212,7 +216,7 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     """Return a SHA-256 hex digest of a picture's user-visible metadata.
 
     Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted tag
-    list, face state, and picture-set / project **membership** — everything a
+    list, face state, and picture-set / project **membership** - everything a
     full restore would revert. Thin wrapper over
     :func:`_compute_picture_metadata_hashes` so the single-picture and batched
     paths can never drift apart in what they digest.
@@ -247,7 +251,7 @@ def _before_flush_hash_tracker(session, flush_context, instances) -> None:
         ):
             # Adding/removing a picture from a set or project changes its
             # restore-visible state, so its hash must be recomputed. Works for
-            # session.deleted too — the row keeps its picture_id while pending.
+            # session.deleted too - the row keeps its picture_id while pending.
             dirty_pids.add(obj.picture_id)
 
 
@@ -258,7 +262,7 @@ def _after_flush_hash_updater(session, flush_context) -> None:
     is held against the SQLite write lock: the old shape issued five SELECTs
     plus one UPDATE per dirty picture, which turned a 64-picture tag batch into
     ~384 extra statements before the lock could be released (#651). It is now a
-    constant number of statements per flush — the batched hash read plus one
+    constant number of statements per flush - the batched hash read plus one
     executemany UPDATE.
 
     Uses Core SQL UPDATE so the change is committed with the same transaction
@@ -297,16 +301,132 @@ def _after_flush_hash_updater(session, flush_context) -> None:
                 session.expire(cached, ["metadata_hash"])
 
 
+def _before_flush_layout_tracker(session, flush_context, instances) -> None:
+    """Record picture IDs whose project / set / person assignments changed.
+
+    The v1.11 layout engine's trigger (``services/layout_move_service.py``), and
+    it is here rather than at the mutation sites because there are far too many
+    of those to keep in step: a picture gains a project through the import
+    route, the CRUD route, the membership service, a plugin, the ComfyUI
+    ingest, stack propagation and a restore. Anything that misses one is a
+    picture whose folder has quietly stopped being true and that nothing ever
+    revisits.
+
+    Only the four facets a layout can be built from count. A rating, a caption
+    or a tag edit is not an assignment and must not wake the engine - the whole
+    rule is that a picture moves when its *folder* stops being true, not
+    whenever something about it changes.
+    """
+    dirty_pids: set = session.info.setdefault("_layout_dirty_pids", set())
+    for obj in itertools.chain(session.new, session.dirty, session.deleted):
+        if isinstance(obj, (PictureSetMember, PictureProjectMember)):
+            if obj.picture_id is not None:
+                dirty_pids.add(obj.picture_id)
+        elif isinstance(obj, Face) and obj.picture_id is not None:
+            if _attribute_changed(obj, "character_id"):
+                dirty_pids.add(obj.picture_id)
+        elif isinstance(obj, Picture) and obj.id is not None:
+            # Deliberately NOT session.new: a picture that has just been created
+            # is either where the engine placed it or where the owner already
+            # had it, and both are true by construction.
+            if obj in session.dirty and _attribute_changed(obj, "project_id"):
+                dirty_pids.add(obj.id)
+
+
+def _attribute_changed(obj, name: str) -> bool:
+    """Whether *name* actually changed on *obj* in this flush.
+
+    ``session.dirty`` is "something on this object changed", not "this column
+    did". Without the narrowing every score, caption and thumbnail write on a
+    Picture would look like an assignment change and stamp the whole library
+    due.
+    """
+    try:
+        return sa_inspect(obj).attrs[name].history.has_changes()
+    except Exception:
+        # An object with no usable state (detached, or a mapper without the
+        # attribute) - treat as changed rather than silently missing a real
+        # assignment change, and say so.
+        logger.warning(
+            "Layout tracker: could not read %s history on %r; treating it as "
+            "changed so the check is not silently skipped.",
+            name,
+            type(obj).__name__,
+            exc_info=True,
+        )
+        return True
+
+
+def _library_has_layout(session) -> bool:
+    """Whether any root in this library has a layout, cached per session.
+
+    The gate that keeps the stamp free for every library that has not chosen a
+    layout - which, on the day this ships, is all of them. One small indexed
+    read per task that touched an assignment, not per flush and not per row.
+    """
+    cached = session.info.get("_library_has_layout")
+    if cached is None:
+        try:
+            cached = bool(
+                session.execute(
+                    sa_select(LibrarySettings.id)
+                    .where(LibrarySettings.layout.is_not(None))
+                    .limit(1)
+                ).first()
+                or session.execute(
+                    sa_select(ReferenceFolder.id)
+                    .where(ReferenceFolder.layout.is_not(None))
+                    .limit(1)
+                ).first()
+            )
+        except Exception:
+            # A vault mid-migration has no such column yet. Fail closed on the
+            # cheap side: no layout, no stamp, and the next task asks again.
+            logger.debug("Layout tracker: layout gate unavailable", exc_info=True)
+            cached = False
+        session.info["_library_has_layout"] = cached
+    return cached
+
+
+def _after_flush_layout_marker(session, flush_context) -> None:
+    """Stamp the tracked pictures as due a layout check, in the same txn.
+
+    The stamp is written unconditionally rather than only when it moves later:
+    re-stamping IS the debounce, so a second change to the same picture pushes
+    its check out again and a remove-then-add settles into one move.
+    """
+    dirty_pids: set = session.info.pop("_layout_dirty_pids", set())
+    if not dirty_pids or not _library_has_layout(session):
+        return
+    due_at = time.time() + CHECK_DEBOUNCE_S
+    with session.no_autoflush:
+        # Core UPDATE against the Table for the same reason the hash hook uses
+        # one: it must not re-enter the ORM flush cycle that called it.
+        session.execute(
+            sa_update(Picture.__table__)
+            .where(Picture.__table__.c.id.in_(sorted(dirty_pids)))
+            .values(layout_check_due_at=due_at)
+        )
+        for pid in dirty_pids:
+            cached = session.identity_map.get((Picture, (pid,)))
+            if cached is not None:
+                session.expire(cached, ["layout_check_due_at"])
+
+
 def _attach_session_hooks(session: Session) -> None:
     """Attach per-session before_flush / after_flush event listeners.
 
-    Currently only the metadata-hash hooks are attached; the writer thread
-    runs every task inside a session with these listeners so that any picture
+    Two pairs: the metadata-hash hooks, and the v1.11 layout tracker. The writer
+    thread runs every task inside a session with these listeners, so any picture
     mutation (or tag/face mutation that affects a picture) refreshes the
-    ``metadata_hash`` column in the same transaction.
+    ``metadata_hash`` column in the same transaction, and any change to a
+    picture's project / set / person membership stamps it as owing a layout
+    check.
     """
     event.listen(session, "before_flush", _before_flush_hash_tracker)
     event.listen(session, "after_flush", _after_flush_hash_updater)
+    event.listen(session, "before_flush", _before_flush_layout_tracker)
+    event.listen(session, "after_flush", _after_flush_layout_marker)
 
 
 class _EngineRWLock:
@@ -854,7 +974,7 @@ class VaultDatabase:
 
         if not db_exists:
             # Pre-create the database file 0600. Left to SQLite, a missing
-            # database is created at 0644 & ~umask — group/world-readable
+            # database is created at 0644 & ~umask - group/world-readable
             # under the Debian/Ubuntu default umask 002. Doing it here covers
             # every construction site, guarded or not. Without O_EXCL a lost
             # race simply opens the other creator's file; the mode argument is
@@ -866,7 +986,7 @@ class VaultDatabase:
 
         # The guard holds a raw fd on vault.db. POSIX advisory locks are
         # per-process, per-inode: closing ANY fd a process has on a file
-        # releases EVERY fcntl lock that process holds on it — including the
+        # releases EVERY fcntl lock that process holds on it - including the
         # ones SQLite took for the engine's live connections
         # (sqlite.org/howtocorrupt.html §2.2). Closing the guard here, while
         # pooled connections were open, therefore stripped the server of its
@@ -1032,7 +1152,7 @@ class VaultDatabase:
         Use for engine-level operations (e.g. the restore DB-file swap) that
         must serialise with normal writes but cannot tolerate a session bound
         to the current engine. The callable receives only the args/kwargs it
-        was submitted with — no implicit ``session`` argument.
+        was submitted with - no implicit ``session`` argument.
 
         Control tasks always run at IMMEDIATE priority and skip the
         ``self._engine is None`` precondition (a swap is permitted to recreate

@@ -92,7 +92,7 @@ beforeEach(() => {
   apiClient.patch.mockClear();
 });
 
-describe("PictureSetEditor — locked set", () => {
+describe("PictureSetEditor - locked set", () => {
   it("disables name/description/project fields", () => {
     const wrapper = mountEditor(lockedSet);
     expect(wrapper.find(".AppInput-stub").attributes("data-disabled")).toBe(
@@ -143,7 +143,7 @@ describe("PictureSetEditor — locked set", () => {
   });
 });
 
-describe("PictureSetEditor — unlocked set", () => {
+describe("PictureSetEditor - unlocked set", () => {
   it("sends the full body including locked on save", async () => {
     const wrapper = mountEditor({ ...lockedSet, locked: false });
     // Fields are enabled.
@@ -192,7 +192,7 @@ describe("PictureSetEditor — unlocked set", () => {
   });
 });
 
-// The adapter tray is wired here, not tested here — `AdapterTray.test.js` owns
+// The adapter tray is wired here, not tested here - `AdapterTray.test.js` owns
 // its behaviour. What only this file can prove is the WIRING: that the editor
 // mounts it at all, and that it hands it this set rather than some other
 // entity. Both are invisible to the tray's own suite, and a tray pointed at the
@@ -203,7 +203,7 @@ const AdapterTrayStub = {
   template: `<div class="adapter-tray-stub" :data-type="entityType" :data-id="entityId"></div>`,
 };
 
-describe("PictureSetEditor — adapter tray", () => {
+describe("PictureSetEditor - adapter tray", () => {
   function mountWithTray(props) {
     return mount(PictureSetEditor, {
       props: { backendUrl: "http://x", projects: [], ...props },
@@ -235,9 +235,9 @@ describe("PictureSetEditor — adapter tray", () => {
 
   it("does not mount it before the dialog has ever been opened", () => {
     // The mount is what triggers the read, and the hosts keep this component
-    // alive for the life of the view. Once opened it stays mounted — including
+    // alive for the life of the view. Once opened it stays mounted - including
     // through the close, so the widest row does not vanish from under the leave
-    // transition — and re-reads via its key on the next open. What must never
+    // transition - and re-reads via its key on the next open. What must never
     // happen is a read for a dialog the user has not opened at all.
     expect(
       mountWithTray({ open: false, set: lockedSet })

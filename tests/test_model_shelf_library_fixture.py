@@ -5,7 +5,7 @@ hold or the fixture is worse than no fixture:
 
 1. the database is one the product itself created and migrated, so it does not
    drift the moment a migration lands;
-2. the two rendering branches the plan calls out are actually present — a set on
+2. the two rendering branches the plan calls out are actually present - a set on
    the ``ICON_CARDS`` sentinel with members behind it, and exactly one character
    with no route to a thumbnail.
 """

@@ -6,11 +6,11 @@ stack always shares the same project membership (``PictureProjectMember`` /
 
 Two operations maintain that invariant:
 
-* :func:`expand_picture_ids_to_stacks` — used by grouping *mutations* so that an
+* :func:`expand_picture_ids_to_stacks` - used by grouping *mutations* so that an
   add/remove/set applied to any stacked picture is applied to **every** member of
   its stack. Callers pass the resulting id list to their normal per-picture
   mutation logic, so state can never go partial.
-* :func:`reconcile_stack_membership` — used only when a picture *joins* an
+* :func:`reconcile_stack_membership` - used only when a picture *joins* an
   existing stack (stack create / add-members). The enlarged stack reconciles to
   the **union** of its members' project & set memberships so it becomes
   consistent again.

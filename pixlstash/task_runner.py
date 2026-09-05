@@ -38,8 +38,8 @@ class TaskRunner:
     SPILLOVER_TOLERANCE_MB = 256
 
     # Pause between attempts after a GPU out-of-memory failure. Long enough to
-    # be worth waiting for — whatever else is holding the card has to give some
-    # back — and short enough that the single GPU worker is not parked on it:
+    # be worth waiting for - whatever else is holding the card has to give some
+    # back - and short enough that the single GPU worker is not parked on it:
     # an interactive ``submit_and_wait`` (face detection, character likeness)
     # queues behind this and has a 60 s budget. Two pauses is the worst case.
     VRAM_OOM_RETRY_PAUSE_S = 5.0
@@ -159,29 +159,11 @@ class TaskRunner:
 
         pid = os.getpid()
         try:
-            output = subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-compute-apps=pid,used_memory",
-                    "--format=csv,noheader,nounits",
-                ],
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=cls._NVIDIA_SMI_TIMEOUT_S,
+            used_mb = sum(
+                row_mb
+                for row_pid, _name, row_mb in cls._query_compute_apps()
+                if row_pid == pid
             )
-            used_mb = 0
-            for line in output.splitlines():
-                parts = [part.strip() for part in line.split(",")]
-                if len(parts) < 2:
-                    continue
-                try:
-                    line_pid = int(parts[0])
-                    line_used_mb = int(float(parts[1]))
-                except Exception:
-                    # Per-line parse guard: skip an unparseable nvidia-smi row.
-                    continue
-                if line_pid == pid:
-                    used_mb += line_used_mb
         except subprocess.TimeoutExpired:
             logger.warning(
                 "nvidia-smi timed out after %ss; reusing last VRAM reading.",
@@ -234,13 +216,70 @@ class TaskRunner:
             # done had the last attempt failed.
             raise error
 
+    @classmethod
+    def _query_compute_apps(cls) -> list[tuple[int, str, int]]:
+        """Every process on the card as nvidia-smi sees it: ``(pid, name, MB)``.
+
+        The one nvidia-smi call behind both the VRAM gate (which wants our own
+        total) and the OOM notice (which wants everyone else's name). Raises
+        what ``subprocess`` raises; the callers decide what a failure means.
+        """
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=cls._NVIDIA_SMI_TIMEOUT_S,
+        )
+        rows: list[tuple[int, str, int]] = []
+        for line in output.splitlines():
+            # rsplit, because a process name is a path and may hold commas.
+            parts = [part.strip() for part in line.rsplit(",", 1)]
+            head = parts[0].split(",", 1) if parts else []
+            if len(parts) < 2 or len(head) < 2:
+                continue
+            try:
+                rows.append((int(head[0]), head[1].strip(), int(float(parts[1]))))
+            except ValueError as exc:
+                logger.debug("Skipping an unparseable nvidia-smi row %r: %s", line, exc)
+        return rows
+
+    @classmethod
+    def gpu_tenants(cls, limit: int = 3) -> list[dict]:
+        """The other processes holding the card, largest first, for the OOM notice.
+
+        "Another program is probably holding the card" was the toast's best
+        guess; this names it. The name is nvidia-smi's process path reduced to
+        its basename - enough to recognise ``lms`` or ``ComfyUI``'s python -
+        and never sent anywhere but this owner's own browser.
+        """
+        pid = os.getpid()
+        try:
+            rows = cls._query_compute_apps()
+        except Exception as exc:
+            # No nvidia-smi, or it stalled: the notice simply names nobody.
+            logger.debug("Could not list GPU tenants for the OOM notice: %s", exc)
+            return []
+        others = sorted(
+            (
+                {"name": os.path.basename(name) or name, "used_mb": mb}
+                for row_pid, name, mb in rows
+                if row_pid != pid and mb > 0
+            ),
+            key=lambda row: -row["used_mb"],
+        )
+        return others[:limit]
+
     def _report_vram_oom(
         self, task: BaseTask, attempt: int, final: bool, recovered: bool = False
     ) -> None:
         """Emit the VRAM_OOM event the SPA turns into a toast.
 
-        Every retry sequence ends with one closing frame — ``recovered`` or
-        ``gave_up`` — because the SPA coalesces them all onto one card, and a
+        Every retry sequence ends with one closing frame - ``recovered`` or
+        ``gave_up`` - because the SPA coalesces them all onto one card, and a
         card whose last word is "retrying…" describes a state that is over.
         """
         if self._notifier is None:
@@ -256,6 +295,10 @@ class TaskRunner:
                     "max_attempts": task.VRAM_OOM_ATTEMPTS,
                     "gave_up": final,
                     "recovered": recovered,
+                    # Who else is on the card, so the toast can say "LM Studio
+                    # is holding 18 GB" instead of guessing. Not on the
+                    # recovery frame: the contention is over.
+                    "other_processes": [] if recovered else self.gpu_tenants(),
                 },
             )
         except Exception as exc:
@@ -395,7 +438,7 @@ class TaskRunner:
                 last_log_s = waited_s
 
             # Escape hatch: if nothing is currently in flight (reserved_mb==0),
-            # waiting longer cannot help — the overflow comes from loaded models
+            # waiting longer cannot help - the overflow comes from loaded models
             # or an external process (e.g. ComfyUI) that won't be freed.
             # If the task supports CPU spillover, try that first so we don't
             # pile more GPU work onto an already-full device.
@@ -424,7 +467,7 @@ class TaskRunner:
                 logger.warning(
                     "Task %s (%s) VRAM gate escape: no tasks in flight after %.1fs; "
                     "running despite overflow (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB). "
-                    "VRAM baseline exceeds budget — models likely loaded into memory.",
+                    "VRAM baseline exceeds budget - models likely loaded into memory.",
                     task.id,
                     task.type,
                     waited_s,
@@ -498,6 +541,13 @@ class TaskRunner:
         with self._active_task_lock:
             return [t for t in self._active_tasks.values() if t.type == task_type]
 
+    def has_active_gpu_tasks(self) -> bool:
+        """True while the GPU worker is executing a task."""
+        with self._active_task_lock:
+            return any(
+                t.queue_type == QueueType.GPU for t in self._active_tasks.values()
+            )
+
     def start(self):
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]
@@ -514,7 +564,7 @@ class TaskRunner:
             )
             t.start()
             self._threads.append(t)
-        # Single dedicated GPU worker — one task at a time, priority-ordered.
+        # Single dedicated GPU worker - one task at a time, priority-ordered.
         gpu_worker = threading.Thread(
             target=self._run,
             args=(self._gpu_queue,),
@@ -659,7 +709,7 @@ class TaskRunner:
             )
 
             # GPU-queue tasks are physically serialised by the single GPU worker
-            # thread — only one runs at a time, so there is no concurrent GPU
+            # thread - only one runs at a time, so there is no concurrent GPU
             # usage to gate against.  Skipping the VRAM gate avoids the
             # spillover escape that fires when loaded-model baseline VRAM
             # already exceeds the configured budget.
@@ -682,11 +732,11 @@ class TaskRunner:
             try:
                 task.run(on_vram_oom=self._pause_and_report_vram_oom)
                 # ``vram_oom_attempts`` decides whether the user has a card open
-                # about this task; ``attempts_used`` is what that card counts —
+                # about this task; ``attempts_used`` is what that card counts -
                 # the attempt that actually finished the work, not the last one
                 # that OOMed.
                 if task.vram_oom_attempts:
-                    # It got there in the end — say so, rather than leaving the
+                    # It got there in the end - say so, rather than leaving the
                     # user's last card reading "retrying".
                     self._report_vram_oom(
                         task, task.attempts_used, final=False, recovered=True
@@ -695,7 +745,7 @@ class TaskRunner:
                 error = exc
                 # Same split: a task that OOMed twice and then died of something
                 # else still has a card open, and it closes naming the attempt
-                # that died — as does one abandoned at shutdown, which used one
+                # that died - as does one abandoned at shutdown, which used one
                 # attempt, not three.
                 if task.vram_oom_attempts:
                     self._report_vram_oom(task, task.attempts_used, final=True)
@@ -800,7 +850,7 @@ class TaskRunner:
         back: ``BaseTaskFinder.on_task_complete`` discards its claimed picture
         ids and ``WorkPlanner.on_task_complete`` frees its in-flight slot. They
         used to fire only from the worker's ``finally``, so a task cancelled off
-        the queue kept both for the life of the process — the finder then sat at
+        the queue kept both for the life of the process - the finder then sat at
         max in-flight for ever, every finder that ``depends_on()`` it starved,
         and the claimed pictures could never be selected again.
 

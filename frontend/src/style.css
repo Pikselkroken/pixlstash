@@ -45,12 +45,12 @@ body {
    the surface, so when the action-fill tier was deepened for the white-label
    invariant (visual-language.md §4) both dark washes lost most of their step:
    hover 1.138 → 1.072 and selection 1.340 → 1.202. The alphas below restore the
-   PRE-EXISTING perceived weight (1.136 and 1.322) — they do not strengthen it.
+   PRE-EXISTING perceived weight (1.136 and 1.322) - they do not strengthen it.
    Restoring .08 / .18 would silently reintroduce a near-invisible 1.072 hover.
    Recompute these if an action fill ever moves again. */
 .v-theme--pixlStashDark {
-  /* Native form-control internals — the range TRACK (the part `accent-color`
-     does not paint), select/checkbox chrome and scrollbars — follow
+  /* Native form-control internals - the range TRACK (the part `accent-color`
+     does not paint), select/checkbox chrome and scrollbars - follow
      `color-scheme`, not the Vuetify theme. Declared only on `:root` (as
      `light dark`) it resolves from the OS preference, so the app's dark theme
      on a light-mode OS rendered a light slider track inside a dark surface.
@@ -61,6 +61,10 @@ body {
   --hover-wash: rgba(var(--v-theme-accent), 0.14);
   /* .18 → .26: compensates the deepened primary (#8EA604 → #6b7d04). */
   --active-wash: rgba(var(--v-theme-primary), 0.26);
+  /* Tint alpha behind a folder-level dropdown (LibraryLayoutDialog). Deeper
+     than light: 0.10 over the dark `input-background` is a smudge, 0.14 gives
+     the same 1.28 luminance step off the field that 0.10 gives on white. */
+  --level-wash: 0.14;
   --active-bar: rgb(var(--v-theme-primary));
   /* Correct as-is: `on-primary` (now #fff) over the 26% primary tint on the
      dark sidebar measures 11.22:1. The 1.32:1 figure in the docs is a
@@ -73,7 +77,7 @@ body {
      in the warm accent on light and the olive on dark, and this control keeps
      one hue in both because it sits beside the bar's olive `Add` and a warm
      chip next to it would read as a second, different accent. The +.06 over
-     light is the same compensation the line above makes, for the same reason —
+     light is the same compensation the line above makes, for the same reason -
      the deepened olive needs more of itself to register on the dark track. */
   --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.34);
 
@@ -83,7 +87,7 @@ body {
 
      STEPPED INDEPENDENTLY, NOT A FLIPPED ALPHA. On a dark canvas an ink alpha
      can only LIGHTEN, and the olive sits at L .1426 with the canvas floor at
-     L .0134 — so a neutral cannot pass below the accent, and today's
+     L .0134 - so a neutral cannot pass below the accent, and today's
      rgba(ink, .28) lands at 1.34:1 against it. The neutral therefore goes to
      the light extreme and the TRACK takes the dark end via a scrim tint.
 
@@ -96,7 +100,7 @@ body {
      Full table and the rejected alternatives: visual-language.md §4. */
   --band-meter-other: rgba(var(--v-theme-on-background), 0.86);
   --band-meter-free: rgba(var(--v-theme-scrim), 0.32);
-  /* Additive only — the alert glyph and the word "Only" carry the low state in
+  /* Additive only - the alert glyph and the word "Only" carry the low state in
      greyscale. A SOLID `warning` free segment is impossible here: dark
      `warning` against this neutral is 1.52:1, and no neutral can clear 3:1
      from both the olive (needs L ≥ .528) and `warning` (needs L ≤ .092). The
@@ -113,6 +117,8 @@ body {
      green, which clashes with the warm palette. Dark keeps the green convention. */
   --hover-wash: rgba(var(--v-theme-accent), 0.14);
   --active-wash: rgba(var(--v-theme-accent), 0.2);
+  /* See the dark block above. */
+  --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-accent));
   --active-text: rgb(var(--v-theme-on-surface));
 
@@ -120,7 +126,7 @@ body {
      so it stays olive here rather than following `--active-wash` into accent. */
   --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.28);
 
-  /* Drive-band capacity meter (#893) — see the dark block above for the rule.
+  /* Drive-band capacity meter (#893) - see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,
      and it has to go past the ink to get there: `on-background` tops out at
      L .0153 and measures 2.95 against the olive, just under the floor.
@@ -131,14 +137,14 @@ body {
      on-token value that clears 3:1; `scrim` (#000000) clears at 3.85 but is
      cold black on a warm palette (visual-language.md §4). If that stretch is
      rejected in review, the swap is a named `meter-neutral` key in main.js
-     (#1c160c light / #d4c9c1 dark) — identical pixels, cleaner semantics.
+     (#1c160c light / #d4c9c1 dark) - identical pixels, cleaner semantics.
 
      Measured, over #faf9f7:
        ours #567309 : other #1c160c  = 3.29
        other        : free  #e5e3e1  = 14.03 */
   --band-meter-other: rgb(var(--v-theme-shadow));
   --band-meter-free: rgba(var(--v-theme-on-background), 0.1);
-  /* other:free 9.57 — the fill level stays readable under the tint. */
+  /* other:free 9.57 - the fill level stays readable under the tint. */
   --band-meter-free-low: rgba(var(--v-theme-warning), 0.55);
   /* Track against canvas is 1.22:1 here. Frame, don't infer. 4.24:1. */
   --band-meter-edge: rgba(var(--v-theme-on-background), 0.6);
@@ -154,7 +160,7 @@ body {
    `--floating-bottom-h` is the height of the TALLEST bottom-anchored floating
    element currently visible INSIDE the notice column's footprint, plus its gap.
    0px when nothing is parked there. Whoever parks something on the bottom edge
-   owns this variable — today that is the SelectionBar pill (and, below 600px
+   owns this variable - today that is the SelectionBar pill (and, below 600px
    where the centred card widens over it, the grid breadcrumb). App.vue writes it
    from measured heights (ResizeObserver), never from a constant, because the
    pill wraps and grows on coarse pointers.
@@ -168,12 +174,12 @@ body {
   --notice-safe-bottom: calc(var(--space-5) + var(--floating-bottom-h));
 }
 
-/* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em
+/* Reusable uppercase section label - matches font-size 11px, weight 600, spacing 0.06em
  *
  * Alpha 0.7 by lead-designer ruling, 2026-08: 11px semibold is SMALL text under
  * visual-language.md §4 and owes 4.5:1. It shipped at 0.5, which measures
  * 3.19:1 light / 4.14:1 dark; 0.7 measures 5.94:1 / 6.65:1. Do not lower it to
- * restore a "quieter than the body" look — an uppercase tracked semibold
+ * restore a "quieter than the body" look - an uppercase tracked semibold
  * already separates on case, weight and tracking, and a heading below its own
  * hint text is inverted hierarchy, not restraint. */
 .section-label {
@@ -185,7 +191,7 @@ body {
 }
 
 /* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for
-   this — those remove the node from the accessibility tree, so a live region
+   this - those remove the node from the accessibility tree, so a live region
    built on them announces nothing. Clipping keeps it rendered and announced. */
 .visually-hidden {
   position: absolute;
@@ -201,7 +207,7 @@ body {
 }
 
 /* ===========================================================================
-   Desktop-app chrome — applied only inside the Electron shell (main.js adds
+   Desktop-app chrome - applied only inside the Electron shell (main.js adds
    `.is-desktop` to <html> when window.pixlstashDesktop exists). A plain browser
    visitor keeps normal web behaviour. Cheap, high-impact "feels like an app,
    not a website" signals (à la VS Code / LM Studio).
@@ -256,12 +262,12 @@ body {
 
 /* Button reset. Every hand-rolled control in this app is a bare <button> that
    paints itself, so all 66 of them opened by undoing the same three pieces of
-   browser chrome — 350 declarations of it. Undo it once here instead.
+   browser chrome - 350 declarations of it. Undo it once here instead.
 
    Element specificity (0,0,1) is the lowest there is, so this loses to
    everything: Vuetify's `.v-btn` keeps its own fill and border, and any
    component asking for a real border or background still wins. `:disabled`
-   keeps the browser's own `default` cursor rather than inheriting `pointer` —
+   keeps the browser's own `default` cursor rather than inheriting `pointer` -
    a control that cannot be pressed must not advertise that it can. Components
    wanting the stronger `not-allowed` (AppButton, and every `aria-disabled`
    control) still say so themselves. */
@@ -280,7 +286,7 @@ button:disabled {
    components collapsed into this, and anything focusable that was never styled
    now shows a ring rather than the browser default.
 
-   Specificity is deliberately (0,1,0) — the bare `:focus-visible`, with the
+   Specificity is deliberately (0,1,0) - the bare `:focus-visible`, with the
    exclusion wrapped in `:where()` so it contributes nothing. Every component
    rule is `.class:focus-visible` at (0,2,0) and therefore still wins, whether it
    adds to the ring (StackBadge's inset warning stroke) or replaces it
@@ -291,9 +297,60 @@ button:disabled {
    and its own rules are class-only (0,1,0): a tie we would win or lose on import
    order, flattening an elevated button while it holds focus. Vuetify's buttons
    keep their own focus treatment. */
-:focus-visible:not(:where(.v-btn, .v-btn *)) {
+:focus-visible:not(
+  :where(.v-btn, .v-btn *, .v-overlay__content, .v-overlay__content > .v-card)
+) {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+/* A dialog takes focus when it opens, so the keyboard lands inside it rather
+   than behind it. That is focus for containment, not for pointing: the ring the
+   rule above would paint draws a square around the entire card, which reads as
+   "this whole thing is the control" and, on a card that carries its own
+   elevation, replaces the shadow with it. The two surfaces Vuetify focuses -
+   the overlay content and the card it holds - are therefore excluded above;
+   every control INSIDE the dialog still rings normally. */
+
+/* ...except inside a Vuetify field, where the focused element is an <input>
+   the component owns rather than the control the owner sees. In a text field
+   that input fills the box and the ring looks right by accident; in a SELECT it
+   is sized to its own text, so the ring drew a 3px amber rectangle around the
+   label - tightest, and most obviously wrong, on an empty select showing only
+   its placeholder.
+
+   The indicator is therefore a glow (`--focus-glow`) on a pseudo-element the
+   size of the field, painted first so it sits beneath the outline and the
+   label, and an outlined field's is clipped at the top edge: its label floats
+   INTO the top border, and any shadow up there is a bar through the label. What
+   is left is a glow down the sides and under the field, below the label.
+
+   A select's menu drops flush against the field's bottom edge and would cut
+   that glow in half, so it goes away while the menu is open; an open menu is
+   its own account of where the keyboard is.
+
+   `:has(:focus-visible)` rather than Vuetify's own `.v-field--focused`, because
+   that class lands on a mouse click too and this indicator is meant to be the
+   keyboard one. All of these are at least (0,2,0) and so beat the (0,1,0) rule
+   above without `!important`. */
+.v-field:has(:focus-visible)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: var(--focus-glow);
+}
+.v-field--variant-outlined:has(:focus-visible)::before {
+  clip-path: inset(0 -12px -12px -12px);
+}
+.v-select--active-menu .v-field::before,
+.v-autocomplete--active-menu .v-field::before,
+.v-combobox--active-menu .v-field::before {
+  box-shadow: none;
+}
+.v-field :focus-visible {
+  box-shadow: none;
 }
 
 /* The sidebar, toolbar and title bar each paint from their OWN theme token

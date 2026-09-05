@@ -76,7 +76,7 @@ def _heal_legacy_docs(output_dir: str) -> None:
     behind, and the release publisher only ever *adds* files, so they would
     linger forever otherwise:
 
-    * each older ``v{major}.{minor}/index.html`` still renders ReDoc — rewrite
+    * each older ``v{major}.{minor}/index.html`` still renders ReDoc - rewrite
       it to the Scalar template (the page is version-agnostic, it just loads the
       sibling ``openapi.json``);
     * a top-level ``openapi.json`` is no longer emitted (the root only holds the

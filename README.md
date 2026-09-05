@@ -95,15 +95,35 @@ python -m pixlstash.app --server-config "C:\path\to\server-config.json"
 PixlStash can register several independent image libraries and keep one open at
 a time. Pictures, tags, scores, snapshots, guest sessions, and guest scores stay
 with their library; your owner account and preferences stay with the
-installation. Switch from **Settings → Libraries**. API tokens and share links
-are pinned to the library where they were created: they become inactive while a
-different library is open and work again when you switch back.
+installation. API tokens and share links are pinned to the library where they
+were created: they become inactive while a different library is open and work
+again when you switch back.
+
+**Settings → Libraries** does all of it: add a library, rename one, switch
+between them, and stop using one. **Add a library…** takes a single folder and
+works out what it is — a library you already made is added as it is, with its
+tags, scores and people; a folder of pictures is brought in as it stands; an
+empty folder starts a fresh library. Nothing in that folder is moved, renamed
+or copied.
+
+**Stop using this** removes no file. PixlStash forgets the library, everything
+inside the folder stays where it is, and adding the folder again brings back its
+tags and its share links. The library you have open cannot be forgotten — switch
+away from it first.
+
+Managing libraries is available on the machine running PixlStash, or over your
+local network or Tailscale, because it points the server at folders on that
+machine. A session from further away can **see** the list — the names, and which
+one is open — and nothing more: switching is on that same footing as adding and
+removing, because it reloads every connected client and takes the outgoing
+library's share links offline. It also sees no folder paths. Set
+`allow_remote_host_ops` in server settings to lift all of it at once.
 
 ### The library command line
 
-Adding and removing libraries is a command-line operation in this release,
-because it points PixlStash at folders on your machine. **Settings → Libraries**
-shows the exact command for your installation, with a copy button.
+The same things can be done from a terminal, which is what a script or a cron
+job wants. **Settings → Libraries** shows the exact command for your
+installation, with a copy button.
 
 Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
 **with the same environment active that the server runs in** (activate the venv,
@@ -499,6 +519,8 @@ pixlstash-cli plugins install ./my_filter.py        # a single module
 pixlstash-cli plugins test ./my_captioner.py       # does it load and render?
 pixlstash-cli plugins list
 pixlstash-cli plugins remove my_captioner
+pixlstash-cli plugins create                          # start writing one
+pixlstash-cli plugins submit                          # ...and open its PR
 ```
 
 `plugins available` lists what
@@ -564,7 +586,118 @@ single `.py` file or a folder containing `__init__.py`.
 
 ### Writing a plugin
 
-Use the template from `pixlstash/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
+```bash
+pixlstash-cli plugins create
+```
+
+Run with no arguments it is a wizard. It works out first whether it can fork
+[PixlStash-plugins](https://github.com/Pikselkroken/PixlStash-plugins) for you,
+and names the repository it would create:
+
+```
+This will create https://github.com/you/PixlStash-plugins, a public fork of
+Pikselkroken/PixlStash-plugins on your account, and clone it.
+```
+
+If you already have that fork it says so, and that it will be reused rather
+than created. If it cannot fork at all it says why: `gh` missing, or `gh` not
+signed in.
+
+Then it asks what kind of plugin you are writing, and that question carries the
+way out:
+
+```
+What kind of plugin is it?
+  1  image       turns a picture into another picture (the Filters menu)
+  2  captioning  turns an image into tags or a description
+  3  abort       stop here, creating nothing
+Choose [1]:
+```
+
+Answer with the number or the name. `3` stops with nothing forked, cloned or
+created, and the question is asked before any of those happen for exactly that
+reason. After it, you are asked what the plugin should do and what to call it.
+
+Everyone contributes from a fork, maintainers included. A plugin reaches the
+repository as a pull request or not at all, and a shortcut for the few people
+with write access would be a second path that only those people ever exercise.
+
+From those answers it clones, branches, copies one of the repository's example
+plugins into `plugins/<kind>/<name>/`, renames its folder, module and class,
+puts your git identity and your licence in the header, writes what you said it
+should do into the plugin's README and docstring, and prints the commands that
+open the pull request. Nothing is committed or pushed: the plugin at that point
+is still the example.
+
+Last, it offers a command that hands the job to a coding agent:
+
+```bash
+cd /home/you/PixlStash-plugins && claude 'Read plugins/image/edge_glow/BRIEF.md and do what it says.'
+```
+
+One line, because the command is the part that gets pasted. The brief itself is
+written to disk as `BRIEF.md` inside the new plugin's folder, where it can be
+read, edited and re-run without retyping anything. It says what you asked the
+plugin to do, that the folder holds a renamed copy of an example whose
+behaviour must be replaced rather than described, what "done" looks like, and
+that it should delete itself when finished. `BRIEF.md` is gitignored, so
+forgetting cannot put it in the pull request.
+
+The command carries its own `cd`, because the brief is named relative to the
+checkout and the agent reads that checkout's instructions: pasted anywhere else
+it would find neither.
+
+For everything general, the brief points at the plugins repository's own
+[`AGENTS.md`](https://github.com/Pikselkroken/PixlStash-plugins/blob/main/AGENTS.md)
+(and a byte-identical `CLAUDE.md`) that both agents read on their own, covering
+the contract to follow, the header rules, what a plugin README needs and the
+commands to finish with. Restating any of that in the prompt would be a second
+copy of instructions that repository maintains and its tests keep honest. All
+the command adds is which README holds the brief.
+
+It is printed rather than run: starting an agent on your checkout is your call,
+and you should read what it writes before committing it.
+
+### Submitting it
+
+```bash
+cd PixlStash-plugins
+pixlstash-cli plugins submit
+```
+
+`submit` is the other half of `create`, and there is nothing to type because
+the branch already names the plugin. It runs the plugins repository's own
+checks with that checkout's `.venv` if it has one (its ruff is pinned, and a
+different version formats differently), stages the one plugin folder, commits
+it, pushes the branch and opens the pull request.
+
+A failing check stops it, which is the point: the same failure found in CI
+costs a red pull request and a force-push. `--dry-run` runs the checks and
+stops; `--skip-checks` runs none of them.
+
+It asks one thing first: what you tested the plugin against, which model, which
+PixlStash version, on what hardware. That goes in the pull request body,
+verbatim and with nothing else read off your machine. CI checks the shape of a
+model-backed plugin and never runs the model, so that sentence is what makes it
+reviewable at all. Pushing and opening the PR are confirmed before they happen
+(`--yes` skips the question).
+
+Everything the wizard asks can be given as an option instead, and giving a name
+and `--kind` skips the questions entirely:
+
+```bash
+pixlstash-cli plugins create edge_glow --kind image \
+  --purpose "Adds a soft glow around every edge." --agent claude
+```
+
+It copies the example the plugins repository's own CI keeps green, rather than a
+template kept here, so a scaffold cannot be out of date with the contract tests
+it has to pass. `--from` starts from a different published plugin,
+`--display-name`, `--description`, `--author` and `--license` fill in the
+header, `--dir` says where the checkout goes, and `--no-fork` skips the fork.
+
+To write one by hand instead, start from
+`pixlstash/image_plugins/built-in/plugin_template.py` in this repository:
 
 1. Create a new `.py` file in your user plugin directory.
 2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.

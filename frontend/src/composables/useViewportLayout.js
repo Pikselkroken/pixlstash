@@ -2,10 +2,12 @@ import { onMounted, onUnmounted, watch } from "vue";
 import { useGridStore } from "../stores/useGridStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 
-const MIN_THUMBNAIL_SIZE = 96;
-const MAX_THUMBNAIL_SIZE = 384;
+// Cut 25% from the pre-2026-09-03 96/384/14 (see thumbnailSizes.js) so the
+// column ceiling keeps pace with the smaller grid ladder.
+const MIN_THUMBNAIL_SIZE = 72;
+const MAX_THUMBNAIL_SIZE = 288;
 const MIN_COLUMNS = 2;
-const MAX_COLUMNS = 14;
+const MAX_COLUMNS = 19;
 const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
 
@@ -42,7 +44,7 @@ export function useViewportLayout({ mainAreaRef }) {
   function updateMaxColumns() {
     // Maintain the responsive column bounds. gridStore.columns is derived from
     // the size level and clamps itself to these bounds, so there is nothing to
-    // write back here — updating the bounds re-evaluates the derived count.
+    // write back here - updating the bounds re-evaluates the derived count.
     const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
     if (!width) {
       gridStore.minColumns = MIN_COLUMNS;

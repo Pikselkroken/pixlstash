@@ -198,7 +198,7 @@ def _check_semantic_search_regression(
 # Library tables emptied before every test. Child rows before parent rows so
 # FK constraints are satisfied even with enforcement on. ``User``/``UserToken``
 # are deliberately absent: the module shares one logged-in client, and wiping
-# identity would cost a ~0.45 s credential re-mint per test for no benefit —
+# identity would cost a ~0.45 s credential re-mint per test for no benefit -
 # nothing here asserts anything about authentication.
 _LIBRARY_TABLES = [
     PictureLikenessQueue,
@@ -249,7 +249,7 @@ def client(server):
     before. Both the hash on set and the hash on verify are deliberately slow
     (~0.15 s each), so the session is established once and reused; the identity
     tables are excluded from ``clean_library`` to keep it valid. The session is
-    re-proven before every test — see ``clean_library``.
+    re-proven before every test - see ``clean_library``.
     """
     api_client = TestClient(server.api)
     response = api_client.post(
@@ -264,7 +264,7 @@ def _reset_pipeline_bookkeeping(vault) -> None:
 
     Both structures below are drained on the *completion* path of a task, and a
     task cancelled by ``TaskRunner.stop`` never gets there. Left behind, they
-    are not merely untidy — emptying ``picture`` makes SQLite hand out ids from
+    are not merely untidy - emptying ``picture`` makes SQLite hand out ids from
     1 again, so stale entries name the *next* test's pictures:
 
     * ``WorkPlanner._inflight_by_finder`` keeps a count that never returns to
@@ -272,12 +272,12 @@ def _reset_pipeline_bookkeeping(vault) -> None:
       finder that ``depends_on`` it never runs at all;
     * ``BaseTaskFinder._claimed_picture_ids`` keeps ids claimed forever, and
       ``_filter_and_claim`` then skips exactly the pictures the next test just
-      uploaded — they never get an embedding, likeness parameters or faces, and
+      uploaded - they never get an embedding, likeness parameters or faces, and
       a test waiting on the pipeline waits until its timeout.
 
     Both were observed: leaving them behind cost two tests a 180 s
     ``likeness pipeline did not settle`` timeout and lost a third one picture's
-    faces. ``UnprocessableImageRegistry`` needs no help — it re-stats the file
+    faces. ``UnprocessableImageRegistry`` needs no help - it re-stats the file
     it recorded, and the reset deleted it, so a recycled id prunes itself.
     """
     planner = vault._work_planner
@@ -380,13 +380,13 @@ def clean_library(request, server, client):
     protected = client.get("/protected")
     assert protected.status_code == 200, (
         f"the shared session is no longer authenticated ({protected.status_code}: "
-        f"{protected.text}) — every assertion below would prove nothing"
+        f"{protected.text}) - every assertion below would prove nothing"
     )
     for endpoint in ("/pictures", "/characters", "/picture_sets", "/projects"):
         remaining = client.get(endpoint)
         assert remaining.status_code == 200, remaining.text
         assert remaining.json() == [], (
-            f"{endpoint} is not empty after the reset: {remaining.json()} — a "
+            f"{endpoint} is not empty after the reset: {remaining.json()} - a "
             "previous test leaked state into this one"
         )
 
@@ -2020,7 +2020,7 @@ def test_semantic_search(server, client, request):
     # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
     picture_ids_with_chars: set[int] = set()
     for pid in picture_ids:
-        # Fetch faces for this picture — poll because face extraction is async
+        # Fetch faces for this picture - poll because face extraction is async
         faces_data = wait_for_faces(client, pid, timeout_s=60)
         logging.debug(f"Received face data for picture ID {pid}: {faces_data}")
         logging.debug(f"Picture ID {pid} has {len(faces_data)} faces detected")
@@ -2100,7 +2100,7 @@ def test_semantic_search(server, client, request):
         faces_check = faces_check_resp.json().get("faces", [])
         assigned = [f for f in faces_check if f.get("character_id") is not None]
         assert assigned, (
-            f"Picture {pid} has no faces with character_id after association — association did not persist"
+            f"Picture {pid} has no faces with character_id after association - association did not persist"
         )
 
     # Replace embedding futures: the originals may have resolved before

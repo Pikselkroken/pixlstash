@@ -194,7 +194,7 @@ const close = () => desktop?.windowClose?.();
      costs the user the ability to move or close the window. The title bar is a
      child of .app-viewport alongside the in-app overlays, and .app-viewport is
      `position: fixed; z-index: 0`, so this rung competes with exactly those
-     siblings. It sits ABOVE `--z-modal` (4000) on purpose — the title bar is
+     siblings. It sits ABOVE `--z-modal` (4000) on purpose - the title bar is
      the FIRST child of .app-viewport and ReviewSessionsOverlay (its own 4000
      stacking context, with `inset: 0` sub-scrims) is a later one, so a tie at
      4000 would be resolved by DOM order against the strip. It sits BELOW

@@ -117,7 +117,7 @@ class JoyCaptionService:
             Generated text string, or None on failure.
         """
         if self._model is None or self._processor is None:
-            logger.error("JoyCaption model not loaded — call ensure_ready() first")
+            logger.error("JoyCaption model not loaded - call ensure_ready() first")
             return None
         try:
             messages = [
@@ -221,7 +221,7 @@ class JoyCaptionService:
         if not images:
             return []
         if self._model is None or self._processor is None:
-            logger.error("JoyCaption model not loaded — call ensure_ready() first")
+            logger.error("JoyCaption model not loaded - call ensure_ready() first")
             return [None] * len(images)
         try:
             messages = [
@@ -316,7 +316,7 @@ class JoyCaptionService:
         try:
             # bitsandbytes is required for NF4/INT8 quantisation.
             if self._precision in ("nf4", "int8"):
-                import bitsandbytes  # noqa: F401 — validates availability
+                import bitsandbytes  # noqa: F401 - validates availability
 
             from transformers import (
                 AutoProcessor,
@@ -341,7 +341,7 @@ class JoyCaptionService:
                 torch_dtype = torch.float32
                 device_map = "cpu"
             elif self._precision == "nf4":
-                # Skip the vision tower and projector — bitsandbytes incorrectly
+                # Skip the vision tower and projector - bitsandbytes incorrectly
                 # quantizes SigLIP's NonDynamicallyQuantizableLinear layers to
                 # uint8.  The skip-module names must be full dotted prefixes so
                 # that should_convert_module's re.match check reaches all child
@@ -390,7 +390,7 @@ class JoyCaptionService:
                     "[JoyCaption] Set tokenizer pad_token = eos_token for batch padding"
                 )
 
-            # PyTorch's F.interpolate does not support LANCZOS — patch the
+            # PyTorch's F.interpolate does not support LANCZOS - patch the
             # image processor to use BICUBIC so inference doesn't crash.
             _ip = getattr(self._processor, "image_processor", None)
             if _ip is not None and hasattr(_ip, "resample"):
@@ -444,14 +444,14 @@ class JoyCaptionService:
                 else torch.device("cuda" if torch.cuda.is_available() else "cpu")
             )
             logger.info(
-                "[JoyCaption] Model loaded successfully on %s (precision=%s) — total load time %.1fs",
+                "[JoyCaption] Model loaded successfully on %s (precision=%s) - total load time %.1fs",
                 self._model_device,
                 self._precision,
                 time.perf_counter() - t_start,
             )
             if str(self._model_device) == "cpu":
                 logger.warning(
-                    "[JoyCaption] Running on CPU — inference will be very slow (~100s/image). "
+                    "[JoyCaption] Running on CPU - inference will be very slow (~100s/image). "
                     "Set default_device=cuda in server-config.json to use the GPU."
                 )
 
@@ -504,7 +504,7 @@ class JoyCaptionPlugin(TaggerPlugin):
     name: str = "joycaption"
     display_name: str = "JoyCaption"
     description: str = (
-        "LLaVA-style LLM captioner — generates detailed descriptions and "
+        "LLaVA-style LLM captioner - generates detailed descriptions and "
         "Danbooru tags. Requires ~8 GB VRAM (NF4). Requires bitsandbytes."
     )
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
@@ -514,7 +514,7 @@ class JoyCaptionPlugin(TaggerPlugin):
             "name": "fancyfeast/llama-joycaption-beta-one-hf-llava",
             # Not an SPDX id and not a declared one: the repo carries no
             # `license` field at all, and this is the licence file it actually
-            # ships. Saying so is the point — a user weighing these terms has
+            # ships. Saying so is the point - a user weighing these terms has
             # to read them, and "MIT" here would be a confident lie. The
             # checkpoint is a composite (Llama-3.1-8B-Instruct plus a
             # google/siglip2 vision tower, Apache-2.0, bundled in the same
@@ -538,7 +538,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         """Create the underlying :class:`JoyCaptionService`, or reuse the existing one.
 
         Calling this method repeatedly is safe: if a service already exists for
-        the same device the existing instance — and any model loaded into it —
+        the same device the existing instance - and any model loaded into it -
         is preserved.  A new service is only created when the device changes (in
         which case the old model is unloaded automatically via garbage collection).
 
@@ -717,12 +717,12 @@ class JoyCaptionPlugin(TaggerPlugin):
         precision = str(parameters.get("precision", "nf4"))
         already_loaded = self.is_loaded()
         logger.info(
-            "[JoyCaption] init() called — precision=%s, already_loaded=%s",
+            "[JoyCaption] init() called - precision=%s, already_loaded=%s",
             precision,
             already_loaded,
         )
         self.service.ensure_ready(precision=precision)
-        logger.info("[JoyCaption] init() complete — loaded=%s", self.is_loaded())
+        logger.info("[JoyCaption] init() complete - loaded=%s", self.is_loaded())
 
     def unload(self) -> None:
         """Unload JoyCaption from memory."""
@@ -785,6 +785,12 @@ class JoyCaptionPlugin(TaggerPlugin):
     ) -> int:
         """Estimate peak VRAM for processing *image_count* images.
 
+        A model that is *not yet resident* is charged in full, because the host
+        asks this before it loads and only on a CUDA engine: returning 0 for a
+        cold start would bill nothing for the 8 GB that is about to be
+        allocated, which is the OOM the budget exists to prevent (#967). Only a
+        model already sitting on the CPU costs nothing.
+
         Args:
             image_count: Number of images.
             parameters: Plugin parameters (uses ``precision``).
@@ -792,9 +798,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         Returns:
             Estimated VRAM in MB.
         """
-        if self._service is None or self._service._model_device is None:
-            return 0
-        if str(self._service._model_device) == "cpu":
+        if self._service is not None and str(self._service._model_device) == "cpu":
             return 0
         return _BASE_VRAM_MB + _PER_IMAGE_VRAM_MB * max(1, image_count)
 
@@ -825,7 +829,7 @@ class JoyCaptionPlugin(TaggerPlugin):
             stop_event: If set, processing stops after the current batch.
 
         Returns:
-            ``{path: list[TagResult]}`` — empty list on per-image failure.
+            ``{path: list[TagResult]}`` - empty list on per-image failure.
         """
         tag_prompt = str(parameters.get("tag_prompt", _DEFAULT_TAG_PROMPT))
         tag_batch_size = max(1, int(parameters.get("tag_batch_size", 4)))
@@ -838,7 +842,7 @@ class JoyCaptionPlugin(TaggerPlugin):
 
         results: dict[str, list[TagResult]] = {}
         logger.debug(
-            "[JoyCaption] tag_images() — %d image(s), batch_size=%d, max_new_tokens=%d",
+            "[JoyCaption] tag_images() - %d image(s), batch_size=%d, max_new_tokens=%d",
             len(image_paths),
             tag_batch_size,
             max_new_tokens_tags,
@@ -886,7 +890,7 @@ class JoyCaptionPlugin(TaggerPlugin):
 
         _flush_batch()  # process any remaining images
 
-        logger.debug("[JoyCaption] tag_images() complete — %d results", len(results))
+        logger.debug("[JoyCaption] tag_images() complete - %d results", len(results))
         return results
 
     def generate_descriptions(
@@ -903,14 +907,14 @@ class JoyCaptionPlugin(TaggerPlugin):
             stop_event: If set, processing stops after the current image.
 
         Returns:
-            ``{path: caption_str}`` — value is ``None`` on failure.
+            ``{path: caption_str}`` - value is ``None`` on failure.
         """
         desc_prompt = str(
             parameters.get("description_prompt", _DEFAULT_DESCRIPTION_PROMPT)
         )
         results: dict[str, Optional[str]] = {}
         logger.debug(
-            "[JoyCaption] generate_descriptions() — %d image(s)", len(image_paths)
+            "[JoyCaption] generate_descriptions() - %d image(s)", len(image_paths)
         )
 
         for path in image_paths:
@@ -941,7 +945,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                 results[path_str] = None
 
         logger.debug(
-            "[JoyCaption] generate_descriptions() complete — %d results", len(results)
+            "[JoyCaption] generate_descriptions() complete - %d results", len(results)
         )
         return results
 

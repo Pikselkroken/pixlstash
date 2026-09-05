@@ -4,14 +4,14 @@ This module is the single source of truth for "at what confidence does a predict
 become a tag the user actually sees?". The tagger applies a *per-label* threshold from
 its ``meta.json`` (``label_thresholds``, produced by the post-train gate), falling back
 to :data:`PIXLSTASH_TAGGER_DEFAULT_THRESHOLD` for labels the gate did not calibrate, and
-adds the user's ``threshold_offset`` bias to both — see
+adds the user's ``threshold_offset`` bias to both - see
 ``PixlStashTaggerService.tag_items``.
 
 The smart-score anomaly penalty reuses exactly that rule
 (:func:`resolve_anomaly_apply_thresholds`) so a picture is only ever penalised for
 defects that are visible in its tag list. Before this existed the penalty read every
 ``TagPrediction`` row regardless of confidence, so predictions that never crossed the
-gate — and are invisible in the UI — still pushed the score down.
+gate - and are invisible in the UI - still pushed the score down.
 
 Kept deliberately dependency-light (file I/O plus ``sanitise_tag``) so both the scoring
 path and the tag-prediction service can import it without an import cycle.
@@ -111,7 +111,7 @@ def resolve_anomaly_apply_thresholds(vault) -> dict[str, float]:
 
     # These three inputs fully determine the output, so a key built from them
     # auto-invalidates the moment the user's offset moves or the tagger model (and thus
-    # its meta.json path) changes — no explicit invalidation hook is needed. The getters
+    # its meta.json path) changes - no explicit invalidation hook is needed. The getters
     # above are cheap; only ``load_label_thresholds`` (which open()s + json.load()s the
     # meta file) is skipped on a hit. Without this, a 100k-picture rescore re-read the same
     # unchanged file ~1,560 times (once per 64-picture batch).
@@ -143,7 +143,7 @@ def resolve_anomaly_apply_thresholds(vault) -> dict[str, float]:
         vault._anomaly_apply_thresholds_memo = (cache_key, resolved)
     except (AttributeError, TypeError) as exc:
         # A vault-like object that forbids attribute assignment (e.g. one using
-        # ``__slots__``) simply runs uncached — correct, just slower. Log so the missed
+        # ``__slots__``) simply runs uncached - correct, just slower. Log so the missed
         # caching is visible rather than silent.
         logger.debug(
             "resolve_anomaly_apply_thresholds: could not memoise on %r (%s); "

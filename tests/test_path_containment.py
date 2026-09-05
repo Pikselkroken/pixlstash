@@ -35,6 +35,9 @@ from pixlstash.services.scrapheap_service import remove_picture_files
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
 from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_path,
+)
 
 
 @pytest.fixture(scope="module")
@@ -104,6 +107,94 @@ def test_path_is_within_follows_a_symlinked_root(tmp_path):
         pytest.skip("symlinks are not available here")
     # The same directory spelled through its alias is still contained.
     assert path_is_within(str(real / "pic.png"), str(link))
+
+
+def test_blocklist_refuses_a_symlink_pointing_into_a_restricted_directory(tmp_path):
+    """A link the caller owns must not launder a blocked target past the check.
+
+    The blocklist compares literal strings, so before this was resolved the
+    link's own path matched no entry and the route behind the check went on to
+    operate on the target. Every caller that passed the string it was given -
+    most of them - inherited that.
+    """
+    link = tmp_path / "innocent-looking"
+    try:
+        link.symlink_to("/etc", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    if not os.path.isdir("/etc"):
+        pytest.skip("no /etc on this platform")
+
+    assert validate_reference_folder_path(str(link)) is not None
+    # Through the link's own children too, not only the root of it.
+    assert validate_reference_folder_path(str(link / "ssl")) is not None
+
+
+def test_blocklist_allows_a_resolved_alias_that_is_not_a_system_directory():
+    """Resolving turns three ordinary locations into blocked-looking ones.
+
+    macOS resolves `/tmp` to `/private/tmp` and `$TMPDIR` under
+    `/private/var/folders`, which the `/private` entry would then swallow;
+    FreeBSD and TrueNAS ship `/home` as a symlink to `/usr/home`, which `/usr`
+    would swallow and strand the whole library. `/tmp` and `/home/me` were
+    accepted before paths were resolved and must stay accepted; their resolved
+    spellings were refused when typed literally and now pass, which is the
+    widening this buys - one directory answering the same way under both of its
+    names. Asserted on Linux, where `/usr` is blocked, so the exception is
+    exercised on the CI platform rather than only on the one with no runner.
+    """
+    assert validate_reference_folder_path("/usr/home/me/Pictures") is None
+    assert validate_reference_folder_path("/usr/home") is None
+
+    # The exception is a prefix, not a substring: the rest of /usr still goes.
+    assert validate_reference_folder_path("/usr/lib/x") is not None
+    assert validate_reference_folder_path("/usr/homework") is not None
+
+
+def test_macos_private_prefix_blocks_system_paths_but_not_the_temp_aliases(
+    monkeypatch,
+):
+    """The macOS rule asserted on Linux, because the gate has no macOS runner.
+
+    `/private` cannot leave the macOS list - it is the only entry that catches
+    `/etc` once that resolves to `/private/etc` - so the temp aliases underneath
+    it have to be excepted by name. Both halves are asserted: the system
+    subtrees still refuse, the two temp locations do not.
+    """
+    from pixlstash.utils import reference_folder_validator as validator
+
+    monkeypatch.setattr(validator, "_get_blocklist", lambda: validator._MACOS_BLOCKLIST)
+
+    assert validator.validate_reference_folder_path("/private/etc/ssl") is not None
+    assert validator.validate_reference_folder_path("/private/var/db") is not None
+    assert validator.validate_reference_folder_path("/Library/Preferences") is not None
+
+    assert validator.validate_reference_folder_path("/private/tmp/export") is None
+    assert (
+        validator.validate_reference_folder_path("/private/var/folders/ab/T/x") is None
+    )
+
+
+def test_blocklist_still_accepts_an_ordinary_folder_and_a_benign_symlink(tmp_path):
+    """Over-blocking is its own regression: resolution must not refuse the normal case."""
+    ordinary = tmp_path / "pictures"
+    ordinary.mkdir()
+    assert validate_reference_folder_path(str(ordinary)) is None
+
+    link = tmp_path / "shortcut"
+    try:
+        link.symlink_to(ordinary, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    assert validate_reference_folder_path(str(link)) is None
+
+    # A path that does not exist yet still resolves as far as it goes, so the
+    # Docker pending-mount callers keep working rather than being refused.
+    assert validate_reference_folder_path(str(ordinary / "not-created-yet")) is None
+
+    # A relative path is still refused before any resolution happens, so it can
+    # never be quietly resolved against the server's working directory.
+    assert validate_reference_folder_path("pictures") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +382,7 @@ def test_writeback_honours_a_legitimate_existing_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# In-place rotate — the first sink that overwrites an ORIGINAL file (#950)
+# In-place rotate - the first sink that overwrites an ORIGINAL file (#950)
 # ---------------------------------------------------------------------------
 
 
@@ -328,8 +419,8 @@ def test_rotate_refuses_to_overwrite_a_file_outside_the_vault_root(
     """`Picture.file_path` is a database value, and rotate WRITES to it.
 
     `resolve_picture_path` hands an absolute path straight back and joins a
-    relative one without normalising, so a wrong row — a faulty import, an
-    edited DB — resolves wherever it says. Every sibling destructive sink checks
+    relative one without normalising, so a wrong row - a faulty import, an
+    edited DB - resolves wherever it says. Every sibling destructive sink checks
     containment first; this one overwrites the user's original bytes, so it is
     the last place that should take the row's word for it.
     """
@@ -417,7 +508,7 @@ def test_rotate_refuses_a_symlink_inside_the_root_that_points_outside(server, tm
     """The topology `path_is_within` accepts on purpose and a write sink cannot.
 
     The harm is a read escape, not a write one: `os.replace` replaces a symlink
-    rather than following it, so the outside file is never rewritten — but
+    rather than following it, so the outside file is never rewritten - but
     `read_orientation` follows it, and the rotate then lands a copy of that
     file's bytes inside the library under the link's name, carrying its mode and
     owner across. Asserting the link is still a link is what fails on the

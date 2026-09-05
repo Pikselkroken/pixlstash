@@ -59,6 +59,41 @@ proves fragile for torch/onnxruntime — to be validated during implementation.)
 installer pins to those same versions (just swapping the `+cpu` build for `+cu128`/
 `+rocm`), guaranteeing torch/torchvision ABI compatibility.
 
+**`--target` shadowing did prove fragile — but not for torch.** The fallback
+above anticipated the wrong package. `pip install --target` writes the *whole
+dependency closure* into the overlay, not just the wheels named on the command
+line: torch alone brings `typing_extensions`, `numpy`, `sympy`, `networkx`,
+`jinja2`, `filelock` and `fsspec`. Every one of those then precedes the bundled
+env on `PYTHONPATH` and shadows the bundle's own copy — for no benefit, since the
+constraints file pinned them to the bundle's versions in the first place.
+
+They only have to disagree once. Windows, 2026-09-03: an overlay carrying
+`typing_extensions` 4.15.0 over a bundle holding 4.16.0 made the *bundle's* anyio
+raise `ImportError: cannot import name 'sentinel'` (4.16 added it), killing the
+backend inside the `fastapi` import chain before the server existed. The
+overlay-fallback path caught it and ran on CPU, so the symptom was silent loss of
+GPU acceleration rather than a dead app.
+
+So the install **prunes** (`BackendManager.pruneOverlay`): after pip finishes,
+every distribution the bundled env also provides is deleted from the overlay,
+keeping only what the overlay exists for (`torch`, `torchvision`,
+`onnxruntime-gpu`, `nvidia-*`, `triton`) plus anything the bundle lacks. That is
+the state the overlay would have had if pip could install *only* the wheels we
+asked for. Deletion is driven by each distribution's own `RECORD`, and
+directories the deletions empty are removed too — an empty directory on
+`sys.path` is an implicit namespace package (PEP 420) and shadows just as
+effectively as a populated one.
+
+**Overlays are re-pruned after an app update.** An app update replaces the
+bundled `site-packages` wholesale, so an overlay pruned against the *previous*
+bundle can start shadowing again without anyone touching it. `OVERLAY.json`
+therefore records the `appVersion` it was pruned against, and
+`BackendManager.repairIfStale` re-prunes on a mismatch at launch. This is a
+repair, not a reinstall: the duplicates are exactly what breaks, and the bundle
+already holds a correct copy of every one of them, so nothing is re-downloaded.
+An overlay whose marker predates pruning has no `appVersion` at all, which reads
+as stale and gets the same repair — that is how already-installed overlays heal.
+
 ## Overlay install location (issue #472)
 
 The GPU overlay is a multi-GB download, so *where* it lands matters. Originally it
@@ -157,21 +192,113 @@ two ephemeral signals come from the launcher:
 
 Dev (`PIXLSTASH_DESKTOP_DEV=1`) keeps using the developer's default config/library.
 
-## First-run setup (UX)
-On first launch (no desktop config yet) the main window shows a **setup screen**
-(`renderer/setup.html`) before starting the backend:
-1. **Import** — if a standalone pip/Docker config is found (located via the backend's
-   own platformdirs, `setup:probe`), offer to copy its values as defaults — most
-   usefully the existing `image_root`, so an existing library is picked up automatically.
-2. **Library folder** — a folder picker (defaults to the imported `image_root`, else
-   `~/Pictures/PixlStash`).
-3. **CPU vs GPU** — shown only when a discrete GPU is detected; "GPU" routes through the
-   existing on-demand overlay install (`~2.5 GB`, progress UI). Mac = Metal (no choice),
-   no GPU = CPU (no choice).
-4. `setup:commit` writes the desktop config, installs/activates the chosen overlay, then
-   boots the backend and navigates the window into the library.
+## The startup framework (UX)
+`renderer/setup.html` is not only the first-run wizard: it is **the screen
+PixlStash puts in front of the app whenever it has to ask something before the
+library can be trusted to open.** A launch runs a **list of steps**, and the main
+process decides the list (`setup:probe` → `steps`). Anything new that must be
+settled before the app loads — a question, help, a repair — belongs here as
+another step id, not as a dialog thrown over a half-loaded library.
 
-Subsequent launches see the config exists → skip the wizard → straight into the library.
+The steps that exist today:
+
+1. **`library`** — *"Do you already have a picture library?"* Two illustrated
+   answers, nothing pre-selected: **pictures I already have** (any folder, read
+   where it sits) and **start empty**. Choosing one reveals the folder field,
+   which then says what is actually in the folder it names (`setup:inspect` →
+   `src/setup/InspectFolder.ts`, a bounded read-only walk): a PixlStash library
+   (a `vault.db` is there, and it is announced with the padlock and the
+   wordmark), a folder of pictures with its count and size, or nothing yet,
+   which refuses and points at "start empty". **A vault proves a library was
+   made here, not that anything is in it**, so the counts come from the library
+   itself — a read-only `sqlite3` query through the bundled interpreter — and a
+   library with nothing in it says so ("…and it is empty") instead of reading as
+   somebody's pictures. An unreadable vault falls back to the walk's own numbers
+   rather than inventing any. Free space is shown in every
+   state. **Only "start empty" gets a folder suggested for it**: a prefilled
+   path with nothing at it is how someone accepts the wrong folder and opens an
+   empty library, so the "already have" answer starts blank and asks, unless a
+   standalone pip/Docker library was found (`setup:probe`, via the backend's own
+   platformdirs) and still exists. That library's identity consent panel appears
+   under the field when the chosen folder is it.
+2. **`compute`** — CPU vs GPU, and only on a machine that has something to
+   choose between: "GPU" routes through the on-demand overlay install (~2.5 GB).
+   Mac = Metal, no GPU = no step, and the rail does not show a step that never
+   comes.
+3. **`privacy`** — the telemetry question, asked here rather than in the app.
+   The answer belongs to the owner's record in a database that does not exist
+   yet, so `setup:commit` parks it in `userData/pending-telemetry.json` and the
+   app applies it on its first config load (read-and-delete, so it cannot
+   re-apply over a later change in Settings). A running app that finds the
+   question unanswered with nothing parked calls `startup:askQuestion`, which
+   brings the window back here for **that one step** and then returns it.
+4. **`install`** — not a question, so it has no rail row: the work the answers
+   cause, as named phases rather than one anonymous bar.
+
+The rail on the left is a two-column table of question and answer, so no later
+step has to repeat back what an earlier one settled. Back and Continue live in a
+footer outside the stacked steps and the steps share one grid cell, so **the
+window never changes size** as you move through it.
+
+**The order of a first run is `src/setup/RunSetup.ts`, and it is tested there.**
+`setup:commit` is the wiring that hands it the real collaborators; the function
+itself takes them as arguments, so every outcome can be driven in a unit test:
+either of the two concurrent jobs finishing first, a read that returns nothing,
+throws, or never starts, a download that fails, a machine with no GPU, an
+identity import that refuses, and a backend that will not start.
+`electron/test/runSetup.test.ts` is that matrix, and it asserts the ORDER rather
+than the outcome, because the order is the part with more cases than anyone can
+hold in their head.
+
+`setup:commit` writes the desktop config, parks the privacy answer, then — when
+a GPU runtime was chosen — **starts the backend on the bundled runtime before
+downloading it**. The ~2.5 GB download is network; the first read of the library
+is disk and CPU, and none of it wants a GPU, so `startAndLoad(accel, repair,
+navigate = false)` brings the server up without taking the window off the setup
+screen, and the library is hashed and thumbnailed through the download. **The chosen folder is read at the same time**, through the app's own
+`/folder-structure/read` (`src/setup/ReadLibraryFolder.ts`, with the loopback
+session cookie): the read is disk work, the download is network, and the setup
+screen shows a line for each with a four-slide tour of the app between them. A
+completed read's **result** is parked in `userData/pending-mapping.json` -
+the result, not its task id, because the task lives in the server process's
+memory and the backend restarts onto the GPU runtime before the app loads, so a
+parked id answers "Task not found". `SideBar`'s loose-picture offer takes the
+result and opens the wizard straight on the mapping questions, which asks the
+server nothing at all. A read that fails, stalls or cannot start costs the overlap and
+nothing else — the app reads the folder itself, exactly as before. When the
+overlay lands it is activated and the backend restarts onto it — the planner
+picks up whatever is still outstanding — and that start is the one that
+navigates the window into the library.
+
+**A start that fails during setup is handled here, not thrown at the screen.**
+The backend refuses to run against a group-writable library folder (mode 775),
+and `boot()` has always known to offer the bounded permission repair; setup
+starts the backend itself, so it goes through `startFromSetup`, which offers the
+same repair and retries once. Declining puts the setup screen back — the answer
+to "I will not open that folder" is to choose another one — and any other
+failure leaves the install step on screen with the error under it, Back to
+change an answer and Try again to re-run the commit. It must never drop the user
+at the first question: the message lives on the install step, so a screen change
+is also a message that vanishes.
+
+**The second recoverable failure is a library database that will not open.**
+Same shape as the permission repair, and for the same reason: Electron has no
+usable stdin, so the backend prints a one-line record
+(`PIXLSTASH_VAULT_UNUSABLE=`), exits, and the shell turns it into a typed
+`VaultUnusableError` rather than a startup message
+(`backend/VaultRecovery.ts`). The offer is a native box — one file, one
+sentence of consequence, one decision — and it names what starting over costs
+*and* that the old file is renamed rather than deleted, which is the line that
+stops somebody deleting it themselves. Accepting relaunches with
+`PIXLSTASH_RECREATE_VAULT=1`; the backend does the renaming, so a dismissed
+dialog changes nothing on disk. The decline button differs by where it happens:
+from setup it is **Choose Another Folder** and returns to the picker, from
+`boot()` there is no picker to return to, so it is **Quit**. Neither path falls
+back to the CPU overlay first — the database has nothing to do with the
+accelerator, and retrying there would throw the typed error away.
+
+Subsequent launches see the config exists → no steps to run → straight into the
+library.
 
 ## Phase 2: LAN exposure + SSL (decided, not yet built)
 The desktop window **always** talks plain HTTP over a private, ephemeral loopback port —

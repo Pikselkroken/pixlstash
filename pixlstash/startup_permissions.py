@@ -1,15 +1,14 @@
-"""Detect and safely repair POSIX permissions that block startup.
+"""Detect and safely repair loose POSIX permissions at startup.
 
-PixlStash's SQLite guards deliberately refuse namespaces another local account
-can modify.  Older releases created the app config and default library under
-the process umask, which is commonly ``0002`` on Linux and therefore produced
-``0775`` directories.  This module turns that upgrade failure into a bounded,
-explicit recovery operation shared by the terminal and Electron launchers.
+PixlStash's SQLite guards warn about namespaces another local account can
+modify.  Older releases created the app config and default library under the
+process umask, which is commonly ``0002`` on Linux and therefore produced
+``0775`` directories.  This module finds those and offers a bounded, explicit
+chmod; startup goes ahead either way.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import stat
@@ -23,7 +22,6 @@ from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocatio
 
 
 PERMISSION_REPAIR_ENV = "PIXLSTASH_REPAIR_PERMISSIONS"
-PERMISSION_REPAIR_PREFIX = "PIXLSTASH_PERMISSION_REPAIR="
 
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 
@@ -68,14 +66,6 @@ class PermissionIssue:
     is_directory: bool
     device: int
     inode: int
-
-    def record(self) -> dict[str, object]:
-        return {
-            "area": self.area,
-            "path": self.path,
-            "current_mode": f"{self.current_mode:03o}",
-            "repaired_mode": f"{self.repaired_mode:03o}",
-        }
 
 
 def _repairable_issue(
@@ -252,36 +242,27 @@ def find_startup_permission_issues(
         if active:
             roots.append(active)
 
+    # The vault guard opens every library with private=False and refuses only
+    # group/world-writable modes, wherever the library lives. Holding the
+    # default library under the config root to 0700 here refused a 0755
+    # directory the guard would have accepted (the Docker image did exactly
+    # that on first run), so this scan asks for no more than the guard does.
     seen: set[str] = set()
     for root in roots:
         resolved = os.path.realpath(os.path.abspath(os.path.expanduser(str(root))))
         if resolved in seen:
             continue
         seen.add(resolved)
-        try:
-            library_is_app_owned = (
-                private_config_dir
-                and os.path.commonpath((resolved, canonical_config_dir))
-                == canonical_config_dir
-            )
-        except ValueError:
-            library_is_app_owned = False
         directory_issue = _repairable_issue(
             resolved,
             area="Library",
-            private=library_is_app_owned,
+            private=False,
             is_directory=True,
         )
         if directory_issue is not None:
             issues.append(directory_issue)
         vault_path = os.path.join(resolved, "vault.db")
-        issues.extend(
-            _database_issues(
-                vault_path,
-                area="Library",
-                private=library_is_app_owned,
-            )
-        )
+        issues.extend(_database_issues(vault_path, area="Library", private=False))
         issues.extend(_ancestor_issues(vault_path, area="Folder holding your library"))
     return _deduplicated(issues)
 
@@ -332,14 +313,7 @@ def format_permission_problem(issues: Iterable[PermissionIssue]) -> str:
     lines.extend(
         [
             "",
-            "PixlStash will not run with these permissions.",
+            "PixlStash will start anyway.",
         ]
     )
     return "\n".join(lines)
-
-
-def permission_repair_signal(issues: Iterable[PermissionIssue]) -> str:
-    """Return the machine-readable line consumed by the Electron shell."""
-
-    payload = {"version": 1, "issues": [issue.record() for issue in issues]}
-    return PERMISSION_REPAIR_PREFIX + json.dumps(payload, separators=(",", ":"))

@@ -28,7 +28,7 @@ def list_plugins(vault: "Vault") -> dict:
     they were dropped (it is OWNER_ONLY now, for the third-party plugin text it
     still serves), the folders are host paths under the owner's home directory,
     and an error row carries the absolute ``file`` it failed on plus exception
-    text from third-party code. Nothing in the UI ever read either — the failures are in
+    text from third-party code. Nothing in the UI ever read either - the failures are in
     the server log, where they were being read from anyway. The tagger
     equivalents are served instead by ``GET /taggers/plugin-diagnostics``,
     which is LOCAL_OWNER_ONLY, because the Auto-tagging screen does show them.

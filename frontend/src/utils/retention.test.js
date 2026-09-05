@@ -407,7 +407,7 @@ describe("isRetentionReduction", () => {
     expect(isRetentionReduction(null, null)).toBe(false);
   });
 
-  // The default is "Never" (auto-empty off), so a first set is TURNING IT ON —
+  // The default is "Never" (auto-empty off), so a first set is TURNING IT ON -
   // the one change that can expose a whole long-lived scrapheap at once. It has
   // to go through the impact check and the confirm, not slip past them.
   it("is true for a first set from the default, because the default is off", () => {
@@ -469,7 +469,7 @@ describe("buildRetentionReductionMessage", () => {
     );
   });
 
-  // Deletion starts when the grace elapses, not on save — never imply "now".
+  // Deletion starts when the grace elapses, not on save - never imply "now".
   it("never claims deletion happens immediately", () => {
     const msg = buildRetentionReductionMessage({
       nextDays: 30,

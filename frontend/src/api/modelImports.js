@@ -1,4 +1,4 @@
-// Taking a training run onto the shelf — /model-folders/{id}/runs and
+// Taking a training run onto the shelf - /model-folders/{id}/runs and
 // /model-imports.
 //
 // **Listing a run costs nothing and changes nothing.** The listing reads
@@ -33,7 +33,7 @@ export async function listRuns(folderId) {
  * A URL rather than a fetch: the browser's own image loading handles caching,
  * decoding and lazy loading, and a run can carry 130 samples.
  *
- * Both segments are encoded because they are **names**, not paths — the server
+ * Both segments are encoded because they are **names**, not paths - the server
  * joins each to a registered path and refuses anything that resolves outside.
  *
  * @param {number} folderId
@@ -60,8 +60,8 @@ export function runSampleUrl(folderId, runName, filename) {
  * @param {Array<number|null>} [options.steps] - which checkpoints, by step,
  *   with `null` for the bare final. Omit for the whole run.
  * @returns {Promise<Object>} the import report: `stack_id`, `deleted_source`
- *   and a per-file `files` array. Each file carries `sample_count` — the run's
- *   previews copied in beside that checkpoint — and a `detail` that says why
+ *   and a per-file `files` array. Each file carries `sample_count` - the run's
+ *   previews copied in beside that checkpoint - and a `detail` that says why
  *   they did not come when it is zero. A failed preview copy leaves the file
  *   `imported`: losing a preview must not cost the weights.
  */

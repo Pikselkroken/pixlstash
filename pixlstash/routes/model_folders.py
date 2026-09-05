@@ -29,8 +29,8 @@ turns a file failed halfway through a 40-file batch into a clean 4xx before the
 batch starts.
 
 **Exactly one ``managed`` folder always exists and cannot be forgotten.** It
-is PixlStash's own model storage — created on first run, the default destination
-for a drop or an import — so there is no association to dissolve and ``DELETE``
+is PixlStash's own model storage - created on first run, the default destination
+for a drop or an import - so there is no association to dissolve and ``DELETE``
 answers 409. ``user`` and ``foreign`` folders may legitimately number zero; that
 is a normal state, not an error. See
 :mod:`pixlstash.services.managed_model_store`.
@@ -48,11 +48,11 @@ collide with that registration.
 shared ``TaskRunner`` and answers 202 with its ``task_id``. That is what gives
 the walk per-file progress (``GET /workers/progress`` →
 ``workers.ModelFolderScanTask``) and a real terminal state (the folder's
-``scan_status``), neither of which the daemon thread it replaced could offer —
+``scan_status``), neither of which the daemon thread it replaced could offer -
 and it is why the scan no longer outlives the process that started it (#856).
 
 Authorization: the read is ``OWNER_ONLY``; every mutator and the rescan are
-``LOCAL_OWNER_ONLY`` with a §16.3 justification, because they take — or walk — a
+``LOCAL_OWNER_ONLY`` with a §16.3 justification, because they take - or walk - a
 caller-supplied host path. That is the same tier and the same reason as the
 ``reference-folders`` block. Declared in ``pixlstash/authz/registry.py``, never
 inline.
@@ -107,7 +107,7 @@ _DERIVED_BY_KIND = {
 #
 # It serves two purposes. It is the "already running" gate: the scanner is
 # correct under concurrent runs (its missing sweep is ``seen_at <`` the run's own
-# stamp, not ``!=``), so this is not a correctness lock — it stops a double-click
+# stamp, not ``!=``), so this is not a correctness lock - it stops a double-click
 # from reading 438 GB twice. And it is where a *finished* scan's outcome lives,
 # because ``TaskRunner`` forgets a task the moment it completes; a caller that
 # had only ``last_checked`` to look at could not tell a crash from a slow read.
@@ -119,7 +119,7 @@ _scans_lock = threading.Lock()
 
 # The two states that mean "this folder is spoken for". PENDING covers the
 # window between submission and a worker picking the task up, which the old bare
-# thread had no equivalent of — it started running the moment it was created.
+# thread had no equivalent of - it started running the moment it was created.
 _SCAN_IN_FLIGHT = (TaskStatus.PENDING, TaskStatus.RUNNING)
 
 
@@ -162,7 +162,7 @@ class ModelFolderUpdateRequest(BaseModel):
 
     Deliberately narrow. Changing ``path`` is a relocation (B7, which must copy,
     verify and only then unlink), and changing ``kind`` changes what the folder
-    *is* — neither is a field edit.
+    *is* - neither is a field edit.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -246,7 +246,7 @@ class ModelFolderResponse(BaseModel):
             "State of the most recent scan submitted for this folder since the "
             "server started: `pending`, `running`, `completed`, `failed` or "
             "`cancelled`. Null when this server has not been asked to scan the "
-            "folder yet — which is not the same as never having scanned it, so "
+            "folder yet - which is not the same as never having scanned it, so "
             "read `last_checked` for that. Poll this rather than watching "
             "`last_checked` advance: a scan that threw never stamps "
             "`last_checked`, so a timestamp cannot tell a crash from a slow read."
@@ -312,14 +312,14 @@ class ModelFolderDeviceResponse(BaseModel):
         default=None,
         description=(
             "What kind of storage this is: `local`, `network`, `removable` or "
-            "`ramdisk`. The CONNECTION, not the medium — it says whether the "
+            "`ramdisk`. The CONNECTION, not the medium - it says whether the "
             "bytes are on another machine, on a stick, or in memory, which is "
             "what changes how fast a move runs and whether it survives a "
             "reboot. Null where the platform will not say (macOS always, and "
             "any filesystem type we do not recognise), and null is a normal "
             "answer: the drive band then draws its plain disk glyph rather "
             "than claiming the drive is unknown. Deliberately does NOT "
-            "distinguish an SSD from a platter — the flags that would are "
+            "distinguish an SSD from a platter - the flags that would are "
             "wrong in a VM, behind LVM or LUKS, and in a USB enclosure, and a "
             "band that mislabels a slow disk as fast is worse than one that "
             "says nothing."
@@ -369,7 +369,7 @@ class ModelFolderRescanResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`started`, `already_running`, or `skipped` — for a `source` folder, "
+        description="`started`, `already_running`, or `skipped` - for a `source` folder, "
         "which holds runs rather than models, and for a built-in folder, "
         "whose rows are declared rather than scanned."
     )
@@ -513,7 +513,7 @@ def create_router(server) -> APIRouter:
         # Scan state before the aggregates, never after. A scan's task flips to
         # completed only once it has written its rows, so reading the counts
         # first lets a scan that finishes in between be reported as completed
-        # with the count from before it wrote — an empty folder that just
+        # with the count from before it wrote - an empty folder that just
         # succeeded. This way round the stale pairing is "still running" with a
         # full count, which the next poll corrects.
         scans = {int(row["id"]): _scan_state(int(row["id"])) for row in rows}
@@ -755,7 +755,7 @@ def create_router(server) -> APIRouter:
             )
         if folder["kind"] == MANAGED_KIND:
             # 409, not 403: the caller is fully authorized and the request is
-            # well formed. What refuses it is the state of the target — this row
+            # well formed. What refuses it is the state of the target - this row
             # is PixlStash's own storage, and exactly one of it always exists.
             # A 403 would say "you may not", which is wrong and would send an
             # operator hunting through the authz tiers for a permission that
@@ -774,7 +774,7 @@ def create_router(server) -> APIRouter:
         # source folder mid-move used to leave the move's UPDATE matching
         # nothing, the source unlinked anyway and the destination bytes
         # registered nowhere (#1017). The mover now refuses a repoint that does
-        # not move exactly one row — that is the guarantee — and this is what
+        # not move exactly one row - that is the guarantee - and this is what
         # turns it into a clean 4xx before the batch starts rather than a file
         # failed halfway through forty.
         if not SHELF_IO_LOCK.acquire(blocking=False):

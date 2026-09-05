@@ -7,7 +7,7 @@ method already accepts a list of aligned crops.
 
 ``BatchedFaceRunner`` exploits this by:
 
-1. Running the detector once per image (unavoidable — ONNX batch=1).
+1. Running the detector once per image (unavoidable - ONNX batch=1).
 2. Collecting *all* aligned face crops from *all* images into a single list.
 3. Calling the recogniser exactly **once** for the entire crop list.
 4. Skipping the landmark (3D/2D) and genderage models that ``FaceAnalysis.get()``
@@ -39,6 +39,14 @@ class FaceResult:
     bbox: np.ndarray
     kps: np.ndarray | None = field(default=None)
     embedding: np.ndarray | None = field(default=None)
+
+
+# Faces per recogniser call. The recogniser's activations are ~20 MB a face at
+# 112 px (~650 MB for 16); per-face throughput was flat from 16 to 64, so a
+# bigger chunk buys nothing, and a face-dense batch of stills would otherwise
+# make one unchunked call whose size nobody chose. The session is uncapped
+# (see ``ORT_ARENA_SHARE``); the chunk bounds its peak anyway.
+RECOGNITION_CHUNK = 16
 
 
 class BatchedFaceRunner:
@@ -73,11 +81,11 @@ class BatchedFaceRunner:
         """
         # Local import: insightface drags in onnxruntime and costs seconds to
         # import. This module sits on the server's import path, and a caller
-        # only reaches here with an already-prepared FaceAnalysis app — so
+        # only reaches here with an already-prepared FaceAnalysis app - so
         # insightface is resident by then anyway.
         from insightface.utils import face_align
 
-        # ── Phase 1: detection — one image at a time (ONNX batch dim = 1) ──
+        # ── Phase 1: detection - one image at a time (ONNX batch dim = 1) ──
         detections: list[tuple[np.ndarray | None, np.ndarray, np.ndarray | None]] = []
         for img in images:
             if img is None:
@@ -107,7 +115,12 @@ class BatchedFaceRunner:
         if crop_refs:
             all_crops = [crop for _, _, crop in crop_refs]
             # get_feat() accepts a list of BGR crops and returns (M, 512)
-            all_embeddings: np.ndarray = self._rec_model.get_feat(all_crops)
+            all_embeddings: np.ndarray = np.concatenate(
+                [
+                    self._rec_model.get_feat(all_crops[i : i + RECOGNITION_CHUNK])
+                    for i in range(0, len(all_crops), RECOGNITION_CHUNK)
+                ]
+            )
             for (img_idx, face_i, _), emb in zip(crop_refs, all_embeddings):
                 embeddings_by_key[(img_idx, face_i)] = emb
 

@@ -1,9 +1,9 @@
-"""Add ``picture.deleted_at`` — the scrapheap retention clock.
+"""Add ``picture.deleted_at`` - the scrapheap retention clock.
 
 v1.8.0 adds an automatic scrapheap retention window: an UNPROTECTED (managed)
 soft-deleted picture is permanently purged once it has sat in the scrapheap for
 ``scrapheap_retention_days``. That needs a per-picture "when did this enter the
-scrapheap" timestamp, which the schema did not carry — ``deleted`` was a bare
+scrapheap" timestamp, which the schema did not carry - ``deleted`` was a bare
 boolean.
 
 ``deleted_at`` is stamped on the ``deleted`` False -> True transition and cleared
@@ -47,7 +47,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current columns via SQLModel.metadata.create_all(); nothing to do.
         return
 

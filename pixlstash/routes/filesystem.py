@@ -1,4 +1,4 @@
-"""Filesystem browsing API — server-side directory picker for native installs."""
+"""Filesystem browsing API - server-side directory picker for native installs."""
 
 import os
 import re
@@ -9,38 +9,17 @@ from pydantic import BaseModel
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import MODEL_SUFFIX
-from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
-
-_SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".bmp",
-        ".heic",
-        ".heif",
-        ".avif",
-    }
-)
-
 
 # Matches any non-empty string that contains no null bytes or newlines.
 # Applied with re.fullmatch() after os.path.realpath() so that CodeQL
 # recognises the result as a path-injection barrier (realpath itself does
 # not break the taint chain in CodeQL's model).
 _SAFE_RESOLVED_PATH_RE = re.compile(r"[^\x00\n]+")
-
-
-def _is_supported_media_file(file_name: str) -> bool:
-    ext = os.path.splitext(file_name)[1].lower()
-    if ext in _SUPPORTED_IMAGE_EXTS:
-        return True
-    return VideoUtils.is_video_file(file_name)
 
 
 class FilesystemEntry(BaseModel):
@@ -178,13 +157,13 @@ def create_router(server) -> APIRouter:
                 # A DIRECTORY symlink leaving the tree is the exception, and it
                 # is ordinary rather than suspect: `Models -> /vault/Models` is
                 # how a launcher keeps its models off the system disk, and the
-                # folder picker was dropping exactly those — silently, so the
+                # folder picker was dropping exactly those - silently, so the
                 # folder simply was not there to click. Nothing is loosened by
                 # listing it: this route browses any directory the owner names,
                 # so it is reachable by typing the path already, and the
                 # fallback is the same sanitizer the browsed path itself goes
                 # through (blocklist, configured roots, then the fullmatch
-                # barrier). Files still get containment — a listed file is a
+                # barrier). Files still get containment - a listed file is a
                 # file this route is offering to read.
                 if not is_dir:
                     continue
@@ -212,7 +191,7 @@ def create_router(server) -> APIRouter:
             except OSError:
                 # Skip entries that cannot be accessed (e.g. permission issues).
                 continue
-            if is_file and _is_supported_media_file(entry.name):
+            if is_file and is_supported_media_file(entry.name):
                 image_count += 1
             if (
                 is_file

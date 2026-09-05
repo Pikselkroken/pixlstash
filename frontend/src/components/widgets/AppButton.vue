@@ -180,7 +180,7 @@ defineExpose({ focus });
   cursor: progress;
 }
 
-/* Primary — amber accent, the key action. */
+/* Primary - amber accent, the key action. */
 .app-btn--primary {
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
@@ -189,7 +189,7 @@ defineExpose({ focus });
   filter: brightness(1.08);
 }
 
-/* Primary green — olive primary, used for create/import affordances. */
+/* Primary green - olive primary, used for create/import affordances. */
 .app-btn--primary_green {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
@@ -198,7 +198,7 @@ defineExpose({ focus });
   filter: brightness(1.08);
 }
 
-/* Secondary — neutral, bordered. The Cancel partner. */
+/* Secondary - neutral, bordered. The Cancel partner. */
 .app-btn--secondary {
   background: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
@@ -222,7 +222,7 @@ defineExpose({ focus });
   filter: brightness(1.08);
 }
 
-/* Ghost — transparent, recedes until hovered. */
+/* Ghost - transparent, recedes until hovered. */
 .app-btn--ghost {
   background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
@@ -258,7 +258,7 @@ defineExpose({ focus });
 }
 
 /* The spinner keeps spinning under reduced motion. It is a status readout, not
-   decoration — the same exception ActionReceipt's countdown hairline takes
+   decoration - the same exception ActionReceipt's countdown hairline takes
    (visual-language.md §10). The global reset in design-tokens.css zeroes
    animation-duration and iteration-count on `*` and `*::before`, which freezes
    this into a static broken ring that reads as a rendering fault. @mdi/font puts

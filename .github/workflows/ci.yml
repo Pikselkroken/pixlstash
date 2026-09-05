@@ -493,6 +493,8 @@ jobs:
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_folder_structure_commit.py
+          tests/test_folder_structure_read.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py
           tests/test_hub_model_shelf_schema.py
@@ -513,6 +515,8 @@ jobs:
           tests/test_libraries_routes.py
           tests/test_library_backup.py
           tests/test_library_generation_coordinator.py
+          tests/test_library_insights.py
+          tests/test_library_layout.py
           tests/test_library_restore_cli.py
           tests/test_library_settings.py
           tests/test_library_switch.py
@@ -546,11 +550,17 @@ jobs:
           tests/test_picture_sets_query_cost.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
+          tests/test_pipeline_stage_contracts.py
+          tests/test_pipeline_throughput_verification.py
+          tests/test_plugin_create.py
           tests/test_plugin_install.py
+          tests/test_plugin_lifecycle_gaps.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
+          tests/test_reference_folder_moves.py
+          tests/test_reference_folder_watcher.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
           tests/test_reviews_api.py
@@ -571,21 +581,25 @@ jobs:
           tests/test_stacks_api.py
           tests/test_stacks_membership.py
           tests/test_startup_permissions.py
+          tests/test_system_utils.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_task.py
           tests/test_tag_worker.py
           tests/test_tagger_user_plugins.py
           tests/test_thumbnail_cache_headers.py
+          tests/test_thumbnail_location.py
           tests/test_token_identity.py
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py
           tests/test_telemetry_sender.py
+          tests/test_views_links.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py
           tests/test_workers_api.py
           tests/test_work_planner.py
+          tests/test_workflow_library.py
           tests/test_ws_broadcaster.py
 
   # ---------------------------------------------------------------------------
@@ -958,6 +972,7 @@ jobs:
           tests/multi_project_authz/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_find_orphaned_files.py
+          tests/test_library_layout.py
           tests/test_server.py
           tests/test_authentication.py
           tests/test_rate_limiter.py

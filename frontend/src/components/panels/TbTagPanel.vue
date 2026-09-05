@@ -70,7 +70,7 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On all ${totalWithTagData} selected — click to remove, drag to rejected to remove`"
+              :title="`On all ${totalWithTagData} selected - click to remove, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="removeTagFromAll(t)"
@@ -92,7 +92,7 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On ${t.count} of ${totalWithTagData} — click to add to all, drag to rejected to remove`"
+              :title="`On ${t.count} of ${totalWithTagData} - click to add to all, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="addTagToRemaining(t)"
@@ -174,7 +174,7 @@
               draggable="true"
               :disabled="predActionLoading.includes(p.tag)"
               :style="{ '--pred-confidence': p.avgConf }"
-              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all, drag to current to confirm`"
+              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept - click to confirm all, drag to current to confirm`"
               @dragstart="onRejectedTagDragStart($event, p)"
               @dragend="onDragEnd"
               @click="confirmPredictionOnAll(p)"
@@ -339,7 +339,7 @@ import {
   confirmTagPrediction,
   rejectTagPrediction,
 } from "../../api/tags";
-import { resetPictureTags } from "../../api/pictures";
+import { resetPicturesTags } from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
@@ -383,7 +383,7 @@ function buildPreviewImages() {
 }
 
 // Stable preview: always update when selection changes; only update when
-// allGridImages changes if the result is non-empty — this prevents the preview
+// allGridImages changes if the result is non-empty - this prevents the preview
 // column from disappearing during the placeholder phase of a grid refresh.
 const stablePreviewImages = ref([]);
 
@@ -762,12 +762,7 @@ async function generateTagsForAll(model = null) {
   generateTagsError.value = "";
   generateTagsSuccess.value = "";
   try {
-    const body = model ? { model } : {};
-    await Promise.all(
-      ids.map((id) =>
-        resetPictureTags(id, body),
-      ),
-    );
+    await resetPicturesTags(ids, model ? { model } : {});
     const suffix = model ? ` with ${model}` : "";
     generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });

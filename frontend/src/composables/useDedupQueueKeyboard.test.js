@@ -73,7 +73,7 @@ beforeEach(() => {
   handle = createDedupKeyHandler(deps);
 });
 
-describe("dedup keyboard — moving the focus", () => {
+describe("dedup keyboard - moving the focus", () => {
   it("ArrowDown moves down, ArrowUp moves up", () => {
     handle(keyEvent("ArrowDown"));
     expect(store.focusNext).toHaveBeenCalledTimes(1);
@@ -81,7 +81,7 @@ describe("dedup keyboard — moving the focus", () => {
     expect(store.focusPrev).toHaveBeenCalledTimes(1);
   });
 
-  // Amendment #3: the letter aliases left navigation — k became Keep
+  // Amendment #3: the letter aliases left navigation - k became Keep
   // separate and j is deliberately unclaimed. Neither may move the focus.
   it("j and k no longer navigate", () => {
     handle(keyEvent("j"));
@@ -92,7 +92,7 @@ describe("dedup keyboard — moving the focus", () => {
 
   // Home goes through the store's own jump-to-start: after an End jump the
   // window no longer contains the top, so a bare setFocus(0) could not reach
-  // it — the store resets to the first page instead.
+  // it - the store resets to the first page instead.
   it("Home jumps to the first group through the store", () => {
     handle(keyEvent("Home"));
     expect(store.focusStart).toHaveBeenCalledTimes(1);
@@ -147,13 +147,13 @@ describe("dedup keyboard — moving the focus", () => {
   });
 });
 
-describe("dedup keyboard — verdicts", () => {
+describe("dedup keyboard - verdicts", () => {
   it("Enter stacks the focused group", () => {
     handle(keyEvent("Enter"));
     expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
   });
 
-  // Amendment #3: S is a SYNONYM of Enter — the owner's S-for-Stack slip is
+  // Amendment #3: S is a SYNONYM of Enter - the owner's S-for-Stack slip is
   // now self-healing, so S must never keep-separate again.
   it("S stacks too, as Enter's synonym", () => {
     handle(keyEvent("s"));
@@ -210,7 +210,7 @@ describe("dedup keyboard — verdicts", () => {
   });
 });
 
-describe("dedup keyboard — cover and exclusion", () => {
+describe("dedup keyboard - cover and exclusion", () => {
   it("1 to 9 point at that candidate and make it the cover", () => {
     handle(keyEvent("3"));
     expect(store.setCover).toHaveBeenCalledWith("g1", 3);
@@ -262,7 +262,7 @@ describe("dedup keyboard — cover and exclusion", () => {
   });
 });
 
-describe("dedup keyboard — Compare", () => {
+describe("dedup keyboard - Compare", () => {
   it("C opens Compare on the focused group", () => {
     handle(keyEvent("c"));
     expect(deps.openCompare).toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe("dedup keyboard — Compare", () => {
     expect(deps.closeCompare).toHaveBeenCalled();
   });
 
-  // Compare exists so the decision is made without a second trip — and a run
+  // Compare exists so the decision is made without a second trip - and a run
   // of decisions without reopening it every time. The verdict keys leave the
   // dialog up; the auto-advance flips it to the next group, and the view
   // closes it only when the queue runs out.
@@ -292,7 +292,7 @@ describe("dedup keyboard — Compare", () => {
   });
 
   // The dialog renders the focused group, so a focus move flips it in place
-  // and no place is lost — Up/Down switch the compared group. k must NEVER
+  // and no place is lost - Up/Down switch the compared group. k must NEVER
   // navigate here: it is a verdict key now (amendment #3).
   it("Up/Down switch the compared group in place; j and k do not", () => {
     compareOpen = true;
@@ -390,7 +390,7 @@ describe("dedup keyboard: E opens the stack in place", () => {
   });
 });
 
-describe("dedup keyboard — select all", () => {
+describe("dedup keyboard - select all", () => {
   it("Ctrl+A selects every loaded group and claims the key", () => {
     store.selectAll = vi.fn();
     const event = keyEvent("a", { ctrlKey: true });
@@ -399,7 +399,7 @@ describe("dedup keyboard — select all", () => {
     expect(event.preventDefault).toHaveBeenCalled();
   });
 
-  it("stays quiet while Compare is open — its keys own that surface", () => {
+  it("stays quiet while Compare is open - its keys own that surface", () => {
     store.selectAll = vi.fn();
     compareOpen = true;
     handle(keyEvent("a", { ctrlKey: true }));
@@ -407,7 +407,7 @@ describe("dedup keyboard — select all", () => {
   });
 });
 
-describe("dedup keyboard — the blink compare (zoom)", () => {
+describe("dedup keyboard - the blink compare (zoom)", () => {
   let zoomOpen;
   let zoom;
 
@@ -438,7 +438,7 @@ describe("dedup keyboard — the blink compare (zoom)", () => {
     expect(zoom.open).toHaveBeenCalled();
   });
 
-  it("arrows flip in place and digits jump — never the cover keys", () => {
+  it("arrows flip in place and digits jump - never the cover keys", () => {
     zoomOpen = true;
     handle(keyEvent("ArrowRight"));
     handle(keyEvent("ArrowLeft"));
@@ -539,7 +539,7 @@ describe("dedup keyboard — the blink compare (zoom)", () => {
   });
 });
 
-describe("dedup keyboard — Escape", () => {
+describe("dedup keyboard - Escape", () => {
   // Escape is the way out of a row's buttons. A key that visibly does nothing
   // is a key the user stops trusting.
   it("calls onEscape when Compare is closed", () => {
@@ -571,7 +571,7 @@ describe("dedup keyboard — Escape", () => {
   });
 });
 
-describe("dedup keyboard — Enter belongs to a focused control", () => {
+describe("dedup keyboard - Enter belongs to a focused control", () => {
   // A user who tabbed onto Compare and pressed Enter must get Compare, not a
   // stack of the group behind it.
   it("declines Enter while a button has focus", () => {
@@ -611,7 +611,7 @@ describe("dedup keyboard — Enter belongs to a focused control", () => {
   });
 });
 
-describe("dedup keyboard — undo and the guards", () => {
+describe("dedup keyboard - undo and the guards", () => {
   it("Ctrl+Z and Cmd+Z both undo", () => {
     handle(keyEvent("z", { ctrlKey: true }));
     handle(keyEvent("z", { metaKey: true }));
@@ -659,7 +659,7 @@ describe("dedup keyboard — undo and the guards", () => {
   });
 
   // Vuetify renders a slider's focusable thumb as a div, not an input. Its
-  // arrows must operate the slider ALONE — acting on the queue as well would
+  // arrows must operate the slider ALONE - acting on the queue as well would
   // double every press: one size step and one row moved.
   it("leaves every key to a focused slider thumb", () => {
     const thumb = {
@@ -780,7 +780,7 @@ describe("dedup keyboard: digits address units, not candidates", () => {
 // implementation would be a second place for them to drift. Three hooks carry
 // the three facts that genuinely differ.
 
-describe("createDedupKeyHandler — a second queue's rows", () => {
+describe("createDedupKeyHandler - a second queue's rows", () => {
   /** A row whose addressable things are a stack's members, not a group's units. */
   const row = { stack_id: 42, member_ids: [7, 8, 9] };
 

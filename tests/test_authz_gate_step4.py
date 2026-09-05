@@ -4,7 +4,7 @@ object-scoped policy classes (``*_SCOPED`` single-id, ``body_ids`` batch, and
 
 Every assertion is both-directional per CLAUDE.md / §16.1: an out-of-scope
 resource-scoped token is 403'd (or a list is emptied/denied) AND an in-scope
-principal still reaches the route — over-blocking is its own regression.
+principal still reaches the route - over-blocking is its own regression.
 
 Toggle mechanism (principal ruling 2026-07-21): the shipped constant
 ``AUTHZ_GATE_ENFORCING`` stays ``False``; Step-4 enforcement is proven here by
@@ -12,7 +12,7 @@ constructing / flipping the gate to ``enforcing=True``.
 
 Two layers:
 
-* **Gate-contract decoys** — a decoy app + the gate as a router dependency, with
+* **Gate-contract decoys** - a decoy app + the gate as a router dependency, with
   ``token_scope`` injected by a tiny scope-setter dependency. This proves the
   gate's Step-4 contract in isolation (no auth middleware), which is the ONLY way
   to exercise the *latent* routes whose scoped tokens the auth middleware blocks
@@ -20,7 +20,7 @@ Two layers:
   the ``tag_suggestions`` ``id_resolver`` routes (§N4). It also proves the
   ``SCOPED_LIST`` unaudited-leaks-nothing rule and the ``resolved_inline`` (§N3)
   skip.
-* **Real-server integration** — a live ``Server`` with real pictures / set /
+* **Real-server integration** - a live ``Server`` with real pictures / set /
   character / project and real resource-scoped tokens, proving the gate enforces
   on routes a scoped token actually reaches (picture / set / character / project
   single-id), plus the ``project_id=UNASSIGNED`` historical-leak regression and
@@ -57,7 +57,7 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 # ===========================================================================
-# Layer A — gate-contract decoys
+# Layer A - gate-contract decoys
 # ===========================================================================
 
 
@@ -157,7 +157,7 @@ def test_picture_scoped_single_both_directions():
 
 def test_owner_and_unscoped_read_short_circuit():
     """Owner (no token_scope) and an unscoped-READ token (resource_type None) both
-    pass every object-scoped class untouched — exactly as today's ladders do."""
+    pass every object-scoped class untouched - exactly as today's ladders do."""
     registry = {
         ("GET", "/api/v1/step4-decoy/pic/{id}"): RoutePolicy(
             AccessPolicy.PICTURE_SCOPED, id_param="id"
@@ -214,7 +214,7 @@ def test_body_ids_batch_checks_every_id():
 
 
 def test_body_ids_single_optional_scalar_run_t2i():
-    """§N6: run_t2i's ``source_picture_id`` is a single, optional scalar — the gate
+    """§N6: run_t2i's ``source_picture_id`` is a single, optional scalar - the gate
     tolerates absent (no-op) and checks a present one."""
     registry = {
         ("POST", "/api/v1/step4-decoy/t2i"): RoutePolicy(
@@ -365,7 +365,7 @@ def test_scoped_list_audited_passes_through_and_stamps_signal():
 
 def test_resolved_inline_route_is_not_object_checked_by_gate():
     """A ``resolved_inline`` *_SCOPED route (name-derived id) is passed through by
-    the gate even for a resource-scoped token — the inline handler check is the
+    the gate even for a resource-scoped token - the inline handler check is the
     enforcement. ``server=None`` proves the gate does not attempt a DB resolution."""
     registry = {
         ("GET", "/api/v1/step4-decoy/projects/{id_or_name}"): RoutePolicy(
@@ -393,7 +393,7 @@ def test_resolved_inline_route_is_not_object_checked_by_gate():
 def test_non_integer_scoped_id_fails_closed():
     """A ``project_id=UNASSIGNED`` aggregate id on a numeric ``*_SCOPED`` route (not
     resolved_inline) cannot be parsed to an id; the gate fails it closed for a
-    resource-scoped token — matching ``get_project_summary``'s own UNASSIGNED 403
+    resource-scoped token - matching ``get_project_summary``'s own UNASSIGNED 403
     (the historical aggregate-leak class)."""
     registry = {
         ("GET", "/api/v1/step4-decoy/proj/{project_id}/summary"): RoutePolicy(
@@ -417,7 +417,7 @@ def test_anti_vacuity_guard_recognises_the_spa_catch_all():
 
     ``/stacks/{id}/stack`` is the URL this suite asserted 200 against for five
     days. It is not a route; the SPA catch-all answered it, so the assertion was
-    vacuous while its docstring claimed to cover ``/stacks/{id}/pictures`` — a
+    vacuous while its docstring claimed to cover ``/stacks/{id}/pictures`` - a
     historical whole-library BOLA vector. Assert the discrimination directly, with
     no server, so the guard cannot itself rot unnoticed.
     """
@@ -444,7 +444,7 @@ def test_shipped_default_is_enforcing():
 
 
 # ===========================================================================
-# Layer B — real-server integration (gate enforcing on live scoped routes)
+# Layer B - real-server integration (gate enforcing on live scoped routes)
 # ===========================================================================
 
 
@@ -489,7 +489,8 @@ def env():
         client = TestClient(server.api, raise_server_exceptions=True)
         anon = TestClient(server.api, raise_server_exceptions=True)
         r = client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
 
@@ -562,14 +563,14 @@ def env():
 @pytest.fixture
 def stacked_env(env):
     """``env`` plus a stack holding BOTH pictures and a *picture*-scoped token for
-    pic A only — the fixture the stack read-route leak tests need.
+    pic A only - the fixture the stack read-route leak tests need.
 
     The grant shape matters and is not interchangeable. Stacking is deliberately
     **set/project-membership-atomic**: ``create_stack`` calls
     ``reconcile_stack_membership``, which unions every member's set and project
     memberships across the stack. So stacking A with B *adds B to A's set and
     project*, and a set- or project-scoped token therefore cannot straddle a
-    stack — by construction, never a leak, and useless as a probe.
+    stack - by construction, never a leak, and useless as a probe.
 
     A ``picture`` token grants exactly ``{resource_id}``
     (``fetch_scope_allowed_picture_ids``) and is untouched by stacking, so it is
@@ -599,7 +600,7 @@ def stacked_env(env):
 
 def test_integration_picture_scoped_via_set_token(env):
     """GET /pictures/{id}/metadata is PICTURE_SCOPED. A set-scoped token reaches its
-    member picture (A) but is 403'd on a non-member (B) — real membership query."""
+    member picture (A) but is 403'd on a non-member (B) - real membership query."""
     anon, tok = env["anon"], env["tokens"]["set"]
     with _enforcing(env["server"]):
         r = anon.get(f"{API}/pictures/{env['pic_a']}/metadata", headers=_bearer(tok))
@@ -613,6 +614,51 @@ def test_integration_picture_scoped_via_set_token(env):
             env["owner"].get(f"{API}/pictures/{env['pic_b']}/metadata").status_code
             == 200
         )
+
+
+def test_integration_picture_layout_read_is_picture_scoped(env):
+    """v1.11 Phase 4b. ``GET /pictures/{id}/layout`` is PICTURE_SCOPED.
+
+    Both directions on a real membership query, and the positive one is not
+    decoration: over-blocking is its own regression, and the route answering
+    "this library has no layout" for a picture the token legitimately reaches
+    is the whole in-scope behaviour."""
+    anon, tok = env["anon"], env["tokens"]["set"]
+    with _enforcing(env["server"]):
+        r = anon.get(f"{API}/pictures/{env['pic_a']}/layout", headers=_bearer(tok))
+        assert r.status_code == 200, f"in-scope A should pass: {r.status_code} {r.text}"
+        assert r.json()["suggested_folder"] is None, r.text
+        r = anon.get(f"{API}/pictures/{env['pic_b']}/layout", headers=_bearer(tok))
+        assert r.status_code == 403, (
+            f"out-of-scope B must 403: {r.status_code} {r.text}"
+        )
+
+
+def test_integration_move_to_match_refuses_a_mixed_batch_whole(env):
+    """v1.11 Phase 4b. ``POST /pictures/layout/move-to-match`` is PICTURE_SCOPED
+    over ``body_ids``, so one out-of-scope id refuses the request and moves
+    nothing - the ``POST /pictures/rotate`` contract (#950).
+
+    A READ token is refused by the middleware before the gate (POST is not in
+    ``READ_SAFE_POST_PATHS``), which is what makes "write-enabled" the operative
+    condition; that refusal is the deny direction here. The owner's own call is
+    the positive control: it reaches the handler and reports zero moved, because
+    this library has no layout and therefore nothing to match."""
+    anon, tok = env["anon"], env["tokens"]["set"]
+    with _enforcing(env["server"]):
+        r = anon.post(
+            f"{API}/pictures/layout/move-to-match",
+            json={"picture_ids": [env["pic_a"], env["pic_b"]]},
+            headers=_bearer(tok),
+        )
+        assert r.status_code == 403, f"a READ token must not move files: {r.text}"
+
+        r = env["owner"].post(
+            f"{API}/pictures/layout/move-to-match",
+            json={"picture_ids": [env["pic_a"], env["pic_b"]]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["moved_count"] == 0, r.text
 
 
 def test_integration_picture_scoped_via_project_token(env):
@@ -661,7 +707,7 @@ def test_integration_character_scoped_route_both_directions(env):
 
 def test_integration_project_summary_unassigned_regression(env):
     """PROJECT_SCOPED /projects/{project_id}/summary: the project token reaches its
-    own project's summary, but the aggregate ``UNASSIGNED`` id is denied — the
+    own project's summary, but the aggregate ``UNASSIGNED`` id is denied - the
     historical aggregate-leak class, now failed closed at the gate."""
     anon, tok = env["anon"], env["tokens"]["proj"]
     with _enforcing(env["server"]):
@@ -674,7 +720,7 @@ def test_integration_project_summary_unassigned_regression(env):
 def test_integration_scoped_list_pass_through_not_overblocked(env, stacked_env):
     """The SCOPED_LIST historical-leak vectors (list, stream, ?character_id=
     UNASSIGNED, /stacks/{id}/pictures, /pictures/{id}/stack) stay reachable by a
-    resource-scoped token when the gate is enforcing — scope_aware pass-through
+    resource-scoped token when the gate is enforcing - scope_aware pass-through
     must not over-block; the inline filter (unchanged) remains the enforcement.
 
     Previously this asserted 200 against ``/stacks/{pic_id}/stack``, which is not a
@@ -705,8 +751,8 @@ def test_integration_scoped_list_pass_through_not_overblocked(env, stacked_env):
 def test_integration_stack_pictures_does_not_leak_out_of_scope_members(
     env, stacked_env
 ):
-    """``GET /stacks/{id}/pictures`` — one of the three historical whole-library
-    BOLA leaks — filters stack members down to the caller's grant.
+    """``GET /stacks/{id}/pictures`` - one of the three historical whole-library
+    BOLA leaks - filters stack members down to the caller's grant.
 
     Both directions. The stack holds A (granted to the picture token) and B (not):
     the scoped caller reaches the stack but must see A only, while the owner must

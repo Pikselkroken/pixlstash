@@ -2,7 +2,7 @@
 
 PixlStash is the system of record for the tagger's history: PixlTagger POSTs its
 report after every eval (including rejected runs). This module owns the DB side of
-that — extracting the indexed fields from a pushed report and upserting on the run
+that - extracting the indexed fields from a pushed report and upserting on the run
 name, plus listing stored runs for the stats panel.
 
 Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_service`.

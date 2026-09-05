@@ -2,7 +2,7 @@
   "name": "pixlstash-desktop",
   "productName": "PixlStash",
   "desktopName": "pixlstash.desktop",
-  "version": "1.10.2",
+  "version": "1.11.0-rc.5",
   "description": "PixlStash desktop app: a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
   "author": {
     "name": "Gaute Lindkvist",
@@ -76,6 +76,9 @@
       "icon": "assets/icon.png",
       "hardenedRuntime": true,
       "gatekeeperAssess": false
+    },
+    "dmg": {
+      "size": "6g"
     },
     "linux": {
       "target": [

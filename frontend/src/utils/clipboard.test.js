@@ -99,7 +99,7 @@ describe('navigator.clipboard.writeText path', () => {
       },
       configurable: true,
     })
-    // jsdom's execCommand is a no-op stub — it won't fire a copy event, so
+    // jsdom's execCommand is a no-op stub - it won't fire a copy event, so
     // the handler never sets intercepted=true.  We just verify it doesn't throw.
     const result = await copyText('hello')
     expect(typeof result).toBe('boolean')

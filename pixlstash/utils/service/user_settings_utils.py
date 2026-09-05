@@ -2,7 +2,11 @@
 
 import json
 
-from pixlstash.utils.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
+from pixlstash.utils.system_utils import (  # noqa: F401
+    MAX_VRAM_BUDGET_GB,
+    default_max_vram_gb,
+    max_vram_budget_gb,
+)
 
 
 # Bounds (in pixels) for the draggable, non-docked sidebar width.
@@ -78,7 +82,7 @@ def serialize_user_config(user) -> dict:
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
     # predates a newly-added setting simply falls back to the default rather
-    # than raising — keeps serialisation resilient to schema growth.
+    # than raising - keeps serialisation resilient to schema growth.
     config = {
         key: (
             getattr(source, key, None)
@@ -317,10 +321,9 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = float(value)
                 if new_value <= 0:
                     raise ValueError("max_vram_gb must be greater than 0")
-                if new_value > MAX_VRAM_BUDGET_GB:
-                    raise ValueError(
-                        f"max_vram_gb must not exceed {MAX_VRAM_BUDGET_GB} GB"
-                    )
+                ceiling = max_vram_budget_gb()
+                if new_value > ceiling:
+                    raise ValueError(f"max_vram_gb must not exceed {ceiling} GB")
             if user.max_vram_gb != new_value:
                 user.max_vram_gb = new_value
                 updated = True

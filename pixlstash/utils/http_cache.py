@@ -6,7 +6,7 @@ sidebar asks for ``/characters/{id}/thumbnail`` and the picture behind it can be
 regenerated at any time.
 
 Starlette's ``FileResponse`` sets an ``ETag`` from the file's size and mtime but
-does **not** answer a conditional request — the only conditional logic it has is
+does **not** answer a conditional request - the only conditional logic it has is
 ``If-Range`` for byte ranges (verified against starlette 1.3.1). So an ETag on
 its own buys nothing: without a ``Cache-Control`` header the browser falls back
 to *heuristic* caching and may reuse a regenerated thumbnail for an unbounded
@@ -76,7 +76,7 @@ def conditional_file_response(
     etag = file_etag(path)
     if etag is None:
         # No stat, so no validator to offer. Serve the bytes and still forbid
-        # heuristic caching — a thumbnail that silently goes stale is the bug
+        # heuristic caching - a thumbnail that silently goes stale is the bug
         # this helper exists to prevent.
         response = FileResponse(path, media_type=media_type)
         response.headers["Cache-Control"] = REVALIDATE_CACHE_CONTROL

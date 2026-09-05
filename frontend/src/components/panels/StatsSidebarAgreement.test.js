@@ -1,9 +1,9 @@
-// Agreement matrix in the stats sidebar — the 5x4 cross-tab of the user's star
+// Agreement matrix in the stats sidebar - the 5x4 cross-tab of the user's star
 // rating against the smart score.
 //
 // StatsSidebar.vue is ~2.7k lines and its data comes from a live /pictures/stats
-// call, so — following the ImageGridLockBadge.test.js / ImageOverlayContextMenu
-// precedent — these tests reproduce the widget's pure contracts verbatim from
+// call, so - following the ImageGridLockBadge.test.js / ImageOverlayContextMenu
+// precedent - these tests reproduce the widget's pure contracts verbatim from
 // the component rather than mounting it:
 //
 //   1. the sqrt shade ramp (what makes a small cell visible next to a huge one);
@@ -197,7 +197,7 @@ describe("cell click filter", () => {
     });
   });
 
-  it("an empty cell is inert — it would filter the grid to nothing", () => {
+  it("an empty cell is inert - it would filter the grid to nothing", () => {
     expect(clickCell(cleared, counts, 1, "4-5")).toEqual(cleared);
   });
 
@@ -252,7 +252,7 @@ describe("keyboard model", () => {
 describe("traffic-light tone", () => {
   // A star rating is a rounded smart score: rating 4 stands for 3.5 to 4.5, so it
   // matches BOTH the 3-4 and the 4-5 bucket. Measuring the gap in grid steps
-  // instead of score points made rating 4 a near-miss against 4-5 — the bug this
+  // instead of score points made rating 4 a near-miss against 4-5 - the bug this
   // block now pins down.
   it("treats a rating as a match for every bucket within half a point", () => {
     expect(tone(4, "3-4")).toBe("good");

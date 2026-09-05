@@ -62,7 +62,7 @@ const stubs = {
   StarRatingOverlay: true,
   // Rendered as a real element so the spanning class can be read off it, and
   // carrying `data-id` like the sibling stubs in CharacterCreateAndAssign and
-  // PictureSetEditor — without it, "the tray is still there" cannot tell a tray
+  // PictureSetEditor - without it, "the tray is still there" cannot tell a tray
   // pointed at the person being edited from one pointed at `undefined`, which
   // is exactly what a closing dialog would leave.
   AdapterTray: {
@@ -82,7 +82,7 @@ function widthOf(wrapper) {
 }
 
 describe("CharacterEditor layout", () => {
-  it("creating is one column at 480 — both right-column blocks need an id", () => {
+  it("creating is one column at 480 - both right-column blocks need an id", () => {
     const w = mountCharacter({ open: true, character: null });
 
     expect(widthOf(w)).toBe(480);
@@ -118,13 +118,13 @@ describe("CharacterEditor layout", () => {
     expect(w.findAll(".ref-picture-item")).toHaveLength(1);
     expect(w.find(".ref-pictures-empty").exists()).toBe(false);
     // The heading and the fields are as visible as the columns are, so they
-    // have to hold too — a dialog that says "New person" over four blank
+    // have to hold too - a dialog that says "New person" over four blank
     // fields beside that person's face is the same defect, further up.
     expect(w.findComponent({ name: "AppDialog" }).props("title")).toBe(
       "Edit person",
     );
     expect(w.vm.localCharacter.name).toBe("A");
-    // Including the tray, which spans both columns — the widest block in the
+    // Including the tray, which spans both columns - the widest block in the
     // dialog is the worst one to drop out from under a leave transition. Its
     // id has to hold too: the host nulls the prop, so a tray reading straight
     // off it stays mounted but points at nobody.
@@ -152,7 +152,9 @@ describe("CharacterEditor layout", () => {
     listPicturesByIds.mockResolvedValueOnce([{ id: 1, score: 4 }]);
     const w = mountCharacter({ open: true, character: { id: 7, name: "A" } });
     await flushPromises();
-    await w.find(".ref-picture-item").trigger("click");
+    // The picture itself now picks the thumbnail; the preview is its own
+    // corner control (see CharacterEditorThumbnail.test.js).
+    await w.find(".ref-picture-zoom").trigger("click");
     expect(w.vm.previewPic).not.toBeNull();
 
     await w.setProps({ open: false, character: null });
@@ -261,7 +263,7 @@ describe("CharacterEditor layout", () => {
   it("lets an older read finish without stranding the empty state", async () => {
     // A's read is still in flight when B opens, and B's has not answered. If
     // A's completion were allowed to clear the loading flag, B would render as
-    // "No reference images yet" — a claim about B that nothing has made.
+    // "No reference images yet" - a claim about B that nothing has made.
     let resolveA;
     getReferencePictures.mockReturnValueOnce(
       new Promise((r) => {
@@ -313,7 +315,7 @@ describe("PictureSetEditor layout", () => {
 
     expect(widthOf(w)).toBe(720);
     expect(w.findAll(".editor-col")).toHaveLength(2);
-    // The appearance block cannot fit in half a dialog — it has to span, or the
+    // The appearance block cannot fit in half a dialog - it has to span, or the
     // 8-column icon grid is what pays for it.
     expect(w.find(".appearance-row").classes()).toContain("editor-span");
     expect(w.find(".adapter-tray-stub").classes()).toContain("editor-span");
@@ -327,7 +329,7 @@ describe("PictureSetEditor layout", () => {
     });
     expect(w.vm.localSet.name).toBe("Set");
 
-    // SideBar.closeSetEditor, in one flush — the same shape as the person
+    // SideBar.closeSetEditor, in one flush - the same shape as the person
     // editor's, and the same leave transition still showing two columns.
     await w.setProps({ open: false, set: null });
 
@@ -387,7 +389,7 @@ describe("PictureSetEditor layout", () => {
     });
 
     // The wash and its reason belong to `.appearance-row` itself, not to the
-    // new spanning wrapper — move them and either the tray falls under the wash
+    // new spanning wrapper - move them and either the tray falls under the wash
     // or the tooltip's hover target changes.
     const row = w.find(".appearance-row");
     expect(row.classes()).toContain("appearance-row--locked");

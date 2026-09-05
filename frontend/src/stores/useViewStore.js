@@ -1,4 +1,4 @@
-// useViewStore.js — route → view resolution: the one place the app parses the
+// useViewStore.js - route → view resolution: the one place the app parses the
 // URL into the selection/project state the grid renders.
 //
 // The route stays the SINGLE SOURCE OF TRUTH for what the grid shows (see
@@ -106,6 +106,66 @@ function parseStackState(raw) {
     : null;
 }
 
+/**
+ * `?path=<absolute folder>`: the folder facet for folders that have no id.
+ *
+ * A reference folder and an import folder each have a route of their own
+ * (`/ref-folder/:id`, `/import-folder/:id`) and the sidebar owns their payload.
+ * A folder an "About your library" finding points at has no id of any kind,
+ * which is why this param exists.
+ *
+ * It rides on every grid route rather than only on `/`, for the same reason
+ * `?stack_state=` does: the facet is not specific to one view shape, and
+ * `/character/UNASSIGNED?path=…` - the unassigned pictures in one folder - is
+ * exactly what a finding opens.
+ *
+ * **It does NOT yet fix the sidebar's subfolder selection.** A subfolder click
+ * carries `referenceFolderId` (`FolderTreeNode.vue` requires it), so
+ * `pushRouteForCurrentSelection` takes its ref-folder branch and the subfolder
+ * path is still dropped from the URL. Closing that means teaching the
+ * sidebar's `activeFolderKey` watcher to restore a subfolder rather than the
+ * folder root, which is a change to the folder tree and not to this param.
+ *
+ * @param {string|string[]|undefined} raw `route.query.path`
+ * @returns {{pathPrefix: string, label: string}|null}
+ */
+function parseFolderPath(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const text = value == null ? "" : String(value).trim();
+  if (!text) return null;
+  // The label is the last component, which is what the owner calls the folder.
+  // Split on both separators: the path comes from the server and may be a
+  // Windows path while the browser showing it is not.
+  const leaf = text
+    .replace(/[/\\]+$/, "")
+    .split(/[/\\]/)
+    .pop();
+  return { pathPrefix: text, label: leaf || text };
+}
+
+/**
+ * `?face=with_face|without_face`: the face facet, on the same terms as
+ * `?stack_state=`.
+ *
+ * ADDITIVE, like the stack state and unlike `?path=`: an absent or unrecognised
+ * value means "leave `useFilterStore.faceBboxFilter` alone", so navigating
+ * anywhere does not silently clear a filter the filter panel set.
+ *
+ * It exists because "About your library" opens its unnamed-faces finding on
+ * `/character/UNASSIGNED?face=with_face` - unassigned means no face here is
+ * named, `with_face` means there is one, and the pair is exactly the set the
+ * finding counted. Without it the destination would be every unassigned
+ * picture, most of which have no face at all.
+ *
+ * @param {string|string[]|undefined} raw `route.query.face`
+ * @returns {string|null}
+ */
+function parseFaceFilter(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const text = value == null ? "" : String(value);
+  return ["with_face", "without_face"].includes(text) ? text : null;
+}
+
 function characterLabelFor(charId) {
   if (charId === ALL_PICTURES_ID) return "All Pictures";
   if (charId === UNASSIGNED_PICTURES_ID) return "Unassigned Pictures";
@@ -138,8 +198,11 @@ function baseView(name) {
     clearFolderFilter: true,
     characterLabel: null,
     folderKey: null,
+    // `{pathPrefix, label}` from `?path=`, or null. Read on every grid route.
+    folderFilter: null,
     // `null` = "leave the filter store alone" (see `parseStackState`).
     stackState: null,
+    faceFilter: null,
   };
 }
 
@@ -157,6 +220,11 @@ export function parseRouteView(route) {
   // shape, and a `/set/3?stack_state=stacked` link should work as well as
   // `/?stack_state=stacked`.
   view.stackState = parseStackState(query.stack_state);
+  // Same reasoning, same placement: a facet that is not specific to one view
+  // shape is read once, for every grid route.
+  view.folderFilter = parseFolderPath(query.path);
+  if (view.folderFilter) view.clearFolderFilter = false;
+  view.faceFilter = parseFaceFilter(query.face);
 
   if (name === "all-pictures") {
     view.characterLabel = "All Pictures";
@@ -282,12 +350,31 @@ function scopeProjectToSession(view, ctx) {
 function applyView(view, selectionStore, projectStore, filterStore) {
   if (!view) return;
 
-  if (view.clearFolderFilter) selectionStore.selectedFolderFilter = null;
+  if (view.clearFolderFilter) {
+    selectionStore.selectedFolderFilter = null;
+  } else if (view.folderFilter && !view.folderKey) {
+    // A `?path=` route owns the folder facet - EXCEPT on a folder route, where
+    // the sidebar owns the payload and sets it once the folder has loaded.
+    // Without the `folderKey` guard, `/ref-folder/5?path=/sub` would overwrite
+    // the sidebar's `{referenceFolderId, pathPrefix, label}` with a bare
+    // `{pathPrefix, label}` and drop `reference_folder_id` from the grid
+    // query. Nothing pushes that combination today; the guard is here so
+    // nothing can start to.
+    const current = selectionStore.selectedFolderFilter;
+    if (current?.pathPrefix !== view.folderFilter.pathPrefix) {
+      selectionStore.selectedFolderFilter = view.folderFilter;
+    }
+  }
 
   // Additive only: a route that says nothing about the stack filter leaves
   // whatever the filter panel set. See `parseStackState`.
   if (view.stackState && filterStore.stackStateFilter !== view.stackState) {
     filterStore.stackStateFilter = view.stackState;
+  }
+
+  // Same additive rule (see `parseFaceFilter`).
+  if (view.faceFilter && filterStore.faceBboxFilter !== view.faceFilter) {
+    filterStore.faceBboxFilter = view.faceFilter;
   }
 
   if (

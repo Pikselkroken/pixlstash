@@ -138,6 +138,64 @@ describe("parseRouteView", () => {
     ).toBe("if-5");
   });
 
+  it("carries a folder path on any grid route, and names the folder by its leaf", () => {
+    // `?path=` is the folder facet for folders that have no id: a subfolder,
+    // and a folder an "About your library" finding points at. It rides on
+    // every grid route for the same reason `?stack_state=` does, which is what
+    // makes `/character/UNASSIGNED?path=…` - the unassigned pictures in ONE
+    // folder - expressible at all.
+    const onAll = parseRouteView(
+      routeOf("all-pictures", {}, { path: "/home/me/library/_unsorted" }),
+    );
+    expect(onAll).toMatchObject({
+      clearFolderFilter: false,
+      folderFilter: {
+        pathPrefix: "/home/me/library/_unsorted",
+        label: "_unsorted",
+      },
+    });
+
+    const onCharacter = parseRouteView(
+      routeOf(
+        "character",
+        { id: "UNASSIGNED" },
+        { path: "C:\\Users\\me\\Shoots" },
+      ),
+    );
+    expect(onCharacter.selectedCharacter).toBe("UNASSIGNED");
+    // A Windows path reaches a browser that is not on Windows, so the leaf is
+    // split on both separators.
+    expect(onCharacter.folderFilter.label).toBe("Shoots");
+
+    // No path means the route says nothing about the folder facet, and the
+    // ordinary clear-it rule stands.
+    expect(parseRouteView(routeOf("all-pictures"))).toMatchObject({
+      clearFolderFilter: true,
+      folderFilter: null,
+    });
+    expect(
+      parseRouteView(routeOf("all-pictures", {}, { path: "  " })).folderFilter,
+    ).toBeNull();
+  });
+
+  it("reads the face facet additively, like the stack state", () => {
+    // `/character/UNASSIGNED?face=with_face` is what the unnamed-faces finding
+    // opens: unassigned means no face here is named, `with_face` means there
+    // is one, and the pair is exactly the set the finding counted.
+    expect(
+      parseRouteView(
+        routeOf("character", { id: "UNASSIGNED" }, { face: "with_face" }),
+      ).faceFilter,
+    ).toBe("with_face");
+    // Additive: an absent or unrecognised value means "leave the filter store
+    // alone", so navigating anywhere does not clear a filter the panel set.
+    expect(parseRouteView(routeOf("all-pictures")).faceFilter).toBeNull();
+    expect(
+      parseRouteView(routeOf("all-pictures", {}, { face: "sideways" }))
+        .faceFilter,
+    ).toBeNull();
+  });
+
   it("returns null for a route the grid is not driven from", () => {
     expect(parseRouteView(routeOf("something-else"))).toBeNull();
     expect(parseRouteView(undefined)).toBeNull();
@@ -178,6 +236,72 @@ describe("useViewStore.applyRoute", () => {
 
     expect(selection.selectedFolderFilter).toStrictEqual(filter);
     expect(viewStore.activeFolderKey).toBe("rf-5");
+  });
+
+  it("writes the ?path= folder filter, and replaces a stale one", () => {
+    const viewStore = useViewStore();
+    const selection = useSelectionStore();
+    selection.selectedFolderFilter = {
+      pathPrefix: "/home/me/old",
+      label: "old",
+    };
+
+    viewStore.applyRoute(
+      routeOf("character", { id: "UNASSIGNED" }, { path: "/home/me/new" }),
+    );
+
+    expect(selection.selectedFolderFilter).toStrictEqual({
+      pathPrefix: "/home/me/new",
+      label: "new",
+    });
+    expect(selection.selectedCharacter).toBe("UNASSIGNED");
+
+    // Re-applying the same path is inert: writing an equal-but-new object
+    // every tick would refetch the grid on every route tick.
+    const written = selection.selectedFolderFilter;
+    viewStore.applyRoute(
+      routeOf("character", { id: "UNASSIGNED" }, { path: "/home/me/new" }),
+    );
+    expect(selection.selectedFolderFilter).toBe(written);
+
+    // And navigating away from it clears it, like any other grid route.
+    viewStore.applyRoute(routeOf("all-pictures"));
+    expect(selection.selectedFolderFilter).toBeNull();
+  });
+
+  it("lets a folder route's own payload win over ?path=", () => {
+    // The sidebar owns a ref-folder's payload and sets it once the folder has
+    // loaded. Overwriting it from `?path=` would drop `reference_folder_id`
+    // from the grid query. Nothing pushes this combination today; the guard is
+    // here so nothing can start to.
+    const viewStore = useViewStore();
+    const selection = useSelectionStore();
+    const owned = {
+      referenceFolderId: 5,
+      pathPrefix: "/home/me/refs",
+      label: "Refs",
+    };
+    selection.selectedFolderFilter = owned;
+
+    viewStore.applyRoute(
+      routeOf("ref-folder", { id: "5" }, { path: "/home/me/refs/sub" }),
+    );
+
+    expect(selection.selectedFolderFilter).toStrictEqual(owned);
+  });
+
+  it("applies the face facet without clearing it on the next route", () => {
+    const viewStore = useViewStore();
+    const filter = useFilterStore();
+
+    viewStore.applyRoute(
+      routeOf("character", { id: "UNASSIGNED" }, { face: "with_face" }),
+    );
+    expect(filter.faceBboxFilter).toBe("with_face");
+
+    // Additive: a route that says nothing about it leaves it alone.
+    viewStore.applyRoute(routeOf("all-pictures"));
+    expect(filter.faceBboxFilter).toBe("with_face");
   });
 
   it("is idempotent: re-applying the same route rewrites nothing", () => {

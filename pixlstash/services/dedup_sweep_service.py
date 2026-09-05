@@ -1,4 +1,4 @@
-"""Vault-wide near-duplicate sweep — server-side group resolution + dry-run plan.
+"""Vault-wide near-duplicate sweep - server-side group resolution + dry-run plan.
 
 Promotes the manual grid maneuver (Likeness Groups sort → select → "Stack groups")
 into a library-wide, policy-driven service. Three things move server-side:
@@ -18,7 +18,7 @@ into a library-wide, policy-driven service. Three things move server-side:
    smart-score margin, a group-size ceiling, and the cross-stack disposition. It
    splits every group into ``auto_collapse`` (act) and ``needs_review`` (propose),
    and every ``needs_review`` group carries machine-readable
-   :class:`ReviewReason` codes — the sweep never rejects a group silently.
+   :class:`ReviewReason` codes - the sweep never rejects a group silently.
 3. **Groups spanning several existing stacks are represented, not skipped.** The
    shipped client drops those groups with a single aggregated warning (and with no
    feedback at all when *every* selected group spans stacks). Here they are a
@@ -28,7 +28,7 @@ into a library-wide, policy-driven service. Three things move server-side:
 
 **Strictly non-destructive.** Resolution means *stacking*, never deleting. This
 module is read-only by construction: it opens no write task, and nothing here
-mutates a row. It produces a :class:`SweepReport` — the dry-run plan an execution
+mutates a row. It produces a :class:`SweepReport` - the dry-run plan an execution
 step (a later lane) would consume.
 
 **Lane-B seam.** :func:`plan_near_duplicate_sweep` accepts an optional
@@ -37,8 +37,8 @@ nothing to log) and is echoed back in the report so a caller can correlate a pla
 with the operation-log batch that later applies it. Nothing in this module imports
 the operation log.
 
-Keeper (stack-leader) selection reuses the shipped ordering — human ``score`` DESC,
-then ``smart_score`` DESC, then ``created_at`` DESC (recency), then ``id`` ASC —
+Keeper (stack-leader) selection reuses the shipped ordering - human ``score`` DESC,
+then ``smart_score`` DESC, then ``created_at`` DESC (recency), then ``id`` ASC -
 so a sweep-built stack has the same leader the grid would have picked. The one
 deliberate divergence from ``routes/stacks.py::_stack_order_key`` is that this
 service reads the **stored** ``Picture.smart_score`` column (maintained by
@@ -77,7 +77,7 @@ MIN_LIKENESS = 0.5
 MAX_LIKENESS = 0.99999
 
 # Policy defaults. ``DEFAULT_LIKENESS_THRESHOLD`` matches the shipped grid default
-# (0.9 — what counts as a candidate group at all); ``DEFAULT_AUTO_RESOLVE_LIKENESS``
+# (0.9 - what counts as a candidate group at all); ``DEFAULT_AUTO_RESOLVE_LIKENESS``
 # is the *higher* bar a group must clear to be acted on without a human look.
 DEFAULT_LIKENESS_THRESHOLD = 0.9
 DEFAULT_AUTO_RESOLVE_LIKENESS = 0.95
@@ -118,7 +118,7 @@ class SweepVerdict(str, Enum):
 class SweepOutcome(str, Enum):
     """The stacking action a group's resolution would perform.
 
-    Every value is additive — a stack is created, grown, or merged. There is no
+    Every value is additive - a stack is created, grown, or merged. There is no
     destructive outcome, by design.
     """
 
@@ -150,7 +150,7 @@ class _SkipReason(str, Enum):
 
 @dataclass(frozen=True)
 class SweepPolicy:
-    """The confidence policy — the sweep's single tuning surface.
+    """The confidence policy - the sweep's single tuning surface.
 
     Constructed per request; nothing here is read from module state, so two
     concurrent sweeps can run different policies. Validated in ``__post_init__``:
@@ -171,7 +171,7 @@ class SweepPolicy:
             unambiguous.
         min_group_size: Smallest component that counts as a group at all.
         max_auto_group_size: Groups larger than this are proposed, not acted on
-            (:attr:`ReviewReason.OVERSIZED_GROUP`) — a big transitively-chained
+            (:attr:`ReviewReason.OVERSIZED_GROUP`) - a big transitively-chained
             blob is rarely one duplicate cluster.
         cross_stack: Disposition for groups spanning several existing stacks.
         max_groups_listed: Cap on the *listing* in the report. Counts and totals
@@ -252,7 +252,7 @@ class SweepGroup:
         target_stack_id: The stack that would receive the members, when one
             already exists. ``None`` for :attr:`SweepOutcome.CREATE_STACK`.
         merged_stack_ids: The other stacks that would be folded into
-            ``target_stack_id`` — non-empty only for
+            ``target_stack_id`` - non-empty only for
             :attr:`SweepOutcome.MERGE_STACKS`.
         likeness_min: The group's weakest observed likeness edge (the chain's
             weak link). Members pulled in by stack expansion have no edge and do
@@ -260,9 +260,9 @@ class SweepGroup:
         likeness_max: The group's strongest observed likeness edge.
         keeper_margin: How far the keeper leads the runner-up on the deciding
             signal, or ``None`` when the signal could not be measured.
-        keeper_margin_basis: Which signal decided — ``"score"``,
+        keeper_margin_basis: Which signal decided - ``"score"``,
             ``"smart_score"``, or ``"none"`` when neither could separate them.
-        held_bytes: Bytes of stored pixels held by the *non-keeper* members —
+        held_bytes: Bytes of stored pixels held by the *non-keeper* members -
             the "these stacks hold N GB" figure, reported without promising the
             reclaim.
         linked_member_ids: Members that carry no likeness edge in this group and
@@ -374,7 +374,7 @@ class _LikenessForest:
 
     Only the *root* of a component holds its ``(min, max)`` likeness accumulator;
     a union merges the two accumulators, so the weakest link of a transitively
-    chained component is known when the stream ends — no second pass over the
+    chained component is known when the stream ends - no second pass over the
     edge table and no adjacency structure.
     """
 
@@ -543,7 +543,7 @@ def plan_sweep_in_session(
         session: Pre-opened DB session (the ``*_in_session`` service contract).
         policy: Confidence policy; the defaults when omitted.
         operation_batch_id: Optional operation-log batch id to correlate this plan
-            with. Inert for a dry run — echoed into the report, never written.
+            with. Inert for a dry run - echoed into the report, never written.
 
     Returns:
         The :class:`SweepReport` for the whole vault.
@@ -643,7 +643,7 @@ def plan_near_duplicate_sweep(
     Args:
         vault: The vault owning the database.
         policy: Confidence policy; the defaults when omitted.
-        operation_batch_id: The Lane-B operation-log batch id seam — echoed into
+        operation_batch_id: The Lane-B operation-log batch id seam - echoed into
             the report, never written by a dry run.
     """
     return vault.db.run_immediate_read_task(
@@ -743,7 +743,7 @@ def _resolve_group(
     """Turn one connected component into a :class:`SweepGroup`, or say why not.
 
     A :class:`_SkipReason` return means the component produced no proposal. Both
-    reasons are counted in the report — nothing is dropped silently, which is the
+    reasons are counted in the report - nothing is dropped silently, which is the
     whole point of promoting this out of the client.
     """
     component_ids = set(member_ids)
@@ -833,7 +833,7 @@ def _keeper_margin(
 ) -> tuple[Optional[float], str, Optional[ReviewReason]]:
     """How clearly the keeper beats the runner-up, and whether that is enough.
 
-    The human ``score`` is decisive when it separates the two — a picture the user
+    The human ``score`` is decisive when it separates the two - a picture the user
     rated higher is the keeper regardless of any model signal. Only on a score tie
     does the smart-score margin decide, and an unmeasurable margin (either picture
     has no stored smart score) is reported as such rather than treated as zero.
@@ -859,7 +859,7 @@ def evaluate_keeper_margin(
 
     Split out from :func:`_keeper_margin` so the "is it big enough" decision is
     testable independently of how the margin is measured. A
-    ``smart_score_margin`` of 0 switches the whole smart-score axis off — an
+    ``smart_score_margin`` of 0 switches the whole smart-score axis off - an
     unmeasurable margin then stops being a review reason too, because the caller
     has said the signal is not a gate.
     """

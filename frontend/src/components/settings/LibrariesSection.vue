@@ -2,29 +2,47 @@
 /**
  * Settings › Libraries.
  *
- * Lists the libraries this installation knows about and switches between them.
- * Adding and removing libraries is deliberately not here: those point the server
- * at folders on disk and are command-line operations in this release, which is
- * why the pane has to *teach* the CLI rather than just mention it. That panel is
- * the only discovery path for multi-library, so it carries real copy.
+ * The whole lifecycle: list, add, rename, switch, stop using. It used to be a
+ * list and a lesson in the CLI, because adding a library points the server at a
+ * folder on disk and that was a terminal job. The routes exist now, so the CLI
+ * panel stays but is demoted to reference - the same things from a terminal,
+ * for a script or a cron job, or anyone who prefers one.
+ *
+ * **Nothing in this pane can remove a picture or a folder.** `Stop using this`
+ * deregisters; the files stay where they are and the row is kept, so the share
+ * links pointing at that library revive when the folder is added again. The
+ * copy says so at the moment of the decision rather than in a help page.
+ *
+ * The active library has no `Stop using this` - switch away first. That refusal
+ * is the registry's, not this dialog's; the item is hidden because offering a
+ * gesture that always fails is worse than not offering it.
  *
  * Switching closes one library and opens another, so it ends in a full page
  * reload rather than a store refresh: picture ids do not mean the same thing in
  * another library, and every open view describes the old one.
  */
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { VCard, VDialog, VProgressCircular } from "vuetify/components";
+import { VCard, VDialog, VMenu, VProgressCircular } from "vuetify/components";
 
-import { LIBRARIES_DOCUMENTATION_URL } from "../../api/libraries";
+import {
+  LIBRARIES_DOCUMENTATION_URL,
+  detachLibrary,
+  renameLibrary,
+} from "../../api/libraries";
 import { useConfirm } from "../../composables/useConfirm";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
+import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppInput from "../widgets/AppInput.vue";
+import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
 
 const props = defineProps({
@@ -33,10 +51,16 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
+// `Choose a layout…` opens LibraryLayoutDialog over this pane. The layout is a
+// property of the *open* library - the routes are `/server-config/...`, which
+// is whichever library is active - so the item is on the active row only.
+const layoutDialogOpen = ref(false);
+
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
 const noticeStore = useNoticeStore();
+const mappingStore = useFolderMappingStore();
 const {
   libraries,
   canManage,
@@ -56,6 +80,15 @@ let copyResetTimer = 0;
 // behind a button.
 const commandsOpen = ref(false);
 const expandedPaths = ref(new Set());
+const openMenuUuid = ref("");
+/** The library being renamed, or null. Held rather than looked up by uuid so a
+    refresh mid-edit cannot swap the dialog's subject under the typing. */
+const renaming = ref(null);
+const renameValue = ref("");
+const renameError = ref("");
+const renameBusy = ref(false);
+const renameInput = ref(null);
+const busyUuid = ref("");
 
 const showOneLibraryPrimer = computed(
   () => hasLoadedSuccessfully.value && libraries.value.length === 1,
@@ -77,10 +110,21 @@ const cliCommands = computed(() => {
       description: "Register a library that already exists on disk.",
     },
     {
+      verb: "rename",
+      syntax: "rename <name> <new name>",
+      description: "Change a library's label. Nothing on disk is renamed.",
+    },
+    {
       verb: "detach",
       syntax: "detach <name>",
       description:
         "Forget one. No files are removed and nothing inside the folder changes.",
+    },
+    {
+      verb: "backup",
+      syntax: "backup <name> <destination>",
+      description:
+        "Write the library and the hub to one archive, even while it is open. Read it back with restore.",
     },
   ].map((item) => ({ ...item, command: `${base} ${item.syntax}` }));
 });
@@ -96,8 +140,8 @@ const detachCommand = computed(() =>
 );
 
 // Which shell these commands are written for, when it is not "any of them".
-// The Windows desktop declares a PowerShell command — a leading `&` call
-// operator — because no single string runs in both cmd.exe and PowerShell
+// The Windows desktop declares a PowerShell command - a leading `&` call
+// operator - because no single string runs in both cmd.exe and PowerShell
 // (issue #1058), and a command pasted into the wrong one fails with an error
 // that names neither. Read off the command we are about to show rather than
 // from a new API field: the hint IS the deployment's own answer, so the two
@@ -136,6 +180,77 @@ async function switchTo(library, event) {
   );
 }
 
+async function startRename(library) {
+  openMenuUuid.value = "";
+  renaming.value = library;
+  renameValue.value = library.name;
+  renameError.value = "";
+  await nextTick();
+  renameInput.value?.focus();
+  renameInput.value?.select();
+}
+
+async function commitRename() {
+  const library = renaming.value;
+  const name = renameValue.value.trim();
+  if (!library || renameBusy.value) return;
+  if (!name || name === library.name) {
+    renaming.value = null;
+    return;
+  }
+  renameBusy.value = true;
+  renameError.value = "";
+  try {
+    await renameLibrary(library.uuid, name);
+    renaming.value = null;
+    await librariesStore.refresh();
+  } catch (error) {
+    // Stay open on the name that was refused. The server's reason names the
+    // library already holding it, which is the one thing that tells the owner
+    // what to type instead.
+    renameError.value = errorDetail(error) || "Could not rename that library.";
+  } finally {
+    renameBusy.value = false;
+  }
+}
+
+async function stopUsing(library) {
+  openMenuUuid.value = "";
+  const shareCount = Number(library.active_share_links ?? 0);
+  const ok = await confirm({
+    title: `Stop using "${library.name}"?`,
+    message:
+      `PixlStash forgets it. Every picture and folder inside ${library.path ?? "that folder"} ` +
+      "stays exactly where it is. Its tags, scores and people live in that " +
+      "folder too, so adding it again later brings them back.",
+    warning:
+      shareCount > 0
+        ? `${shareCount} share ${shareCount === 1 ? "link" : "links"} ` +
+          `${shareCount === 1 ? "points" : "point"} at it. ` +
+          `${shareCount === 1 ? "It stops" : "They stop"} working until you add ` +
+          "the folder again, and then works again - nothing is revoked."
+        : "",
+    confirmLabel: "Forget it",
+  });
+  if (!ok) return;
+
+  busyUuid.value = library.uuid;
+  try {
+    await detachLibrary(library.uuid);
+    await librariesStore.refresh();
+    noticeStore.success(`Forgot "${library.name}". No files were removed.`, {
+      key: "libraries-detached",
+    });
+  } catch (error) {
+    noticeStore.error(
+      errorDetail(error) || `Could not stop using ${library.name}.`,
+      { key: "libraries-detach" },
+    );
+  } finally {
+    busyUuid.value = "";
+  }
+}
+
 function togglePath(libraryUuid) {
   const next = new Set(expandedPaths.value);
   if (next.has(libraryUuid)) next.delete(libraryUuid);
@@ -163,7 +278,7 @@ async function copyCommand(command) {
   );
 }
 
-// Reopening the dialog otherwise shows "Copied" — and announces it — for a
+// Reopening the dialog otherwise shows "Copied" - and announces it - for a
 // button nobody pressed this time.
 watch(commandsOpen, (isOpen) => {
   if (!isOpen) copiedCommand.value = "";
@@ -179,6 +294,12 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       title="Libraries"
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
     >
+      <div v-if="canManage" class="libraries-toolbar">
+        <AppButton size="sm" variant="primary" @click="mappingStore.openWizard()">
+          + Add a library…
+        </AppButton>
+      </div>
+
       <div v-if="loading" class="libraries-loading" role="status" aria-live="polite">
         <v-progress-circular indeterminate size="20" width="2" />
         <span>Reading the list of libraries…</span>
@@ -244,12 +365,97 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
               v-if="!library.is_active"
               size="sm"
               variant="secondary"
-              :disabled="!canManage || !library.is_reachable"
+              :disabled="
+                !canManage || !library.is_reachable || busyUuid === library.uuid
+              "
               :loading="overlayOpen && targetLibrary?.uuid === library.uuid"
               @click="switchTo(library, $event)"
             >
               Switch
             </AppButton>
+
+            <!-- The management verbs are all on the locality tier, so a remote
+                 session gets no menu at all rather than one whose every item
+                 fails. The visible note under the list explains why. -->
+            <v-menu
+              v-if="canManage"
+              :model-value="openMenuUuid === library.uuid"
+              location="bottom end"
+              origin="top end"
+              :offset="6"
+              @update:model-value="
+                (isOpen) => (openMenuUuid = isOpen ? library.uuid : '')
+              "
+            >
+              <template #activator="{ props: menuProps }">
+                <button
+                  v-bind="menuProps"
+                  type="button"
+                  class="library-row__more"
+                  :disabled="busyUuid === library.uuid"
+                  aria-haspopup="menu"
+                  :aria-expanded="openMenuUuid === library.uuid"
+                  :aria-label="`More actions for ${library.name}`"
+                >
+                  ⋯
+                </button>
+              </template>
+              <ul class="library-menu" role="menu">
+                <li v-if="!library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    :disabled="!library.is_reachable"
+                    @click="
+                      openMenuUuid = '';
+                      switchTo(library, $event);
+                    "
+                  >
+                    Open this library
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    @click="startRename(library)"
+                  >
+                    Rename…
+                  </button>
+                </li>
+                <!-- Only on the active library: the layout routes address the
+                     open one, so offering this on a row that is not open would
+                     silently edit a different library's folders. -->
+                <li v-if="library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    @click="
+                      openMenuUuid = '';
+                      layoutDialogOpen = true;
+                    "
+                  >
+                    Choose a layout…
+                  </button>
+                </li>
+                <!-- Absent on the active library on purpose: detaching it is
+                     refused by the registry, and an item that can only fail is
+                     worse than no item. -->
+                <li v-if="!library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item library-menu__item--separated"
+                    @click="stopUsing(library)"
+                  >
+                    Stop using this…
+                  </button>
+                </li>
+              </ul>
+            </v-menu>
           </div>
         </li>
       </ul>
@@ -257,16 +463,18 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       <!-- Visible text, not a tooltip: a disabled control has to explain
            itself somewhere a keyboard or screen-reader user will reach. -->
       <p v-if="!loading && !canManage" class="libraries-note">
-        Switching libraries is only available on the machine running PixlStash,
-        or over your local network or Tailscale. To allow it from anywhere, set
-        <code>allow_remote_host_ops</code> in server settings.
+        Adding, renaming, switching and removing libraries is only available on
+        the machine running PixlStash, or over your local network or Tailscale,
+        because it points the server at folders on that machine. To allow it
+        from anywhere, set <code>allow_remote_host_ops</code> in server
+        settings.
       </p>
     </SettingsSection>
 
-    <SettingsSection title="Adding and removing libraries">
+    <SettingsSection title="The same things from a terminal">
       <p class="libraries-note">
-        Libraries are added and removed from the command line in this release,
-        because it points PixlStash at folders on your computer.
+        Everything above can also be done from the command line, on the machine
+        hosting PixlStash.
       </p>
 
       <AppButton
@@ -308,15 +516,14 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       </p>
 
       <p v-if="showOneLibraryPrimer" class="libraries-note">
-        You have one library. Use <code>attach &lt;folder&gt;</code> to add another,
-        keep separate sets of pictures such as client work and experiments, and
-        switch between them here.
+        You have one library. Add another to keep separate sets of pictures -
+        client work and experiments, say - and switch between them here.
       </p>
     </SettingsSection>
 
     <v-dialog v-model="commandsOpen" max-width="640">
       <v-card class="libraries-cli-dialog">
-        <h3 class="libraries-cli-dialog__title">Adding and removing libraries</h3>
+        <h3 class="libraries-cli-dialog__title">The same things from a terminal</h3>
 
         <ul class="libraries-cli-list">
           <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
@@ -344,6 +551,47 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         </div>
       </v-card>
     </v-dialog>
+
+    <AppDialog
+      :open="Boolean(renaming)"
+      :title="`Rename ${renaming?.name ?? ''}`"
+      subtitle="Changes the label only. Nothing on disk is renamed."
+      :width="440"
+      @close="renaming = null"
+      @accept="commitRename"
+    >
+      <AppInput
+        ref="renameInput"
+        v-model="renameValue"
+        class="libraries-rename__field"
+        label="Name"
+        :disabled="renameBusy"
+        @enter="commitRename"
+      />
+      <p v-if="renameError" class="libraries-error libraries-rename__error" role="alert">
+        {{ renameError }}
+      </p>
+      <template #footer>
+        <AppButton size="sm" variant="secondary" @click="renaming = null">
+          Cancel
+        </AppButton>
+        <AppButton
+          class="libraries-rename__commit"
+          size="sm"
+          variant="primary"
+          :loading="renameBusy"
+          :disabled="!renameValue.trim()"
+          @click="commitRename"
+        >
+          Rename
+        </AppButton>
+      </template>
+    </AppDialog>
+
+    <LibraryLayoutDialog
+      :open="layoutDialogOpen"
+      @close="layoutDialogOpen = false"
+    />
 
     <p class="visually-hidden" role="status" aria-live="polite">
       {{ copyAnnouncement }}
@@ -463,6 +711,81 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 
 .library-row__action {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.libraries-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
+}
+
+.library-row__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.library-row__more:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.library-row__more:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.library-menu {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  min-width: 200px;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+}
+
+.library-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.library-menu__item:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.library-menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The destructive-sounding one is set apart, the way the artboard sets it
+   apart: it is the only item in this menu whose consequence is not obvious
+   from its name. */
+.library-menu__item--separated {
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-border));
+  border-radius: 0;
 }
 
 .libraries-note {

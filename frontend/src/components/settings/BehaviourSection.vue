@@ -37,7 +37,6 @@ const pluginInstallHelpOpen = ref(false);
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
 const VRAM_BUDGET_STEP_GB = 2;
-const VRAM_BUDGET_MAX_GB = 12;
 const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
 const maxVramGbLoading = ref(false);
@@ -54,7 +53,9 @@ function deriveMaxVramSliderMax(totalVramGb) {
   const available = total - 2;
   const stepped =
     Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
-  return Math.min(VRAM_BUDGET_MAX_GB, Math.max(VRAM_BUDGET_MIN_GB, stepped));
+  // No fixed ceiling: the backend validates against the card too, and a 32 GB
+  // card now defaults to 16 GB - a slider capped at 12 could not show it.
+  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
 }
 
 function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
@@ -79,7 +80,7 @@ async function fetchVramSliderBounds() {
       processData.vramTotalGb ??
       processData.total_vram_gb;
     const derived = deriveMaxVramSliderMax(totalVramGb);
-    // Only ever increase the bound — a transient low reading must not shrink the
+    // Only ever increase the bound - a transient low reading must not shrink the
     // slider and cause Vuetify to auto-clamp (and overwrite) the saved budget.
     if (derived > maxVramGbMax.value) maxVramGbMax.value = derived;
   } catch {
@@ -194,7 +195,7 @@ async function fetchTaggerPlugins() {
     taggerLoading.value = false;
   }
   // Separate request: these name host paths, so the route is local-owner-only
-  // and 403s for a remote or share-scoped caller. That is not an error — there
+  // and 403s for a remote or share-scoped caller. That is not an error - there
   // is simply nothing to show them.
   try {
     const diagnostics = await listTaggerPluginDiagnostics();
@@ -606,7 +607,7 @@ watch(
 }
 
 /* A plugin's load error is exception text from third-party code and has no
-   length limit, so it is bounded and scrolled too — otherwise it is a second
+   length limit, so it is bounded and scrolled too - otherwise it is a second
    unbounded thing in this section and squeezes the tables it sits under. */
 .settings-tagger-plugin-errors {
   list-style: none;

@@ -50,7 +50,7 @@ def cleanup(db_path: str, dry_run: bool = False) -> None:
             )
 
         if dry_run:
-            print("\nDry-run mode — nothing was deleted.")
+            print("\nDry-run mode - nothing was deleted.")
             return
 
         orphan_ids = [row[0] for row in orphans]

@@ -17,6 +17,9 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -39,6 +42,7 @@ import {
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
+import { inspectLibraryPath } from "../../api/libraries";
 import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
@@ -85,6 +89,7 @@ import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
+import { useMovesStore } from "../../stores/useMovesStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -125,6 +130,7 @@ function noticeDetail(e) {
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const dedupStore = useDedupStore();
+const movesStore = useMovesStore();
 
 // Store-direct (Phase 3): the sidebar reads the selection, sort, project and
 // preference state it displays straight from the stores and writes changes
@@ -169,16 +175,36 @@ const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 // than hiding them: a read-only visitor should still see that the feature
 // exists. Every /dedup/* route is owner-only (a duplicate group is defined by
 // content identity, so it straddles any token's scope), so nothing here can be
-// primed with a count or a badge — the row states the reason instead.
+// primed with a count or a badge - the row states the reason instead.
 const READ_ONLY_DEDUP_HINT =
   "Duplicate review is only available in your own library";
 
 // The shelf is the same shape of refusal: every /models, /adapters,
 // /checkpoints and /model-* route is owner-only, because the shelf lists files
-// on the machine PixlStash runs on. Same show-but-disable rule as Duplicates —
+// on the machine PixlStash runs on. Same show-but-disable rule as Duplicates -
 // the destination stays visible and says why (issue #1014).
 const READ_ONLY_SHELF_HINT =
   "The model shelf is only available in your own library";
+
+// "About your library" is a destination too: it reads the library rather than
+// showing it, so it has no selection to express.
+const isInsightsView = computed(() => route.name === "insights");
+
+// Same show-but-disable rule again. GET /insights is owner-only because its
+// numbers ARE the vault-wide aggregate - narrowing them to a share token's
+// scope would leak that out-of-scope pictures exist - so the row is visible,
+// inert, and says why rather than quietly vanishing for a demo visitor.
+const READ_ONLY_INSIGHTS_HINT =
+  "Findings about a library are only available in your own";
+
+// Moves is not a permanent destination the way the three above are: it is a
+// to-do queue of moves made outside PixlStash, most libraries never populate
+// it (no reference folder has opted into a layout), and unlike the others its
+// data is never useful to a share visitor even as a curiosity. So it follows
+// the opposite rule - hidden rather than shown-and-disabled - gated on
+// movesStore.hasAnyPending, which itself never becomes true for a read-only
+// session because nothing here ever calls GET /moves/pending for one.
+const isMovesView = computed(() => route.name === "moves");
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -189,6 +215,8 @@ const props = defineProps({
 const emit = defineEmits([
   "select-duplicates",
   "select-models",
+  "select-insights",
+  "select-moves",
   "select-character",
   "select-set",
   "import-finished",
@@ -236,7 +264,7 @@ const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
-// Which sections, projects and folders are open — hydrated from and written
+// Which sections, projects and folders are open - hydrated from and written
 // back to localStorage by the composable, so the shape of the sidebar survives
 // a reload. Section state (People/Sets, the Folders-tab headers) defaults to
 // expanded; the folder tree defaults to collapsed.
@@ -367,7 +395,7 @@ const sidebarCtxHeader = ref(null);
 // (auto-hide, dock mode).
 const sidebarCtxEmpty = ref(false);
 
-// Computed style for the main context menu — opens upward when near the bottom.
+// Computed style for the main context menu - opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
   const MENU_W = 165;
   const MENU_H = 190; // actual menu height estimate
@@ -389,7 +417,7 @@ const setCtxAppearanceStyle = computed(() => {
   }
   return { left: pos.left + "px", top: pos.top + "px" };
 });
-// Shared resource IDs — drives the share-link icon overlay on sidebar items
+// Shared resource IDs - drives the share-link icon overlay on sidebar items
 const sharedCharacterIds = ref(new Set());
 const sharedSetIds = ref(new Set());
 const sharedProjectIds = ref(new Set());
@@ -461,7 +489,7 @@ const importFoldersLoading = ref(false);
 const inDocker = ref(false);
 const referenceFoldersImageRoot = ref(null);
 // expandedFolderIds / referenceFoldersCollapsed / importFoldersCollapsed are
-// persisted — see useSidebarExpansion() at the top of this component.
+// persisted - see useSidebarExpansion() at the top of this component.
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
@@ -470,6 +498,33 @@ const dragOverReferenceTargetKey = ref(null);
 // Reference folder editor state
 const referenceFolderEditorOpen = ref(false);
 const referenceFolderEditorFolder = ref(null); // null = create, object = edit
+
+// v1.11 Phase 3: adding a new reference folder goes through the mapping
+// wizard instead of the plain editor - see `openReferenceFolderEditor` below.
+// The editor is unchanged for *editing* an already-registered one (sync
+// toggles, sidecar suffixes), which the wizard has no opinion about.
+const mappingStore = useFolderMappingStore();
+const librariesStore = useLibrariesStore();
+
+function _samePath(a, b) {
+  const norm = (p) => String(p || "").replace(/[\\/]+$/, "");
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
+// The pending mapping this library can act on. A `local_import` entry names
+// the library root it was saved for; shown or auto-opened against any OTHER
+// library it would offer to "set up" a library that is already set up - which
+// is exactly what happened when a stale entry met a re-attached vault. The
+// listing may not carry paths (a remote session), and then there is no way
+// to be sure, so nothing is offered.
+const pendingForThisLibrary = computed(() => {
+  const entry = mappingStore.pending;
+  if (!entry) return null;
+  if (entry.mode !== "local_import") return entry;
+  return _samePath(entry.path, librariesStore.activeLibrary?.path)
+    ? entry
+    : null;
+});
 const importFolderEditorOpen = ref(false);
 const importFolderEditorFolder = ref(null); // null = create, object = edit
 const addFolderTypeDialogOpen = ref(false);
@@ -495,13 +550,128 @@ function chooseFolderType(type) {
 }
 
 function openReferenceFolderEditor(rf = null) {
-  referenceFolderEditorFolder.value = rf ?? null;
+  if (rf === null) {
+    // Adding a folder is "Add a library" now: a folder indexed in place as
+    // the library's own storage. This used to open the mapping wizard in
+    // reference mode, which, pointed at the library root, registered the
+    // whole library as one reference folder.
+    openFolderMappingWizard();
+    return;
+  }
+  referenceFolderEditorFolder.value = rf;
   referenceFolderEditorOpen.value = true;
 }
 
 function closeReferenceFolderEditor() {
   referenceFolderEditorOpen.value = false;
   referenceFolderEditorFolder.value = null;
+}
+
+// The wizard's open state is the store's, so Settings › Libraries and the
+// empty library's "Choose a folder…" open this same mounted instance.
+function openFolderMappingWizard(resume = null) {
+  mappingStore.openWizard(resume);
+}
+
+async function folderMappingWizardCommitted() {
+  mappingStore.closeWizard();
+  await fetchReferenceFolders();
+  // A newly added folder may be active-but-unscanned, same as a plain add.
+  _startFolderStatusPoll();
+}
+
+// "Add a library"'s "Yes, build this library" saves a `local_import` entry
+// with `autoCommit` and switches the active library before this component
+// even exists - reopening this same wizard is therefore this session's ONLY
+// chance to run that commit, unlike the ordinary "Finish organising…" row
+// below, which only ever needs a click because its read is already kept
+// server-side either way. `mappingStore.pending` is left untouched by this
+// auto-open, so if the owner cancels, the row still offers it again.
+// Watched rather than checked once on mount: the library list that says
+// which root is active loads after this component does.
+let autoOpenedPendingMapping = false;
+watch(
+  () => pendingForThisLibrary.value,
+  (entry) => {
+    if (autoOpenedPendingMapping || isReadOnly.value) return;
+    if (entry?.mode !== "local_import") return;
+    autoOpenedPendingMapping = true;
+    openFolderMappingWizard(entry);
+  },
+  { immediate: true },
+);
+
+// The empty library, when its own folder is not empty. The desktop's first
+// run creates the vault in whatever folder was chosen, and the web flow's
+// "Add a library" only saves a pending entry for folders IT read, so a vault
+// made over loose pictures has nothing to bring the wizard up. The grid says
+// the library is empty; this asks the server what is on disk and opens the
+// same wizard the sidebar's row would, against the library root, as a
+// `local_import` with no read yet. Once per page load, like the auto-open
+// above: a cancelled read is saved as pending and the row offers it again.
+// The grid asks twice in one tick (`library-empty`, then `library-loaded`),
+// and App.vue holds the telemetry question on the second answer, so every
+// caller gets the one in-flight offer rather than an instant "already
+// asked": settling before the wizard had opened is what let the question
+// through on a fresh desktop library.
+let loosePicturesOffer = null;
+function offerLoosePictures() {
+  if (isReadOnly.value || mappingStore.pending) return Promise.resolve();
+  loosePicturesOffer ??= _offerLoosePictures();
+  return loosePicturesOffer;
+}
+
+/**
+ * A folder read the desktop startup screen finished while the GPU runtime
+ * downloaded, carrying the read's own RESULT. The task id would not do: the
+ * task lives in the server's memory and the backend restarts onto the GPU
+ * runtime before the app loads, so asking for it answered "Task not found".
+ * Null in a browser, and on a desktop launch that had nothing to read.
+ */
+async function takeParkedFolderRead() {
+  const desktop =
+    typeof window !== "undefined" ? window.pixlstashDesktop : null;
+  if (!desktop?.takePendingMapping) return null;
+  try {
+    return (await desktop.takePendingMapping()) || null;
+  } catch (error) {
+    console.warn("Could not read the startup screen's folder read", { error });
+    return null;
+  }
+}
+
+async function _offerLoosePictures() {
+  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  const path = librariesStore.activeLibrary?.path;
+  if (!path || !librariesStore.canManage) return;
+  // On desktop the startup screen may have read this very folder already,
+  // alongside the runtime download. Resuming that read is the whole point of
+  // doing it there: the wizard opens on its questions instead of on a second
+  // progress bar over an empty grid.
+  const parked = await takeParkedFolderRead();
+  if (parked?.result && parked.path === path) {
+    autoOpenedPendingMapping = true;
+    openFolderMappingWizard({
+      path,
+      result: parked.result,
+      mode: "local_import",
+    });
+    return;
+  }
+  try {
+    const verdict = await inspectLibraryPath(path);
+    if (verdict?.picture_count > 0) {
+      // The read the wizard starts saves a pending entry, which the watch
+      // above would otherwise take as its cue to open the wizard again.
+      autoOpenedPendingMapping = true;
+      openFolderMappingWizard({ path, mode: "local_import" });
+    }
+  } catch (error) {
+    console.warn("Could not check the library folder for pictures", {
+      path,
+      error,
+    });
+  }
 }
 
 function pathParent(path) {
@@ -582,7 +752,7 @@ function closeImportFolderEditor() {
 }
 
 function showDockerRestartPrompt() {
-  // Informational outcome, not a decision — a notice, not a blocking dialog.
+  // Informational outcome, not a decision - a notice, not a blocking dialog.
   // Sticky (no auto-dismiss) because it asks the user to go and do something.
   noticeStore.push({
     level: "info",
@@ -606,7 +776,7 @@ async function referenceFolderSaved(savedFolder = null) {
       : "";
     // A partial outcome (some items may need attention) reads as `warning`;
     // a clean relocation is a plain success.
-    const relocationText = `Reference folder relocated — rewrote ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`;
+    const relocationText = `Reference folder relocated - rewrote ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`;
     if (issues) {
       noticeStore.warning(relocationText, { key: "reference-relocated" });
     } else {
@@ -1005,7 +1175,7 @@ async function _pollFolderStatus() {
       _stopFolderStatusPoll();
     }
   } catch {
-    // Ignore transient errors — just try again next tick.
+    // Ignore transient errors - just try again next tick.
   }
 }
 
@@ -1027,7 +1197,7 @@ onBeforeUnmount(() => _stopFolderStatusPoll());
 
 function selectFoldersTab() {
   // Stateless tab switch: only change which list the sidebar shows. Do NOT
-  // emit select-* / navigate / clear the grid's selection — switching a tab
+  // emit select-* / navigate / clear the grid's selection - switching a tab
   // must leave the current view intact so the user can drag pictures from it
   // onto entries in this tab.
   sidebarPrimaryTab.value = "folders";
@@ -1271,9 +1441,7 @@ function openProjectSubMenu(section, event, focusFirst = false) {
   projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
   projectMenuSection.value = section;
   if (focusFirst) {
-    nextTick(() =>
-      focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0),
-    );
+    nextTick(() => focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0));
   }
 }
 
@@ -1489,7 +1657,7 @@ const sortedProjects = computed(() =>
 
 // Auto-expand projects the first time they appear in the tree, except the ones
 // the user collapsed in an earlier session. This keeps projects open by default
-// without preventing a manual collapse — or undoing a remembered one — and
+// without preventing a manual collapse - or undoing a remembered one - and
 // forgets projects that no longer exist.
 watch(
   () => sortedProjects.value.map((p) => p.id),
@@ -1731,8 +1899,8 @@ const dateFormatModel = computed({
 });
 
 const themeModeModel = computed({
-  get: () => userPrefsStore.themeMode ?? "light",
-  set: (value) => userPrefsStore.setThemeMode(value ?? "light"),
+  get: () => userPrefsStore.themeMode ?? "dark",
+  set: (value) => userPrefsStore.setThemeMode(value ?? "dark"),
 });
 
 const showKeyboardHintModel = computed({
@@ -1771,7 +1939,7 @@ const sidebarWidthModel = computed({
 });
 
 // Live width while dragging (null when not dragging). Kept local so a drag does
-// not emit/persist on every frame — we commit once on pointer-up.
+// not emit/persist on every frame - we commit once on pointer-up.
 const sidebarDragWidth = ref(null);
 
 // Below 150px the expanded sidebar is too tight for the per-entry image counts;
@@ -1965,7 +2133,7 @@ function selectCharacter(id, label = null, event = null) {
   const currentIds = new Set(selectedCharacterIdSet.value);
 
   if (currentIds.size === 0) {
-    // Nothing selected yet — treat as plain click
+    // Nothing selected yet - treat as plain click
     const singleChar0 = characters.value.find((c) => c.id === numericId);
     const charProjectId0 = singleChar0?.project_id ?? null;
     emit("select-set", null);
@@ -2291,7 +2459,7 @@ function openSidebarCtxMenu(type, item, event) {
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
-  // Same treatment for the header/empty targets — reset up front so the legacy
+  // Same treatment for the header/empty targets - reset up front so the legacy
   // per-item branches below never have to clear them.
   sidebarCtxHeader.value = null;
   sidebarCtxEmpty.value = false;
@@ -2410,7 +2578,7 @@ function closeSidebarCtxMenu() {
   setCtxColorMenuOpen.value = false;
 }
 
-// True when the Scrapheap holds nothing to empty — drives the disabled state of
+// True when the Scrapheap holds nothing to empty - drives the disabled state of
 // the context-menu item (a confirm on an empty heap is a dead-end affordance).
 // The sidebar row already owns this count, so we read it here rather than reach
 // into the grid's `scrapheapEmptyDisabled`.
@@ -2430,7 +2598,7 @@ function emptyScrapheapFromCtx() {
 
 // "Suggest more pictures of <person>" (#636): ranks the whole library against
 // this person's reference faces so their un-tagged pictures can be assigned in
-// one action. Deliberately does NOT select the person first — the search spans
+// one action. Deliberately does NOT select the person first - the search spans
 // the library, and narrowing the view to what is already assigned would hide
 // every result it is meant to find.
 function suggestPicturesForCharacterFromCtx(character) {
@@ -2524,7 +2692,7 @@ const SET_LOCK_REASON =
 // the collapsed-dock/flyout variants). Single-sourced so every set-row surface
 // reads identically.
 const SET_LOCKED_ROW_TITLE =
-  "Locked — this set is read-only. Right-click and choose Unlock set to edit it.";
+  "Locked - this set is read-only. Right-click and choose Unlock set to edit it.";
 
 async function shareResource(resourceType, resourceId, label) {
   closeSidebarCtxMenu();
@@ -2559,7 +2727,7 @@ function createCharacter() {
 // target (set_id / character_id) is threaded into the import staging session
 // (openStagingSession), and PictureImportTask associates every imported picture
 // on commit. The async streaming-staging contract returns no per-file
-// results[], so there is nothing to associate client-side here — just re-emit.
+// results[], so there is nothing to associate client-side here - just re-emit.
 function handleImportFinished(payload) {
   emit("import-finished", payload);
 }
@@ -2625,7 +2793,7 @@ function showNotice(
 
 function dragOverSetItem(setId, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
-  // projects — that drag is not an image assignment.
+  // projects - that drag is not an image assignment.
   if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures", "files"]);
   if (verdict === "ignore") return;
@@ -2645,16 +2813,19 @@ function isCountSelected(id) {
 
 /**
  * Whether a selection-driven row may render as active at all. The Duplicates
- * view and the model shelf are addressed by ROUTE, not by the selection
- * system, so while either is open
+ * view, the model shelf and "About your library" are addressed by ROUTE, not
+ * by the selection system, so while any of them is open
  * the underlying selection (kept so back-navigation restores it) must yield
- * the highlight — otherwise the sidebar shows two active destinations. A live
- * folder filter suppresses the same rows for the same reason, so the two
- * guards travel together.
+ * the highlight - otherwise the sidebar shows two active destinations. A live
+ * folder filter suppresses the same rows for the same reason, so the guards
+ * travel together.
  */
 const selectionOwnsHighlight = computed(
   () =>
-    !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
+    !hasFolderFilter.value &&
+    !isDuplicatesView.value &&
+    !isModelsView.value &&
+    !isInsightsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -2838,7 +3009,7 @@ async function fetchCharacterThumbnail(characterId) {
   try {
     // No cache-buster: a fresh `?cb=` per call re-downloaded every character
     // thumbnail on every sidebar refresh, against an already-expensive route
-    // (#651). Freshness is the *response's* job instead — the route sends
+    // (#651). Freshness is the *response's* job instead - the route sends
     // `Cache-Control: private, no-cache` with an ETag and answers a conditional
     // request with a 304, so the browser revalidates every time but transfers
     // bytes only when the thumbnail actually changed. Re-adding a buster here
@@ -2904,7 +3075,7 @@ async function fetchProjects() {
 }
 
 async function fetchPictureSets() {
-  // Always fetch all sets — in the flat project tree each project filters
+  // Always fetch all sets - in the flat project tree each project filters
   // its own sets client-side, so we must not scope this call to a single project.
   const sets = await entityLists.refresh("sets");
   entityNames.mergeSetNames(sets);
@@ -3084,12 +3255,12 @@ async function handleDeleteSet() {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
-  // An entity (set/character) is being moved between projects — that drop is
+  // An entity (set/character) is being moved between projects - that drop is
   // handled by the project header / sub-section zones, not by this image-drop
   // handler. Bail out so we don't try to parse it as image-drag data.
   if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
-  // file-import path — browsers also populate dataTransfer.files for <img> drags.
+  // file-import path - browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
     event?.dataTransfer?.types?.includes("application/json");
   if (
@@ -3144,7 +3315,7 @@ async function handleDropOnSet(setId, event) {
 
 function handleDragOverCharacter(id, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
-  // projects — that drag is not an image assignment.
+  // projects - that drag is not an image assignment.
   if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures", "faces", "files"]);
   if (verdict === "ignore") return;
@@ -3162,7 +3333,7 @@ const dragOverProjectId = ref(null);
 
 function handleDragOverProject(id, event) {
   // Suppress the picture-drop highlight while an entity (character/set) is
-  // being dragged between projects — that drag is handled by the project
+  // being dragged between projects - that drag is handled by the project
   // header's entity-move zone (onProjectHeaderDrop), not by a picture assign.
   if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures"]);
@@ -3294,7 +3465,7 @@ function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
 
 async function onProjectDrop(projectId, event) {
   dragOverProjectId.value = null;
-  // An entity (character/set) is being moved between projects — that drop is
+  // An entity (character/set) is being moved between projects - that drop is
   // handled by onProjectHeaderDrop, not this picture-assign handler. Bail out
   // so we don't try to parse it as image-drag data (and log a spurious error).
   if (draggingEntityKind.value) return;
@@ -3306,7 +3477,7 @@ async function onProjectDrop(projectId, event) {
     // Picture↔Project is many-to-many (PictureProjectMember); membership is
     // created via the batch /pictures/project endpoint with mode "add".
     // (Patching a picture's direct project_id column does NOT create the
-    // membership the project view queries — that returns 200 but shows nothing.)
+    // membership the project view queries - that returns 200 but shows nothing.)
     await setPicturesProject(imageIds, projectId, {
       mode: "add",
     });
@@ -3331,11 +3502,11 @@ async function onProjectDrop(projectId, event) {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
-  // An entity (character/set) is being moved between projects — handled by the
+  // An entity (character/set) is being moved between projects - handled by the
   // project header / sub-section drop zones, not by this image-drop handler.
   if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
-  // file-import path — browsers also populate dataTransfer.files for <img> drags.
+  // file-import path - browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
     event?.dataTransfer?.types?.includes("application/json");
   if (
@@ -3445,7 +3616,7 @@ function handleDropOnCharacter(payload) {
 async function characterSaved() {
   if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
     // New character was created, increment nextCharacterNumber. The row itself
-    // comes from the refetch below — the shared list is never written locally.
+    // comes from the refetch below - the shared list is never written locally.
     nextCharacterNumber.value++;
   }
   await fetchCharacters(); // Refresh characters
@@ -3565,6 +3736,15 @@ onMounted(() => {
     _origCleanup();
     document.removeEventListener("mousedown", handleProjectMenuOutsideClick);
   };
+});
+
+// The "screen on next start" half of Phase 5's review (release plan §4): one
+// GET on mount, so a backlog left over from while PixlStash was closed shows
+// up the moment the sidebar renders rather than waiting for the next scan's
+// WebSocket nudge. Read-only sessions never call this - GET /moves/pending is
+// owner-only and the row it would feed is hidden for them regardless.
+onMounted(() => {
+  if (!isReadOnly.value) movesStore.fetchPending();
 });
 
 function onSidebarCtxOutside(event) {
@@ -3689,7 +3869,7 @@ watch(projectViewMode, () => {
   if (_initializing) return;
   // Stateless tabs: switching the Global ↔ Project mode is a sidebar-display
   // operation only. It changes which list of entries the sidebar renders but
-  // must NOT touch the grid — the grid view follows the route (the single
+  // must NOT touch the grid - the grid view follows the route (the single
   // source of truth), driven only by explicit entry clicks. We therefore do
   // NOT emit update:project-view-mode here. Re-fetching the sets is purely to
   // populate the sidebar's own scoped list (all sets in global, project-scoped
@@ -3732,7 +3912,7 @@ watch(
   () => viewStore.activeFolderKey,
   async (newKey, oldKey) => {
     if (!newKey) {
-      // Route left a folder view — clear the sidebar's folder highlight.
+      // Route left a folder view - clear the sidebar's folder highlight.
       if (oldKey && selectedFolderKey.value === oldKey) {
         selectedFolderKey.value = null;
         selectedFolderReferenceId.value = null;
@@ -3908,7 +4088,7 @@ async function moveSetToProject(setId, projectId) {
   }
 }
 
-// Project header — accepts both characters and sets.
+// Project header - accepts both characters and sets.
 function onProjectHeaderDragOver(projectId, event) {
   if (!draggingEntityKind.value) return;
   event.preventDefault();
@@ -3929,7 +4109,7 @@ function onProjectHeaderDrop(projectId) {
   else if (kind === "set") moveSetToProject(id, projectId);
 }
 
-// People area — accepts only characters.
+// People area - accepts only characters.
 function onProjectPeopleDragOver(projectId, event) {
   if (draggingEntityKind.value !== "character") return;
   event.preventDefault();
@@ -3949,7 +4129,7 @@ function onProjectPeopleDrop(projectId) {
   }
 }
 
-// Sets area — accepts only picture sets.
+// Sets area - accepts only picture sets.
 function onProjectSetsDragOver(projectId, event) {
   if (draggingEntityKind.value !== "set") return;
   event.preventDefault();
@@ -3984,6 +4164,17 @@ function openCurrentSelectionEditor() {
 defineExpose({
   refreshSidebar,
   openSettingsDialog,
+  // Reached from the empty library's "Choose a folder…", which is the first
+  // thing pointing anyone at reference folders - they have always worked and
+  // were a sidebar accessory nobody was sent to.
+  //
+  // The reference editor DIRECTLY, not `openAddFolderTypeDialog`. That chooser
+  // offers "Import folder - watch for new files and import them
+  // automatically", which copies files in; the button that gets here promises
+  // "Nothing is moved" one screen earlier, so routing through the chooser would
+  // have the release's headline claim falsified by the next click.
+  openReferenceFolderEditor,
+  offerLoosePictures,
   startLocalImport,
   currentProjectId,
   openCurrentSelectionEditor,
@@ -4055,6 +4246,12 @@ defineExpose({
     @saved="referenceFolderSaved"
     @deleted="referenceFolderDeleted"
     @relocate="openReferenceFolderRelocateDialog"
+  />
+  <FolderMappingWizard
+    :open="mappingStore.wizardOpen"
+    :resume="mappingStore.wizardResume"
+    @close="mappingStore.closeWizard()"
+    @committed="folderMappingWizardCommitted"
   />
   <FolderEditor
     type="import"
@@ -4216,7 +4413,7 @@ defineExpose({
       @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
     >
       <div class="sidebar-brand-left">
-        <!-- The logo is a real outbound link — let its native right-click menu
+        <!-- The logo is a real outbound link - let its native right-click menu
              (copy/open link) through and don't open the sidebar's view menu. -->
         <a
           href="https://pikselkroken.github.io/pixlstash/"
@@ -4416,9 +4613,7 @@ defineExpose({
           class="sidebar-collapsed-project-submenu"
           role="menu"
           :aria-label="
-            projectMenuSection === 'projects'
-              ? 'Projects'
-              : 'Library folders'
+            projectMenuSection === 'projects' ? 'Projects' : 'Library folders'
           "
           :style="{
             top: projectMenuSubPos.top + 'px',
@@ -5212,6 +5407,39 @@ defineExpose({
             </button>
           </div>
 
+          <!-- Moves in the dock: reachable whenever the queue holds anything
+               at all (movesStore.hasAnyPending), never shown-and-disabled the
+               way the three permanent destinations above are - see the
+               comment on isMovesView. The attention dot is narrower than the
+               row: an off_layout-only queue has nothing to decide, so it
+               earns the row (or its retention window would expire it unseen)
+               but not the dot. -->
+          <div
+            v-if="movesStore.hasAnyPending"
+            :class="['sidebar-collapsed-row', { active: isMovesView }]"
+          >
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{ active: isMovesView }"
+              :aria-current="isMovesView ? 'page' : undefined"
+              aria-label="Moves made outside PixlStash"
+              :title="
+                movesStore.hasPending
+                  ? `${movesStore.pendingCount} move(s) to review`
+                  : 'Moves already followed, nothing to decide'
+              "
+              @click="emit('select-moves')"
+            >
+              <v-icon>mdi-folder-move-outline</v-icon>
+              <span
+                v-if="movesStore.hasPending"
+                class="sidebar-collapsed-dedup-badge"
+                title="There are moves to review"
+              ></span>
+            </button>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -5323,6 +5551,24 @@ defineExpose({
               >
             </div>
             <div
+              v-if="pendingForThisLibrary"
+              class="sidebar-folder-row sidebar-mapping-resume-row"
+              :title="
+                pendingForThisLibrary.taskId
+                  ? 'The scan is kept - reopening this does not re-scan'
+                  : 'Reopening this starts scanning that folder'
+              "
+              @click="openFolderMappingWizard(pendingForThisLibrary)"
+            >
+              <v-icon size="15" class="sidebar-mapping-resume-icon"
+                >mdi-map-marker-path</v-icon
+              >
+              <span class="sidebar-mapping-resume-label">
+                Finish organising
+                {{ pendingForThisLibrary.label || pendingForThisLibrary.path }}…
+              </span>
+            </div>
+            <div
               v-for="rf in referenceFolders"
               v-show="!referenceFoldersCollapsed"
               :key="rf.id"
@@ -5421,7 +5667,7 @@ defineExpose({
                   class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
                   :title="
                     inDocker
-                      ? 'Mount error — check Docker volume'
+                      ? 'Mount error - check Docker volume'
                       : 'Folder not accessible'
                   "
                 >
@@ -5432,8 +5678,8 @@ defineExpose({
                   class="sidebar-folder-status-badge sidebar-folder-status--pending_mount"
                   :title="
                     inDocker
-                      ? 'Pending restart — restart server to mount'
-                      : 'Scan pending — will start automatically'
+                      ? 'Pending restart - restart server to mount'
+                      : 'Scan pending - will start automatically'
                   "
                 >
                   <v-icon size="12">mdi-clock-outline</v-icon>
@@ -5681,7 +5927,7 @@ defineExpose({
                  READ session, and hiding a feature there advertises a smaller
                  product than PixlStash is (`e2e/specs/read-only-features.spec.js`).
                  Every /models route is owner-only, so the row must be quiet as
-                 well as inert — it can carry no count and start no fetch
+                 well as inert - it can carry no count and start no fetch
                  (issue #1014). -->
             <div class="sidebar-all-pictures-row">
               <button
@@ -5700,6 +5946,33 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
+              </button>
+            </div>
+
+            <!-- Moves: a to-do queue, not a permanent destination, so it earns
+                 its row while the queue holds anything at all - including an
+                 off_layout-only backlog, which has nothing to decide but
+                 still has to be reachable before its retention window expires
+                 it unseen (see hasAnyPending's own comment). The count only
+                 ever names what needs a DECISION; an off_layout-only queue
+                 shows the row with no number, not a "0" that reads as empty. -->
+            <div
+              v-if="movesStore.hasAnyPending"
+              class="sidebar-all-pictures-row"
+            >
+              <button
+                type="button"
+                :class="['sidebar-list-item', { active: isMovesView }]"
+                :aria-current="isMovesView ? 'page' : undefined"
+                @click="emit('select-moves')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-folder-move-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Moves</span>
+                <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
+                  movesStore.pendingCount
+                }}</span>
               </button>
             </div>
 
@@ -5778,8 +6051,9 @@ defineExpose({
                     aria-label="Edit selected character"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
-                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
+                    <v-icon size="16">mdi-pencil</v-icon>
+                  </button>
                   <button
                     v-if="
                       !isReadOnly &&
@@ -5794,8 +6068,9 @@ defineExpose({
                     aria-label="Delete selected character"
                     @click.stop="deleteCharacter"
                     title="Delete selected character"
-                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
+                    <v-icon size="16">mdi-trash-can-outline</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly"
                     type="button"
@@ -5803,8 +6078,9 @@ defineExpose({
                     aria-label="Add character"
                     @click.stop="createCharacter"
                     title="Add character"
-                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
+                    <v-icon size="16">mdi-plus</v-icon>
+                  </button>
                 </div>
               </div>
               <div
@@ -5977,8 +6253,9 @@ defineExpose({
                     aria-label="Edit selected set"
                     @click.stop="openSetEditor(selectedSetObj)"
                     title="Edit selected set"
-                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
+                    <v-icon size="16">mdi-pencil</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly && selectedSetIdSet.size > 0"
                     type="button"
@@ -5990,8 +6267,9 @@ defineExpose({
                         ? `Delete ${selectedSetIdSet.size} selected sets`
                         : 'Delete selected set'
                     "
-                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
+                    <v-icon size="16">mdi-trash-can-outline</v-icon>
+                  </button>
                   <button
                     v-if="!isReadOnly"
                     type="button"
@@ -5999,8 +6277,9 @@ defineExpose({
                     aria-label="Create new set"
                     @click.stop="createSet"
                     title="Create new set"
-                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
+                    <v-icon size="16">mdi-plus</v-icon>
+                  </button>
                 </div>
               </div>
               <div v-if="!setsSectionCollapsed" class="sidebar-section-scroll">
@@ -6113,7 +6392,7 @@ defineExpose({
             </div>
           </template>
 
-          <!-- ══ PROJECTS tab content — flat tree ══ -->
+          <!-- ══ PROJECTS tab content - flat tree ══ -->
           <template v-if="projectViewMode === 'project'">
             <div v-if="projects.length === 0" class="sidebar-no-projects-empty">
               <v-icon size="52" class="sidebar-no-projects-icon"
@@ -6753,6 +7032,25 @@ defineExpose({
         </span>
       </div>
       <template v-if="sidebarCtxAllPictures">
+        <!-- "About your library" moved here from its own permanent sidebar
+             destination: it reads the whole library rather than acting on
+             All Pictures specifically, but All Pictures is the one row that
+             already means "the whole library" everywhere else in this
+             sidebar, so its context menu is where owners now find it. -->
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          :title="isReadOnly ? READ_ONLY_INSIGHTS_HINT : undefined"
+          @click="
+            emit('select-insights');
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-lightbulb-on-outline</v-icon
+          >
+          About your library
+        </button>
         <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"

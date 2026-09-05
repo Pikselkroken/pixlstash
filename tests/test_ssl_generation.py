@@ -161,7 +161,7 @@ class TestSslConfigPersistence:
 
     def test_existing_ssl_paths_stripped_when_ssl_off(self, tmp_path):
         """A config polluted with ssl paths from an older build (require_ssl
-        off) has them removed — they would never be read and just reappear."""
+        off) has them removed - they would never be read and just reappear."""
         import json
 
         path = str(tmp_path / "server-config.json")

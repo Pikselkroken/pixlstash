@@ -29,10 +29,10 @@ def insightface_app_cpu():
 @pytest.mark.parametrize(
     "width,height,description",
     [
-        (1, 512, "1×512 portrait — ratio 512, new_width = int(256/512) = 0"),
-        (512, 1, "512×1 landscape — ratio 1/512, new_height = int(256/512) = 0"),
-        (1, 300, "1×300 portrait — ratio 300, new_width = int(256/300) = 0"),
-        (1, 257, "1×257 — minimum ratio to trigger the bug"),
+        (1, 512, "1×512 portrait - ratio 512, new_width = int(256/512) = 0"),
+        (512, 1, "512×1 landscape - ratio 1/512, new_height = int(256/512) = 0"),
+        (1, 300, "1×300 portrait - ratio 300, new_width = int(256/300) = 0"),
+        (1, 257, "1×257 - minimum ratio to trigger the bug"),
     ],
 )
 def test_detect_faces_does_not_crash_on_extreme_aspect_ratio(
@@ -40,7 +40,7 @@ def test_detect_faces_does_not_crash_on_extreme_aspect_ratio(
 ):
     """detect_faces_in_images must not raise for extreme-aspect-ratio images."""
     img = np.zeros((height, width, 3), dtype=np.uint8)
-    # Should return a list with one (empty) inner list — no exception.
+    # Should return a list with one (empty) inner list - no exception.
     results = FaceExtractionTask.detect_faces_in_images(insightface_app_cpu, [img])
     assert len(results) == 1, f"Expected one result list for: {description}"
     assert isinstance(results[0], list), f"Expected a list of faces for: {description}"

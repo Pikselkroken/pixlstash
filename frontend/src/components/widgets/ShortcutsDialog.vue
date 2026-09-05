@@ -9,7 +9,7 @@ import {
 
 // The undo/redo chords differ per platform, so the table renders whatever the
 // hint helper reports rather than hard-coding Ctrl. Select-all differs the same
-// way — a macOS reader was being taught `Ctrl+A` for a chord their keyboard
+// way - a macOS reader was being taught `Ctrl+A` for a chord their keyboard
 // spells `⌘A`, and the shelf's own keycap now reports the platform.
 const undoKeyHintKeys = undoKeyHint();
 const redoKeyHintKeys = redoKeyHint();

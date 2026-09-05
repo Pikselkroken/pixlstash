@@ -140,7 +140,7 @@ class QualityUtils:
         deleted_ids = set(valid_ids) - existing_id_set
         for pid in deleted_ids:
             logger.warning(
-                "Skipping quality update for picture %s — picture was deleted.", pid
+                "Skipping quality update for picture %s - picture was deleted.", pid
             )
 
         surviving_ids = list(existing_id_set)
@@ -186,7 +186,7 @@ class QualityUtils:
         except (IntegrityError, StaleDataError):
             session.rollback()
             logger.warning(
-                "Quality update rolled back for batch of %s pictures — concurrent deletion likely.",
+                "Quality update rolled back for batch of %s pictures - concurrent deletion likely.",
                 len(pics),
             )
             return []

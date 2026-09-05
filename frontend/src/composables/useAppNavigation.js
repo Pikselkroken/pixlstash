@@ -13,6 +13,7 @@ import {
   SCRAPHEAP_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
 } from "../stores/useViewStore";
+import { markEnd, markStart } from "../utils/perfMarks";
 
 /**
  * The app's navigation handlers: the sidebar's entry clicks, and the route
@@ -77,6 +78,9 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   }
 
   async function handleSelectCharacter(payload) {
+    // Times a sidebar click through to the DOM update it causes (nextTick),
+    // i.e. click-to-visible-response for the app's most common navigation.
+    markStart("pixlstash:interaction-navigate");
     selectionStore.selectedFolderFilter = null;
     const {
       id: charId,
@@ -94,6 +98,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     if (charId == null) {
       selectionStore.selectedCharacter = null;
       await nextTick();
+      markEnd("pixlstash:interaction-navigate");
       return;
     }
     if (label) {
@@ -126,6 +131,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     await nextTick();
     onNavigated?.();
     pushRouteForCurrentSelection();
+    markEnd("pixlstash:interaction-navigate");
   }
 
   async function handleSelectSet(payload) {
@@ -213,7 +219,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   }
 
   // ============================================================
-  // ROUTING — URL ↔ Store sync
+  // ROUTING - URL ↔ Store sync
   // ============================================================
 
   /**
@@ -266,8 +272,18 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         });
         return;
       }
-      // Path-based subfolder — no dedicated route; fall through to all-pictures.
-      pushAppRoute({ name: "all-pictures" });
+      // A folder payload with no id of any kind - what an "About your
+      // library" finding points at. It travels as `?path=` rather than being
+      // dropped, and `useViewStore.parseFolderPath` reads it back.
+      //
+      // NOT the sidebar's subfolder case: `FolderTreeNode.vue` requires
+      // `rfId`, so a subfolder click takes the ref-folder branch above and its
+      // path is still lost from the URL. Fixing that is a change to the folder
+      // tree's route restoration, not to this branch.
+      pushAppRoute({
+        name: "all-pictures",
+        query: f.pathPrefix ? { path: f.pathPrefix } : {},
+      });
       return;
     }
 
@@ -365,7 +381,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
   // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
-  // be imported — the same destination, a second tab — so the sidebar's Models
+  // be imported - the same destination, a second tab - so the sidebar's Models
   // entry stays the current page across both and no second destination lights.
   // A READ session is never showing it: the shelf lists the owner's machine and
   // every route behind it is owner-only, so mounting it would only fire requests
@@ -383,21 +399,30 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   //
   // A watcher and not a router guard. The router's first navigation resolves at
   // mount, before `Root.vue` has fetched the session context, and for this
-  // session nothing ever navigates a second time — so a guard would see "not
+  // session nothing ever navigates a second time - so a guard would see "not
   // read-only" on exactly the boot it exists to catch, and never run again.
   //
   // It writes no selection or project state, so `useViewStore` remains the only
   // route→store watcher; this one only navigates, which is this file's job.
   //
   // `replace` and not `push`, so Back leaves the app rather than returning to
-  // the bounce — and through the same token-preserving path every other
+  // the bounce - and through the same token-preserving path every other
   // navigation here uses, because the ONLY session that reaches this line is
   // one whose credential lives in `?token=`. Dropping it would leave a share
   // visitor on a URL that 401s the moment they reload or bookmark it.
+  // `/insights` and `/moves` bounce for the same reason and through the same
+  // watcher: GET /insights and GET /moves/pending are both owner-only, so a
+  // READ session that pasted either URL would mount a screen whose only
+  // request is a guaranteed 403.
   watch(
     [isReadOnly, () => route.name],
     ([readOnly, name]) => {
-      if (readOnly && MODEL_SHELF_ROUTES.includes(name))
+      if (
+        readOnly &&
+        (MODEL_SHELF_ROUTES.includes(name) ||
+          name === "insights" ||
+          name === "moves")
+      )
         replaceAppRoute({ name: "all-pictures" });
     },
     { immediate: true },
@@ -406,6 +431,76 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   /** Open the model shelf. */
   function handleSelectModels() {
     pushAppRoute({ name: "models" });
+  }
+
+  // "About your library" is a destination for the same reason Duplicates is: it
+  // shows findings rather than pictures, so it has no selection to express.
+  //
+  // Gated on `isReadOnly` exactly like the shelf, and for the reason in issue
+  // #1014: GET /insights is owner-only, so mounting the screen for a READ
+  // session would only fire a request the credential can never satisfy. The
+  // predicate is gated rather than the component, so the one place that
+  // answers "is this showing" stays the one place that decides.
+  const isInsightsView = computed(
+    () => !isReadOnly.value && route.name === "insights",
+  );
+
+  /** Open the read-only findings about this library. */
+  function handleSelectInsights() {
+    pushAppRoute({ name: "insights" });
+  }
+
+  // Moves is a destination for the same reason Insights is: it reports on the
+  // library rather than expressing a selection within it, gated on
+  // `isReadOnly` for the same reason (GET /moves/pending is owner-only,
+  // issue #1014's pattern).
+  const isMovesView = computed(
+    () => !isReadOnly.value && route.name === "moves",
+  );
+
+  /** Open the reconciliation queue for moves made outside PixlStash. */
+  function handleSelectMoves() {
+    pushAppRoute({ name: "moves" });
+  }
+
+  /**
+   * Act on one finding's button: open the tool it names, on the pictures it
+   * counted. The `kind` vocabulary is the backend's (`routes/insights.py`).
+   *
+   * `settings` is not handled here - the settings dialog is not a route, so
+   * App.vue takes that one straight to `openSettingsDialog`.
+   *
+   * @param {{kind: string, path?: string, folder_label?: string}} action
+   */
+  function handleInsightAction(action) {
+    if (!action) return;
+    if (
+      action.kind === "unassigned_in_folder" ||
+      action.kind === "unassigned_with_face"
+    ) {
+      const query = {};
+      if (action.path) query.path = action.path;
+      // The face half of the unnamed-faces finding: unassigned AND holding a
+      // face is exactly the set that finding counted.
+      if (action.kind === "unassigned_with_face") query.face = "with_face";
+      pushAppRoute({
+        name: "character",
+        params: { id: UNASSIGNED_PICTURES_ID },
+        query,
+      });
+      return;
+    }
+    if (action.kind === "duplicates_in_folder" && action.path) {
+      handleSelectDuplicates({
+        type: "folder",
+        id: action.path,
+        label: action.folder_label || action.path,
+        icon: "mdi-folder-outline",
+      });
+      return;
+    }
+    // Two folders with no usable common ancestor: the whole queue, unscoped.
+    if (action.kind === "duplicates") handleSelectDuplicates({});
   }
 
   /**
@@ -436,7 +531,12 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   return {
     isDuplicatesView,
     isModelsView,
+    isInsightsView,
+    isMovesView,
     handleSelectModels,
+    handleSelectInsights,
+    handleSelectMoves,
+    handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,
     handleSelectFolder,

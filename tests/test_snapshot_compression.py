@@ -12,7 +12,7 @@ from pixlstash.utils.snapshot_compression import (
 
 
 def _sample_bytes() -> bytes:
-    # A header of random bytes plus a long compressible run — exercises both
+    # A header of random bytes plus a long compressible run - exercises both
     # that compression runs and that the round-trip is byte-exact.
     return os.urandom(2048) + (b"pixlstash" * 20000)
 

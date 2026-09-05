@@ -1,4 +1,4 @@
-// Pictures resource — /pictures.
+// Pictures resource - /pictures.
 //
 // The largest resource in the app. Seeded here with the reads whose call sites
 // have already migrated; the counts, scores, thumbnails, and export endpoints
@@ -30,6 +30,43 @@ export function pictureThumbnailUrl(id, { version } = {}) {
   // to be spelled out here rather than left for axios to prepend.
   return appendShareToken(
     `${API_BASE_URL}/pictures/thumbnails/${id}.webp${query}`,
+  );
+}
+
+/**
+ * Read a picture's thumbnail as image BYTES.
+ *
+ * The one caller so far is the model shelf's thumbnail verb, and the shape of
+ * that verb is why this exists: `POST /models/{id}/icon` takes bytes and stores
+ * them content-addressed beside the hub, deliberately with no route that
+ * resolves a picture id server-side - the icon is a COPY, so it cannot break
+ * when the picture is deleted or the library is switched
+ * (`services/model_icons.py`). So choosing a library picture means sending its
+ * pixels, and the thumbnail is the right pixels to send: it is already WebP, it
+ * is generated on demand rather than having to have been made in advance, and
+ * its 384px short edge is both what an icon needs and comfortably inside the
+ * store's 2 MB ceiling.
+ *
+ * **It can still 404**, because "on demand" means generated FROM the file: the
+ * route refuses when the source is missing, unreachable or undecodable - an
+ * unplugged drive is a state this app models. The caller must have an answer
+ * for that; it is not a read that always succeeds.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string|number} [options.cacheBuster] - forces a fresh read past the
+ *   route's one-hour `max-age`. Worth passing when the bytes are about to be
+ *   STORED rather than merely shown: an hour-old thumbnail is a fine tile and a
+ *   wrong thing to keep.
+ * @returns {Promise<Blob>} the WebP bytes.
+ */
+export async function getPictureThumbnailBlob(id, { cacheBuster } = {}) {
+  const query =
+    cacheBuster == null ? "" : `?cb=${encodeURIComponent(cacheBuster)}`;
+  return unwrap(
+    apiClient.get(`/pictures/thumbnails/${id}.webp${query}`, {
+      responseType: "blob",
+    }),
   );
 }
 
@@ -327,13 +364,13 @@ export async function deletePictures(pictureIds) {
  *
  * The file's EXIF orientation tag is rewritten and the bitmap is left alone, so
  * this is not a new picture and nothing is stacked: the same id keeps the same
- * URL and only its bytes move. Owner-only — a share or otherwise scoped token
+ * URL and only its bytes move. Owner-only - a share or otherwise scoped token
  * cannot call it at all.
  *
  * The response splits what happened three ways and a caller must read all
  * three: `rotated_picture_ids` (done, thumbnails will regenerate),
  * `unsupported_picture_ids` (the format cannot carry a rotation every renderer
- * agrees on — Filters > Rotate still makes a copy), and `skipped_picture_ids`
+ * agrees on - Filters > Rotate still makes a copy), and `skipped_picture_ids`
  * (a locked set, or the file is missing). `batch_id` groups the whole call as
  * one undo step.
  *
@@ -516,6 +553,33 @@ export async function resetPictureDescription(
 }
 
 /**
+ * Re-run tagging on many pictures in one request. The backend marks them and
+ * the background tagger batches them; nothing is queued per picture.
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [body] - `{ model }` to pick a tagger.
+ * @returns {Promise<Object>} the response body: `count` marked.
+ */
+export async function resetPicturesTags(pictureIds, body = {}) {
+  return unwrap(apiClient.post(
+    "/pictures/reset_tags",
+    { ...body, picture_ids: pictureIds },
+  ));
+}
+
+/**
+ * Re-run captioning on many pictures in one request; see `resetPicturesTags`.
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [body] - `{ model }` to pick a captioner.
+ * @returns {Promise<Object>} the response body: `count` marked.
+ */
+export async function resetPicturesDescriptions(pictureIds, body = {}) {
+  return unwrap(apiClient.post(
+    "/pictures/reset_description",
+    { ...body, picture_ids: pictureIds },
+  ));
+}
+
+/**
  * Remove tags the model could not possibly be right about.
  * @param {Array<number|string>} pictureIds
  * @param {Object} filters - the scope the caller is viewing.
@@ -593,6 +657,23 @@ export async function startExport(query = "") {
       ? `/pictures/export?${query}`
       : `/pictures/export`,
   ));
+}
+
+/**
+ * Start a folder export of a picture selection or filter scope (#291).
+ *
+ * The local-owner counterpart to {@link startExport}: instead of packaging a
+ * ZIP to download, the server writes the pictures straight into a folder on
+ * its own disk (`destination`, part of `query`) and opens it in the host
+ * file manager once done. Poll the same {@link getExportStatus}; a completed
+ * folder export never gets a `download_url`.
+ *
+ * @param {string} query - pre-encoded selection/filter query string,
+ *   including `destination`.
+ * @returns {Promise<Object>} the response body, whose `task_id` drives polling.
+ */
+export async function startFolderExport(query) {
+  return unwrap(apiClient.post(`/pictures/export/folder?${query}`));
 }
 
 /**

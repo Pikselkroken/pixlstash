@@ -81,7 +81,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
   const effectivePinned = computed(() =>
     sidebarForcedHidden.value ? false : sidebarPinned.value,
   );
-  // Width used by the layout — forced to full on mobile.
+  // Width used by the layout - forced to full on mobile.
   // True while a reference/import folder is being scanned. The sidebar sets it
   // (it owns the folder lists); the grid reads it, so its empty state can say
   // "still scanning" instead of "nothing here".
@@ -107,8 +107,8 @@ export const useSidebarStore = defineStore("sidebar", () => {
   function setSidebarPinned(val) {
     sidebarPinned.value = !!val;
     saveSidebarPinned(sidebarPinned.value);
-    // When unpinning, keep it revealed — the pointer is still inside the sidebar
-    // — until the pointer leaves. When pinning, clear the transient reveal.
+    // When unpinning, keep it revealed - the pointer is still inside the sidebar
+    // - until the pointer leaves. When pinning, clear the transient reveal.
     autoRevealed.value = !sidebarPinned.value;
   }
 

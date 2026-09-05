@@ -258,7 +258,7 @@
               @keydown="onFieldKeydown"
             />
             <!-- The identical seed re-creates the identical image, which the
-                 importer dedupes into silence — flagged, not forbidden. -->
+                 importer dedupes into silence - flagged, not forbidden. -->
             <span v-if="seedIsOriginal" class="remix-seed-note remix-seed-note--warn">
               <v-icon size="14" class="remix-mode-icon">mdi-alert-outline</v-icon>
               same as original
@@ -302,14 +302,14 @@
 
 <script setup>
 /**
- * "Generate variants" — the Remix v1 entry point (v1.9 Lane D).
+ * "Generate variants" - the Remix v1 entry point (v1.9 Lane D).
  *
  * Two ways to make a variant of one picture, chosen from side-by-side radio
  * CARDS (stacked full-width they read as info boxes, not a choice); v1.11's
  * third mode (lock-replay: reproduce the original exactly) joins the row:
  *
- * - **template** — run a saved i2i workflow with a prompt and a seed.
- * - **recipe** — "same workflow, new seed": replay the executable ComfyUI
+ * - **template** - run a saved i2i workflow with a prompt and a seed.
+ * - **recipe** - "same workflow, new seed": replay the executable ComfyUI
  *   graph embedded in the source file. Offered only when the file actually
  *   carries one AND the server's pre-flight against the user's ComfyUI passes.
  *
@@ -318,7 +318,7 @@
  * and replaying it executes it on the owner's ComfyUI, bounded only by which
  * node packs are installed. So the confirm step names the node classes that
  * will run and says when the file came from outside this instance. When the
- * pre-flight could not run at all — ComfyUI unreachable — the dialog refuses
+ * pre-flight could not run at all - ComfyUI unreachable - the dialog refuses
  * outright: Generate is disabled in BOTH modes until "Check again" succeeds
  * (owner decision, 2026-07-29; the run would fail against a dead ComfyUI
  * anyway). The former run-unchecked acknowledgement is gone from this surface;
@@ -326,8 +326,8 @@
  * still refuses uninspected graphs without it.
  *
  * Deliberately absent: a strength/denoise slider. None of the shipped
- * templates exposes a denoise input — the Flux2 Klein edit graph samples from
- * an empty latent with the source entering as reference conditioning — so the
+ * templates exposes a denoise input - the Flux2 Klein edit graph samples from
+ * an empty latent with the source entering as reference conditioning - so the
  * control would move nothing. A slider that silently does nothing is worse
  * than no slider: it teaches a false model of cause and effect.
  *
@@ -366,8 +366,8 @@ const props = defineProps({
 const emit = defineEmits(["close", "run", "use-batch"]);
 
 const MAX_SEED_32 = 4294967295;
-// Recipe replay needs more than 32 bits — the shipped Flux2 Klein template's
-// own noise_seed is 432262096973502 — but the ceiling offered here is
+// Recipe replay needs more than 32 bits - the shipped Flux2 Klein template's
+// own noise_seed is 432262096973502 - but the ceiling offered here is
 // MAX_SAFE_INTEGER, not ComfyUI's 2^64-1: above 2^53 a JavaScript number
 // cannot hold the value exactly, so the field would quietly round whatever the
 // user typed and pin a different seed than the one on screen. The API still
@@ -415,7 +415,7 @@ const submitError = ref("");
 
 const promptRef = ref(null);
 const generateRef = ref(null);
-/** The element focus returns to on close — never document.body. */
+/** The element focus returns to on close - never document.body. */
 let returnFocusEl = null;
 let loadGeneration = 0;
 
@@ -442,7 +442,7 @@ const maxSeed = computed(() =>
 /**
  * The seed the original run actually used: the recipe route's `seed` (the
  * sampler's own widget), falling back to the first patchable seed input.
- * `null` — never 0, which is a legal seed — when there is nothing to read.
+ * `null` - never 0, which is a legal seed - when there is nothing to read.
  */
 const originalSeed = computed(() => {
   const info = recipe.value;
@@ -477,7 +477,7 @@ const incrementedSeed = computed(() => {
   return Math.min(maxSeed.value, Math.max(0, originalSeed.value + delta));
 });
 
-/** Flag — not forbid — a fixed seed that would re-create the original exactly.
+/** Flag - not forbid - a fixed seed that would re-create the original exactly.
  * Recipe mode only: a template run with the original's seed is a different
  * graph, so nothing identical comes out of it. */
 const seedIsOriginal = computed(
@@ -497,7 +497,7 @@ const copyWorkflowLabel = computed(
   () =>
     ({
       copying: "Copying…",
-      copied: "Copied — paste into ComfyUI",
+      copied: "Copied - paste into ComfyUI",
       failed: "Copy failed",
     })[copyState.value] || "Copy workflow",
 );
@@ -520,7 +520,7 @@ async function copyWorkflowToClipboard() {
     liveMessage.value = "Workflow copied. Paste it into ComfyUI.";
   } catch (err) {
     // Clipboard writes fail on an insecure origin, and the fetch can 404 on a
-    // file whose chunk is unreadable. Either way say so — a button that
+    // file whose chunk is unreadable. Either way say so - a button that
     // silently does nothing reads as a broken button.
     copyState.value = "failed";
     liveMessage.value =
@@ -587,15 +587,15 @@ const comfyuiUnreachable = computed(
  * The recipe row has four states, not two. One computed rather than a pair of
  * booleans, because a pair drifts out of sync:
  *
- * - `loading`     — the check is in flight.
- * - `blocked`     — no graph, no seed, or a pre-flight that ran and FAILED.
+ * - `loading`     - the check is in flight.
+ * - `blocked`     - no graph, no seed, or a pre-flight that ran and FAILED.
  *                   The row is aria-disabled: the option genuinely cannot be
  *                   chosen.
- * - `unreachable` — the pre-flight could not run at all. The row stays
+ * - `unreachable` - the pre-flight could not run at all. The row stays
  *                   selectable (marking it disabled would be a lie to
  *                   assistive tech and would hide "Check again"), but Generate
  *                   is disabled in both modes until a re-check succeeds.
- * - `ready`       — checked and clean.
+ * - `ready`       - checked and clean.
  */
 const recipeState = computed(() => {
   if (recipeLoading.value) return "loading";
@@ -712,7 +712,7 @@ const promptPlaceholder = computed(() =>
 
 const canSubmit = computed(() => {
   if (submitting.value || !props.image?.id) return false;
-  // No contact with ComfyUI, no generation — in either mode.
+  // No contact with ComfyUI, no generation - in either mode.
   if (comfyuiUnreachable.value) return false;
   if (selectedMode.value === "recipe") return recipeState.value === "ready";
   if (selectedMode.value === "template") return Boolean(selectedWorkflow.value);
@@ -723,7 +723,7 @@ watch(prompt, (next) => {
   if (next !== description.value) promptTouched.value = true;
 });
 
-// Announce a bad or unchecked pre-flight once, politely — the user may be
+// Announce a bad or unchecked pre-flight once, politely - the user may be
 // mid-prompt and must not be interrupted. A clean result announces nothing,
 // because a success that changes nothing the user asked about is noise.
 watch(recipeState, (state) => {
@@ -778,8 +778,8 @@ async function onOpen() {
     loadDescription(generation, imageId),
   ]);
   if (!isCurrentLoad(generation, imageId)) return;
-  // Fixed defaults to the seed the original run used — flagged as "same as
-  // original" until edited — rather than whatever a previous dialog pinned.
+  // Fixed defaults to the seed the original run used - flagged as "same as
+  // original" until edited - rather than whatever a previous dialog pinned.
   if (originalSeed.value != null) seed.value = originalSeed.value;
   selectedMode.value = resolveInitialMode();
   focusedModeIndex.value = Math.max(
@@ -810,7 +810,7 @@ function normaliseDescription(value) {
 
 /**
  * The grid hands this dialog its own row object, and the grid LISTING carries
- * no `description` field at all — so without this fetch the prompt claimed
+ * no `description` field at all - so without this fetch the prompt claimed
  * "this image has no description yet" for pictures that plainly have one.
  * Only runs when the prop didn't already provide a usable description.
  */
@@ -849,7 +849,7 @@ function focusInitial() {
     return;
   }
   // A disabled Generate is not focusable and focus would fall to document.body,
-  // which this dialog never allows. Land on the selected mode row instead — the
+  // which this dialog never allows. Land on the selected mode row instead - the
   // reason Generate is disabled is written on it.
   if (!canSubmit.value) {
     modeEls.value[focusedModeIndex.value]?.focus?.();
@@ -913,7 +913,7 @@ function resetRecipeDisclosure() {
   copyState.value = "idle";
 }
 
-/** Retry the pre-flight — the only way out of the unreachable refusal. */
+/** Retry the pre-flight - the only way out of the unreachable refusal. */
 async function recheckRecipe() {
   if (recipeLoading.value) return;
   // Cleared first so an unchanged outcome still re-announces.
@@ -965,7 +965,7 @@ function resetPrompt() {
 }
 
 /**
- * Escape must reach AppDialog (dismiss) and Enter must reach it (accept —
+ * Escape must reach AppDialog (dismiss) and Enter must reach it (accept -
  * the textarea is exempt there, so Enter still makes newlines in the prompt);
  * every other key is walled off from the app-level shortcut owners.
  * Ctrl/Meta+Enter submits from inside a field, where the root handler would
@@ -1131,7 +1131,7 @@ async function submit() {
   border-color: rgb(var(--v-theme-accent));
 }
 
-/* "Offered, with a warning" — deliberately NOT --off: this row can still be
+/* "Offered, with a warning" - deliberately NOT --off: this row can still be
    chosen, so it must not take the opacity drop that says otherwise. */
 .remix-mode--caution {
   border-color: rgba(var(--v-theme-warning), 0.5);

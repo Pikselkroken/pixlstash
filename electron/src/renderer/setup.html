@@ -12,65 +12,232 @@
   </head>
   <body>
     <div id="winbar" class="winbar"></div>
+    <!-- The startup framework. Every question PixlStash has to ask before the
+         app can be trusted to run - first-run setup, an upgrade's new privacy
+         question, and whatever repair or help comes later - is a step in here,
+         so none of them has to be a dialog thrown over a half-loaded library.
+         Which steps run is decided by the main process (setup:probe → steps). -->
     <div class="app setup">
       <div class="setup-header">
         <img class="brand-logo" src="Logo.png" alt="" />
         <h1 class="setup-title">
           Welcome to <span class="brand-name">Pixl<span>Stash</span></span>
         </h1>
-        <p class="setup-intro">
-          Let's set up your library. You can change these later in Settings.
-        </p>
+        <p class="setup-intro">Helping you set up PixlStash</p>
+        <!-- Two columns: the question, and the answer you gave it. Rows are
+             written by setup.js from the steps this launch actually needs. -->
+        <div id="steps" class="steps"></div>
       </div>
 
-      <div id="imported" class="imported hidden">
-        <span id="importedText"></span>
-      </div>
+      <div class="formcol">
+        <div class="forms">
+          <!-- STEP: library -->
+          <div class="setup-form off" id="screenLibrary">
+            <p class="ask">Do you already have a picture library?</p>
+            <p class="sub">Any folder of pictures counts, read where it sits.</p>
 
-      <div id="legacyIdentityPanel" class="panel hidden">
-        <label class="identity-consent">
-          <input id="importLegacyIdentity" type="checkbox" />
-          <span>
-            <strong>Use the login and share links from this existing library</strong>
-            <code id="legacyIdentitySource"></code>
-          </span>
-        </label>
-        <div class="sub identity-consent-copy">
-          If selected, PixlStash validates this vault and prepares a one-time identity
-          migration before desktop starts. Pictures stay in place. Leave this unchecked
-          to start desktop without importing its login or share links.
-        </div>
-      </div>
+            <div class="picker">
+              <button class="card card--open" type="button" id="cardOpen" aria-pressed="false">
+                <span class="card-tick" aria-hidden="true">&#10003;</span>
+                <span class="card-art" aria-hidden="true">
+                  <svg viewBox="0 0 132 92" fill="none">
+                    <defs>
+                      <clipPath id="ph1"><rect x="26" y="36" width="40" height="40" rx="2" /></clipPath>
+                      <clipPath id="ph2"><rect x="64" y="32" width="40" height="40" rx="2" /></clipPath>
+                    </defs>
+                    <!-- One folder, drawn the same on both cards. What is inside
+                         it is the only difference between the two answers. -->
+                    <path
+                      class="folder"
+                      d="M14 84V10h30l8 8h66v66z"
+                      fill="currentColor"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linejoin="round"
+                    />
+                    <g transform="rotate(-6 46 56)">
+                      <image href="folder-photo-1.jpg" x="26" y="36" width="40" height="40" clip-path="url(#ph1)" preserveAspectRatio="xMidYMid slice" />
+                      <rect x="26" y="36" width="40" height="40" rx="2" stroke="#f2e5da" stroke-opacity="0.55" stroke-width="1.5" />
+                    </g>
+                    <g transform="rotate(5 84 52)">
+                      <image href="folder-photo-2.jpg" x="64" y="32" width="40" height="40" clip-path="url(#ph2)" preserveAspectRatio="xMidYMid slice" />
+                      <rect x="64" y="32" width="40" height="40" rx="2" stroke="#f2e5da" stroke-opacity="0.55" stroke-width="1.5" />
+                    </g>
+                  </svg>
+                </span>
+                <span class="card-title">Pictures I already have</span>
+                <span class="card-sub">Point at their folder. Nothing is moved or renamed.</span>
+              </button>
 
-      <div class="panel">
-        <div class="hw">Library folder</div>
-        <div class="field">
-          <input id="folder" type="text" aria-label="Library folder" readonly />
-          <button id="pick" class="secondary" type="button">Choose…</button>
-        </div>
-        <div class="sub">Your pictures and the PixlStash database are stored here.</div>
-      </div>
+              <button class="card card--new" type="button" id="cardNew" aria-pressed="false">
+                <span class="card-tick" aria-hidden="true">&#10003;</span>
+                <span class="card-art" aria-hidden="true">
+                  <svg viewBox="0 0 132 92" fill="none">
+                    <path
+                      class="folder"
+                      d="M14 84V10h30l8 8h66v66z"
+                      fill="currentColor"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span class="card-title">Start empty</span>
+                <span class="card-sub">A new folder. Drop pictures in later, or let ComfyUI fill it.</span>
+              </button>
+            </div>
 
-      <div id="computePanel" class="panel hidden">
-        <div class="hw">Compute</div>
-        <div id="computeOptions"></div>
-        <div id="installLocation" class="install-location hidden">
-          <div class="field">
-            <input id="installPath" type="text" aria-label="GPU install location" readonly />
-            <button id="pickInstall" class="secondary" type="button">Change…</button>
+            <div class="answer waiting" id="answer" data-mode="open">
+              <div class="panel">
+                <div class="hw" id="answerHw">The folder</div>
+                <div class="field">
+                  <input
+                    id="folder"
+                    type="text"
+                    aria-label="Library folder"
+                    readonly
+                    value=""
+                    placeholder="Pick one of the two above first"
+                  />
+                  <button id="pick" class="secondary" type="button" disabled>Choose&hellip;</button>
+                </div>
+                <div class="verdict" id="verdict" data-tone="ok">
+                  <span class="vmark" aria-hidden="true">&middot;</span>
+                  <span class="verdict-body">
+                    <strong id="verdictTitle">Nothing chosen yet</strong>
+                    <div class="sub" id="verdictSub">
+                      PixlStash says what it found there before anything is written.
+                    </div>
+                    <div class="stats" id="verdictStats"></div>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div id="legacyIdentityPanel" class="panel hidden">
+              <label class="identity-consent">
+                <input id="importLegacyIdentity" type="checkbox" />
+                <span>
+                  <strong>Use the login and share links from this existing library</strong>
+                  <code id="legacyIdentitySource"></code>
+                </span>
+              </label>
+              <div class="sub identity-consent-copy">
+                If selected, PixlStash validates this vault and prepares a one-time identity
+                migration before desktop starts. Pictures stay in place. Leave this unchecked
+                to start desktop without importing its login or share links.
+              </div>
+            </div>
+
+            <div id="imported" class="imported hidden">
+              <span id="importedText"></span>
+            </div>
           </div>
-          <div class="sub">The GPU runtime (~2.5&nbsp;GB) is stored here.</div>
+
+          <!-- STEP: compute -->
+          <div class="setup-form off" id="screenCompute">
+            <p class="ask">How should PixlStash do the heavy lifting?</p>
+            <p class="sub">
+              Tagging and search run either way. The GPU runtime only makes them faster.
+            </p>
+
+            <div class="panel">
+              <div class="hw">Compute</div>
+              <div id="computeOptions"></div>
+              <div id="installLocation" class="install-location hidden">
+                <div class="field">
+                  <input id="installPath" type="text" aria-label="GPU install location" readonly />
+                  <button id="pickInstall" class="secondary" type="button">Change&hellip;</button>
+                </div>
+                <div class="sub">The GPU runtime (~2.5&nbsp;GB) is stored here.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STEP: privacy -->
+          <div class="setup-form off" id="screenPrivacy">
+            <p class="ask" id="privacyAsk">What may PixlStash send?</p>
+            <p class="sub" id="privacyLede"></p>
+
+            <div class="panel">
+              <div class="tele" id="teleOptions" role="radiogroup" aria-label="What PixlStash may send"></div>
+            </div>
+
+            <p class="never">
+              <strong>Never sent:</strong> your images &middot; your tags, captions or
+              filenames &middot; your search queries &middot; your file paths
+            </p>
+          </div>
+
+          <!-- STEP: install (no question, just the work the answers cause) -->
+          <div class="setup-form off" id="screenInstall">
+            <p class="ask">Setting up</p>
+
+            <!-- The wait is the one moment a new user will watch this screen.
+                 Spend it showing what they are waiting for. -->
+            <!-- The wait is the one moment a new user will watch this screen.
+                 Spend it showing what they are waiting for. -->
+            <!-- The wait is the one moment a new user will watch this screen.
+                 Spend it showing what they are waiting for.
+
+                 Each slide is cropped to the frame's own ratio, and to the
+                 CONTENT rather than the chrome: a full 1920px capture scaled
+                 into 560px and anchored top-left shows a magnified corner of a
+                 sidebar, which is what the first version of this did. Settings
+                 panels, list views and search fields do not survive the size at
+                 all - what reads here is pictures. -->
+            <div class="carousel">
+              <div class="slides">
+                <figure class="slide is-on">
+                  <img src="tour/1.jpg" alt="" />
+                  <figcaption>Projects, people and sets down the side, not folders to remember</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/2.jpg" alt="" />
+                  <figcaption>Captions, tags and faces, worked out on your own machine</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/3.jpg" alt="" />
+                  <figcaption>Duplicates arrive in groups: keep the best, drop the rest</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/4.jpg" alt="" />
+                  <figcaption>Every picture in one grid, however many folders they arrived in</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/5.jpg" alt="" />
+                  <figcaption>Filter by people, score, tags and stacks at once</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/6.jpg" alt="" />
+                  <figcaption>It finds what is in a picture, not only who</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/7.jpg" alt="" />
+                  <figcaption>Every change is a step you can walk back</figcaption>
+                </figure>
+                <figure class="slide">
+                  <img src="tour/8.jpg" alt="" />
+                  <figcaption>Restore from a snapshot, or send a picture straight to a project</figcaption>
+                </figure>
+              </div>
+              <div class="dots" aria-hidden="true"><i class="is-on"></i><i class=""></i><i class=""></i><i class=""></i><i class=""></i><i class=""></i><i class=""></i><i class=""></i></div>
+            </div>
+
+            <div class="panel">
+              <ol class="phases" id="phases"></ol>
+            </div>
+            <div id="error" class="error hidden"></div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <button class="act secondary off" type="button" id="back">Back</button>
+          <span class="sub" id="hint"></span>
+          <button class="act" type="button" id="next" disabled>Continue</button>
         </div>
       </div>
-
-      <div id="error" class="error hidden"></div>
-
-      <div id="progress" class="progress hidden">
-        <div class="bar"><div id="barFill"></div></div>
-        <div id="progressCaption" class="caption"></div>
-      </div>
-
-      <button id="start" type="button">Get started</button>
     </div>
     <script src="winbar.js"></script>
     <script src="setup.js"></script>

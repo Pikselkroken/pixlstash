@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import cv2
+import numpy as np
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import NO_VALUE
@@ -18,6 +19,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.inference.engine import InferenceEngine
+from pixlstash.inference.vram_budget import ORT_ARENA_SHARE
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
@@ -28,7 +30,7 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
-from pixlstash.utils.vram_utils import empty_cuda_cache
+from pixlstash.utils.vram_utils import empty_cuda_cache, is_vram_oom
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -67,7 +69,7 @@ class FaceExtractionTask(BaseTask):
     _cpu_insightface_lock = threading.Lock()
     # Live task instances that hold a reference to an InsightFace app. The app is
     # an onnxruntime session whose VRAM lives in ORT's own CUDA arena (torch's
-    # empty_cache cannot free it) — the arena is only returned to the driver when
+    # empty_cache cannot free it) - the arena is only returned to the driver when
     # the last reference to the session is dropped and it is garbage-collected.
     # Nulling only the class globals is not enough: each running task also holds
     # self._insightface_app pointing at the same object, so release must clear
@@ -81,8 +83,8 @@ class FaceExtractionTask(BaseTask):
     _active_task_lock = threading.Lock()
     # Semaphore that limits concurrent ONNX inference to 1 session at a time.
     # With INFLIGHT=2, Task 2's preload runs while Task 1 holds this semaphore,
-    # so Task 2 can start ONNX immediately after Task 1 finishes — no I/O wait.
-    # Uses the shared GPU queue — the single GPU worker ensures only one
+    # so Task 2 can start ONNX immediately after Task 1 finishes - no I/O wait.
+    # Uses the shared GPU queue - the single GPU worker ensures only one
     # face-extraction task runs at a time.  HIGH priority in the GPU queue
     # means face extraction is always preferred over tagging or embeddings.
     # gate so tagging/embedding tasks never compete while FE is active.
@@ -107,6 +109,9 @@ class FaceExtractionTask(BaseTask):
         self._cpu_spillover_enabled = False
         self._stop_event = threading.Event()
         self._preloaded_images: dict = {}
+        # The DB writes this task submitted and did not wait for; the finder
+        # releases the pictures' claims once every one of them has landed.
+        self.pending_writes: list = []
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
         self._preload_cancel = threading.Event()
@@ -141,11 +146,14 @@ class FaceExtractionTask(BaseTask):
         self._preload_thread.start()
 
     def _preload_images(self) -> None:
-        """Load every still image in the batch from disk into memory (background thread).
+        """Load every picture in the batch from disk into memory (background thread).
 
-        Only handles still images; videos are skipped here and loaded
-        synchronously in _extract_features because cv2.VideoCapture is not
-        thread-safe.
+        Stills are stored as ``(bgr_image, inv_scale)``; videos as
+        ``(frames, 1.0)`` where ``frames`` is the ``(frame_index, bgr_frame)``
+        list :meth:`_read_video_frames` selects. Each call opens its own
+        ``cv2.VideoCapture`` - the thread-safety concern is sharing one capture,
+        not decoding in parallel. A video that fails to decode here gets no
+        entry, so the batch loop reads it synchronously instead.
         """
 
         def _load_one(pic):
@@ -157,7 +165,19 @@ class FaceExtractionTask(BaseTask):
                 )
                 ext = os.path.splitext(file_path)[1].lower()
                 if ext not in self._IMAGE_EXTS:
-                    return file_path, None, 1.0  # video — skip
+                    if ext not in self._VIDEO_EXTS:
+                        return None, None, 1.0
+                    try:
+                        return (file_path, *self._read_video_frames(file_path))
+                    except Exception as exc:
+                        logger.warning(
+                            "Video preload failed for %s (%s: %s); "
+                            "falling back to synchronous decode",
+                            file_path,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        return None, None, 1.0
                 img, inv_scale = ImageUtils.load_image_bgr_reduced(
                     file_path, FaceExtractionTask.INFERENCE_MAX_SIDE
                 )
@@ -235,12 +255,26 @@ class FaceExtractionTask(BaseTask):
                 if self._stop_event.is_set():
                     break
 
-            # Release preloaded numpy arrays immediately — each BGR image can
+            # Release preloaded numpy arrays immediately - each BGR image can
             # be several MB; a batch of 64 can be 500+ MB held unnecessarily.
             self._preloaded_images = {}
 
-            for bulk_faces, bulk_thumbnail_crops in pending_flushes:
-                self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
+            # Submitted, not awaited. Waiting here parked the single GPU
+            # worker behind whatever LOW write the five CPU stages had on the
+            # writer thread - a measured pass ran at gpu_busy=0.08. But the
+            # pictures must stay CLAIMED until the rows land, or the next sweep
+            # re-offers them and a second detection pass hits the unique face
+            # key (seen as 7 face tasks for 12 pictures). So the worker is
+            # freed now and the finder holds the claims on these futures:
+            # see MissingFaceExtractionFinder.on_task_complete.
+            self.pending_writes = [
+                future
+                for future in (
+                    self._flush_to_db(bulk_faces, bulk_thumbnail_crops)
+                    for bulk_faces, bulk_thumbnail_crops in pending_flushes
+                )
+                if future is not None
+            ]
 
             picture_ids = sorted(
                 {pic_id for _, pic_id, _, _ in all_changed if pic_id is not None}
@@ -387,14 +421,32 @@ class FaceExtractionTask(BaseTask):
             if use_cuda
             else ["CPUExecutionProvider"]
         )
+        # One dict per provider; the CUDA one bounds each of the five ORT
+        # sessions' arenas so the pack can stay resident for a pass.
+        provider_options = (
+            [
+                engine.vram_budget.ort_cuda_provider_options(
+                    ORT_ARENA_SHARE["insightface_session"]
+                ),
+                {},
+            ]
+            if use_cuda
+            else [{}]
+        )
         logger.debug(
-            "Initialising InsightFace with providers=%s (ctx_id=%d, pack=%s, root=%s)",
+            "Initialising InsightFace with providers=%s options=%s (ctx_id=%d, pack=%s, root=%s)",
             providers,
+            provider_options,
             0 if use_cuda else -1,
             model_pack,
             root,
         )
-        app = FaceAnalysis(name=model_pack, root=root, providers=providers)
+        app = FaceAnalysis(
+            name=model_pack,
+            root=root,
+            providers=providers,
+            provider_options=provider_options,
+        )
         app.prepare(
             ctx_id=0 if use_cuda else -1,
             det_thresh=0.25,
@@ -451,7 +503,7 @@ class FaceExtractionTask(BaseTask):
         InsightFace pipeline without a database or ``Picture`` objects.
 
         Images with either dimension below ``_MIN_DETECTION_DIM`` are skipped
-        and returned as empty (no-face) results — they cannot contain a
+        and returned as empty (no-face) results - they cannot contain a
         detectable face and would crash InsightFace's internal cv2.resize.
 
         Args:
@@ -486,6 +538,14 @@ class FaceExtractionTask(BaseTask):
                 for idx, res in zip(safe_indices, batch_results):
                     results[idx] = res
             except Exception as exc:
+                if is_vram_oom(exc):
+                    # Never "no faces". Inside FaceExtractionTask this result
+                    # becomes a sentinel row per picture, and sentinels are
+                    # never re-scanned - so a full card (another process
+                    # holding VRAM) would silently and permanently mark every
+                    # picture in the batch as faceless. The runner retries an
+                    # OOM; let it.
+                    raise
                 logger.warning(
                     "Batch face detection failed (%s) for %d images "
                     "\u2014 treating all as having no faces: %s",
@@ -494,6 +554,13 @@ class FaceExtractionTask(BaseTask):
                     exc,
                 )
         return results
+
+    #: A batch slower than this logs its own timing breakdown at INFO, without
+    #: anyone having had to set PIXLSTASH_FEATURE_TIMING in advance. Well above
+    #: a healthy batch (a hundred JPEGs run in ~1-2 s on a warm GPU) so an
+    #: ordinary library never sees it, and well below the "is it stuck?"
+    #: threshold of a person watching a log.
+    SLOW_BATCH_LOG_S = 5.0
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
@@ -516,6 +583,67 @@ class FaceExtractionTask(BaseTask):
     # recognition calls but longer gaps between visible DB progress ticks.
     _FLUSH_CHUNK_SIZE = 100
 
+    @staticmethod
+    def _read_video_frames(
+        file_path: str,
+    ) -> tuple[list[tuple[int, np.ndarray]], float]:
+        """Return ``(frames, inv_scale)`` - the frames face detection samples.
+
+        ``frames`` is ``(frame_index, bgr_frame)`` pairs, each reduced so its
+        longest side is at most ``INFERENCE_MAX_SIDE`` (as stills are);
+        ``inv_scale`` maps a reduced-frame coordinate back to source pixels and
+        is one number per clip because every frame shares the clip's size.
+        Frame 0 plus every ``max(1, frame_count // 3)``-th frame after it, read
+        by seeking. Sequential decode was measured against this on real HEVC
+        clips: ~25 % faster on clips under ~100 frames, but linear in clip
+        length (12 s for a 14k-frame clip against 0.17 s seeking), and it
+        returns different pixels on HEVC than the seek does. Seeking keeps the
+        frames the detector has always received.
+        """
+        cap = cv2.VideoCapture(file_path)
+        try:
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if frame_count < 1:
+                logger.warning("No frames found in video: %s", file_path)
+                return [], 1.0
+            frames: list[tuple[int, np.ndarray]] = []
+            inv_scale = 1.0
+
+            def reduced(frame: np.ndarray) -> np.ndarray:
+                nonlocal inv_scale
+                h, w = frame.shape[:2]
+                if max(h, w) <= FaceExtractionTask.INFERENCE_MAX_SIDE:
+                    return frame
+                scale = FaceExtractionTask.INFERENCE_MAX_SIDE / float(max(h, w))
+                new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+                inv_scale = w / float(new_w)
+                return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frames.append((0, reduced(frame)))
+            step = max(1, frame_count // 3)
+            for frame_index in range(step, frame_count, step):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    # DEBUG, not WARNING: CAP_PROP_FRAME_COUNT is an estimate
+                    # for HEVC - a 47-frame iPhone clip reports 47 and cannot
+                    # read frame 45 - so the last sample often lands past the
+                    # end. The clip still gets its other frames.
+                    logger.debug(
+                        "Could not read frame %s of %s from video %s",
+                        frame_index,
+                        frame_count,
+                        file_path,
+                    )
+                    continue
+                frames.append((frame_index, reduced(frame)))
+            return frames, inv_scale
+        finally:
+            cap.release()
+
     def _extract_features(
         self, pics, *, semaphore_wait_s: float = 0.0, preload_wait_s: float = 0.0
     ) -> List[tuple]:
@@ -532,7 +660,7 @@ class FaceExtractionTask(BaseTask):
 
         # Tag every face written in this batch with the pack that produced it so
         # the FACE_MODEL_REFRESH finder can detect stale embeddings on a pack
-        # change. Read once per batch — the engine pack is immutable per run.
+        # change. Read once per batch - the engine pack is immutable per run.
         model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
 
         updates = []
@@ -548,20 +676,20 @@ class FaceExtractionTask(BaseTask):
 
         # Images are preloaded in on_queued() via a background thread so that
         # I/O runs while the previous task holds the inference semaphore.
-        # Retrieve the completed dict here (instant — _run_task already joined
+        # Retrieve the completed dict here (instant - _run_task already joined
         # the preload thread via _wait_for_preload).
         preloaded = self._preloaded_images
 
         # ── Batched detection + recognition ─────────────────────────────────
         # Run detection (per-image, detector ONNX batch=1) and recognition
-        # (batched — all crops from all images in one ONNX call) up front.
+        # (batched - all crops from all images in one ONNX call) up front.
         # This replaces N×(detector + recogniser + landmark + genderage) calls
         # with N detector calls + 1 recogniser call.
         runner = BatchedFaceRunner(self._insightface_app)
         # Build the set of resolved paths for the current chunk only.  The
         # preloaded dict contains ALL task images; without this filter, every
         # chunk would run run_batch() on the full task and get_feat() on all
-        # crops — O(chunks × images) wasted work and proportionally higher
+        # crops - O(chunks × images) wasted work and proportionally higher
         # peak GPU activation memory.
         _setup_start = time.time()
         chunk_paths: set[str] = {
@@ -693,110 +821,78 @@ class FaceExtractionTask(BaseTask):
 
             elif ext in self._VIDEO_EXTS:
                 if need_faces:
-                    read_start = time.time()
-                    cap = cv2.VideoCapture(file_path)
-                    image_load_s += time.time() - read_start
-                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    if frame_count < 1:
-                        logger.warning("No frames found in video: %s", file_path)
-                        cap.release()
+                    preloaded_entry = preloaded.get(file_path)
+                    if preloaded_entry is not None:
+                        frames, inv_scale = preloaded_entry
                     else:
-                        first_frame = None
-                        first_bboxes = []
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = cap.read()
-                        if ret and frame is not None:
+                        # Not preloaded (cancelled, or decode failed in the
+                        # pool - already logged): read on the worker thread.
+                        read_start = time.time()
+                        frames, inv_scale = self._read_video_frames(file_path)
+                        image_load_s += time.time() - read_start
+                    first_frame = None
+                    first_bboxes = []
+                    if frames:
+                        _infer_start = time.time()
+                        per_frame_faces = runner.run_batch([f for _, f in frames])
+                        inference_s += time.time() - _infer_start
+                    else:
+                        per_frame_faces = []
+                    face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
+                    for (frame_index, frame), frame_faces in zip(
+                        frames, per_frame_faces
+                    ):
+                        if frame_index == 0:
                             first_frame = frame
-                            _infer_start = time.time()
-                            frame_faces = runner.run_batch([frame])[0]
-                            inference_s += time.time() - _infer_start
-                            detected_faces_total += len(frame_faces)
-                            face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox,
-                                    frame.shape[1],
-                                    frame.shape[0],
-                                    face_expand_fraction,
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
-                                    logger.warning(
-                                        "Face embedding missing for face in video %s, frame 0",
-                                        file_path,
-                                    )
-                                first_bboxes.append(expanded_bbox)
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=0,
-                                        features=features_bytes,
-                                        model_pack=model_pack,
-                                    )
-                                )
-                        step = max(1, frame_count // 3)
-                        for frame_index in range(step, frame_count, step):
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                            ret, frame = cap.read()
-                            if not ret or frame is None:
-                                logger.warning(
-                                    "Could not read frame %s from video: %s",
-                                    frame_index,
-                                    file_path,
-                                )
-                                continue
-                            _infer_start = time.time()
-                            frame_faces = runner.run_batch([frame])[0]
-                            inference_s += time.time() - _infer_start
-                            detected_faces_total += len(frame_faces)
-                            face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox,
-                                    frame.shape[1],
-                                    frame.shape[0],
-                                    face_expand_fraction,
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
-                                    logger.warning(
-                                        "Face embedding missing for face in video %s, frame %s",
-                                        file_path,
-                                        frame_index,
-                                    )
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=frame_index,
-                                        features=features_bytes,
-                                        model_pack=model_pack,
-                                    )
-                                )
-                        cap.release()
-                        if first_frame is not None and first_bboxes:
-                            pending_thumb_work.append(
-                                (pic.id, pic.file_path, first_frame, first_bboxes, 1.0)
+                        detected_faces_total += len(frame_faces)
+                        for face in frame_faces:
+                            expanded_bbox = Face.expand_face_bbox(
+                                face.bbox,
+                                frame.shape[1],
+                                frame.shape[0],
+                                face_expand_fraction,
                             )
+                            features_bytes = None
+                            if (
+                                hasattr(face, "embedding")
+                                and face.embedding is not None
+                            ):
+                                features_bytes = face.embedding.astype(
+                                    "float32"
+                                ).tobytes()
+                            else:
+                                logger.warning(
+                                    "Face embedding missing for face in video %s, frame %s",
+                                    file_path,
+                                    frame_index,
+                                )
+                            if frame_index == 0:
+                                # Loaded-frame space, matching first_frame.
+                                first_bboxes.append(expanded_bbox)
+                            # Scale bbox from loaded-frame space to source pixels.
+                            if inv_scale != 1.0 and expanded_bbox:
+                                expanded_bbox = [v * inv_scale for v in expanded_bbox]
+                            face_objects.append(
+                                Face(
+                                    picture_id=pic.id,
+                                    face_index=-1,
+                                    bbox=expanded_bbox,
+                                    character_id=None,
+                                    frame_index=frame_index,
+                                    features=features_bytes,
+                                    model_pack=model_pack,
+                                )
+                            )
+                    if first_frame is not None and first_bboxes:
+                        pending_thumb_work.append(
+                            (
+                                pic.id,
+                                pic.file_path,
+                                first_frame,
+                                first_bboxes,
+                                inv_scale,
+                            )
+                        )
             else:
                 logger.warning(
                     "Unsupported file extension for feature extraction: %s",
@@ -815,12 +911,10 @@ class FaceExtractionTask(BaseTask):
 
             if need_faces:
                 if not face_objects:
-                    logger.warning(
-                        "No face found in %s for picture %s. Inserting sentinel record.",
-                        file_path,
-                        pic.id,
-                    )
-                    # Sentinel face — no bbox, face_index=-1
+                    # Not a warning: most pictures have no face in them, and
+                    # a warning per picture buried the real ones.
+                    logger.debug("No faces found in %s (picture %s)", file_path, pic.id)
+                    # Sentinel face - no bbox, face_index=-1
                     bulk_faces.append(
                         Face(
                             picture_id=pic.id,
@@ -852,7 +946,7 @@ class FaceExtractionTask(BaseTask):
         # ── Square-crop rectangle update ──────────────────────────────────
         # The whole-frame AR bitmap is face-INDEPENDENT, so detecting faces does
         # not change the thumbnail file (written at import / by the finder). We
-        # only recompute the face-weighted SQUARE-CROP rectangle in bitmap space —
+        # only recompute the face-weighted SQUARE-CROP rectangle in bitmap space -
         # pure geometry from the exif-corrected source dimensions and the detected
         # boxes, with no image re-encode or file write.
         if pending_thumb_work:
@@ -906,8 +1000,15 @@ class FaceExtractionTask(BaseTask):
                 )
             thumb_gen_s += time.time() - _thumb_gen_start
 
-        if profile_enabled:
-            elapsed = time.time() - batch_start
+        elapsed = time.time() - batch_start
+        # Always say why a slow batch was slow. The breakdown existed but only
+        # behind an env var nobody sets before they need it, so the log of a
+        # library that felt stalled showed a burst of sentinel warnings, minutes
+        # of silence, and no way to tell whether that silence was work (a
+        # hundred HEIC frames decoded, a video seeked three times) or the
+        # planner idling between batches. One line per slow batch answers that,
+        # and a fast batch stays quiet.
+        if profile_enabled or elapsed >= self.SLOW_BATCH_LOG_S:
             logger.info(
                 "[FEATURE_TIMING] batch=%s processed=%s updates=%s faces=%s elapsed=%.3fs semaphore_wait=%.3fs preload_wait=%.3fs init=%.3fs setup=%.3fs batch_infer=%.3fs loop=%.3fs(precheck=%.3fs load=%.3fs infer=%.3fs) thumb_gen=%.3fs thumb_write=%.3fs",
                 len(pics),
@@ -934,14 +1035,16 @@ class FaceExtractionTask(BaseTask):
         self,
         bulk_faces: list,
         bulk_thumbnail_crops: list,
-    ) -> None:
-        """Write accumulated face rows and thumbnail crops to the database.
+    ):
+        """Submit the face rows and thumbnail crops to the writer; return the future.
 
         Called AFTER releasing the inference semaphore so that the SQLite
-        commit does not block the next task from starting inference.
+        commit does not block the next task from starting inference. The
+        caller waits on the returned future before the task completes - see
+        `_run_task` for why that wait is load-bearing.
         """
         if not bulk_faces and not bulk_thumbnail_crops:
-            return
+            return None
 
         def bulk_write(session, faces, crops):
             for face in faces:
@@ -951,7 +1054,7 @@ class FaceExtractionTask(BaseTask):
             except IntegrityError:
                 session.rollback()
                 logger.warning(
-                    "Bulk face insert failed (IntegrityError) — skipping batch."
+                    "Bulk face insert failed (IntegrityError) - skipping batch."
                 )
                 return
 
@@ -972,10 +1075,8 @@ class FaceExtractionTask(BaseTask):
                 session.rollback()
                 logger.warning("Bulk thumbnail crop update failed: %s", exc)
 
-        # Fire-and-forget: submit to the DB queue without blocking the worker
-        # thread.  Errors are logged inside bulk_write.  Freeing the worker
-        # thread immediately lets it pick up the next queued task so inference
-        # can restart before the SQLite commit finishes (1-3 s for 512 rows).
-        self._db.submit_task(
+        # Errors are logged inside bulk_write. HIGH priority so the task's own
+        # completion is not queued behind the LOW writes of other stages.
+        return self._db.submit_task(
             bulk_write, bulk_faces, bulk_thumbnail_crops, priority=DBPriority.HIGH
         )

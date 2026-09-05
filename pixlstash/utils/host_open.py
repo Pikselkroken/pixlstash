@@ -7,12 +7,12 @@ on macOS, ``xdg-open`` everywhere else. The shelf is the fourth caller, and it
 is here rather than inline **because it is not byte-identical to the three**:
 this one reads the opener's exit status, which is what makes a headless host an
 honest refusal instead of a reported success (below). Migrating the other three
-onto it is a change of its own — each wraps the spawn in different error
-handling and each has tests patching ``subprocess.run`` in its own module — so
+onto it is a change of its own - each wraps the spawn in different error
+handling and each has tests patching ``subprocess.run`` in its own module - so
 this is not yet the deduplication its existence invites.
 
 Every caller of this is on the ``LOOPBACK_OWNER_ONLY`` red line
-(``docs/backend_architecture.md`` §16.3.1) — it drives the server process's own
+(``docs/backend_architecture.md`` §16.3.1) - it drives the server process's own
 shell, which is authority over the host rather than over any row.
 """
 
@@ -30,8 +30,8 @@ def open_in_file_manager(path: str) -> bool:
 
     **The POSIX openers' exit status is read**, which is the one thing the three
     inline copies do not do: they pass ``check=False`` and discard it. A
-    headless or containerised host usually *has* ``xdg-open`` — it is a shell
-    script — and it exits non-zero (1–4, documented) when there is no desktop
+    headless or containerised host usually *has* ``xdg-open`` - it is a shell
+    script - and it exits non-zero (1–4, documented) when there is no desktop
     to hand the path to, so ignoring the status reports success for the exact
     deployment where nothing opened. ``open`` on macOS behaves the same way.
     Windows' ``os.startfile`` has no status to read and raises instead.
@@ -45,7 +45,7 @@ def open_in_file_manager(path: str) -> bool:
 
     Returns:
         True when the opener accepted the path. False when there is nothing at
-        *path*, or the opener is absent, or it refused — all three are a
+        *path*, or the opener is absent, or it refused - all three are a
         refusal to report rather than a crash.
     """
     if not path or not os.path.exists(path):
@@ -53,7 +53,7 @@ def open_in_file_manager(path: str) -> bool:
         return False
     try:
         if sys.platform.startswith("win"):
-            os.startfile(path)  # noqa: S606 — Windows' own shell-open verb
+            os.startfile(path)  # noqa: S606 - Windows' own shell-open verb
             return True
         opener = "open" if sys.platform == "darwin" else "xdg-open"
         completed = subprocess.run([opener, path], check=False)
@@ -69,8 +69,8 @@ def open_in_file_manager(path: str) -> bool:
         return True
     except Exception:
         # With the traceback: what lands here is platform-specific and varies by
-        # desktop — a missing opener, a permission error, a Windows shell verb
-        # that failed — and the frame is the only thing that says which.
+        # desktop - a missing opener, a permission error, a Windows shell verb
+        # that failed - and the frame is the only thing that says which.
         logger.exception(
             "Failed to open %s in the host file manager (platform %s).",
             path,

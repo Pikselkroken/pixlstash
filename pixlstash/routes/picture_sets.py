@@ -30,6 +30,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.services import operation_log_service
+from pixlstash.services.layout_move_service import rename_entity_folders
 from pixlstash.services.project_membership_service import (
     picture_set_project_ids,
     reconcile_entity_projects_change,
@@ -39,6 +40,7 @@ from pixlstash.services.set_lock_service import (
     enforce_set_not_locked,
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.library_layout import Facet
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
@@ -76,7 +78,7 @@ class PictureSetResponse(BaseModel):
     project_id: Optional[int] = PydanticField(
         default=None,
         description=(
-            "The set's primary project — the lowest id in ``project_ids``, or null "
+            "The set's primary project - the lowest id in ``project_ids``, or null "
             "when it belongs to no project. Kept for backwards compatibility; "
             "prefer ``project_ids``, which lists every project."
         ),
@@ -203,7 +205,7 @@ def create_router(server) -> APIRouter:
     def _ensure_unique_set_name(session, name: str, project_ids, exclude_set_id=None):
         """Raises 409 if a set with the same name (case-insensitive) already
         exists in **any** of the given projects.  Unscoped sets (no projects) are
-        exempt — they have no uniqueness requirement.
+        exempt - they have no uniqueness requirement.
 
         Since issue #125 a set can be in several projects at once, so the clash
         check spans every project it is joining, not just its primary one.
@@ -242,7 +244,7 @@ def create_router(server) -> APIRouter:
                 payload mentions neither key. ``None`` for a create.
 
         Returns:
-            ``(target_project_ids, provided)`` — the full target membership set,
+            ``(target_project_ids, provided)`` - the full target membership set,
             and whether the payload asked for a project change at all.
 
         Raises:
@@ -681,9 +683,9 @@ def create_router(server) -> APIRouter:
             ).first()
             # Scope guard on the PROJECT half of the path, before the membership
             # query below can answer from it (#708 condition 2). Without it the
-            # three outcomes — set in this project (200), project exists but does
+            # three outcomes - set in this project (200), project exists but does
             # not hold it (404 "Picture set not found"), project does not exist
-            # (404 "Project not found") — told a set-scoped token which projects
+            # (404 "Project not found") - told a set-scoped token which projects
             # exist and which hold its set. A token that may not see the project
             # now gets the same 403 in all three cases; an owner is unaffected
             # and still gets the 404s below.
@@ -709,7 +711,7 @@ def create_router(server) -> APIRouter:
             return payload
 
         result = server.vault.db.run_immediate_read_task(fetch)
-        # Scope guard (BOLA): a resource-scoped token may only read its own set —
+        # Scope guard (BOLA): a resource-scoped token may only read its own set -
         # the id-based twin (get_picture_set) already does this.
         _require_scope_allows_picture_set(request, int(result["id"]))
         return result
@@ -873,9 +875,9 @@ def create_router(server) -> APIRouter:
 
         Args:
             session: A pre-opened session.
-            project_ids: The projects the new set is joining. Siblings — whose
+            project_ids: The projects the new set is joining. Siblings - whose
                 icons and colours are skipped so they stay distinguishable in
-                one list — are the sets sharing any of them; with no projects,
+                one list - are the sets sharing any of them; with no projects,
                 every set is a sibling (the pre-#125 unscoped behaviour).
         """
         wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
@@ -890,7 +892,7 @@ def create_router(server) -> APIRouter:
             if wanted
             else select(PictureSet.set_icon, PictureSet.set_color)
         ).all()
-        # Newest set holding a palette value — reference sets and sets left on
+        # Newest set holding a palette value - reference sets and sets left on
         # the card-stack default carry none, so they are skipped by the filter.
         last_icon = session.exec(
             select(PictureSet.set_icon)
@@ -1380,7 +1382,7 @@ def create_router(server) -> APIRouter:
         deduplicate_stacks = not expand_stacks and fields != "full"
 
         # If any picture in the set belongs to a stack, treat the entire stack
-        # as part of the set — mirroring how stacks work in the regular view.
+        # as part of the set - mirroring how stacks work in the regular view.
         def expand_with_stack_members(session, ids):
             if not ids:
                 return ids
@@ -1510,7 +1512,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Updates picture set name and/or description.\n\n"
             "**Project membership.** Send ``project_ids`` (a list) to set the full "
-            "set of projects the picture set belongs to — a set may be in several "
+            "set of projects the picture set belongs to - a set may be in several "
             "at once. The legacy single ``project_id`` is still accepted and means "
             "the same as a one-element ``project_ids``; ``null`` on either key "
             "removes the set from every project. ``project_ids`` wins when both "
@@ -1547,7 +1549,7 @@ def create_router(server) -> APIRouter:
 
             # Lock rule: while a set is locked the only accepted PATCH is one that
             # changes nothing but `locked` (i.e. an unlock). Compare each field to
-            # its CURRENT value — not mere key presence — so the frontend echoing
+            # its CURRENT value - not mere key presence - so the frontend echoing
             # unchanged fields back is a no-op, not a rejection.
             description_changing = (
                 description is not None and description != picture_set.description
@@ -1586,6 +1588,7 @@ def create_router(server) -> APIRouter:
 
             project_assignment_requested = project_provided and bool(target_project_ids)
             pictures_changed = False
+            previous_name = picture_set.name
             if name is not None:
                 picture_set.name = name
             if description is not None:
@@ -1647,6 +1650,21 @@ def create_router(server) -> APIRouter:
                 ]
 
             session.commit()
+            if name_changing:
+                # **Renaming a set renames its FOLDER; it moves no files**
+                # (v1.11 §4). Required, not cosmetic: a folder still carrying
+                # the old name names nothing the library knows, so the layout
+                # can no longer read it and its pictures fall out of the rule.
+                # Commits for itself, and rolls the directories back if it
+                # cannot: the renames and the ``file_path`` rewrites describing
+                # them have to land together.
+                rename_entity_folders(
+                    session,
+                    Facet.SET,
+                    previous_name,
+                    picture_set.name,
+                    image_root=server.vault.image_root,
+                )
             return (
                 True,
                 project_id_changed or pictures_changed,
@@ -1799,7 +1817,7 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
-            # Membership of a locked set is frozen — no additions until unlocked.
+            # Membership of a locked set is frozen - no additions until unlocked.
             enforce_set_not_locked(session, picture_set, "add pictures to a locked set")
             # Sets are atomic for stacks: adding any stacked picture adds every
             # member of its stack.
@@ -1837,7 +1855,7 @@ def create_router(server) -> APIRouter:
             return added_any
 
         # Set membership is stack-atomic, so the snapshot expands to the whole
-        # stack — otherwise undo would leave the stack siblings in the set.
+        # stack - otherwise undo would leave the stack siblings in the set.
         success, _operation = operation_log_service.run_recorded_metadata_task(
             server.vault,
             add_member,
@@ -1890,7 +1908,7 @@ def create_router(server) -> APIRouter:
         reference_character_id = _find_reference_character_id_for_set(id)
 
         def remove_member(session, id, picture_id, reference_character_id=None):
-            # Membership of a locked set is frozen — no removals until unlocked.
+            # Membership of a locked set is frozen - no removals until unlocked.
             picture_set = session.get(PictureSet, id)
             if picture_set is not None:
                 enforce_set_not_locked(
@@ -1965,7 +1983,7 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
-            # Membership of a locked set is frozen — no additions until unlocked.
+            # Membership of a locked set is frozen - no additions until unlocked.
             enforce_set_not_locked(session, picture_set, "add pictures to a locked set")
             # Sets are atomic for stacks: pull in every member of any stack.
             picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
@@ -2048,7 +2066,7 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, set_id)
             if not picture_set:
                 return None
-            # Membership of a locked set is frozen — no replacement until unlocked.
+            # Membership of a locked set is frozen - no replacement until unlocked.
             enforce_set_not_locked(
                 session, picture_set, "replace the members of a locked set"
             )
@@ -2088,7 +2106,7 @@ def create_router(server) -> APIRouter:
         def _current_members(session):
             # A replace-all also EVICTS members the request never named. They must
             # be in the snapshot or undo would re-add the new members and never
-            # restore the evicted ones — a half-reversible operation.
+            # restore the evicted ones - a half-reversible operation.
             return session.exec(
                 select(PictureSetMember.picture_id).where(PictureSetMember.set_id == id)
             ).all()

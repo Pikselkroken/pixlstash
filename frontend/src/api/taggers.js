@@ -1,11 +1,11 @@
-// Tagger plugins resource — /taggers, /taggers/plugin-diagnostics and
+// Tagger plugins resource - /taggers, /taggers/plugin-diagnostics and
 // /tagger/label-thresholds.
 //
 // `/taggers` returns both the installed plugins and the user's per-plugin
 // settings in one body; the settings are written back through the user config
 // (see api/config.js), which is why there is no PATCH here. Because it carries
 // those settings it is owner-only, and the installation diagnostics beside it
-// are local-owner-only — both calls have to tolerate a 403.
+// are local-owner-only - both calls have to tolerate a 403.
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
@@ -22,7 +22,7 @@ export async function listTaggers() {
  * Read the plugin installation diagnostics: the scanned host folders and the
  * plugins that failed to import.
  *
- * Local owner only — a remote or share-scoped caller gets 403, which the
+ * Local owner only - a remote or share-scoped caller gets 403, which the
  * caller is expected to treat as "nothing to show" rather than an error. Both
  * halves name paths on the server's disk, which is why they are not on
  * `/taggers`.

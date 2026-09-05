@@ -5,7 +5,7 @@ handled once. ``model`` / ``model_file`` / ``model_folder`` are **hub** tables
 (what is on this disk is a fact about this machine); ``adapter_attachment`` is a
 **vault** table (which character uses a LoRA is a fact about this library). No
 foreign key and no SQL join can cross the two, so a filter that mixes them is two
-queries intersected in Python — and, importantly, *two* queries no matter how
+queries intersected in Python - and, importantly, *two* queries no matter how
 many rows come back.
 
 Everything here is shaped so the sorting work is a change to one SELECT rather
@@ -15,11 +15,11 @@ query. Nothing is fetched per row.
 
 **Sorting (B7) kept that promise.** A stack's size is the sum of its members and
 its date is the newest member's, and a row must never sort by a number it does
-not display — so those aggregates are two ``LEFT JOIN``s onto grouped subqueries
+not display - so those aggregates are two ``LEFT JOIN``s onto grouped subqueries
 inside the *same* ``SELECT`` as the rows, not a lookup per row. 1,806 rows sorted
 by an aggregate is the N+1 this shape exists to prevent.
 
-Both list blocks — adapters and checkpoints — go through :func:`fetch_models`.
+Both list blocks - adapters and checkpoints - go through :func:`fetch_models`.
 There is one content table, so there is one query; ``file_kind`` is the only
 thing that differs.
 """
@@ -233,7 +233,7 @@ def fetch_models(
         file_kinds: Which ``model.file_kind`` values to serve. One query, not one
             per kind: there is one content table.
         base_model: Exact match, or :data:`UNSET` to select the rows that record
-            none. ``None`` means no filter — a null base model is a bulk state
+            none. ``None`` means no filter - a null base model is a bulk state
             (37 % of a measured 91-file folder), so it is never dropped by
             default.
         kind: Adapter algorithm (``lora``, ``lokr``, …).
@@ -310,7 +310,7 @@ def fetch_model_by_hash(hub, sha256: str) -> Optional[dict]:
 def fetch_locations(hub, model_id: Optional[int] = None) -> dict[int, list[dict]]:
     """Return ``model_id -> [location, …]`` in a single query.
 
-    One query for the whole page, grouped in Python — not one per row, and not a
+    One query for the whole page, grouped in Python - not one per row, and not a
     join onto ``model`` that would duplicate every model row once per copy.
 
     Args:
@@ -350,7 +350,7 @@ def fetch_capabilities(hub, model_id: Optional[int] = None) -> dict[int, list[st
     the fan-out the aggregate joins in that SELECT exist to avoid.
 
     Ordered by ``rowid``, so the set comes back in the order the declaration
-    wrote it — primary first, matching ``model.kind``. A row's capabilities
+    wrote it - primary first, matching ``model.kind``. A row's capabilities
     reading "Detection, Captioning" for a captioner is a small lie the shelf
     does not have to tell.
 
@@ -422,8 +422,8 @@ def replace_attachments(
     two open tabs interleave into a set neither of them chose.
 
     Every ``entity_id`` is checked against the live table before anything is
-    written. ``adapter_attachment`` carries no foreign key — it cannot, its other
-    end is in the hub — so nothing else would ever notice a typo'd id, and the
+    written. ``adapter_attachment`` carries no foreign key - it cannot, its other
+    end is in the hub - so nothing else would ever notice a typo'd id, and the
     row would sit there invisible and permanent.
 
     Args:
@@ -497,7 +497,7 @@ FILE_KINDS = (
 #
 # Settable at all because the shelf shows it. `model_capability` was written
 # only by PixlStash's own declarations, so the Kind column read `Captioning` on
-# rows whose editor offered nothing but file kinds — a value on screen that the
+# rows whose editor offered nothing but file kinds - a value on screen that the
 # owner could not correct. It is a CLASSIFICATION, and for a model PixlStash
 # does not load it is a guess off a name or a `config.json`; the owner's answer
 # beats ours.
@@ -569,7 +569,7 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
                     tuple(columns_only.values()) + tuple(ids),
                 )
             # Correcting what a file IS drops the capabilities we guessed it
-            # served — unless the same call states them, which is the owner
+            # served - unless the same call states them, which is the owner
             # answering both questions at once and must not be undone by the
             # answer to the first. Capability rows are only ever written by a
             # declaration (the scanner writes none), so this reaches exactly the
@@ -631,7 +631,7 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
     # ONE critical section, gate and delete together. `hub.fetchall` takes and
     # releases the hub lock per call, so reading the states outside this block
     # left a window in which a background `ModelFolderScanner` could flip a row
-    # from `missing` back to `present` between the check and the DELETE — and
+    # from `missing` back to `present` between the check and the DELETE - and
     # the model would be forgotten anyway. Small window, unrecoverable
     # consequence, on the one shelf operation with no undo behind it.
     #
@@ -664,15 +664,15 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
 
         # Engines are declared by PixlStash on every start, so forgetting one
         # deletes a row that comes straight back. Refused here rather than at the
-        # route because the read belongs inside this transaction — the same
+        # route because the read belongs inside this transaction - the same
         # critical section the state gate runs in.
         #
         # Only while something still declares it, which is what every non-
         # `missing` state means here: a declared engine nothing has fetched is
         # `not_downloaded`, and `declare_folder`'s sweep writes `missing` exactly
         # when the declaration stopped naming the row. That is the DISCOVERED
-        # roots — a repo dropped by `huggingface-cli delete-cache`, a deleted
-        # InsightFace pack — and nothing fetches those back, so refusing them
+        # roots - a repo dropped by `huggingface-cli delete-cache`, a deleted
+        # InsightFace pack - and nothing fetches those back, so refusing them
         # left the owner a row drawn as a fault that no verb on the shelf could
         # clear.
         #
@@ -709,7 +709,7 @@ def _purge(conn, ids: list[int]) -> None:
     """Delete the given models and their child rows, on an open connection.
 
     Repairs the stacks they were in on the way out. A member's row can leave a
-    run through here — Forget and Delete both end at this function — and until
+    run through here - Forget and Delete both end at this function - and until
     the shelf let a single member be selected that could not happen, so nothing
     tidied up after it. Left alone it yields a run numbered ``0, 2, 3``, or one
     with no cover at all because the cover is what went, or a stack of one,
@@ -749,7 +749,7 @@ def purge_deleted_models(hub, emptied: dict[int, list[tuple[int, str]]]) -> list
 
     The row half of ``POST /model-files/delete``, which unlinks the bytes first
     and calls this for the copies it actually removed. It shares
-    :func:`forget_models`' delete order, and it keeps a gate of its own — a
+    :func:`forget_models`' delete order, and it keeps a gate of its own - a
     narrower one, because the state check there would refuse every row this is
     called for. A ``model`` row goes only when **no** ``model_file`` row for it
     survives the location delete, so a copy a background ``ModelFolderScanner``

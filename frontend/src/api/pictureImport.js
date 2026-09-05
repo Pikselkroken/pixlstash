@@ -1,7 +1,7 @@
 import { apiClient } from "../utils/apiClient";
 
 /**
- * Picture import resource — the async streaming-staging session (#459).
+ * Picture import resource - the async streaming-staging session (#459).
  *
  * This module is the SINGLE seam between the async-import UI and the backend.
  * Every network call the import flow makes lives here, so the UI (the two-phase
@@ -14,13 +14,13 @@ import { apiClient } from "../utils/apiClient";
  *
  *   Phase A "staging / unsafe":  open a staging session, then STREAM the files
  *     into it batch by batch while the tab stays open. Closing/refreshing the
- *     tab mid-stream aborts the upload — this is the window the beforeunload
+ *     tab mid-stream aborts the upload - this is the window the beforeunload
  *     guard protects. `openStagingSession()` starts it; `stageFiles()` streams a
  *     batch; `cancelStaging()` discards a not-yet-committed session.
  *
  *   Safe transition:  once every byte is staged, `commitStaging()` hands off to a
  *     background `PictureImportTask` on the server's task runner and returns the
- *     task id. From here the tab is free — refreshing is harmless.
+ *     task id. From here the tab is free - refreshing is harmless.
  *
  *   Phase B "importing / safe":  poll `fetchStagingStatus()` BY `stagingId`
  *     (NOT task id) until `stage` is `completed`/`failed`/`cancelled`, driving
@@ -39,7 +39,7 @@ import { apiClient } from "../utils/apiClient";
  * shipped restore route, which already clears `deleted_at` and re-folds stack
  * positions. There is deliberately no second restore path here.
  *
- * GRID REFRESH — there is deliberately NO per-file `results[]` payload. On
+ * GRID REFRESH - there is deliberately NO per-file `results[]` payload. On
  * completion the backend broadcasts `CHANGED_PICTURES` + `PICTURE_IMPORTED` over
  * the WebSocket (uniform origin-aware envelope, integration_architecture.md §8),
  * which the grid already consumes (`useGridRealtimeSync`) to insert the new
@@ -58,10 +58,15 @@ import { apiClient } from "../utils/apiClient";
  *                                                                       cancelled_count, error }
  *
  * NOTE: the staging file endpoint accepts media, `.zip` archives (extracted
- * server-side) and `.txt` caption sidecars — the client streams whatever the
- * import file-collection allows (`isSupportedImportFile`) and lets the backend
- * decide. Truly unsupported files come back in `skipped[]`; a session that
- * stages nothing 400s on commit.
+ * server-side) and `.txt` caption sidecars, and the client streams whatever the
+ * import file-collection allows (`isSupportedImportFile`). That collection now
+ * mirrors the server's own media allowlist (`IMPORT_MEDIA_EXTENSIONS` in
+ * `utils/media.js` ↔ `STAGING_ALLOWED_MEDIA_EXTS` in the route), because
+ * "stream it and let the backend decide" charged the whole upload before
+ * refusing: a file the name already disqualifies came back in `skipped[]` after
+ * its last byte, and a session that staged nothing 400s on commit. What still
+ * reaches `skipped[]` is what only the bytes can settle - a corrupt image, a
+ * bad zip - never an extension.
  */
 
 export const IMPORT_ENDPOINTS = {
@@ -84,12 +89,12 @@ export const IMPORT_ENDPOINTS = {
  */
 
 /**
- * Phase A start — open a staging session (start of the unsafe window).
+ * Phase A start - open a staging session (start of the unsafe window).
  *
  * `projectId` / `setId` / `characterId` are the drop-target association: when
  * files are dropped onto a project / set / character row, the backend associates
  * every imported picture with that target server-side on commit (there is no
- * per-file results[] to associate client-side). They are independent — a drop
+ * per-file results[] to associate client-side). They are independent - a drop
  * targets one, but the session accepts each optionally.
  *
  * @param {Object} args
@@ -130,7 +135,7 @@ export async function openStagingSession({
  */
 
 /**
- * Phase A — stream one batch of files into the session. Throws on network/HTTP
+ * Phase A - stream one batch of files into the session. Throws on network/HTTP
  * failure so the caller's retry/abort logic can react.
  *
  * @param {Object} args
@@ -179,7 +184,7 @@ export async function stageFiles({
  */
 
 /**
- * Safe handoff — commit the session, enqueuing the background import.
+ * Safe handoff - commit the session, enqueuing the background import.
  * Throws on 400 (empty / face worker down), 409 (already committed), 507 (disk).
  *
  * @param {Object} args
@@ -240,7 +245,7 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  */
 
 /**
- * Phase B — poll a session's stage/progress by staging id.
+ * Phase B - poll a session's stage/progress by staging id.
  *
  * @param {Object} args
  * @param {string} args.backendUrl

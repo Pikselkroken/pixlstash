@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""split_library_by_project.py — Split a PixlStash library in two along a project boundary.
+"""split_library_by_project.py - Split a PixlStash library in two along a project boundary.
 
 Part of a database split: one library becomes "the project" and the other becomes
 "everything else".  Run the script twice, once against each half, with opposite
 ``--mode`` values:
 
   1. Copy the whole image root (it contains ``vault.db``) to a second location.
-  2. Against the ORIGINAL library, run ``--mode remove-in-project`` — it strips
+  2. Against the ORIGINAL library, run ``--mode remove-in-project`` - it strips
      out everything that belongs to the project, leaving the "everything else"
      half.
   3. Point the app at the COPY, restart it, and run ``--mode remove-out-of-project``
-     — it strips out everything that does not belong to the project, leaving the
+     - it strips out everything that does not belong to the project, leaving the
      project-only half.
 
 Both halves must have their own copy of the image root before either run: the
@@ -27,7 +27,7 @@ an entity can sit on both sides of the split.  The rules are:
   for it, OR it is a member of a picture set in the project, OR it has a face
   assigned to a character in the project.
 * Overlapping entities (in the project *and* in another project) are KEPT BY BOTH
-  halves — neither run deletes them.
+  halves - neither run deletes them.
 * Entities in no project at all belong to the "everything else" half, so
   ``--mode remove-out-of-project`` deletes them and ``--mode remove-in-project``
   keeps them.
@@ -45,7 +45,7 @@ full plan.  ``--report`` writes the plan (including every id) to a JSON file so
 the run is auditable afterwards.
 
 Usage:
-    # Dry run — prints what would go, touches nothing.
+    # Dry run - prints what would go, touches nothing.
     python scripts/split_library_by_project.py \\
         --url https://localhost:9537 --token API_TOKEN \\
         --project PixlTagger --mode remove-in-project --insecure
@@ -572,20 +572,20 @@ def print_report(plan: dict, locks: dict, applying: bool, unlocking: bool) -> No
     counts = plan["counts"]
     delete = plan["delete"]
     keep = plan["keep"]
-    header = "APPLYING" if applying else "DRY RUN — nothing will be deleted"
+    header = "APPLYING" if applying else "DRY RUN - nothing will be deleted"
     if plan["mode"] == MODE_REMOVE_IN:
         intent = f"remove everything belonging to {plan['project']['name']!r}"
     else:
         intent = f"remove everything NOT belonging to {plan['project']['name']!r}"
 
     print("=" * 78)
-    print(f"PixlStash library split — {header}")
+    print(f"PixlStash library split - {header}")
     print(f"  Project : {plan['project']['name']} (id={plan['project']['id']})")
-    print(f"  Mode    : {plan['mode']} — {intent}")
+    print(f"  Mode    : {plan['mode']} - {intent}")
     print("=" * 78)
 
     print(
-        f"\nPictures — {counts['pictures_total']} total "
+        f"\nPictures - {counts['pictures_total']} total "
         f"({counts['pictures_live']} live, "
         f"{counts['pictures_scrapheaped']} already scrapheaped)"
     )
@@ -605,13 +605,13 @@ def print_report(plan: dict, locks: dict, applying: bool, unlocking: bool) -> No
         f"  ({len(delete['already_scrapheaped_ids'])} already in the scrapheap)"
     )
 
-    print(f"\nPicture sets — {counts['sets_total']} total")
+    print(f"\nPicture sets - {counts['sets_total']} total")
     print(f"  exclusive to the project       {counts['sets_exclusive_to_project']:>8}")
     print(f"  shared with other projects     {counts['sets_overlapping']:>8}  (kept)")
     print(f"  outside the project            {counts['sets_outside_project']:>8}")
     print(f"  TO DELETE                      {len(delete['sets']):>8}")
 
-    print(f"\nCharacters — {counts['characters_total']} total")
+    print(f"\nCharacters - {counts['characters_total']} total")
     print(
         f"  exclusive to the project       {counts['characters_exclusive_to_project']:>8}"
     )
@@ -621,7 +621,7 @@ def print_report(plan: dict, locks: dict, applying: bool, unlocking: bool) -> No
     print(f"  outside the project            {counts['characters_outside_project']:>8}")
     print(f"  TO DELETE                      {len(delete['characters']):>8}")
 
-    print(f"\nProjects TO DELETE — {len(delete['projects'])}")
+    print(f"\nProjects TO DELETE - {len(delete['projects'])}")
     for entry in delete["projects"]:
         print(f"  {entry['id']:>6}  {entry['name']}")
 
@@ -634,7 +634,7 @@ def print_report(plan: dict, locks: dict, applying: bool, unlocking: bool) -> No
 
     collateral = plan["warnings"]["collateral_reference_sets"]
     if collateral:
-        print("\nWARNING — deleting these characters also deletes their reference")
+        print("\nWARNING - deleting these characters also deletes their reference")
         print("picture set, which is not otherwise scheduled for deletion:")
         for entry in collateral:
             print(f"  character {entry['character_id']} -> set {entry['set_id']}")
@@ -737,7 +737,7 @@ def execute_plan(
             # and went with the character above; anything else is a real failure.
             if "HTTP 404" in str(exc):
                 logger.info(
-                    "Set id=%s (%s) was already gone — deleted with its character.",
+                    "Set id=%s (%s) was already gone - deleted with its character.",
                     entry["id"],
                     entry["name"],
                 )
@@ -1021,7 +1021,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"This permanently deletes {len(plan['delete']['picture_ids'])} picture(s) "
             "FROM THE DATABASE AND FROM DISK, plus "
             f"{len(plan['delete']['sets'])} set(s) and "
-            f"{len(plan['delete']['characters'])} character(s) — {total} rows in all."
+            f"{len(plan['delete']['characters'])} character(s) - {total} rows in all."
         )
         print("It cannot be undone. Make sure the other half of the split already")
         print("has its own copy of the image root.")

@@ -127,7 +127,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, TrainingRuns, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -142,9 +142,9 @@ frontend/src/
     │   ├── TagHealthBoard.vue         # Landing tag-health board
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
-    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
+    ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute, Libraries, Layout), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), `PicturePicker` (one faceted, single-select library picker: the shelf's thumbnail verb today, the workflow Fixed and run-time modes next), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
 
 ---
@@ -228,9 +228,10 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen`, `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
+| `useMovesStore` | `useMovesStore.js` | v1.11 Phase 5, the reconciliation queue for moves made outside PixlStash. `unambiguous` / `ambiguous` / `offLayout`, `loading`, `error`, `loaded`; `hasPending`/`pendingCount` deliberately **exclude `offLayout`** — that bucket carries no decision (backend_architecture.md §27), so a sidebar badge counting it would nag about nothing. `fetchPending` never invents or corrects a verdict; it re-fetches `GET /moves/pending`, which the backend reclassifies live on every call. `applyAllUnambiguous`/`applyReview`/`dismissReviews`/`dismissAll` all re-fetch afterward rather than mutating the local lists — see §9.4. |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
-| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name and the reduced location state on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
+| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. **Under `folder` the key carries the COPY, not the folder**, because the hub is content-addressed and the same bytes can be registered twice *inside one folder* under two names — the exact collision the previous sentence describes, reached on the axis it was written for. `relpath` is half the `model_file` key and so unique within a folder by construction. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
 | `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched when `ModelFoldersDialog` opens, not at startup: the dialog is its only reader. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
@@ -285,6 +286,27 @@ It is split in two so the URL contract is testable on its own:
 - Folder routes (`ref-folder` / `import-folder`) deliberately do **not** clear `selectedFolderFilter`. The sidebar owns that payload and emits `select-folder` once the folder has loaded, so the route must not wipe what the sidebar just set.
 
 **`?stack_state=` is the one filter the route owns**, and it is **additive only**: an absent or unrecognised value resolves to `null`, which means "leave `useFilterStore.stackStateFilter` alone". Resetting it on every route tick would silently clear a filter the user set in the filter panel the moment they navigated anywhere, which no other filter does. It exists because the Duplicates queue-clear screen routes to All Pictures with the stacked filter applied (`docs/design/keep-cover-only.md` → "The route from Duplicates"), and that destination has to be reloadable and Back-able rather than a state only one click can produce. It is read for every grid route, not just `/`. Adding a second route-owned filter is a design decision, not a copy-paste: the store is otherwise the writer of selection/project state only.
+
+**`?path=<absolute folder>` is the folder facet for folders that have no id.** A
+reference folder and an import folder each have a route (`/ref-folder/:id`,
+`/import-folder/:id`) and the sidebar owns their payload — which is why those
+two routes do not clear `selectedFolderFilter`, and why `?path=` is ignored on
+them (`applyView` guards on `folderKey`). The folder an "About your library"
+finding points at (§9.3) has no id of any kind, which is what this param is
+for. **The sidebar's subfolder selection is still not in the URL:**
+`FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
+`pushRouteForCurrentSelection`'s ref-folder branch and the path is dropped as
+before — closing that means teaching the sidebar's `activeFolderKey` watcher to
+restore a subfolder rather than the folder root, which is a change to the
+folder tree. `parseFolderPath`
+resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
+to the listing API's existing `file_path_prefix` param — there is no new backend
+filter behind it. Read on every grid route rather than only on `/`, the same
+reasoning as `?stack_state=`: it is what makes `/character/UNASSIGNED?path=…`,
+the unassigned pictures in ONE folder, expressible at all. Unlike
+`?stack_state=` it is **not** additive — an absent `path` on a non-folder route
+clears the filter, because the facet describes what the grid is showing rather
+than a sticky preference.
 
 **The URL cannot grant a project scope the credential does not have.** `applyRoute` narrows the parsed descriptor through `scopeProjectToSession` before writing it: a credential with a `resource_type` takes its project scope from the **token**, never from the URL — `project` → its own project (whatever project the URL names), everything else (`character` / `picture_set` / `picture`) → global mode with no project id. An owner session and a whole-library READ share both have **no** `resource_type` and are left exactly as the URL says; narrowing them would be over-blocking, since the backend places no project restriction on either (`visible_project_ids` returns `None`).
 
@@ -348,9 +370,155 @@ The core image display engine. Responsibilities:
 - **Segment (object detection)**: the context menu's "Segment" item emits `segment`; `ImageGrid` opens a small dialog for an optional label phrase and `POST`s `/pictures/detect` with the selected ids (empty phrase → dense detection). Progress shows in the task manager; the overlay refreshes on the resulting `changed_pictures` event.
 - Image scoring (guest and authenticated star rating).
 - Drag-and-drop reordering within sets (via `useGridDragDrop`).
-- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
+- Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `LibraryEmptyState`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
+
+##### The empty library is a different question from an empty grid
+
+`ImageGrid` has three empty states and they are not variants of one screen.
+A filter that matched nothing and an empty scrap heap keep the card they had —
+"No pictures match the current filters", "Are all your pictures that good?" —
+because those are questions with their own answers.
+
+The third, `totalAllPicturesCount === 0`, is **the first screen of every
+install**, and it gets `LibraryEmptyState.vue`. It used to read *"No pictures in
+the database. Add pictures by dragging them here."* Two things were wrong with
+that. **"Database"** is our word: the owner has pictures, and the thing holding
+them is an implementation detail they were never introduced to. And **dragging
+is one route of three**, offered as though it were the only one — PixlStash can
+also read a folder you already have, in place, moving nothing, and it can
+generate straight into the library. Someone arriving with an organised folder
+tree was being told to take it apart and drag it back in, which is the v1.11
+diagnosis in a single sentence of copy.
+
+So: three routes, folder first, and only that one carries the accent. Ordering
+plus a single primary is the whole of how "none of them is more official than
+the others" is said; two primaries would make it a choice between two official
+answers. The folder route leads because it is the case the release exists for
+and the one that was invisible — reference folders have always worked and were a
+sidebar accessory nobody was pointed at.
+
+**Every route reuses wiring App.vue already had.** `local-import` reaches
+`SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
+(with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
+new signal, for `SideBar.openReferenceFolderEditor`.
+
+**The empty library asks whether its own folder is empty.** The desktop's
+first-run setup creates the vault in whatever folder was chosen, and the web
+flow's "Add a library" only saves a pending mapping entry for folders it read
+itself, so a vault made over loose pictures had nothing to bring the wizard up:
+the owner chose a folder full of pictures and got "This library is empty".
+`ImageGrid` emits `library-empty` the first time `showLibraryEmptyState` turns
+true; App.vue forwards it to `SideBar.offerLoosePictures`, which asks
+`GET /libraries/inspect` about the active library's own path (the `attached`
+verdict now carries `picture_count`, what is on disk whether indexed or not)
+and, when there is anything there, opens `FolderMappingWizard` with
+`{ path, mode: "local_import" }` and no read: the scan card starts one, the
+read saves the pending entry as any resumed read does, so Cancel leaves the
+sidebar's "Finish organising…" row offering it. Once per page load, like the
+pending-entry auto-open beside it, and never for a read-only session, a remote
+one (`canManage` false), or while an entry is already pending. The wizard's
+"Drop this, organise later" commits with no assignments when the library
+already exists rather than trying to add it again.
+
+**Initial setup comes before the telemetry question.** `useAppConfig` asks
+for the consent dialog as soon as the config says it was never answered, which
+on a first run is before the library has even been counted, so the privacy
+dialog came up first and the import wizard opened over it. `ImageGrid` also
+emits `library-loaded` `{ empty }` when the first count lands; App.vue awaits
+the loose-picture offer for an empty library, then marks the library settled,
+and `TelemetryConsentDialog` is shown only once that is true and no mapping
+wizard is open or pending. The request itself is kept, so the dialog appears
+the moment the wizard closes. `SideBar.offerLoosePictures` hands every caller
+the same in-flight promise: `library-empty` and `library-loaded` fire in the
+same tick, and a second call that returned at once (already offered) settled
+the library before the path had even been inspected, so the dialog came up
+under the wizard anyway.
+
+**The first frame's theme is remembered, not guessed.** The theme a person
+chose lives on their user record, a round trip away, so everything painted
+before that answer lands is painted in whatever `createVuetify`'s
+`defaultTheme` says. That default is **dark** - it matches the desktop shell the
+window opens from, and a picture is looked at against a dark canvas - which left
+someone who had chosen light watching one frame of dark first.
+`utils/themeMemory.js` closes it: App.vue's theme watcher writes the mode it
+just applied to `localStorage`, and `main.js` reads it back to pick
+`defaultTheme` before the app mounts. It is a cache of a decision made
+elsewhere and never the decision itself - a stale or unreadable value costs one
+repaint and nothing else - so a blocked `localStorage` simply falls back to the
+default, and the stored `theme_mode` still wins the moment the config arrives.
+
+**On desktop the privacy question is not this dialog's to ask.** The shell's
+startup framework (`electron/src/renderer/setup.html` / `setup.js`) asks it
+before the app loads, as one of the steps that launch needed, and parks the
+answer in `userData/pending-telemetry.json`. `useAppConfig` takes that answer
+(`window.pixlstashDesktop.takePendingTelemetry()`, read-and-delete so it cannot
+re-apply over a later change in Settings) and saves it, which also sets
+`telemetry_consent_prompted` and stops the dialog. A desktop launch that finds
+the question unanswered with nothing parked — an upgrade from a version that
+never asked — hands the window back with
+`askStartupQuestion("privacy")` rather than opening the dialog over a library
+that is already on screen; the shell shows that one step, parks the answer, and
+returns to the app. The in-app `TelemetryConsentDialog` remains the browser's
+path, and the desktop's last resort if the shell is too old to answer either
+call.
+
+**Directly to the reference editor, not to `openAddFolderTypeDialog`.** That
+chooser's other option is an import folder — *"watch for new files and import
+them automatically"* — which copies files in, and the button that reaches it
+promises "Nothing is moved" one screen earlier. Routing through the chooser
+would have the release's headline claim falsified by the very next click, and
+the probe would measure the opposite of what it is for.
+
+The component is presentational: it holds a hidden file input, clears its
+`value` after each `change` so the same files can be chosen twice in a row, and
+hands the chosen files up **unfiltered**. `ImageGrid.importChosenFiles` drops
+what PixlStash cannot read, against the same `isSupportedImportFile` and under
+the same `import-unsupported-files` notice key the two drop paths use — an OS
+picker's `accept` is advisory, so a button that skipped it would be the one
+import route that took anything silently. It normalises with `Array.from`
+before filtering, so a caller handing it an `<input>`'s `FileList` gets an
+import rather than a `TypeError` raised a long way from the mistake.
+
+**`accept` is one constant, `IMPORT_FILE_ACCEPT` in `utils/media.js`, for all
+three import inputs** (this card, `PhotosImportDialog`, `TbImportPanel`). It has
+to agree with `isSupportedImportFile`, and it did not: this card shipped as
+`image/*,video/*`, which greyed out the zip and caption-file imports the app
+supports and left them reachable only through the picker's "All Files". Advisory
+or not, `accept` is what the route *looks like it takes*, so a narrow one hides
+a feature rather than rejecting a file. `media.test.js` asserts the offer
+against the predicate in **both** directions — every named extension is one the
+importer takes, and every type the importer takes is named or covered by a
+wildcard — because a subset check alone stays green when a supported type is
+dropped from the offer, which is the drift that matters.
+
+**A `:accept` bound to a name the `<script setup>` never imported renders no
+`accept` at all**, so the picker silently offers every file on the disk while
+the markup still reads correctly. This shipped in review: two of the three
+inputs were pointed at the shared constant without importing it. Two guards now
+close it — `vue/no-undef-properties` is an **error** in `eslint.config.js`
+(repo-wide, for every undeclared name a template references, not just this one),
+and `TbImportPanel.test.js` asserts the *rendered* attribute rather than the
+binding.
+
+**Three conditions stop it appearing, and two are about not lying:**
+
+- `totalAllPicturesCountLoaded` — the count starts at `0` and
+  `fetchAllPicturesCount` swallows its failure, so an unanswered request is
+  indistinguishable from an empty library. Saying "This library is empty" over a
+  backend that did not reply is worse than saying nothing, and this screen says
+  it with three buttons under it.
+- `!isReadOnly` — a share recipient owns nothing here. Two routes open the
+  owner's sidebar dialogs and the third dead-ends in the importer's read-only
+  refusal, and the zero they were handed is the count `GET
+  /characters/{ALL}/summary` refused them, not a fact about the library.
+- the scrap-heap and set-overlap views, which have their own questions.
+
+`ImageGridLibraryEmptyState.test.js` mounts the real grid for all of it. The
+component's own suite passes with the feature disconnected from the app
+entirely — that was measured, not assumed — so the integration file is where
+"does it render" and "does a button reach anything" actually live.
 
 ##### Who owns a card's thumbnail URL
 
@@ -565,6 +733,92 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
+##### `LibraryLayoutDialog.vue`: the layout, and the one gesture that moves everything
+
+**A dialog, not a tab.** It opens from `Choose a layout…` on the active
+library's `⋯` menu in `LibrariesSection`, and only that row's: the layout routes
+are `/server-config/layout`, which address whichever library is *open*, so the
+item on any other row would silently edit a different library's folders. There
+is deliberately no Library layout entry on the settings rail.
+
+620px rather than the house 440 (`AppDialog :width="620"`), and the extra width
+is spent on the one thing that needs it. One pane, no steps:
+
+- **The level builder** is one `v-select multiple` per folder level, each in its
+  own colour, with the level number on the select's own label so colour is
+  never the only thing telling two levels apart. The hues are theme colours
+  `level-1`..`level-4` (+ their `on-*` pairs) in `main.js`, and they are the one
+  family that is deliberately **different in light and dark**: the hue has to
+  clear 4.5:1 as small text, which needs luminance <= 0.183 on white and >= 0.310
+  on the dark `input-background`, and those windows do not overlap. The tint
+  alpha behind each field is `--level-wash` in `style.css`, 0.10 light and 0.14
+  dark for the same luminance step.
+  Four levels must sit on one line without wrapping: 620 minus 48 padding = 572px,
+  less three separators and six gaps leaves about 527px over four 120px-basis
+  flex columns, and a label longer than its column ellipsises with the full text
+  in `title`. Measured in Chromium at 620px: four levels give four 132px cells
+  at one shared top, row height 36px, no horizontal scrollbar. The row is
+  `align-items: stretch`, not `center`, because a filled select is taller than
+  an empty one and centring the two puts the boxes on different baselines.
+  That budget only holds while the row carries selects and separators and
+  **nothing else**: no per-level remove button, and no add control at four
+  levels. `LibraryLayoutDialog.test.js` pins that. A fifth level cannot happen,
+  because there are four facets and none may be used twice.
+- **The tree is the argument.** `getLayoutMigrationPreview` returns `tree`, a
+  flat list of `{path, name, depth, have, arriving, leaving, is_new}`, every
+  folder of the library, uncapped: the list scrolls, because a cap that showed
+  sixty rows and "...and 299 more folders" hid exactly the date folders the
+  owner wanted to check. A folder is a row only when one of have/arriving/leaving is
+  non-zero, so an intermediate folder that holds nothing and receives nothing is
+  absent while its child is present, and **under a multi-level layout almost
+  every row is such an orphan**. Indenting on `depth` alone therefore says
+  nothing: measured against the e2e fixture on Project/Person/Set/Tag, all nine
+  rows were leaves whose ancestors had no row, and they read "arm hair",
+  "beard", "arm hair" with no way to tell whose they were. So each row shows the
+  ancestors that have no row of their own as a **muted breadcrumb read off
+  `path`**, and indents only under the nearest ancestor that IS present. Nothing
+  is synthesised and no withheld parent row is invented. The breadcrumb is the
+  only part that shrinks (`flex: 0 1 auto` + ellipsis); the leaf identifies the
+  row and always shows in full, and `title` carries the whole stored path.
+  `have` renders a dash off `is_new`, not off `have == 0`, because a real folder
+  can legitimately hold nothing.
+- **The layout is frozen for the duration of a move**, in `scheduleSave`, every
+  edit routes through it, so one guard covers the model, the debounce and the
+  write. Editing mid-run makes later passes re-plan against a new layout, so
+  half the library lands on one and half on the other, under one undo batch that
+  describes neither. The selects are `disabled` too, but that is the affordance,
+  not the rule.
+- **`refreshPreview` never touches `lastRun`.** Its `batchId` is the only route
+  back to a move that has already happened, and a re-count is not a reason to
+  throw one away. Nor is a pass that fails: `lastRun` is only overwritten when
+  the new run actually minted a batch id.
+- **There is no confirm, and the Move button is the guard instead.** The
+  consequence bar carries the number beside the verb, so a modal on top would be
+  a second yes for one gesture. Every edit marks the count stale, the bar reads
+  `counting…` *instead of* the old number, and the primary is inert until a
+  fresh count lands. A number that lags the tree is worse than no number.
+- **Saves are debounced 500 ms.** `v-select multiple` emits per item toggle and
+  every save re-counts.
+- **The migration runs in passes and echoes one `batch_id`**, which is what makes
+  the whole run a single undo (integration §23). The loop guards on the cursor
+  strictly advancing. `undoBatchById` refuses by returning `null` rather than
+  throwing, which is what keeps the Undo on screen instead of discarding the
+  batch id with it.
+- **Two exits, both filled buttons, side by side.** `Keep layout, move nothing`
+  is `secondary`, not `ghost`: choosing a layout and declining the move is the
+  common case and must not read as backing out. `Move them now` is
+  `primary_green` and is the only control on the pane that changes colour.
+- **Every refusal the API reports is shown** as a flag chip, from the preview's
+  `skipped_counts` and from each pass's `skipped`, alongside `collision_count`
+  and `cross_volume_count`. A run that could not touch 500 locked files must not
+  report a clean "Moved 3,609 pictures".
+- **The prose is a disclosure.** `What this layout will never do` is three lines
+  behind a closed `<details>`; it is a promise checked once, not copy read every
+  time.
+
+A library switch reloads the page (`useLibrariesStore.begin` -> `reloadPage`), so
+nothing in this dialog has to survive one.
+
 **Pane height is fixed** (`.settings-content`, 524px) so the dialog does not
 resize as the rail is clicked. A pane that outgrows it scrolls whole, header and
 all, which is what the Models pane did once a library had six tagger plugins.
@@ -593,7 +847,68 @@ asserted in `UserSettingsDialog.test.js`.
 `LibrariesSection` reads the shared registry
 store, shows host paths and deployment-specific CLI commands only when the
 server supplied them, and always offers the public documentation link as the
-remote-safe fallback. The switch confirmation is the global
+remote-safe fallback.
+
+It owns the whole lifecycle from v1.11: `+ Add a library…`, and a per-row `⋯`
+menu holding `Open this library`, `Rename…` and `Stop using this…`. **The active
+library's menu has no `Stop using this…`** — the registry refuses detaching it,
+so the item could only ever fail, and switching away first is what the other
+rows' `Switch` buttons are for. **A remote session gets no menu and no Add
+button at all**, because every verb behind them is `LOCAL_OWNER_ONLY`; the
+visible note under the list says so, rather than four items that each fail.
+Renaming stays open on a name the server refused, with the server's reason — it
+names the library already holding that name, which is the one thing that tells
+the owner what to type instead.
+
+`+ Add a library…` opens **`FolderMappingWizard.vue`**, the one dialog the whole
+add flow lives in (mounted once, in `SideBar`; opened through
+`useFolderMappingStore.openWizard()` from Settings, the empty library's
+`Choose a folder…` and the sidebar's add-folder alike). Its first pane is
+`folders/FolderMappingChooseStep.vue`: one path field, `Browse…` (reusing
+`FolderBrowser`, including its `New folder`, since `POST /libraries` creates no
+directory), and one `FolderMappingCard` rendering the `GET /libraries/inspect`
+verdict. Every word in that card is the server's `headline` and `detail`; the
+component decides only the border and whether there is a button, branching on
+`can_add` and nothing else. `vault` and `empty` are added and switched to on
+the spot (`addLibrary`, then `useLibrarySwitchStore.begin`); it adds the path
+the **server resolved**, not the one typed, and an inspection still on the wire
+when the path changes is discarded by epoch. A refusal from `POST /libraries` —
+the server re-inspects, so a folder that became covered since the verdict is
+refused there — re-asks and then shows the message, so the card and the error
+agree.
+
+**`pictures` creates nothing yet.** `Bring them in` swaps the verdict card for
+`FolderMappingScanStep` in the same `FolderMappingCard` frame, under the same
+(now fixed) path field, in the same dialog at the same width — the owner's
+requirement was that the box changes and the dialog does not. The read runs
+with `match_existing: false`, because the library it would match against does
+not exist and some other one is active. Then the mapping and preview steps as
+before; only `Yes, build this library` (or `Organise later`, with no
+assignments) does `addLibrary`, saves a store entry with `autoCommit: true`,
+the accepted `assignments` and `pictureCount`, and starts the switch. After the
+reload `SideBar` auto-opens the wizard on that entry, straight into the preview
+step, which commits on mount (`commitOnMount`) and immediately re-saves the
+entry without `autoCommit`, so a deferred or interrupted commit resumes as a
+plain "Finish organising…" and never commits twice. Cancel or the header close
+anywhere before the build cancels a running read, clears the entry and leaves
+nothing behind; a resumed entry is left alone, as its read is real.
+
+A `Call it` field sits inside the addable card, prefilled from the verdict's
+`suggested_name` and left alone once the owner edits it. It is not decoration:
+library names are unique among attached libraries, so without it two folders
+both named `2024` are unaddable from this dialog and the owner is sent to the
+command line — the thing the feature removes.
+
+**`inspect` is a no-op for the path it last answered, and that is what makes the
+button work.** A browser orders `mousedown → blur → click`; `@blur` re-inspects,
+and without the guard it cleared the verdict synchronously, so the click that
+followed found `canAdd` false and did nothing at all — a button that silently
+failed on its first press, every time. `FolderMappingChooseStep.test.js`
+reproduces it with a *slow* inspect mock on purpose: with one that settles
+inside the blur's own `nextTick` the test passes either way, which is how such a
+bug survives being "covered".
+
+The switch confirmation is the global
 `ConfirmDialog.vue` host for `useConfirm`: it focuses the primary action, handles
 Enter/Escape through `AppDialog`, restores invoking focus on cancel, and names
 outgoing live share links before any switch request is sent. After acceptance,
@@ -658,7 +973,7 @@ Small presentational building blocks shared by the section components above, so 
 ### Editor and Browser Components
 
 #### `CharacterEditor.vue` (582 lines)
-Create/edit a character (person). Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved` (payload: the saved record, with the server-assigned id on create, so hosts can chain follow-up work). Hosted by `SideBar` (its own entry points), by `ImageGrid` (the context menu's create-person-and-assign flow, #645) and by `ImageOverlay` (create-person-from-a-face; that instance is overlay-local, see §`ImageOverlay.vue`). Embeds `AdapterTray` below the reference images. **Editing is two-column at 720** (fields left, reference images right, tray spanning); **creating stays one-column at 480**, because both right-column blocks are gated on an existing id and a 720 dialog with an empty half is worse than the narrow one. See "Two-column editors" below.
+Create/edit a character (person). Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved` (payload: the saved record, with the server-assigned id on create, so hosts can chain follow-up work). Hosted by `SideBar` (its own entry points), by `ImageGrid` (the context menu's create-person-and-assign flow, #645) and by `ImageOverlay` (create-person-from-a-face; that instance is overlay-local, see §`ImageOverlay.vue`). Embeds `AdapterTray` below the reference images. **The reference grid is the thumbnail picker**: clicking a reference image stages it as the person's thumbnail (marked with a corner check and the `--active-bar` selected edge; written as `thumbnail_picture_id` on **Save**, like every other field in this form), clicking the staged one clears the pin back to the automatic choice, and the full-screen preview moved onto its own magnify button because one click cannot mean two things. The key is sent **only when the user picked** — an absent key tells the backend to leave the existing pin alone, so a host handing the editor a character row without the field cannot wipe a pin it never showed. Two cases the grid alone does not cover: the reference list is recomputed from scores, so a pinned picture can drop out of it, and the badge is the only control — a pin the list no longer holds therefore gets an explicit "Use the automatic choice" reset (`.ref-pin-reset`); and the magnify button is `opacity: 0` until hover or focus, with an `@media (hover: none)` branch that shows it on touch, where an invisible corner button would otherwise swallow the tap meant to pin. **Editing is two-column at 720** (fields left, reference images right, tray spanning); **creating stays one-column at 480**, because both right-column blocks are gated on an existing id and a 720 dialog with an empty half is worse than the narrow one. See "Two-column editors" below.
 
 #### `PictureSetEditor.vue` (696 lines)
 Create/edit picture sets. Props: `open`, `set`, `thumbnailUrl`, `backendUrl`, `projects`. Uses `SET_COLORS`, `SET_ICON_CATEGORIES`, `ICON_CARDS` from `setAppearance.js`. Emits: `close`, `refresh-sidebar`. Hosted by `SideBar`. Embeds `AdapterTray` below the appearance row, outside the lock wash — the tray is read-only, so a locked set still shows what it uses. **Two-column at 720**: name/description left, projects/lock right, with the appearance row and the tray spanning both. See "Two-column editors" below.
@@ -823,6 +1138,70 @@ The house-styled form/control primitives that wrap Vuetify with the PixlStash to
 **`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms keep the fixed `width`.
 
 **The dialog keyboard contract (owner decision, 2026-07-29).** Every dialog dismisses on **Escape** and accepts on plain **Enter**, and the buttons wear the keys. `AppDialog` implements both on its own subtree so no page-level Escape owner is consulted first: Escape emits `close` (suppressed while `persistent`), Enter emits `accept`. Enter is deliberately inert where the key already has a meaning — multiline fields, buttons and links (native activation wins, so Enter on a focused Cancel cancels), selects, `<summary>`, ARIA text boxes, and any element that already handled the event (`defaultPrevented`). To adopt: wire the primary action to `@accept`, give the accept/confirm button `AppButton key-hint="enter"` (an ↵ badge, plus `aria-keyshortcuts`) and the cancel/abort button `key-hint="esc"`, and let the disabled state of the button — not the handler — be what gates the keypress (the `accept` handler must check the same `canSubmit` the button uses). New dialogs must follow this; existing dialogs adopt it as they are touched. First adopter: `RemixDialog`.
+
+#### `PicturePicker.vue` (`widgets/`)
+**One picker for "which picture?", faceted by the groupings the vault already
+stores.** Props: `open`, `subtitle` (what the picture is *for*, in the caller's
+own words). Emits `close` and `pick(picture)`; a `footer-start` slot is where a
+caller puts the route the picker deliberately does not replace. Built on
+`AppDialog` (so it inherits the Escape/Enter contract), with the facet rail
+left, search and tile grid right, and the receipt plus verbs in the footer —
+the `Picker` artboard of the 1.11 Workflow Library canvas.
+
+**Facets are project / character / picture set**, read from
+`useEntityListsStore` (so the picker costs no request the sidebar was not making
+anyway; reference sets are filtered out exactly as the sidebar filters them).
+One facet is active at a time and it becomes `project_id` / `character_id` /
+`set_id` on `GET /pictures/stream`. Free search is the **escape hatch, not the
+primary route**: it swaps to `GET /pictures/search` and carries the same scope.
+
+**Single-select on purpose.** Every caller needs exactly one picture — a model's
+thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
+be built on the argument that something might want it one day.
+
+**Paste imports — and the picker deliberately handles none of it.**
+`useWindowFileImport` already claims a pasted image anywhere in the window, and
+`ImageImporter` — what it hands off to — announces the import from inside the
+import, where the truth is: its progress dialog opens on the same keystroke and
+it reports the buckets at the end. The picker shows the `Ctrl` `V` affordance
+and nothing else, because a second announcement from outside could only be a
+guess, and was wrong three ways: `startImport` refuses outright while another
+import runs *and* under a read-only token, neither refusal ever registers a run
+(so a flag armed on paste never disarmed), and the window importer takes video
+as well as images, so a filter of the picker's own reported one paste and stayed
+silent on another. **What the picker does own** is that the result becomes
+selectable without reopening the dialog: it re-reads the *current* list when
+`useTasksStore.importRuns` drains while it is open — in place, keeping the
+facet, the search and the choice, because an import finishing is not a reason to
+undo what the reader did while they waited, and any import may be one they never
+started. Why paste must import at all: everything downstream names a picture by
+id, and `generation_input` locks an image by sha256 **and** id, so a picture
+that was never imported cannot be locked.
+
+**Two ceilings, both stated on screen.** The browse path pages at 120 with
+`Show more`. The search path has no server-side ceiling to inherit — `GET
+/pictures/search` ignores `top_n` and defaults its `limit` to `sys.maxsize` —
+and this grid is not virtualised, so the cap is applied client-side and the
+panel says it cut the list. The browse path also asks for an explicit
+`fields=id,file_path` rather than `fields=grid`, because the route reads `grid`
+as "this is the picture grid" and silently forces `stack_leaders_only`: a picker
+that could not offer a stacked variant, and whose browse and search results
+would then disagree about the same picture.
+
+**A tile can say it is not available.** A thumbnail is generated *from* the
+file, so a picture on an unplugged drive 404s — a state the shelf beside it
+already models. Those tiles draw the off-glyph, carry it in their accessible
+name, and refuse to be chosen, rather than showing an empty box that invites a
+click which cannot work.
+
+**The grid is one tab stop.** Roving `tabindex` with arrow-key movement (the
+pattern `DedupPictureStrip` already uses), because 120 tiles as 120 tab stops
+puts the footer verbs out of reach — and Enter on a tile accepts, since
+`AppDialog` exempts `<button>` from its Enter contract and the ↵ badge on
+`Use this picture` would otherwise promise what the keyboard cannot do.
+
+First caller: the model shelf's thumbnail verb (§9.1). The workflow Fixed and
+run-time Picker modes are its second and third.
 
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
 The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
@@ -1163,19 +1542,25 @@ Pure stack ordering and leader-selection utilities (no Vue dependency).
 
 File type helpers.
 
-| Export | Description |
-|--------|-------------|
-| `PIL_IMAGE_EXTENSIONS` | Array of ~50 image format extensions. |
-| `VIDEO_EXTENSIONS` | `['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v']` |
-| `ARCHIVE_EXTENSIONS` | `['zip']` |
-| `CAPTION_EXTENSIONS` | `['txt']` |
+Every name below is `export`ed **except** the five marked *(module-local)*, which
+are listed because they are how the exported predicates are built, not because
+anything outside the file can reach them.
+
+| Name | Description |
+|------|-------------|
+| `PIL_IMAGE_EXTENSIONS` | Array of ~50 image format extensions. What the app can **display** — never what it will import. |
+| `VIDEO_EXTENSIONS` | `['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v']` — display, as above. |
+| `IMPORT_MEDIA_EXTENSIONS` | What the importer will **take**, mirroring `STAGING_ALLOWED_MEDIA_EXTS` in `pixlstash/routes/pictures/_import.py`. Much shorter than the display lists, and the difference is not cosmetic: filtering a drop against those let a `.psd` or a `.wmv` upload in full before the route skipped it as unsupported and the commit returned "No staged files to import". `tests/test_architecture_guardrails.py::test_frontend_import_extensions_match_the_staging_allowlist` fails the build if the two lists drift. |
+| `ARCHIVE_EXTENSIONS` | *(module-local)* `['zip']` |
+| `CAPTION_EXTENSIONS` | *(module-local)* `['txt']` |
 | `isSupportedImageFile(file)` | Predicate by extension. |
 | `isSupportedVideoFile(file)` | Predicate by extension. |
-| `isSupportedArchiveFile(file)` | Predicate by extension. |
-| `isSupportedMediaFile(file)` | Image OR video. |
-| `isSupportedCaptionFile(file)` | `.txt` extension. |
-| `isSupportedImportFile(file)` | Media OR archive OR caption. |
-| `collectImportFiles(dataTransfer)` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, deduplicates by `name::size::lastModified`. |
+| `isSupportedArchiveFile(file)` | *(module-local)* Predicate by extension. |
+| `isImportableMediaFile(file)` | *(module-local)* Extension is in `IMPORT_MEDIA_EXTENSIONS` — the import test, not the display one. |
+| `isSupportedCaptionFile(file)` | *(module-local)* `.txt` extension. |
+| `isSupportedImportFile(file)` | Importable media OR archive OR caption. Every import entry point filters through this one: the window-wide drop (`useWindowFileImport`), the grid's drop target, the sidebar set/character drops, and the import dialog. |
+| `isModelFile(file)` | `.safetensors` — what the model shelf catalogues, not something the picture importer ever takes. |
+| `extractSupportedImportFilesFromDataTransfer(dataTransfer, { accept })` | Async; recursively resolves `FileSystemEntry` trees via WebKit directory API, keeps what `accept` allows (default `isSupportedImportFile`), deduplicates by `name::size::lastModified`. Call it ONCE per drop: Safari empties the DataTransfer on the first `await`, so a caller wanting two kinds out of one drop widens `accept` and splits the result. |
 
 ---
 
@@ -1443,6 +1828,33 @@ The Axios request interceptor rewrites all relative URLs:
 - If the URL does not already start with `/api/v1`, prepends `/api/v1`.
 - Fully qualified URLs (`http://...`) are passed through unchanged, except same-origin requests get the share token injected.
 - Share token is injected as `?token=` query param for both relative and same-origin absolute requests.
+
+### Uploads: the transport clears the JSON default
+
+The Axios instance sets `Content-Type: application/json` for every request, and
+Axios 1.x decides in `transformRequest` from **that** header what the body is:
+a `FormData` under a JSON content type is rewritten as
+`JSON.stringify(formDataToJSON(form))`, in which a `File` or `Blob` serialises
+to `{}`. An upload that inherited the default therefore reached the server as
+the literal body `{"file":{}}` and was refused as a validation error, with
+nothing on the wire to suggest a file had been meant.
+
+The request interceptor **deletes** the content type whenever the body is a
+`FormData` (via `AxiosHeaders.delete`, with a plain-object walk behind it for a
+hand-assembled config), so the browser writes it with the boundary only it can
+generate. Deleted in the transport rather than remembered per call: the
+model-icon uploader was the one of four that did not pass
+`{headers: {"Content-Type": "multipart/form-data"}}` itself, which silently
+killed the model shelf's Set Thumbnail verb on both of its routes. The other
+three still pass it and are unaffected — the strip runs first and axios then
+re-derives the type from the body — but a new uploader does not have to.
+
+The alternative was to drop the instance-level JSON default and let Axios set
+`application/json` per request, which it does for any object payload. That is
+the smaller diff and the wider blast radius: it also changes what a POST with
+no body, a string body or a `URLSearchParams` body sends, across every route in
+the app. It is worth doing on its own, deliberately, and not inside a fix for a
+broken upload.
 
 ### `appendShareToken(url)`
 
@@ -2455,6 +2867,39 @@ adds a tab stop per row to a list whose keyboard model is deliberately one stop
 per row (§ the roving grid), which is a `ui-ux-expert` decision rather than a
 rendering one.
 
+#### The same bytes, twice
+
+The hub is content-addressed — one `model` row per SHA-256, many `model_file`
+rows — so a second `present` copy is not a second model, it is disk the owner
+can have back. Until this the fact lived only inside `copyPathsTitle`'s tooltip,
+which is a per-row hover: a library with four duplicated files in eighteen
+hundred rows had no way to find them short of hovering every line.
+
+- **`presentCopies()`** (pure, in `utils/modelShelf.js`) counts the copies in
+  state `present` and nothing else. A `missing` or `not_downloaded` row is a
+  registration rather than bytes, and folding it in would offer the reader a
+  saving that is not there.
+- **The count is taken in `visibleRows` and carried on the row as `copies`**,
+  never computed in the template. `groups` narrows a drawn row's `locations` to
+  one copy under `folder` (the bullets above), so a template calling
+  `presentCopies` at render time would report `1` for exactly the rows this
+  exists to mark.
+- **It rides the file line** as `· 2 copies`, beside `LOC_NOTE`, rather than
+  taking a chip: it is a fact about the file, and the tooltip already next to it
+  is what answers the question the count raises — *where is the other one*.
+- **`Show → Copies → Only duplicates`** narrows to `copies >= 2`, client-side,
+  because `locations` is already on every row and there is nothing to ask the
+  server for. It is applied last, so it narrows whatever the type and base
+  boxes left rather than being a screen of its own, and it is the one filter
+  that is not persisted (see `useModelShelfStore` in §5).
+
+Finding them is all this does. Deleting *one* copy is not on the shelf:
+`POST /model-files/delete` is per model and takes every copy with it by design
+(`pixlstash/routes/model_files.py`), so the remedy is the file manager and a
+rescan. The row half of a per-copy delete already exists —
+`purge_deleted_models` drops a `model` row only when no `model_file` survives —
+so the gap is `_plan_deletions`, whose every gate is deliberately per model.
+
 #### The three kinds of absence (#898, #926)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders
@@ -2809,8 +3254,9 @@ and at the pointer with them.
 - **The verbs are ICONS with their words in the tooltip and in the menu.** Nine
   labelled buttons was a sentence to re-read on every selection. Tests address
   them by `data-verb`, not by label text.
-- **The two single-item verbs ride along disabled** past one selection rather
-  than disappearing, so the row of buttons never reflows under the pointer.
+- **Rename, the one single-item verb, rides along disabled** past one selection
+  rather than disappearing, so the row of buttons never reflows under the
+  pointer. Set thumbnail used to sit beside it and is now bulk.
 - **Right-click follows the file-manager rule**: right-clicking a row that is
   not selected selects it and acts on it alone; right-clicking one that IS
   selected leaves the selection alone, so a menu opened on any of forty selected
@@ -3057,7 +3503,7 @@ shelf root**, the same landing `closeMove` uses: the button destroys the element
 the keyboard is standing on, and focus falling to `<body>` restarts the next Tab
 at the top of an 1,800-row document.
 
-#### The icon verb, on the shelf
+#### The thumbnail verb, on the shelf
 
 **Unset is never blank.** The identity column used to be a bare kind glyph, so
 every checkpoint row and the 37% of adapters carrying no title rendered
@@ -3081,18 +3527,70 @@ group, and the shelf already treats "not set" as a value rather than an absence.
 The mark is `aria-hidden`: the row's accessible name already says which model it
 is, and a mark announcing "FL" would be the same fact twice, less usefully.
 
-**Set is single-row, clear is bulk.** An icon answers "which one is this?", so
-giving forty rows one mark would remove the only thing telling them apart — Set
-icon is gated to a selection of one, shown-and-disabled like Rename. Clear
-appears only when something in the selection has one. Setting or clearing a
-single row prompts for nothing (both are reconstructable by doing them again); a
-**bulk** clear is not and confirms, the same test the bulk base-model overwrite
-falls on.
+**Both set and clear are bulk.** Set was originally gated to a selection of one,
+on the argument that giving forty rows one mark removes the only thing telling
+them apart; in practice the owner's common case is the opposite — a base model's
+whole family of adapters wearing its logo — and the shelf is where a selection is
+made. So the verb takes whatever is selected. Clear appears only when something
+in the selection has one.
 
-**One upload path.** The picker is a real `<input type="file">` — the platform's
-own chooser, keyboard-accessible for free — and the client posts the bytes. That
-is what makes "pick a library picture" a *copy* rather than a reference into the
-vault, which is the constraint the hub/vault split imposes.
+`setIconOnSelected` posts the same bytes once per **model** rather than calling a
+bulk route: the icon store is content-addressed, so N identical uploads collapse
+to one file on disk, and this reuses the single write path all three ways of
+choosing an icon already share (`POST /models/{id}/icon`). It addresses
+`selectedModelIds`, not `selectedRows` — a fully ticked run is one row wearing
+the cover's id, and iterating rows would mark the cover and skip the other
+eleven versions. Set and clear have to agree about what a selection is.
+
+Because the route is per-model, no server cap can see the gesture, so the client
+carries both bounds: `MAX_MODELS_PER_ICON_SET` (500, the clear route's figure)
+refuses the write outright, and the uploads go out six at a time. A wider
+fan-out only queues behind the browser's ~6 sockets per origin while still
+burning the client's own 60 s timeout, which would report as failed writes the
+server had committed. The receipt counts, and names the model only when the
+selection was one — which of a partly failed batch landed is not known
+client-side, so the ids go to `console.warn` beside their reasons.
+
+Setting or clearing a single row prompts for nothing (both are reconstructable
+by doing them again). A **bulk** clear is not reconstructable and confirms, the
+same test the bulk base-model overwrite falls on — and so does a bulk set **over
+rows that already have a mark**: the images survive in the shared store, but
+which model wore which is recorded nowhere else. The prompt is counted on those
+rows only (a selection of forty bare rows loses nothing) and is asked *before*
+the picker opens, so nobody is made to choose a picture and then defend it.
+
+**The verb is `Set Thumbnail…`, and the field is still `icon`.** The vocabulary
+change (workflow plan §3 S3) aligns the user-facing verb with the word the code
+already used for what it produces — `ModelMark` describes `set_icon` as "what
+its **thumbnail** was replaced BY" — and keeps *sample* (what a model produces:
+derived, plural, automatic) distinct from what a model *is*. `set_icon`,
+`icon_sha256`, `POST /models/{id}/icon` and `POST /models/icons/clear` are
+unchanged: renaming the column is churn with no user-visible benefit, and
+`set_icon` is separately in use for picture-set glyphs in `SideBar.vue`.
+
+**The library route is primary; the file route survives as the secondary.**
+`PicturePicker` (below) opens on the verb, and its `footer-start` slot carries
+the shelf's `Choose a file…`, which is still the same hidden `<input
+type="file">`. Removing a shipped way of doing the job would be a regression,
+and the point of the step was to prove the picker without taking anything away.
+
+**One upload path, whichever route was taken.** `POST /models/{id}/icon` takes
+bytes and nothing else — there is deliberately no route that resolves a picture
+id server-side, because `model` is a hub row and a picture is a vault row, no
+key spans the two, and SQLite recycles deleted ids
+(`pixlstash/services/model_icons.py`). So the library route sends the picture's
+**pixels**: `getPictureThumbnailBlob(id)` reads
+`GET /pictures/thumbnails/{id}.webp` and the result is posted to the same
+multipart route the file chooser uses. The thumbnail is the right copy to send —
+already WebP, generated on demand for any file the server can still reach, and
+384px on the short edge, which is an icon's size and comfortably inside the
+store's 2 MB ceiling. It is fetched cache-busted, because these bytes are about
+to be *stored*: the route caches for an hour, which is fine for a tile and wrong
+for a copy. **The read can 404** — a thumbnail is generated from the file, so an
+unplugged drive refuses — which is why the picker is closed only once the bytes
+are actually in hand.
+That is what makes the mark a *copy* rather than a reference into the vault, and
+is why it survives the picture being deleted or the library being switched.
 
 **The sample/icon view toggle is NOT built, and cannot be yet.** The ruling
 defines two fallback chains (sample → icon → mark, and icon → mark), but the
@@ -3362,8 +3860,8 @@ in a file mode rather than an `<input type=file>`.** The file is on the machine
 running PixlStash and the server copies it there, so an upload would push a
 gigabyte through the browser to land it a directory away from where it started —
 and `<input type=file>` cannot give the host path the route needs anyway. (The
-icon verb *does* use a real file input, because an icon is small and its bytes
-genuinely have to travel.) The picker's file mode is opt-in on both sides: the
+thumbnail verb's secondary `Choose a file…` route *does* use a real file input,
+because an icon is small and its bytes genuinely have to travel.) The picker's file mode is opt-in on both sides: the
 `pickModelFile` prop turns a click on a file into a selection instead of a
 no-op, and it is what sets `include_model_files` on `GET /filesystem/browse`, so
 every other folder picker keeps a directory-only list. A click **selects**, it
@@ -3379,6 +3877,37 @@ onto a folder group already does, and it does it better — with the folder in
 front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
 and `shelf_bytes` moved with it, so the drive bands are stale too.
+
+**Dropping a `.safetensors` on the window is the same verb without the picker,
+and it works on the desktop only.** `useWindowFileImport` claims a model file
+before the picture importer or the grid can see it and calls the very same
+`POST /model-files` — by *path*, so nothing is uploaded. The path is the whole
+difficulty: a dropped `File` carries a name and bytes but never a location, so
+only the desktop shell can answer where it came from
+(`window.pixlstashDesktop.getDroppedFilePath`, `webUtils.getPathForFile` behind
+the preload bridge). In a browser tab there is nothing to resolve and nothing to
+send, and the drop says so, naming `Add ▾ → Add file…` rather than failing
+quietly — that menu works in a browser because the *server* enumerates the
+filesystem, which is the direction a drop cannot run in. A drop carrying both a
+model and pictures is split: the model goes to the shelf, and the pictures go to
+whichever importer owns the spot they landed on — dropped on the grid they are
+left to propagate to the grid's own handler, which threads the selected
+character into the import where the window-level one cannot. Only a drop of
+model files ALONE is stopped outright, because the grid would otherwise report
+it as unsupported while the shelf was busy accepting it.
+
+**A folder is walked, and the walk happens once.** A trainer's output directory
+holds the adapter beside its samples, and `dataTransfer.files` reports the whole
+directory as a single unreadable entry — reading the flat list imported the
+samples and lost the adapter in silence. `extractSupportedImportFilesFromDataTransfer`
+therefore takes an `accept` predicate, and the drop handler passes one widened to
+"picture **or** model" and splits the single result. It cannot call the walk twice:
+Safari empties the DataTransfer on the first `await`, so a second pass returns
+nothing. The picture import is started *before* the shelf copy is awaited and the
+two run side by side — a multi-gigabyte copy takes minutes, and the photos of a
+mixed drop must not queue behind it. Each drop also takes its own notice key, or
+a second drop coalesces onto the first one's sticky progress card and then
+dismisses it, leaving a running copy with nothing on screen.
 
 **The `Import from ai-toolkit` item is hidden, not disabled, when no `source`
 folder is registered** — unlike the selection bar's verbs, which are about a
@@ -4063,6 +4592,119 @@ Back returns to the queue. Covered in `DuplicateQueue.test.js`.
 `filteredSortOptions`). The backend still serves the mechanism, so a saved
 preference naming it keeps working; the menu simply shows a one-time migration
 notice in its place, persisted through `useOneTimeNotice`.
+
+### 9.3 The "About your library" destination
+
+`/insights` mounts `LibraryInsights.vue` in place of `ImageGrid` (`App.vue`,
+`isInsightsView`), for the same reason `/duplicates` and `/models` do: it reads
+the library rather than showing it, so it has no selection to express and the
+grid's fetches go quiet while it is open. Like the shelf, the predicate is
+gated on `isReadOnly` and the route bounces (`useAppNavigation`): `GET
+/insights` is owner-only, so mounting it for a READ session would only fire a
+request the credential can never satisfy (issue #1014). It has no permanent
+sidebar row of its own — it is reached from All Pictures' right-click menu
+(`SideBar.vue`, `sidebarCtxAllPictures`), inert-not-hidden for a READ session
+there, and says why.
+
+Three rules carry the screen, and the first is the reason it exists:
+
+- **A check that came back clear still gets a row.** The server returns every
+  check in both directions (`state: "todo" | "clear"`), and the view renders
+  both — the clear card is dashed and unpainted, wears a tick, and says
+  "nothing to do" instead of offering a button. A screen where every row is a
+  complaint reads as a nag; one that says "11,900 of your 12,000 pictures carry
+  a tag, nothing to fix here" reads as someone who looked. Filtering the clear
+  rows out client-side would undo the whole design.
+- **The action object is emitted untouched.** `LibraryInsights` emits `act`
+  with the server's `action` verbatim; `App.vue` routes `kind: "settings"` to
+  `openSettingsDialog` (a dialog, not a route) and everything else to
+  `handleInsightAction`, which is where the navigation lives
+  (`useAppNavigationInsights.test.js` pins each kind's destination). The view
+  never re-derives a path or a kind — the folder the evidence counted has to be
+  the folder the tool opens on, and two of the kinds carry a facet
+  (`?path=`, `?face=with_face`) precisely so the destination is the counted set
+  rather than a superset. See `docs/integration_architecture.md` §20.
+- **Nothing on it writes.** There is one request, it is a GET, and "Look again"
+  is that same GET. The bar and the footnote both say so, and the buttons open
+  tools that ask before they change anything. Any control added here that
+  mutates breaks the promise the screen is built on.
+
+The glyph per row is keyed on the finding `id`, never on its prose, so a
+reworded finding does not silently lose its icon. The screen's own title is an
+`h2` above the findings' `h3`s — the other view bars carry a span, but a screen
+whose entire body is headed sections needs an outline to move through. The
+contract is in `docs/integration_architecture.md` §20, including why the
+counts are in grid ROWS rather than pictures.
+
+### 9.4 The "Moves" destination (v1.11 Phase 5)
+
+`/moves` mounts `MovesReview.vue` in place of `ImageGrid`, the same
+replaces-the-grid shape as Insights/Duplicates/the shelf (`App.vue`,
+`isMovesView`), and the same read-only bounce (`GET /moves/pending` is
+owner-only). Where it diverges from those three is the sidebar row: Insights,
+Duplicates and the shelf are permanent destinations shown-and-disabled for a
+read-only session (issue #1014's rule — a demo visitor should still see the
+feature exists); Moves is a to-do queue almost no library ever populates (no
+reference folder has opted into a layout) and one whose contents are never a
+useful thing for a share visitor to see even inertly, so `SideBar.vue` hides
+the row entirely behind `movesStore.hasPending` instead. `hasPending` never
+becomes true for a read-only session because `SideBar`'s `onMounted` only
+calls `movesStore.fetchPending()` when `!isReadOnly`.
+
+**Two entry paths, matching the release plan's "screen on next start" /
+"a sidebar strip a few seconds after the moves stop":**
+
+- **On next start:** the sidebar's own `onMounted` fires one
+  `GET /moves/pending`, so a backlog left over from while PixlStash was
+  closed is reflected the moment the sidebar renders.
+- **While running:** `useUpdatesSocket` debounces `EXTERNAL_MOVES_PENDING`
+  3s before calling `movesStore.fetchPending()` — a burst of reference-folder
+  scans settling around the same time re-fetches once, not once per scan. The
+  event carries no count (the backend's classification is live, so any number
+  put on the wire could already be wrong by the time it renders); the
+  debounced re-fetch is the whole reaction.
+
+**The view never corrects a verdict itself.** Every mutating action
+(`applyAllUnambiguous`, `applyReview`, `dismissReviews`, `dismissAll`)
+re-fetches the queue afterward rather than patching `unambiguous` /
+`ambiguous` / `offLayout` locally — the backend reclassifies fresh on
+`POST /moves/apply` too, so a picture whose memberships changed between the
+GET and the click is applied against what is true at mutation time, and the
+view has to read that back rather than assume its own request matched.
+
+**Reading the response, three shapes:**
+
+- **Unambiguous**: one removal and one addition of the *same* facet reads as
+  a swap (`2024 Shoots → Client · Nordvik`, `changeShape` picks this
+  deliberately over forcing every case through an arrow); anything else — a
+  pure addition, a pure removal, a cross-facet change — reads as separate
+  `+`/`−` tags. Each row also has its own **Apply** button (`applyReview`, the
+  same call `applyAllUnambiguous` makes for every row at once).
+- **Ambiguous**: `item.current` names why — the picture's own current values
+  for the facet a removal is ambiguous about (`"in 2024 Shoots and Client ·
+  Nordvik"`). Two buttons only, matching the design bundle's Moves artboard:
+  a resolve button and **Keep both** (`dismissReviews`, never calls apply).
+  **The resolve button always names the destination, never a generic verb**
+  (`onlyNowLabel`), because it applies a removal and must not read as a
+  no-op. The canonical case — the artboard's own example — has NO addition:
+  the picture already belongs to the folder it moved into, so there is
+  nothing to gain, only the old membership to leave. The label is derived
+  from `item.current` for that case (the ambiguous facet's current names,
+  minus the one being removed), falling back to `additions[0].name` when
+  there genuinely is one and to a generic "Apply this move" only when
+  neither derivation resolves to exactly one name.
+- **Off-layout**: informational chips, no button at all — "already followed,
+  nothing to decide" is the screen's own description of the bucket, so
+  offering an action there would contradict it.
+
+**A scope cut from the artboard, not the plan.** The Moves artboard groups
+identical `(old_folder → new_folder)` patterns into one row with a picture
+count; `GET /moves/pending` returns a flat per-picture list instead, and the
+view renders one row per picture. Every fact the grouped view would show
+(the folders, the implied change) is in the response — this is a presentation
+simplification, not a data gap — and it keeps the backend contract simple: no
+second, pattern-keyed shape to keep in sync with the per-picture one apply
+and dismiss actually operate on.
 
 ## 10. Naming and Coding Conventions
 

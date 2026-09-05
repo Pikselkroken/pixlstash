@@ -1,4 +1,4 @@
-// useGridRealtimeSync — owns the WebSocket → grid update decision table.
+// useGridRealtimeSync - owns the WebSocket → grid update decision table.
 //
 // App.vue keeps only the socket lifecycle (connect / reconnect / close /
 // set_filters). Every incoming message is handed to `handleMessage(payload)`
@@ -13,7 +13,7 @@
 // are not applied inline: they are accumulated into per-category buffers and
 // flushed once per short coalescing window (see the coalescer below). A burst
 // of N foreign events therefore collapses into one batched insert, one batched
-// per-id refresh pass, and one batched remove — not N fetch+rebuild cycles.
+// per-id refresh pass, and one batched remove - not N fetch+rebuild cycles.
 //
 // All dependencies (stores, grid imperative API, predicates, scheduler, logger)
 // are injected so the decision table can be unit-tested without a real grid or a
@@ -31,7 +31,7 @@ const IGNORED = "ignored";
 // thumbnail fetch each) becomes a fetch storm. A foreign-tab "set project on
 // 400 pictures" or "apply scores" lands here; doing one reload (or deferring it
 // under an open overlay) is cheaper than hundreds of single-card refreshes.
-// Applied to the COALESCED batch, not to a single event — a window that
+// Applied to the COALESCED batch, not to a single event - a window that
 // accumulates >50 distinct ids escalates to one reload.
 const MAX_TARGETED_UPDATE = 50;
 
@@ -45,7 +45,7 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 ]);
 
 // "Card-content" fields change how a card *renders* (its overlays / icons) but
-// never its sort or filter position — by construction they are not
+// never its sort or filter position - by construction they are not
 // view-affecting, so they must never reshuffle the grid or raise a pill. The
 // card still needs a targeted in-place metadata refresh so the new content shows
 // without a full reload. `detections` is the canonical case: the grid draws
@@ -54,7 +54,7 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // way for every tab regardless of who started it.
 // `pixels` belongs here for the same reason: an in-place rotate (or the undo of
 // one) rewrites the file and therefore the card's thumbnail, while its sort and
-// filter position are untouched — a turned photo does not move in the grid. It
+// filter position are untouched - a turned photo does not move in the grid. It
 // needs one thing `detections` does not, handled at the branch below: the
 // thumbnail URL lives on the batch-thumbnail endpoint, not on /metadata, so a
 // card refresh alone repaints the pre-rotate bitmap.
@@ -95,14 +95,14 @@ function normaliseSource(payload) {
 // The wire values for `change_kind`, mirroring the backend's
 // `WsBroadcasterMixin.CHANGE_KINDS` allowlist. The two are ONE contract: the
 // backend silently drops a kind missing from its tuple, and this function
-// silently degrades a kind missing from this set to "updated" — which for a
+// silently degrades a kind missing from this set to "updated" - which for a
 // lifecycle change leaves a stale, 404-clickable card behind. Never add a value
 // on one side only.
 //
 // `restored` is a scrapheap comeback (undo of a move-to-Scrapheap, or
 // POST /pictures/scrapheap/restore). It is deliberately NOT `added`: both put a
 // card back, but only `added` means "new to the vault", and the sidebar reads
-// that difference — it raises its NEW marker for an import and must not for a
+// that difference - it raises its NEW marker for an import and must not for a
 // picture that has been in the library all along.
 const CHANGE_KINDS = new Set(["added", "updated", "removed", "restored"]);
 
@@ -158,7 +158,7 @@ export function useGridRealtimeSync(deps) {
   // of the same id inside the window nets out to a remove (and remove→add to an
   // add), never both.
   let addedIds = new Set();
-  let restoredIds = new Set(); // scrapheap comebacks — inserted without the flash
+  let restoredIds = new Set(); // scrapheap comebacks - inserted without the flash
   let updatedFields = new Map(); // id -> Set<field>
   let removedIds = new Set();
   let sawRemove = false; // a removal event arrived this window (even empty-id)
@@ -330,7 +330,7 @@ export function useGridRealtimeSync(deps) {
   }
 
   // True when one of the changed fields is a server-computed sort field that is
-  // also the active sort — the only case where an own-origin echo still needs a
+  // also the active sort - the only case where an own-origin echo still needs a
   // single-card reconcile.
   function fieldsAreActiveServerSort(fields) {
     if (!Array.isArray(fields) || !fields.length) return false;
@@ -378,11 +378,11 @@ export function useGridRealtimeSync(deps) {
       grid.refreshSmartScoreForImage?.(id);
       return;
     }
-    // The picture's own BYTES changed — an in-place rotate, or an undo/redo of
+    // The picture's own BYTES changed - an in-place rotate, or an undo/redo of
     // one arriving over the socket. The card is the same card, but its thumbnail
     // URL has to be re-read, and `refreshGridImage` cannot do it: the metadata
     // endpoint carries no thumbnail URL, so on its own it repaints the
-    // pre-rotate bitmap. Same reasoning as `stack_count` — a listing-only value
+    // pre-rotate bitmap. Same reasoning as `stack_count` - a listing-only value
     // a per-card metadata read cannot repair.
     if (fields.includes("pixels")) {
       void grid.applyRotatedCards?.([id]);
@@ -398,9 +398,9 @@ export function useGridRealtimeSync(deps) {
   // construction: `insertGridImagesById` skips ids already in
   // `lastFetchedGridImages`, so a tile still mounted as a ghost (its undo
   // receipt was live when the undo landed) is left exactly where it is and only
-  // the ghost flag clears, while a tile whose ghost window had already elapsed —
+  // the ghost flag clears, while a tile whose ghost window had already elapsed -
   // or that was never ghosted, because the undo came from the toolbar, the
-  // lightbox or Ctrl+Z long after the fact — is fetched and re-inserted at its
+  // lightbox or Ctrl+Z long after the fact - is fetched and re-inserted at its
   // sorted position. One path, both cases, no refetch flash for the live one.
   /**
    * Put newly-imported pictures into the grid, for own-origin and foreign-ui
@@ -441,7 +441,7 @@ export function useGridRealtimeSync(deps) {
     if (grid.isImagesLoading?.()) {
       // A streaming fetch owns `allGridImages` wholesale and an insert into it
       // would be clobbered. Raise the "view changed" pill rather than dropping
-      // the comeback — deliberately NOT the "new pictures" pill, whose copy
+      // the comeback - deliberately NOT the "new pictures" pill, whose copy
       // would call a restored picture new.
       enqueueSortPill(pictureIds);
       return { action: PILL, reason: `${originLabel}-restored-during-load` };
@@ -463,7 +463,7 @@ export function useGridRealtimeSync(deps) {
     }
     if (changeKind === "updated" && fieldsAreActiveServerSort(fields)) {
       // Optimistic guess for a server-computed sort field can diverge from
-      // server truth — reconcile each card, never reload. Cap the per-id
+      // server truth - reconcile each card, never reload. Cap the per-id
       // fetch loop: a large own-origin batch reconcile becomes a fetch storm.
       // (Reconcile is its own immediate per-id pass, not the coalesced updated
       // buffer, because it dispatches refreshSmartScoreForImage rather than the
@@ -496,7 +496,7 @@ export function useGridRealtimeSync(deps) {
       return { action: TARGETED, reason: "foreign-ui-removed" };
     }
     // Another owner tab undid a scrapheap move (or hit Restore). Targeted, like
-    // its `added` sibling — but never the "new pictures" pill, whose copy would
+    // its `added` sibling - but never the "new pictures" pill, whose copy would
     // call a picture that has been here all along new.
     if (changeKind === "restored") {
       return applyRestored("foreign-ui", pictureIds);
@@ -536,7 +536,7 @@ export function useGridRealtimeSync(deps) {
       enqueueRemoved(pictureIds);
       return { action: TARGETED, reason: "external-removed" };
     }
-    // A restore from outside this UI never auto-inserts under the user — the
+    // A restore from outside this UI never auto-inserts under the user - the
     // external contract. It takes the "View changed externally" pill and NOT
     // the "New pictures" one: the pictures are coming back, not arriving, and
     // that pill's own copy would say otherwise.
@@ -578,13 +578,13 @@ export function useGridRealtimeSync(deps) {
           reason: "external-updated-sort-affecting-overlay-deferred",
         };
       }
-      // Would reshuffle the grid — raise the pill instead of moving cards under
+      // Would reshuffle the grid - raise the pill instead of moving cards under
       // the user.
       enqueueSortPill(pictureIds);
       return { action: PILL, reason: "external-updated-sort-affecting" };
     }
     // The changed fields are known and invisible to the current sort/filter
-    // (the only way to reach here — empty/unknown fields make affectsView true).
+    // (the only way to reach here - empty/unknown fields make affectsView true).
     // The classic case is a background `smart_score` recompute under a date
     // sort. Skip entirely, exactly as the old App.vue handler did: a per-id
     // refresh would fire a /metadata + thumbnail fetch for every affected card
@@ -612,7 +612,7 @@ export function useGridRealtimeSync(deps) {
 
     // Card-content-only update (e.g. detections): the card's rendered content
     // changed but not its sort/filter position, so refresh each affected card in
-    // place for ALL origins (own-origin echo, foreign UI, external) uniformly —
+    // place for ALL origins (own-origin echo, foreign UI, external) uniformly -
     // detection completion looks the same regardless of who triggered it. Never
     // a pill, never a reshuffle. Cap the per-id fetch loop and defer under an
     // open overlay, like the other targeted branches.
@@ -634,7 +634,7 @@ export function useGridRealtimeSync(deps) {
         };
       }
       // A `pixels` change rewrote the FILE, so the card's shape and its bitmap
-      // both move — from two different reads, which have to land together or the
+      // both move - from two different reads, which have to land together or the
       // tile turns twice on screen. `applyRotatedCards` owns both, so it
       // REPLACES the metadata refresh here rather than following it.
       // `detections` leaves the file alone and takes the plain refresh.

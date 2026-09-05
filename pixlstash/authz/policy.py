@@ -2,13 +2,13 @@
 
 Defines the closed :class:`AccessPolicy` vocabulary and the :class:`RoutePolicy`
 declaration record that the authz registry (:mod:`pixlstash.authz.registry`) maps
-each mounted route to. This is Phase 1 of the backend authorization refactor — see
+each mounted route to. This is Phase 1 of the backend authorization refactor - see
 ``docs/backend_architecture.md`` §16.2 and the backend refactor plan §3.1 / §3.2.
 
 The enum is deliberately **closed**: adding an access level is a deliberate edit
 here plus its tests, which is exactly the friction that keeps the authorization
 vocabulary small and reviewable. A route is made safe by *declaring* one of these
-policies in the registry, never by omission — an undeclared data route is denied
+policies in the registry, never by omission - an undeclared data route is denied
 by the gate (deny-by-default), not allowed through.
 """
 
@@ -24,7 +24,7 @@ class AccessPolicy(str, Enum):
     Reads like English on a route: ``PICTURE_SCOPED`` means "a scoped share token
     reaches this only if the picture is in its grant"; ``OWNER_ONLY`` means "share
     tokens never reach this". Loosening a route is a one-line, diff-visible change
-    of the declared value — there is no way to loosen by omitting a declaration.
+    of the declared value - there is no way to loosen by omitting a declaration.
     """
 
     PUBLIC = "public"
@@ -48,7 +48,7 @@ class AccessPolicy(str, Enum):
 
     SCOPED_LIST = "scoped_list"
     """List/search endpoint: no single id; results are filtered through the
-    scope-allowed id set. Object filtering is Step 4 handler work — the gate does
+    scope-allowed id set. Object filtering is Step 4 handler work - the gate does
     not perform list filtering, it only records the declaration."""
 
     OWNER_ONLY = "owner_only"
@@ -57,13 +57,13 @@ class AccessPolicy(str, Enum):
 
     LOCAL_OWNER_ONLY = "local_owner_only"
     """``OWNER_ONLY`` plus a loopback / local-IP / Tailscale-CGNAT check
-    (host-filesystem browse, reference-folder writes — the §16.3 accepted-risk
+    (host-filesystem browse, reference-folder writes - the §16.3 accepted-risk
     class). A remote owner is admitted only when the dedicated
     ``allow_remote_host_ops`` server-config flag is ``True`` (default ``False``);
     the deny path names that flag."""
 
     LOOPBACK_OWNER_ONLY = "loopback_owner_only"
-    """``OWNER_ONLY`` plus a strict **loopback-only** check (127.0.0.0/8 + ::1) —
+    """``OWNER_ONLY`` plus a strict **loopback-only** check (127.0.0.0/8 + ::1) -
     stricter than ``LOCAL_OWNER_ONLY``: RFC1918 LAN and Tailscale addresses are
     NOT accepted, and ``allow_remote_host_ops`` can NEVER loosen it. The §16.3
     hard red line for the highest-privilege host-shell routes (server restart,
@@ -97,7 +97,7 @@ SCOPED_POLICIES = frozenset(
 # machine-checked replacement for the §16.1 "written justification + named
 # reviewer sign-off" prose rule (the reviewer sign-off still lives in the PR).
 # ``PUBLIC`` opens a route to the world; ``LOCAL_OWNER_ONLY`` /
-# ``LOOPBACK_OWNER_ONLY`` grant host-filesystem / host-shell authority — all are
+# ``LOOPBACK_OWNER_ONLY`` grant host-filesystem / host-shell authority - all are
 # decisions someone must own in writing.
 JUSTIFICATION_REQUIRED = frozenset(
     {
@@ -110,7 +110,7 @@ JUSTIFICATION_REQUIRED = frozenset(
 
 @dataclass(frozen=True)
 class RoutePolicy:
-    """One route's declared access requirement — a single coverage-matrix cell.
+    """One route's declared access requirement - a single coverage-matrix cell.
 
     Attributes:
         policy: The required :class:`AccessPolicy` (the only mandatory field).
@@ -129,22 +129,22 @@ class RoutePolicy:
         resolved_inline: ``True`` marks a ``*_SCOPED`` route whose object id is
             **name-derived** (e.g. ``/projects/{project_name}/...``) and therefore
             cannot be resolved to a numeric id at the gate without duplicating the
-            handler's own name→id lookup — the exact divergence this refactor
+            handler's own name→id lookup - the exact divergence this refactor
             exists to kill (matrix §N3; principal ruling 2026-07-21 D2). The gate
             does **not** object-check these; the handler's inline
             ``_require_scope_allows_*`` check remains the live enforcement and must
             not be removed in Step 5 until a shared name→id resolver exists. This
-            is a typed, validator-checked exemption — not a comment.
+            is a typed, validator-checked exemption - not a comment.
         scope_aware: Only valid on :attr:`AccessPolicy.SCOPED_LIST`. ``True`` marks
             a list/search route that has been **audited** to filter its own result
             set for a resource-scoped token (the 39 current list routes all do).
             A ``SCOPED_LIST`` route left ``scope_aware=False`` (the safe-by-omission
-            default) is failed **closed** by the gate for a resource-scoped token —
+            default) is failed **closed** by the gate for a resource-scoped token -
             a new, unaudited list route leaks nothing (matrix §3.6; principal
             ruling 2026-07-21 D4). The gate cannot synthesise a correct empty
             envelope for an arbitrary list shape, so "leak nothing" is a 403, not
             an empty body.
-        library_independent: ``True`` exempts the route from the library pin —
+        library_independent: ``True`` exempts the route from the library pin -
             the rule that a token only authenticates while the library it was
             minted for is the active one (multi-library plan §4). **The default,
             ``False``, is the safe one:** a new data route is pinned by
@@ -152,12 +152,12 @@ class RoutePolicy:
             A route qualifies for the exemption only if it satisfies *both*
             clauses: it returns no library content, **and** it cannot be used to
             acquire access to a different library. The second clause is what
-            keeps token minting pinned — a token stamped for library A that
+            keeps token minting pinned - a token stamped for library A that
             could mint while B is active would hand itself a B-stamped token and
             reopen the pivot the pin exists to close.
         id_resolver: Names a registered resolver that maps the route's raw id(s)
             (from :attr:`id_param` or :attr:`body_ids`) to a **picture id** before
-            the picture-membership check — for routes keyed by a non-picture id
+            the picture-membership check - for routes keyed by a non-picture id
             that nonetheless authorise on picture scope (matrix §N4: the
             ``tag_suggestions`` mutators key on a ``suggestion_id`` that resolves to
             ``TagSuggestion.picture_id``). Only valid on a ``*_SCOPED`` policy.
@@ -194,7 +194,7 @@ def validate_policy_declarations(
     :data:`JUSTIFICATION_REQUIRED` policy must carry a non-empty ``justification``,
     and a ``*_SCOPED`` policy must name an ``id_param`` or ``body_ids`` so the gate
     knows where to find the resource id. An empty list means the declarations are
-    clean. The startup validator treats a non-empty result as a boot failure — a
+    clean. The startup validator treats a non-empty result as a boot failure - a
     registry-authoring mistake is always fatal, independent of the report-only
     gate flag, because it is an error in the declaration table itself.
     """

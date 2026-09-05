@@ -250,8 +250,10 @@ and (unchanged in value, now correct in ratio) `on-secondary`.
 
 - **Light theme: barely.** `accent` drops 4 points of HSL lightness, `tertiary` 5.
   Side by side you can see it; from memory you cannot. `primary` and `secondary` — the
-  two most-used fills in the light theme, which is the default theme — **do not move at
-  all.** The light theme is effectively unchanged.
+  two most-used fills in the light theme — **do not move at
+  all.** The light theme is effectively unchanged. (It was the default theme when
+  this was measured; dark is the default now, which raises the stakes of the
+  dark-theme paragraph below rather than changing any value in it.)
 - **Dark theme: visibly.** `accent` drops 21 points of lightness (`#f28f3b` bright
   orange → `#b85c0c` burnt amber) and `primary` 8. This is the real cost, and it is the
   most visible colour change in the product: dark-mode chrome that was lit by a bright
@@ -714,6 +716,13 @@ These get skipped and that is exactly why a UI looks cheap.
   previous `rgba(accent, .55)` measured 1.96:1 (light) and 3.01:1 (dark) against the
   canvas, i.e. it failed the 3:1 focus-indicator floor outright in the default theme.
   A focus ring is the one place in this system where "subtle" is a defect.
+  The one exception to the stroke is a Vuetify field, whose floating label rides on the
+  top border: there the stroke is a bar through the label, so the field takes
+  `--focus-glow` (the same accent, 2px solid spread plus a 6px blur) painted beneath the
+  outline and clipped off the top edge, so it runs down the sides and under the field
+  and never behind the label. It steps aside while a select's menu is open, since the
+  menu drops flush against that bottom edge. Same colour, same contrast at the edge, and
+  keyboard-only via `:has(:focus-visible)`.
   **There is exactly one focus language.** The theme's legacy `focus` key (`#7c4dff`
   violet) is still consumed as `outline: 2px solid` by 10 review-surface components, so
   the app currently shows an amber ring in the grid and a violet outline in reviews.

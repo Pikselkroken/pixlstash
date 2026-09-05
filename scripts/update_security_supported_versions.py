@@ -1,8 +1,8 @@
 """Rewrite the supported-versions table in ``SECURITY.md`` for a new release.
 
 PixlStash supports exactly one minor series: the latest. The table therefore
-always has three rows — the supported minor, the one it just demoted, and a
-catch-all ``< previous`` row — and it was maintained by hand at release time.
+always has three rows - the supported minor, the one it just demoted, and a
+catch-all ``< previous`` row - and it was maintained by hand at release time.
 ``.github/workflows/release-version.yml`` runs this script against the ``main``
 checkout so the table lands in the same bot PR as the other website updates.
 

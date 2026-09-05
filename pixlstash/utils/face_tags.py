@@ -549,7 +549,7 @@ class FaceTags:
     )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Combined set — derive once at class-definition time.
+    # Combined set - derive once at class-definition time.
     # ─────────────────────────────────────────────────────────────────────────
     ALL: frozenset[str] = (
         EYE_COLORS

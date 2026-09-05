@@ -25,6 +25,7 @@ import {
   defaultSortDirection,
   fileKindLabel,
   locationState,
+  presentCopies,
   trashName,
   modelName,
   offlineFolders,
@@ -39,7 +40,7 @@ const FILTERS_KEY = "pixlstash:modelShelfFilters";
  *
  * A remembered selection outlives the reason it was remembered. `Unclassified`
  * shipped off by default, so every blob written before this carries
- * `unclassified: false` whether or not anyone chose it — and a shelf that now
+ * `unclassified: false` whether or not anyone chose it - and a shelf that now
  * has something real to show under that box would have gone on hiding it from
  * exactly the people who have been using the screen longest (#927).
  */
@@ -95,10 +96,10 @@ export const FOLDER_LAYOUTS = ["drive", "alpha"];
  * deliberately absent: it is the flexible track that takes whatever the others
  * leave, so it has no width of its own to remember.
  *
- * `date` is not in the kit — the column postdates it. 96px is what `ymd-jp`
+ * `date` is not in the kit - the column postdates it. 96px is what `ymd-jp`
  * needs, the widest of the eight day formats (`2026年08月16日`: three
  * full-width glyphs and eight tabular digits at `--text-xs`), and `locale`
- * hands back whatever the reader's browser writes — so it is the figure that
+ * hands back whatever the reader's browser writes - so it is the figure that
  * keeps the common formats clear of the ellipsis rather than a proof against
  * every one, and the grip is there for the reader it does not suit.
  */
@@ -135,10 +136,10 @@ export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56, date: 80 };
  * panel sideways on a 1024px window. That bound was doing the wrong job: it is
  * a guess about the narrowest panel anyone has, so on a wide one it stopped the
  * reader at four columns totalling ~600px and a Name track that could never be
- * less than about half the shelf — and it had to be re-derived every time a
+ * less than about half the shelf - and it had to be re-derived every time a
  * column was added. The real limit is the panel
  * in front of the reader, so the header strip measures the Name track and
- * refuses to widen a column past `MIN_NAME_WIDTH` — see `ModelShelf.vue`. This
+ * refuses to widen a column past `MIN_NAME_WIDTH` - see `ModelShelf.vue`. This
  * figure only has to be a number no legitimate column reaches.
  */
 export const MAX_COLUMN_WIDTH = 400;
@@ -149,7 +150,7 @@ export const MAX_COLUMN_WIDTH = 400;
  * A finite NUMBER and nothing else. `Number()` coercion would take `null`,
  * `""`, `[]` and `false` as 0 and hand back the floor, so a stored blob
  * carrying `{"size": null}` would silently come back as a 56px column instead
- * of falling through to the default — which is the one thing the read-back
+ * of falling through to the default - which is the one thing the read-back
  * loop exists to prevent.
  *
  * @returns {number|null} the clamped width, or null if `px` is not one.
@@ -220,6 +221,18 @@ function compareOn(a, b, key, direction) {
 function modelCount(n) {
   return `${Number(n).toLocaleString()} ${n === 1 ? "model" : "models"}`;
 }
+
+// Ceiling on one bulk thumbnail set, mirroring the clear route's
+// `MAX_MODELS_PER_CLEAR` (`pixlstash/routes/model_icons.py`). The set route is
+// per-model, so no server cap can see the gesture: Ctrl+A on a long shelf is
+// one keystroke, and this is where it stops being one.
+const MAX_MODELS_PER_ICON_SET = 500;
+
+// How many of those uploads are in the air at once. A browser gives ~6 sockets
+// per origin, so a wider fan-out only queues - and a queued request still burns
+// the client's own 60 s timeout, which would report as failed writes the server
+// had committed. It also leaves sockets for the row thumbnails.
+const ICON_SET_CONCURRENCY = 6;
 
 /** What each curated column is called in a receipt. */
 const FIELD_WORDS = {
@@ -297,7 +310,7 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
  * Say what a delete destroyed, where it put it, and what it left alone.
  *
  * Where the bytes went is the first thing the reader needs, because it is the
- * difference between recoverable and not — so the trash is named rather than
+ * difference between recoverable and not - so the trash is named rather than
  * implied, and a permanent delete says so in the same slot.
  *
  * The refusals are grouped by reason rather than counted together: "on a drive
@@ -310,7 +323,7 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
  * @param {boolean} permanent - whether the files were unlinked or trashed.
  * @param {string} trash - what the SERVER calls its trash.
  * @param {number} [filesRemoved=0] - how many files actually moved. Zero with
- *   `gone` above it is the row-only case — every copy was already off the disk —
+ *   `gone` above it is the row-only case - every copy was already off the disk -
  *   and saying "moved to the Trash" there would name a place the reader could go
  *   and fail to find them.
  */
@@ -442,10 +455,10 @@ function defaultView() {
  * `unclassified` is on, and it is a first-class state with its own checkbox,
  * never folded into either other bucket. `engines` is on for the same reason:
  * they are the answer to "where did my disk go", and on a measured machine
- * they are 118 GB against the adapters' few — invisible by default is how they
+ * they are 118 GB against the adapters' few - invisible by default is how they
  * came to be missing from the shelf for three releases while the architecture
  * note claimed they were on it.
- * `adapterKinds: []` means *every* kind, not *no* kind — an empty multi-select
+ * `adapterKinds: []` means *every* kind, not *no* kind - an empty multi-select
  * is unconstrained, the standard convention, and the only reading under which
  * a fresh install shows anything. `capabilities` reads the same way.
  */
@@ -467,6 +480,12 @@ function defaultFilters() {
     support: true,
     baseModels: [],
     capabilities: [],
+    // Deliberately NOT restored by `storedFilters()` on startup, unlike every box
+    // above it. "Only the files written twice" is a question somebody asks once
+    // while reclaiming disk, not a preference; remembered across a restart it is
+    // a shelf that opens showing four rows of an eighteen-hundred-row library
+    // with no obvious reason why.
+    duplicatesOnly: false,
   };
 }
 
@@ -520,7 +539,7 @@ function storedFilters() {
   // FOLDED algorithm and a shipped build persisted the raw column. A remembered
   // `LoRA` would otherwise match no row and appear in no checkbox: the shelf
   // shows nothing, the Adapters box reads fully on, the one algorithm box reads
-  // off, and the only way out is `Reset filters` — which also throws away the
+  // off, and the only way out is `Reset filters` - which also throws away the
   // base models and capabilities the user did not ask to lose.
   //
   // Folded rather than gated behind a `FILTERS_SCHEMA_VERSION` bump for that
@@ -601,7 +620,7 @@ function storedCollapsed() {
  * encoder and the aesthetic scorer's backbone. Filing either under one heading
  * answers "what breaks if I delete this" wrongly, which is the question this
  * axis exists to answer, so the row appears under each. An adapter declares no
- * capability and is filed under its algorithm instead — see below.
+ * capability and is filed under its algorithm instead - see below.
  */
 function groupsOf(row, axis) {
   if (axis === "feature") {
@@ -611,7 +630,7 @@ function groupsOf(row, axis) {
     if (!capabilities.length) {
       // An adapter's algorithm IS its heading here. The row's own Kind column
       // has always read `LoRA`, so filing it under the catch-all left
-      // the axis saying one thing and the cell beside it another — and it
+      // the axis saying one thing and the cell beside it another - and it
       // swallowed most of the shelf into one bucket, which is the one shape a
       // grouping axis must not take. A checkpoint has no algorithm either, and
       // is headed by its FILE KIND two branches down for the same reason.
@@ -620,7 +639,7 @@ function groupsOf(row, axis) {
       // `detect_adapter_kind`'s explicit refusal (`KIND_UNKNOWN`) for an
       // adapter whose tensor markers matched nothing it knows. Promoting that
       // to a heading would stand a second shrug next to the real one and call
-      // it a feature — the confident wrong answer the classifier declined to
+      // it a feature - the confident wrong answer the classifier declined to
       // give. The comparison catches every spelling of it because the label is
       // trimmed and folded first.
       //
@@ -641,15 +660,15 @@ function groupsOf(row, axis) {
         ];
       }
       // The same argument one file kind over. A checkpoint, a VAE and a text
-      // encoder never declare a capability — nothing scans one and writes
-      // `model_capability` — so all three sat under the catch-all while
+      // encoder never declare a capability - nothing scans one and writes
+      // `model_capability` - so all three sat under the catch-all while
       // the cell beside them read `Checkpoint`. The sting is sharper here than
       // for adapters: a DECLARED checkpoint (an HF-cache repo, which enters as
       // `file_kind=engine`) DOES record the capability, so the axis drew a
       // `Checkpoint` header holding the one packaged model and left all eighty
       // scanned checkpoints out of it.
       //
-      // Unprefixed, and that is the point — the opposite of the branch above.
+      // Unprefixed, and that is the point - the opposite of the branch above.
       // `kind:` keeps an ALGORITHM out of the capability keyspace because a
       // collision there would merge two unrelated headings; here the collision
       // IS the fix, because `checkpoint` the file kind and `checkpoint` the
@@ -668,7 +687,7 @@ function groupsOf(row, axis) {
             key: String(row.file_kind),
             label: fileKindLabel(row.file_kind),
             labelKind: "name",
-            // "" for the support kinds, which no capability marks — the header
+            // "" for the support kinds, which no capability marks - the header
             // falls back to the axis glyph rather than borrowing a wrong one.
             icon: capabilityIcon(row.file_kind),
           },
@@ -747,7 +766,7 @@ const BLOCKS = [
  *
  * `support` is the one block that is two kinds. A VAE and a text encoder are
  * separate answers to "what is this file" and one answer to "what does the
- * shelf show", so they are separate `file_kind`s and one checkbox — the alt
+ * shelf show", so they are separate `file_kind`s and one checkbox - the alt
  * being two boxes nobody wants to tick separately.
  */
 function blockOf(row) {
@@ -822,7 +841,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * until the next fetch clears it. Diffed against the previous ids rather than
    * read off a timestamp, because "new" here means "this appeared while you
    * were looking", which is a fact about the two payloads and not about
-   * `added_at` — a folder re-registered after a Forget hands back rows whose
+   * `added_at` - a folder re-registered after a Forget hands back rows whose
    * `added_at` is months old and which are nonetheless new to this shelf.
    *
    * @param {{markNew?: boolean}} [options]
@@ -887,7 +906,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * FOLDED, like `baseModelOptions` is folded: `model.kind` is free text, so
    * `LoRA` and `lora` are one algorithm and two raw strings. Faceting on the
    * raw column offered two checkboxes that the panel now draws with the same
-   * label, each ticking half the rows — and the `feature` axis folds them into
+   * label, each ticking half the rows - and the `feature` axis folds them into
    * one group, so ticking either would have emptied half of a group the user
    * can see.
    *
@@ -916,7 +935,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Ordered by the label a reader sees rather than by the stored word, because
    * the list is read as labels: sorting on `scorer` would file "Quality score"
    * under S. Faceted over every row's whole set, so a model serving two
-   * features contributes to both boxes — the same rule as the group axis.
+   * features contributes to both boxes - the same rule as the group axis.
    */
   const capabilityOptions = computed(() =>
     [
@@ -937,7 +956,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const baseModelOptions = computed(() => {
     // Faceted on the folded value too, or the filter offers four boxes that
-    // each tick a quarter of one base — and ticking "SDXL" would hide the rows
+    // each tick a quarter of one base - and ticking "SDXL" would hide the rows
     // whose file happens to spell it `sdxl base`.
     const named = [
       ...new Set(rows.value.map(baseModelKey).filter(Boolean)),
@@ -953,8 +972,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * `baseModelOptions` above is built from the rows on screen and is folded,
    * because a filter checkbox must tick exactly the rows behind it. A
    * completion list has the opposite job: it offers strings that are NOT on the
-   * shelf yet — the labels the server ships, so the field is useful on a fresh
-   * install where nothing records a base model at all — and it offers them in
+   * shelf yet - the labels the server ships, so the field is useful on a fresh
+   * install where nothing records a base model at all - and it offers them in
    * the spelling they will be stored in. Two lists, two jobs; deriving one from
    * the other would break whichever one lost.
    */
@@ -966,7 +985,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * The fetched list, plus the base models on screen the server did not know.
    *
    * The fetch is not the only writer of `base_model`: the scanner and the
-   * importer write it too, and neither goes anywhere near this store — so a
+   * importer write it too, and neither goes anywhere near this store - so a
    * value that arrived with a scan would not be offered until a reload. The
    * rows carry their own spellings, so unioning them in costs no request and
    * closes that window.
@@ -978,7 +997,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * dropped: a shelf spelling `sdxl base`, `SDXL` and `sdxl_base_v1-0` would
    * offer three more entries for the `SDXL 1.0` already in the list, and with
    * eight slots in the menu the canonical label can be pushed off it. The
-   * client cannot fold on its own — the alias table is the server's — so this
+   * client cannot fold on its own - the alias table is the server's - so this
    * is the only place the rule can be honoured.
    *
    * Deduplication is on case, spacing and punctuation (the server's `_norm`),
@@ -1052,7 +1071,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           // exactly as the base-model filter is two branches down.
           //
           // A row whose kind folds to nothing is NOT excluded. The facet offers
-          // no box for it — an unlabelled checkbox is not a control — so a kind
+          // no box for it - an unlabelled checkbox is not a control - so a kind
           // selection cannot hold an opinion about it, and hiding it would
           // leave a row no box can bring back. That is the failure this store
           // already memorialises one computed up: base models that stayed
@@ -1060,7 +1079,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           const key = adapterKindKey(row.kind);
           if (key && !kinds.includes(key)) return false;
         }
-        // "HAS this capability", not "IS this kind" — the whole point of the
+        // "HAS this capability", not "IS this kind" - the whole point of the
         // set. A model serving two features survives a tick of either.
         //
         // Scoped to the engines block for the same reason the kind boxes are
@@ -1076,12 +1095,26 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           const key = baseModelKey(row) || BASE_MODEL_UNASSIGNED;
           if (!bases.includes(key)) return false;
         }
+        // Last, so it narrows whatever the boxes above left - the point is
+        // "duplicates among the files I am looking at", not a separate screen.
+        // Against the row's OWN copies, before the folder narrowing two
+        // computeds down: a file written twice into one folder must survive
+        // this on every grouping axis, including the one that then shows the
+        // reader only one of the two.
+        if (filters.duplicatesOnly && presentCopies(row.locations) < 2) {
+          return false;
+        }
         return true;
       })
       .map((row) => ({
         ...row,
         name: modelName(row),
         locState: locationState(row.locations),
+        // Counted HERE, off the row's whole `locations`, and carried on the row
+        // from then on. The folder axis narrows a draw to the one copy that
+        // folder holds, so a template calling `presentCopies` at render time
+        // would report `1` for exactly the rows this is meant to mark.
+        copies: presentCopies(row.locations),
         isNew: newIds.value.has(row.id),
       }));
     // Folded LAST, so the filters narrow individual models and the stack is
@@ -1175,8 +1208,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           byKey.set(group.key, bucket);
         }
         // `rowKey` carries the GROUP on every grouped axis, not only on the
-        // ones that can draw a row twice. Two axes fan out now — a file copied
-        // into two folders, a model serving two features — and both drew the
+        // ones that can draw a row twice. Two axes fan out now - a file copied
+        // into two folders, a model serving two features - and both drew the
         // same model under two headers with one key, which is the collision
         // that put `tabindex="0"` on several draws at once and made `indexOf`
         // return the first. Under `base_model` a row is in exactly one group,
@@ -1191,20 +1224,27 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // answer "where is this file" with a path in the folder above.
         //
         // Narrowing here is safe because nothing else reads a DRAWN row's
-        // locations — `selectedRows` and the verbs all read `visibleRows`,
+        // locations - `selectedRows` and the verbs all read `visibleRows`,
         // which still carries every copy.
         //
         // A stack's `members` are narrowed with it, for the reason the row
         // itself is: an expanded strip under `/models` would otherwise answer
         // "where is this step" with a path in the folder above. Members with no
-        // copy in this folder keep their own — the run is drawn here because
+        // copy in this folder keep their own - the run is drawn here because
         // the run is here, and inventing an absence for one step would be worse
         // than a merged tooltip.
         bucket.rows.push(
           group.location
             ? {
                 ...row,
-                rowKey: `${row.id}:${group.key}`,
+                // The COPY, not the folder. `group.key` is the folder path, so
+                // a file written twice into one folder produced two draws under
+                // one key - the very collision the note above describes, hit by
+                // the axis it was written for. `relpath` is unique within a
+                // folder by definition (it is half the `model_file` key), so
+                // appending it separates them and changes nothing for the
+                // single-copy rows that are the rest of the shelf.
+                rowKey: `${row.id}:${group.key}:${group.location.relpath}`,
                 locState: locationState([group.location]),
                 locations: [group.location],
                 ...(row.members ? { members: narrow(row.members, group) } : {}),
@@ -1217,7 +1257,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
-   * The folders that are wholly out of reach — an unplugged drive, usually.
+   * The folders that are wholly out of reach - an unplugged drive, usually.
    *
    * Derived from `rows` and NOT from `visibleRows`, because it is a fact about
    * the disk rather than about the current `Show` selection: a filter that
@@ -1271,8 +1311,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   function setView(patch) {
     // A NEW sort key arrives at its own end unless the caller named one. Here
-    // rather than in the caller, because there are two writers of `sortKey` —
-    // the column headings and the Sort panel — and putting it in one of them
+    // rather than in the caller, because there are two writers of `sortKey` -
+    // the column headings and the Sort panel - and putting it in one of them
     // is how the two came to disagree: the panel carried "Newest first" over
     // onto Name and handed back Z to A, which is exactly what
     // `defaultSortDirection` exists to stop.
@@ -1323,7 +1363,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * narrowing and the number would stop meaning anything.
    */
   const activeCount = computed(() => {
-    // Every block defaults to ON, so the departure is turning one OFF — and
+    // Every block defaults to ON, so the departure is turning one OFF - and
     // read off {@link BLOCKS} rather than named one by one, which is how
     // `engines` came to be uncounted: a shelf showing engines alone reported
     // "3 filters active" while the fourth block was the only one showing
@@ -1334,11 +1374,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (filters.adapters && filters.adapterKinds.length) n += 1;
     if (filters.baseModels.length) n += 1;
     if (filters.capabilities.length) n += 1;
+    if (filters.duplicatesOnly) n += 1;
     return n;
   });
 
   /**
-   * True when the selection asks for no rows at all — a distinct empty state.
+   * True when the selection asks for no rows at all - a distinct empty state.
    *
    * Read off {@link BLOCKS} rather than named block by block, which is how
    * `engines` came to be left out of it: a shelf showing engines alone asks
@@ -1348,7 +1389,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * This and `activeCount` now derive; `defaultFilters`, `storedFilters`,
    * `blockOf` and `fetchRows` still spell the blocks out, because each says
    * something different about each one. A fifth block is four deliberate
-   * edits, not five — the two that could silently disagree with the fetch are
+   * edits, not five - the two that could silently disagree with the fetch are
    * the two that no longer can.
    */
   const nothingSelected = computed(
@@ -1393,7 +1434,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * A run counts as one row while the whole of it is selected; the moment part
    * of it is, the parts count for themselves. `visibleRows` holds one row per
    * stack, so a member picked out of an expanded strip is not in it and has to
-   * be contributed from `members` — otherwise selecting a step gives the bar an
+   * be contributed from `members` - otherwise selecting a step gives the bar an
    * empty selection and every verb a phantom to gate on.
    */
   const selectedRows = computed(() => {
@@ -1423,7 +1464,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Every selected model, stack members included.
    *
    * `selectedRows` is one row per *shown* row, so a collapsed stack appears
-   * once — right for counting and for what the bar says, wrong for what a verb
+   * once - right for counting and for what the bar says, wrong for what a verb
    * writes. A verb must act on the whole run or a Forget would destroy a run's
    * cover and leave its five steps on the shelf, which is precisely the partial
    * state `services/stack_membership` exists to forbid.
@@ -1494,7 +1535,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * A **member** of an expanded strip stands for itself: it is not in
    * `visibleRows`, so the lookup misses and the id comes back alone. That is
-   * the intent rather than a gap — opening a run and pointing at one file
+   * the intent rather than a gap - opening a run and pointing at one file
    * inside it is how that file is taken out of the run, or made its cover.
    */
   function modelsBehind(id) {
@@ -1647,7 +1688,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // row was already gone (another tab forgot it, or this list is stale),
       // `is_a_builtin_engine` means it is ours and the owner has nothing to do.
       // Anything the server may add later counts as "kept", which is the
-      // conservative reading — not forgotten, and possibly still there.
+      // conservative reading - not forgotten, and possibly still there.
       const count = (reason) =>
         refused.filter((r) => r.reason === reason).length;
       const vanished = count("no_such_model");
@@ -1670,8 +1711,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Delete the selection from disk, then say what went and what did not.
    *
-   * The shelf's only destructive verb. The confirmation is the view's — this
-   * runs after it — and both of the things that decide what is destroyed come
+   * The shelf's only destructive verb. The confirmation is the view's - this
+   * runs after it - and both of the things that decide what is destroyed come
    * from the gesture rather than from anything this store remembers: `permanent`
    * from the press's own Shift, and `ids` from the list the prompt counted, so
    * the reader can never agree to one number and have another one deleted.
@@ -1720,7 +1761,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Attach or detach one character/set across the selected adapters.
    *
    * `PUT /adapters/{sha256}/attachments` REPLACES one adapter's whole set, so
-   * this is N calls with the union computed here — never one call, and never a
+   * this is N calls with the union computed here - never one call, and never a
    * blind write of just the new entity, which would silently detach every other
    * character already using the model.
    *
@@ -1789,59 +1830,102 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Give one model an icon.
+   * Give every selected model the same icon.
    *
-   * Single-row by nature, and gated that way in the bar: an icon answers
-   * "which one is this?", so giving forty rows the same mark would remove the
-   * only thing telling them apart. (Two models legitimately SHARING a logo is
-   * different — that is the owner setting each one, and the content-addressed
-   * store then keeps one file.)
+   * Addressed off `selectedModelIds`, never `selectedRows`: a fully-ticked
+   * stack is ONE row whose `id` is the cover's, so iterating rows would mark
+   * the cover and silently skip the other eleven versions. This is the same
+   * expansion `clearIconsOnSelected` uses, and set and clear have to agree
+   * about what a selection is.
    *
-   * No confirmation: setting an icon is reconstructable by setting it again.
+   * One upload per model rather than one bulk route: the icon store is
+   * content-addressed, so identical bytes collapse to one file on disk however
+   * many times they are posted, and this reuses the write path all three ways
+   * of choosing an icon already share. Windowed rather than fired all at once,
+   * for the socket reason above.
    *
-   * **Refuses a selection that is not exactly one**, rather than taking the
-   * first row. The bar disables the button, but a UI state is not an invariant:
-   * any other caller would silently mark whichever row happened to sort first,
-   * which is the surprise this verb can least afford.
+   * The caller confirms a bulk set that would REPLACE existing marks; this
+   * writes.
    *
    * @param {File|Blob} file
-   * @returns {Promise<boolean>} true when the icon landed; false if it was
-   *   refused or the request failed.
+   * @returns {Promise<boolean>} true when at least one icon landed.
    */
   async function setIconOnSelected(file) {
     const notices = useNoticeStore();
-    if (selectedRows.value.length !== 1 || !file) return false;
-    const row = selectedRows.value[0];
-    try {
-      await setModelIcon(row.id, file);
-      await fetchRows();
-      notices.push({
-        level: "success",
-        // A row in the `needs-a-name` state has no name to say, by design —
-        // its `text` is empty so the shelf can draw it as a field. The receipt
-        // still has to name something the reader can recognise.
-        text: `Set the icon on ${row.name.text || row.filename || "the model"}.`,
-      });
-      return true;
-    } catch (err) {
+    const ids = selectedModelIds.value;
+    if (!ids.length || !file) return false;
+    if (ids.length > MAX_MODELS_PER_ICON_SET) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not set that icon.",
+        text: `At most ${MAX_MODELS_PER_ICON_SET} models in one thumbnail set.`,
       });
       return false;
     }
+
+    // Captured before the writes: `fetchRows()` below replaces the rows, and
+    // the receipt names the model the reader pointed at.
+    const only = ids.length === 1 ? selectedRows.value[0] : null;
+
+    const failed = [];
+    let done = 0;
+    for (let i = 0; i < ids.length; i += ICON_SET_CONCURRENCY) {
+      const batch = ids.slice(i, i + ICON_SET_CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map((id) => setModelIcon(id, file)),
+      );
+      results.forEach((result, offset) => {
+        if (result.status === "rejected") {
+          failed.push([batch[offset], result.reason]);
+        } else {
+          done += 1;
+        }
+      });
+    }
+
+    if (failed.length) {
+      // The ids as well as the reasons: the receipt can only say how many
+      // failed, and without this there is nothing anywhere saying WHICH - and
+      // the only recourse is otherwise to redo the whole selection.
+      console.warn(
+        `[modelShelf] ${failed.length} thumbnail write(s) failed:`,
+        failed.map(([id, reason]) => `${id}: ${errorDetail(reason) || reason}`),
+      );
+    }
+    await fetchRows();
+    if (!done) {
+      notices.push({
+        level: "error",
+        text: errorDetail(failed[0]?.[1]) || "Could not set that thumbnail.",
+      });
+      return false;
+    }
+    const notes = failed.length
+      ? ` ${modelCount(failed.length)} could not be written.`
+      : "";
+    notices.push({
+      level: failed.length ? "warning" : "success",
+      // A row in the `needs-a-name` state has no name to say, by design - its
+      // `text` is empty so the shelf can draw it as a field. The receipt still
+      // has to name something the reader can recognise. Named only when the
+      // selection was one model: which of a partly failed batch landed is not
+      // known here.
+      text: only
+        ? `Set the thumbnail on ${only.name?.text || only.filename || "the model"}.${notes}`
+        : `Set the thumbnail on ${modelCount(done)}.${notes}`,
+    });
+    return true;
   }
 
   /**
    * Clear the icon on the selection.
    *
    * The caller confirms a BULK clear: one row is reconstructable by setting it
-   * again, and a selection is not — the same test the bulk base-model overwrite
+   * again, and a selection is not - the same test the bulk base-model overwrite
    * falls on. The server reports which rows actually had one, so the receipt
    * says what changed rather than how many ids were sent.
    *
    * @returns {Promise<boolean>} true when the clear landed. False covers both
-   *   "nothing was selected" and a failed request — the receipt says which,
+   *   "nothing was selected" and a failed request - the receipt says which,
    *   and no caller currently branches on the difference.
    */
   async function clearIconsOnSelected() {
@@ -1855,14 +1939,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       notices.push({
         level: cleared ? "success" : "info",
         text: cleared
-          ? `Cleared the icon on ${modelCount(cleared)}.`
-          : "None of those had an icon.",
+          ? `Cleared the thumbnail on ${modelCount(cleared)}.`
+          : "None of those had a thumbnail.",
       });
       return true;
     } catch (err) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not clear those icons.",
+        text: errorDetail(err) || "Could not clear those thumbnails.",
       });
       return false;
     }

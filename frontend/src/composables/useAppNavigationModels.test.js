@@ -1,7 +1,7 @@
 // The model shelf against a READ/share credential (issue #1014).
 //
 // Every route the shelf calls is owner-only, so the backend answers a share
-// session with 403 on all of them. Nothing leaks — but the session was still
+// session with 403 on all of them. Nothing leaks - but the session was still
 // offered the destination, and a direct `/models` URL mounted the whole screen
 // so it could fire a burst of requests it could never satisfy. Two halves fix
 // it, and this file pins the navigation half:
@@ -117,7 +117,7 @@ describe("the model shelf and a READ session", () => {
   }
 
   it("bounces a READ session that navigates to /models after mount", async () => {
-    // The share session is already in the app when the URL changes — a pasted
+    // The share session is already in the app when the URL changes - a pasted
     // link, a Back into a models entry left in history.
     sessionContext.value = UNSCOPED_READ;
     nav.route.query = { token: SHARE_TOKEN };
@@ -135,7 +135,7 @@ describe("the model shelf and a READ session", () => {
 
   // The bounce is the ONLY navigation in the app that fires exclusively for a
   // share session, so a dropped `?token=` here would break the share link for
-  // every visitor it fires for and nobody else — invisible until the next
+  // every visitor it fires for and nobody else - invisible until the next
   // reload, when `Root.vue` finds no token and shows the login screen.
   it("carries the share token through the bounce", () => {
     sessionContext.value = SCOPED_READ;

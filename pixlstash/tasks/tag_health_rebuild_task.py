@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 class TagHealthRebuildTask(BaseTask):
     """Recompute every tag's health signals and replace the cache rows.
 
-    Pure SQL aggregation (no models, no embeddings) — CPU queue. HIGH priority:
+    Pure SQL aggregation (no models, no embeddings) - CPU queue. HIGH priority:
     user-triggered, but a batch job that shouldn't preempt interactive tasks.
     """
 

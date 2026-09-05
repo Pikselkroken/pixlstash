@@ -55,7 +55,9 @@ class LikenessParameterUtils:
         """Return up to *scan_limit* (id, width, height) tuples for pictures missing all params.
 
         All parameters are written atomically, so ``size_bin_index IS NULL`` is
-        the sole pending-work indicator.  Returns ``None`` when idle.
+        the sole pending-work indicator.  A picture is only offered once its own
+        quality metrics exist, so every parameter row is written once, with real
+        quality values.  Returns ``None`` when idle.
         """
         return LikenessParameterUtils._find_size_bin_batch(session, scan_limit)
 
@@ -94,12 +96,23 @@ class LikenessParameterUtils:
         batch of BATCH_SIZE pictures instead of one per unique resolution gives
         a 100-128x throughput improvement when pictures have diverse dimensions.
         """
+        # The inverse of QualityTask.count_missing_quality's per-row predicate:
+        # that counts pictures with no Quality row or a NULL sharpness, so
+        # "quality done" is a Quality row whose sharpness is set (a failed
+        # calculation writes -1.0 and is done too). ix_picture_size_bin_index
+        # drives the probe; ix_quality_picture_id serves the EXISTS.
+        quality_done = (
+            select(Quality.id)
+            .where(Quality.picture_id == Picture.id, Quality.sharpness.is_not(None))
+            .exists()
+        )
         rows = session.exec(
             select(Picture.id, Picture.width, Picture.height)
             .where(
                 Picture.size_bin_index.is_(None)
                 & Picture.width.is_not(None)
                 & Picture.height.is_not(None)
+                & quality_done
             )
             .order_by(Picture.id)
             .limit(max_ids)

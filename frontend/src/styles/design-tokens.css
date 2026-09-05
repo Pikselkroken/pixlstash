@@ -1,5 +1,5 @@
 /* =============================================================================
-   PixlStash design tokens — the single source of truth for non-color scales.
+   PixlStash design tokens - the single source of truth for non-color scales.
    This file IS the shipped stylesheet (imported by frontend/src/main.js) and the
    spec. docs/design/design-tokens.css is a symlink to it, so the two cannot drift.
    =============================================================================
@@ -11,7 +11,7 @@
 
    These values are the law. They mirror `docs/design/visual-language.md`. If you
    need a size, a radius, a shadow, or a duration, it is in here. If it is not in
-   here, you do not need it — you need to pick the nearest token. Adding a new
+   here, you do not need it - you need to pick the nearest token. Adding a new
    value is a design decision, not an implementation detail: raise it with the
    lead designer instead of inventing a one-off in a component.
 
@@ -24,7 +24,7 @@
 
 :root {
   /* ---------------------------------------------------------------------------
-     SPACING — 4px base grid. Use these for padding, margin, and gap. Nothing
+     SPACING - 4px base grid. Use these for padding, margin, and gap. Nothing
      else. The audit found 4 / 8 / 6 / 2px dominating with a long tail of
      off-grid one-offs (5, 7, 10, 11, 14, 18, 26, 30, 36px); those are drift.
      `--space-1` (2px) is the only sub-4 step and exists for hairline insets and
@@ -42,7 +42,7 @@
   --space-9: 64px;  /* hero / empty-state breathing room */
 
   /* ---------------------------------------------------------------------------
-     ROW WIDTHS — the three sizes that make list rows share a left edge. A row
+     ROW WIDTHS - the three sizes that make list rows share a left edge. A row
      reserves its leading glyph slot whether or not it has a glyph, and moves by
      whole indent steps. See visual-language.md §5.1. None of these is a new
      value: each is measured off a size the sidebar already forced.
@@ -58,7 +58,7 @@
                            sidebar overrides it from its thumbnail slider. */
 
   /* ---------------------------------------------------------------------------
-     RADIUS — four steps and a pill. The audit found 14 distinct radii
+     RADIUS - four steps and a pill. The audit found 14 distinct radii
      (2/3/4/5/6/8/9/10/12/14/16/18/999/9999). Collapse to these. 9999 was a typo
      for the pill; use `--radius-pill`.
      --------------------------------------------------------------------------- */
@@ -68,26 +68,26 @@
   --radius-pill: 999px; /* fully-rounded: toggles, status pills, avatar ring */
 
   /* ---------------------------------------------------------------------------
-     TYPE RAMP — base 14px (the app is dense; 16px body wastes vertical space in
+     TYPE RAMP - base 14px (the app is dense; 16px body wastes vertical space in
      the grid chrome). Sizes in rem off a 16px root so user zoom scales them.
      RULE: size text from this ramp only, and only in rem. The audit found 30+
      sizes mixing px, rem, AND em. `em` compounds with its parent and is the main
      reason nested labels drift; do not size body text in em.
      --------------------------------------------------------------------------- */
-  --text-2xs: 0.6875rem; /* 11px — uppercase section labels, badge counts */
-  --text-xs:  0.75rem;   /* 12px — captions, metadata, dense secondary text */
-  --text-sm:  0.8125rem; /* 13px — secondary body, toolbar labels */
-  --text-base:0.875rem;  /* 14px — DEFAULT body and controls */
-  --text-md:  1rem;      /* 16px — emphasised body, dialog body */
-  --text-lg:  1.125rem;  /* 18px — card titles, dialog headings */
-  --text-xl:  1.375rem;  /* 22px — view titles */
-  --text-2xl: 1.75rem;   /* 28px — login / startup / empty-state display */
+  --text-2xs: 0.6875rem; /* 11px - uppercase section labels, badge counts */
+  --text-xs:  0.75rem;   /* 12px - captions, metadata, dense secondary text */
+  --text-sm:  0.8125rem; /* 13px - secondary body, toolbar labels */
+  --text-base:0.875rem;  /* 14px - DEFAULT body and controls */
+  --text-md:  1rem;      /* 16px - emphasised body, dialog body */
+  --text-lg:  1.125rem;  /* 18px - card titles, dialog headings */
+  --text-xl:  1.375rem;  /* 22px - view titles */
+  --text-2xl: 1.75rem;   /* 28px - login / startup / empty-state display */
 
   --leading-tight: 1.2;  /* display and headings */
   --leading-snug:  1.35; /* UI labels, single-line controls */
   --leading-body:  1.5;  /* reading text (matches the :root default) */
 
-  /* Weights. Headings are 600, NOT 700 — 700 reads heavy against the warm
+  /* Weights. Headings are 600, NOT 700 - 700 reads heavy against the warm
      near-black text ramp. 700 is reserved for the rare true-emphasis case. */
   --weight-regular: 400;
   --weight-medium:  500;
@@ -95,7 +95,7 @@
   --weight-bold:    700; /* reserve */
 
   /* Font stacks. The UI runs on the platform system sans (no webfont load, native
-     feel in a dense tool). Tiny5 is the brand pixel face — wordmark and brand
+     feel in a dense tool). Tiny5 is the brand pixel face - wordmark and brand
      moments ONLY, never body or UI copy. Mono is for hashes, tokens, paths. */
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-pixel: "Tiny5", monospace;
@@ -104,7 +104,7 @@
   --tracking-label: 0.06em; /* uppercase section labels (see .section-label) */
 
   /* ---------------------------------------------------------------------------
-     ELEVATION — four levels, all built on the theme `--v-theme-shadow` token so
+     ELEVATION - four levels, all built on the theme `--v-theme-shadow` token so
      shadows warm/cool with the theme. The audit found 58 distinct box-shadows,
      most hardcoding `rgba(0,0,0,…)`, which reads cold and flat on the warm light
      canvas. Never hardcode a shadow color again. Higher level = more lifted.
@@ -114,13 +114,13 @@
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22); /* popovers, floating panels */
   --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30); /* dialogs, lightbox chrome */
 
-  /* Focus ring — one definition, used on every focusable element. A SOLID 3px accent
+  /* Focus ring - one definition, used on every focusable element. A SOLID 3px accent
      stroke. This is the keyboard-user's lifeline; never remove an outline without
      replacing it with this.
 
      It is solid on purpose. The previous `rgba(accent, 0.55)` blended toward the
      canvas and measured 1.96:1 in the light theme and 3.01:1 in dark, against the
-     3:1 focus-indicator floor (WCAG 1.4.11 / 2.4.11) — i.e. it failed outright in the
+     3:1 focus-indicator floor (WCAG 1.4.11 / 2.4.11) - i.e. it failed outright in the
      default theme, and would have fallen to 1.90 – 1.95:1 once the accent deepened for the
      white-label rule (visual-language.md §4). At full opacity the ring measures
      dark 3.61 / 3.23 / 3.76 and light 4.51 / 4.75 / 4.07 on
@@ -128,8 +128,15 @@
      A focus ring is the one place in this system where "subtle" is a defect. */
   --focus-ring: 0 0 0 3px rgb(var(--v-theme-accent));
 
+  /* The same accent as a GLOW rather than a stroke, for the one place a stroke
+     cannot sit: a Vuetify field, whose floating label rides ON the top border.
+     A 3px stroke there is a bar through the label. The 2px spread is still solid
+     accent, so the indicator keeps the contrast the ring was made solid for.
+     `style.css` paints it beneath the label and clips it off the top edge. */
+  --focus-glow: 0 0 6px 2px rgb(var(--v-theme-accent));
+
   /* ---------------------------------------------------------------------------
-     SCRIMS — translucent legibility backings for corner badges/chips that sit on
+     SCRIMS - translucent legibility backings for corner badges/chips that sit on
      top of imagery (lock badges, tag chips). Both are theme-token based; the
      audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Three contexts:
      `--scrim-surface` is a light warm chip over the bright grid/sidebar canvas
@@ -152,7 +159,7 @@
   --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
-     STATE OPACITY — exactly one value, because there is exactly one state that
+     STATE OPACITY - exactly one value, because there is exactly one state that
      may legally fade. `--opacity-disabled` names the ~38% that
      visual-language.md §11 has always specified in prose and that AppButton
      carried as a raw 0.38. WCAG 1.4.3 exempts an inactive control, which is why
@@ -169,10 +176,10 @@
   --opacity-disabled: 0.38;
 
   /* ---------------------------------------------------------------------------
-     SECONDARY TEXT OPACITY — the second, and only other, legal fade: copy that
+     SECONDARY TEXT OPACITY - the second, and only other, legal fade: copy that
      is still meant to be READ. A timestamp, a count, a hint, a reason. The
      floor is WCAG AA 4.5:1 (1.4.3), and the canvas that decides it is the
-     SIDEBAR, not the grid — measure on `surface` and you will pass a test the
+     SIDEBAR, not the grid - measure on `surface` and you will pass a test the
      user fails.
 
      Measured against the LIVE Vuetify themes in `frontend/src/main.js`
@@ -183,7 +190,7 @@
        0.65  light 4.94 / 5.04 / 4.64   dark 6.40 / 5.95 / 5.00   passes, no headroom
        0.7   light 5.80 / 5.94 / 5.41   dark 7.20 / 6.65 / 5.55   passes with headroom
 
-     0.6 is the value the codebase kept copying — 37 sites, and it fails on both
+     0.6 is the value the codebase kept copying - 37 sites, and it fails on both
      sidebars. Use the token, never a raw number, in either form:
      `opacity: var(--opacity-text-secondary)` or
      `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))`.
@@ -191,7 +198,7 @@
      Text ONLY. A glyph, chevron or icon button is a non-text UI component with
      a 3:1 floor (visual-language.md §4, "Contrast") and may stay quieter; a
      disabled control uses `--opacity-disabled` and is exempt (WCAG 1.4.3). And
-     a fade is never how RANK is expressed — that is weight, color and space
+     a fade is never how RANK is expressed - that is weight, color and space
      (§3).
 
      `design-tokens.test.js` recomputes these ratios from this token and from
@@ -201,11 +208,11 @@
   --opacity-text-secondary: 0.7;
 
   /* ---------------------------------------------------------------------------
-     COMPONENT DIMENSIONS — a small set of fixed component sizes that are neither
+     COMPONENT DIMENSIONS - a small set of fixed component sizes that are neither
      spacing gaps nor radii, but recur across the UI and were drifting as raw
      one-offs (15px vs 7px badges; 34 / 40 / 48 / 56px action bars). Snap to these.
      --------------------------------------------------------------------------- */
-  /* Badge — the count pill and the attention dot (sidebar task/upload badge,
+  /* Badge - the count pill and the attention dot (sidebar task/upload badge,
      filter-count badge, folder counts). Count pills are pill-radius, `--text-2xs`
      semibold, and MUST use a contrast-safe fill (`primary`/`on-primary`, 4.84:1);
      the amber accent fails 4.5:1 behind small text, so accent is for the dot/glow
@@ -223,7 +230,7 @@
      so they cannot borrow from the spacing scale (same reasoning as
      `--countdown-h`). 24px is not invented: it is already the de-facto value of
      `.bar-separator` in Toolbar.vue. The taller variant marks a boundary between
-     two CONTEXTS in one container — its one consumer is the grid action pill's
+     two CONTEXTS in one container - its one consumer is the grid action pill's
      search|selection seam (merged-grid-action-pill.md §2). The two differ by
      height and air only, never by a second colour. */
   --rule-h: 24px;
@@ -240,7 +247,7 @@
      rail. */
   --rail-w: 3px;
 
-  /* Contextual action bar / toolbar band — the full-width bar that holds a count
+  /* Contextual action bar / toolbar band - the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,
      overlay top bar). One height so these bands align. Desktop chrome compresses
      it (see `--titlebar-h` and the desktop overrides in style.css). */
@@ -259,7 +266,7 @@
   --notice-max-w: 420px;
 
   /* ---------------------------------------------------------------------------
-     LAYERS (`--z-*`) — the stacking ladder. See visual-language.md §14.
+     LAYERS (`--z-*`) - the stacking ladder. See visual-language.md §14.
 
      There was no scale: 40+ distinct raw values from 0 to 99999, two of them
      `!important`. "Put it above that thing" was luck, not a rule. These eight
@@ -268,7 +275,7 @@
      wedge one component between two strata without inventing a ninth stratum.
 
      A raw z-index is now drift. Migrating the existing 40+ call sites is
-     opportunistic follow-up work — touch a rule, move it onto the ladder — not
+     opportunistic follow-up work - touch a rule, move it onto the ladder - not
      a big-bang rewrite, because each move is pixel-visible in a different
      screen and has to be eyeballed there.
      --------------------------------------------------------------------------- */
@@ -283,7 +290,7 @@
 
   /* CLOSED RUNG, one member: TitleBar.vue. In the desktop build the title strip
      carries the window drag region and the window controls, so no in-app overlay
-     may paint over it — occluding it costs the user the ability to move or close
+     may paint over it - occluding it costs the user the ability to move or close
      the window. --z-modal is NOT sufficient: ReviewSessionsOverlay is itself a
      4000 stacking context whose full-viewport sub-scrims would win that tie on
      DOM order. A sticky toolbar is not a title bar; it belongs on --z-sticky. */
@@ -292,16 +299,16 @@
   /* CLOSED RUNG, one member: NoticeHost.vue. Above everything, including a modal
      and the title bar: an error about a failed background job must be readable
      while a dialog is open, and must NOT depend on being a later sibling of
-     .app-viewport to be seen — it previously "won" only by DOM order, so moving
+     .app-viewport to be seen - it previously "won" only by DOM order, so moving
      the host earlier in App.vue silently hid every notice behind the chrome.
      A floating status pill is not a notice; it belongs on --z-floating. */
   --z-notice: 5000;
 
   /* ---------------------------------------------------------------------------
-     MOTION — durations and easings. Motion confirms what happened; it is
+     MOTION - durations and easings. Motion confirms what happened; it is
      feedback, not decoration. --dur-1..3 are the routine-interaction ceiling:
      nothing on a routine bulk action animates slower than --dur-3. --dur-4 is the
-     one exception — a longer, expressive ONE-SHOT for delight moments (a FLIP
+     one exception - a longer, expressive ONE-SHOT for delight moments (a FLIP
      chip flying into the sidebar, a badge landing, a sticker drop), never for
      routine interaction. Easings: standard for most; decelerate for elements
      entering; accelerate for elements leaving; spring for a physical landing
@@ -309,7 +316,7 @@
      --------------------------------------------------------------------------- */
   --dur-1: 150ms; /* hover, press, micro-feedback */
   --dur-2: 200ms; /* panels, expand/collapse, default */
-  --dur-3: 250ms; /* overlays, dialog enter/leave — routine ceiling */
+  --dur-3: 250ms; /* overlays, dialog enter/leave - routine ceiling */
   --dur-4: 420ms; /* expressive ONE-SHOT: FLIP flight, badge/sticker landing (delight only) */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);   /* entering elements */

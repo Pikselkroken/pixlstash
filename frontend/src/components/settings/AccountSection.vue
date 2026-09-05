@@ -195,9 +195,9 @@ async function clearWatermark() {
 }
 
 function formatTokenTimestamp(value) {
-  if (!value) return "—";
+  if (!value) return " - ";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return " - ";
   // Date-only keeps the table columns compact (a full locale datetime is far
   // too wide for the dense token table).
   return date.toLocaleDateString();
@@ -811,7 +811,7 @@ watch(
       </div>
       <template v-if="shareUrl">
         <div class="account-token-warning">
-          Share this URL — anyone with it gets read access to the selected
+          Share this URL - anyone with it gets read access to the selected
           resource.
         </div>
         <div class="account-token-value-row">
@@ -980,7 +980,7 @@ watch(
   flex-direction: column;
 }
 
-/* WatermarkDrop — the thumbnail IS the control: click opens the file picker,
+/* WatermarkDrop - the thumbnail IS the control: click opens the file picker,
    drop sets the image, a reset overlay clears it. */
 .wm-drop {
   position: relative;

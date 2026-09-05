@@ -49,7 +49,7 @@ class MissingTagPredictionFinder(SimpleMissingFinder):
             return False
         try:
             # Tagging turned off entirely (no active tag plugin) means no
-            # background inference at all — mirror MissingTagFinder, which bails on
+            # background inference at all - mirror MissingTagFinder, which bails on
             # a falsy ``active_tag_plugin``. Without this the workflow's
             # ``active or "pixlstash_tagger"`` fallback reports the PixlStash tagger
             # as "enabled" even when the user cleared the active plugin, so this

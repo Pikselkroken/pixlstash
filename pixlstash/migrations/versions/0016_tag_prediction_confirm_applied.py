@@ -19,7 +19,7 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:
-    # Step 1: CONFIRMED — prediction tag is a real applied tag for this picture.
+    # Step 1: CONFIRMED - prediction tag is a real applied tag for this picture.
     op.execute(
         """
         UPDATE tag_prediction
@@ -34,7 +34,7 @@ def upgrade() -> None:
           )
         """
     )
-    # Step 2: REJECTED — TagTask has run for this picture (at least one tag row
+    # Step 2: REJECTED - TagTask has run for this picture (at least one tag row
     # exists, which may be a real tag or the empty sentinel) but this particular
     # prediction tag was not among the applied tags.
     op.execute(

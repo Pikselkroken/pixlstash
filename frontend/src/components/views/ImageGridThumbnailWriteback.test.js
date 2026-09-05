@@ -1,4 +1,4 @@
-// Grid thumbnail batch — write results back by picture identity, not by slot.
+// Grid thumbnail batch - write results back by picture identity, not by slot.
 //
 // Symptom this guards: you add a penalised tag, the card moves to its new
 // smart-score position correctly, but it never shows the problem indicator.

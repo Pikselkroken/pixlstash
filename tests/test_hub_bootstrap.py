@@ -10,19 +10,26 @@ import sqlite3
 import stat
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from sqlalchemy.exc import NoSuchTableError, OperationalError
+
 from pixlstash.hub.bootstrap import (
     HubBootstrapError,
+    UnusableVaultError,
     bootstrap_hub,
     finalize_opened_library,
     prepare_legacy_identity,
     prevalidate_library_fingerprint,
+    registered_vault_path,
+    unusable_vault_from_open_failure,
 )
-from pixlstash.hub.db import HubDatabase, HubPermissionError
+from pixlstash.hub.db import HubDatabase
+from pixlstash.server import Server
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
-from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.vault import Vault
 
 
@@ -261,8 +268,8 @@ class TestFreshInstall:
         """A fresh unregistered vault must be private under umask 002.
 
         Two creations under one umask: ``Vault.__init__`` makes the image_root
-        (0775 with the default makedirs mode), and — via the unguarded
-        no-hub branch — a ``VaultDatabase`` whose file SQLite would otherwise
+        (0775 with the default makedirs mode), and - via the unguarded
+        no-hub branch - a ``VaultDatabase`` whose file SQLite would otherwise
         create at 0664. Both must come out owner-only.
         """
         old_umask = os.umask(0o002)
@@ -321,13 +328,14 @@ class TestFreshInstall:
         TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-    def test_a_loose_existing_ancestor_is_kept_and_still_refused(self, tmp_path):
+    def test_a_loose_existing_ancestor_is_kept_and_still_reported(
+        self, tmp_path, caplog
+    ):
         """Creation only: the fix never chmods a directory the owner already had.
 
         The loose ancestor keeps its mode (owner's folder, owner's business),
-        and the guarded open goes on refusing the namespace — that refusal is
-        pre-existing behaviour, asserted here so the fix cannot drift into
-        repairing directories it did not create.
+        and the guarded open goes on warning about the namespace, asserted here
+        so the fix cannot drift into repairing directories it did not create.
 
         World-writable, not the 0775 this asserted originally: group-write alone
         is no longer an exposure when the group is the owner's own one-member
@@ -350,23 +358,26 @@ class TestFreshInstall:
 
         assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o777
         assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
-        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
-            TrustedSQLiteLocation.open(str(image_root / "vault.db"))
+        TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
+        assert any(
+            "group/world-writable" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
 
     def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
-        self, tmp_path
+        self, tmp_path, caplog
     ):
         """A permission someone else loosened is an event the operator must see.
 
         Same rule ``check_file_mode`` follows for the hub file: the server
-        raises rather than tightening in place, because silently fixing it hides
+        warns rather than tightening in place, because silently fixing it hides
         that it ever happened.
         """
         os.chmod(tmp_path, 0o700)
         parent = tmp_path / "loose"
         parent.mkdir()
         # chmod, not mkdir(mode=): the mode argument is masked by the process
-        # umask, so the mode lands short wherever the umask is 022 — which is
+        # umask, so the mode lands short wherever the umask is 022 - which is
         # the GitHub runner default. The directory then is not group-writable,
         # nothing is loose, and the test failed with "DID NOT RAISE" for the
         # one reason that is not a defect in the code under test.
@@ -377,9 +388,12 @@ class TestFreshInstall:
         # would make this pass there and fail nothing.
         os.chmod(parent, 0o777)
 
-        with pytest.raises(HubPermissionError, match="group/world-writable"):
-            HubDatabase(str(parent / "hub.db"))
+        HubDatabase(str(parent / "hub.db")).close()
 
+        assert any(
+            "group/world-writable" in record.message and record.levelname == "WARNING"
+            for record in caplog.records
+        )
         assert stat.S_IMODE(parent.stat().st_mode) == 0o777
 
     def test_existing_foreign_vault_is_not_an_implicit_identity_source(self, tmp_path):
@@ -646,8 +660,8 @@ class TestInteractiveLegacyPreparation:
 
     def test_a_concurrent_preparation_during_the_prompt_is_not_reattempted(self, paths):
         """The callback can block on a human for as long as it likes, so
-        another process — e.g. someone running the CLI command in a second
-        terminal while this prompt is still awaiting an answer — can record
+        another process - e.g. someone running the CLI command in a second
+        terminal while this prompt is still awaiting an answer - can record
         the same preparation first. The belated "yes" must not try to record
         it again, only pick up the state that is already there.
         """
@@ -1263,6 +1277,124 @@ class TestCrashSafeOrdering:
             )
 
 
+class TestAVanishedVault:
+    """The active library's vault deleted from under a still-stamped hub.
+
+    A desktop install and a source install keep separate hubs but share one
+    library folder, so removing a vault in one leaves the other's registration
+    pointing at nothing.
+    """
+
+    @staticmethod
+    def _stamped(folder, fingerprint):
+        make_vault(folder)
+        conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+        conn.execute("UPDATE library_settings SET library_uuid = ?", (fingerprint,))
+        conn.commit()
+        conn.close()
+        return folder
+
+    @pytest.fixture
+    def two_libraries(self, tmp_path):
+        """A hub whose active library's vault has just been deleted."""
+        hub_path = str(tmp_path / "hub.db")
+        kept = self._stamped(
+            str(tmp_path / "kept"), "00000000-0000-4000-8000-0000000000aa"
+        )
+        gone = self._stamped(
+            str(tmp_path / "gone"), "00000000-0000-4000-8000-0000000000bb"
+        )
+        hub = HubDatabase(hub_path)
+        registry = LibraryRegistry(hub)
+        registry.attach(kept, "Kept")
+        registry.attach(gone, "Gone")
+        registry.set_active("Gone")
+        hub.close()
+        os.remove(os.path.join(gone, "vault.db"))
+        return hub_path, kept, gone
+
+    def test_the_deleted_vault_is_not_recreated_and_the_alternative_is_named(
+        self, two_libraries
+    ):
+        hub_path, kept, gone = two_libraries
+
+        with pytest.raises(HubBootstrapError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert "Kept" in str(raised.value) and kept in str(raised.value)
+        # The whole point of validating read-only first: an empty vault.db here
+        # would turn a missing database into an unrecognisable one for good.
+        assert not os.path.exists(os.path.join(gone, "vault.db"))
+
+    def test_the_offered_library_becomes_active(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+        offered = []
+
+        def prompt(library, reason, alternatives):
+            offered.append((library.name, [lib.name for lib in alternatives]))
+            return alternatives[0]
+
+        result = bootstrap_hub(kept, hub_path, library_switch_prompt=prompt)
+        try:
+            assert offered == [("Gone", ["Kept"])]
+            assert result.library.path == kept
+            assert result.library.is_active
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_declining_the_offer_keeps_the_active_library(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+
+        with pytest.raises(HubBootstrapError):
+            bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: None)
+
+        hub = HubDatabase(hub_path)
+        try:
+            assert LibraryRegistry(hub).active_library().path == gone
+        finally:
+            hub.close()
+
+    def test_a_populated_folder_without_its_vault_starts_fresh(self, two_libraries):
+        """A restored picture folder is an import folder, not a dead end.
+
+        The desktop has no terminal to offer alternatives in, and the folder
+        the owner restored their pictures into is the library they want: start
+        a fresh vault there, so the app opens on an empty library whose folder
+        is full of pictures to import. Contrast the empty folder above, which
+        is what an unmounted drive looks like and stays refused.
+        """
+        hub_path, kept, gone = two_libraries
+        with open(os.path.join(gone, "holiday.jpg"), "wb") as picture:
+            picture.write(b"not really a jpeg")
+
+        result = bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: None)
+        try:
+            assert result.library.path == gone
+            assert result.library.vault_uuid is None
+            with Vault(
+                registered_vault_path(result.hub, result.library, result),
+                disable_background_workers=True,
+            ):
+                pass
+            assert read_vault_uuid(gone) == result.library.uuid
+            assert LibraryRegistry(result.hub).by_uuid(
+                result.library.uuid
+            ).vault_uuid == (result.library.uuid)
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_an_unreadable_alternative_is_never_offered(self, two_libraries):
+        hub_path, kept, gone = two_libraries
+        os.remove(os.path.join(kept, "vault.db"))
+
+        with pytest.raises(HubBootstrapError) as raised:
+            bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: "no")
+
+        assert "Kept" not in str(raised.value)
+
+
 class TestLosingTheHub:
     def test_a_deleted_hub_is_recreated_and_the_server_still_starts(self, paths):
         """Hub loss must degrade, never block startup.
@@ -1378,7 +1510,7 @@ class TestPortableIdentityScrub:
         """Windows refuses to fsync a read-only handle (EBADF).
 
         CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is
-        later fsynced works on Linux and fails on Windows — which is how the
+        later fsynced works on Linux and fails on Windows - which is how the
         read-only opens in this module took down every test in backend-windows
         shard 2, through ``finalize_library_connection`` on every registered
         vault open. Linux cannot reproduce the EBADF, but it can assert the
@@ -1669,3 +1801,250 @@ class TestPortableIdentityScrub:
         ) == [(1,)]
         result.engine.close()
         result.hub.close()
+
+
+def make_unopenable_vault(folder):
+    """A ``vault.db`` that is present and is not a database we can open.
+
+    The shape that ended a first run on a traceback: the file exists, so
+    ``register_pending`` is not used, and it does not validate, so ``attach``
+    refuses. Bytes rather than SQLite, because "unopenable" has to cover a
+    truncated or foreign file and not only an old schema.
+    """
+    os.makedirs(folder, exist_ok=True)
+    vault = os.path.join(folder, "vault.db")
+    with open(vault, "wb") as handle:
+        handle.write(b"not a database, not even close")
+    return vault
+
+
+def make_pre_alembic_vault(folder):
+    """A real vault from before Alembic: openable, upgradable, no version table."""
+    os.makedirs(folder, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+    for table in (
+        "picture",
+        "character",
+        "face",
+        "tag",
+        "quality",
+        "metadata",
+        "pictureset",
+    ):
+        conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    return os.path.join(folder, "vault.db")
+
+
+class TestAVaultThatWillNotOpen:
+    """Start-up asks a question about it rather than dying on it."""
+
+    def test_bootstrap_raises_a_typed_error_and_touches_nothing(self, tmp_path):
+        folder = str(tmp_path / "library")
+        vault = make_unopenable_vault(folder)
+        before = open(vault, "rb").read()
+
+        with pytest.raises(UnusableVaultError) as caught:
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+        assert caught.value.folder == os.path.realpath(folder)
+        assert caught.value.vault_path == vault
+        assert "vault.db" in caught.value.reason
+        assert open(vault, "rb").read() == before, "refusing must not edit the file"
+
+    def test_it_is_a_hub_bootstrap_error_so_existing_callers_report_it(self, tmp_path):
+        """`app.main` already prints HubBootstrapError concisely; inherit that."""
+        folder = str(tmp_path / "library")
+        make_unopenable_vault(folder)
+
+        with pytest.raises(HubBootstrapError):
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+    def test_recreation_moves_the_old_file_aside_rather_than_deleting_it(
+        self, tmp_path, monkeypatch
+    ):
+        folder = str(tmp_path / "library")
+        vault = make_unopenable_vault(folder)
+        before = open(vault, "rb").read()
+        # Sidecars travel with the database; a stale -wal beside a new vault is
+        # its own bug report.
+        for suffix in ("-wal", "-shm"):
+            with open(f"{vault}{suffix}", "wb") as handle:
+                handle.write(b"stale")
+        monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
+
+        result = bootstrap_hub(folder, str(tmp_path / "hub.db"))
+        try:
+            assert result.library.path == os.path.realpath(folder)
+            assert not os.path.exists(vault), "the new vault is created on open"
+
+            moved = [
+                name
+                for name in os.listdir(folder)
+                if name.startswith("vault.db.unusable-")
+            ]
+            assert len(moved) == 3, f"database and both sidecars, got {sorted(moved)}"
+            kept = next(name for name in moved if not name.endswith(("-wal", "-shm")))
+            assert open(os.path.join(folder, kept), "rb").read() == before
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_nothing_is_moved_without_the_explicit_authorisation(self, tmp_path):
+        """An inherited '0' - or no variable at all - is not a yes."""
+        folder = str(tmp_path / "library")
+        make_unopenable_vault(folder)
+
+        with pytest.raises(UnusableVaultError):
+            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+        assert os.listdir(folder) == ["vault.db"]
+
+    def test_a_pre_alembic_vault_is_opened_rather_than_recreated(self, tmp_path):
+        """The regression itself: this vault upgrades, so it must never be offered
+        the recovery that abandons it."""
+        folder = str(tmp_path / "library")
+        vault = make_pre_alembic_vault(folder)
+        before = open(vault, "rb").read()
+
+        result = bootstrap_hub(folder, str(tmp_path / "hub.db"))
+        try:
+            assert result.library.path == os.path.realpath(folder)
+            assert open(vault, "rb").read() == before, "registration must not migrate"
+            assert not any(
+                name.startswith("vault.db.unusable-") for name in os.listdir(folder)
+            )
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+
+def sqlalchemy_operational_error(message):
+    """An OperationalError shaped the way SQLAlchemy actually raises one."""
+    return OperationalError("SELECT 1", {}, sqlite3.OperationalError(message))
+
+
+class TestAVaultThatRegistersButWillNotMigrate:
+    """Validation reads `sqlite_master`; the migration chain reads much more."""
+
+    def _library(self, tmp_path):
+        folder = str(tmp_path / "library")
+        make_pre_alembic_vault(folder)
+        registry = LibraryRegistry(HubDatabase(str(tmp_path / "hub.db")))
+        return registry.attach(folder, "Library 1")
+
+    def test_a_schema_failure_becomes_the_same_offer(self, tmp_path):
+        library = self._library(tmp_path)
+
+        unusable = unusable_vault_from_open_failure(library, NoSuchTableError("user"))
+
+        assert unusable is not None
+        assert unusable.vault_path == library.vault_path
+        # "NoSuchTableError: user" alone reads as the word "user".
+        assert "could not be upgraded" in unusable.reason
+        assert "NoSuchTableError" in unusable.reason
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "database is locked",
+            "unable to open database file",
+            "attempt to write a readonly database",
+            "disk I/O error",
+            "database disk image is malformed",
+            # SQLITE_FULL says it in SQLite's words, ENOSPC in the OS's. A
+            # full disk answered by abandoning the library is the worst
+            # outcome this classification exists to prevent.
+            "database or disk is full",
+            "no space left on device",
+            "out of memory",
+        ],
+    )
+    def test_a_failure_about_the_machine_is_never_offered_a_recreate(
+        self, tmp_path, message
+    ):
+        """A full disk must not be answered by abandoning a good library."""
+        library = self._library(tmp_path)
+
+        assert (
+            unusable_vault_from_open_failure(
+                library, sqlalchemy_operational_error(message)
+            )
+            is None
+        )
+
+    def test_a_file_that_is_not_a_database_is_still_offered_the_recovery(
+        self, tmp_path
+    ):
+        """SQLITE_NOTADB is a statement about the file, not about the machine."""
+        library = self._library(tmp_path)
+
+        unusable = unusable_vault_from_open_failure(
+            library, sqlalchemy_operational_error("file is not a database")
+        )
+
+        assert unusable is not None
+
+
+class TestOpeningTheRegisteredVault:
+    """`Server._open_registered_vault`'s branches, without standing up a Server."""
+
+    def _server_double(self, tmp_path, failure, *, opened=None):
+        folder = str(tmp_path / "library")
+        make_pre_alembic_vault(folder)
+        hub = HubDatabase(str(tmp_path / "hub.db"))
+        registry = LibraryRegistry(hub)
+        library = registry.attach(folder, "Library 1")
+        attempts = []
+
+        def build_vault(image_root):
+            attempts.append(image_root)
+            if len(attempts) == 1:
+                raise failure
+            return opened
+
+        return SimpleNamespace(
+            hub=hub,
+            library_registry=registry,
+            _hub_bootstrap=SimpleNamespace(library=library),
+            build_vault=build_vault,
+        ), attempts
+
+    def test_a_schema_failure_raises_the_typed_error(self, tmp_path):
+        double, attempts = self._server_double(tmp_path, NoSuchTableError("user"))
+
+        with pytest.raises(UnusableVaultError):
+            Server._open_registered_vault(double)
+
+        assert len(attempts) == 1, "nothing is retried without authorisation"
+
+    def test_an_environmental_failure_is_re_raised_untouched(self, tmp_path):
+        double, _ = self._server_double(
+            tmp_path, sqlalchemy_operational_error("database is locked")
+        )
+
+        with pytest.raises(OperationalError):
+            Server._open_registered_vault(double)
+
+    def test_an_authorised_retry_sets_the_old_file_aside_and_reopens(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
+        sentinel = object()
+        double, attempts = self._server_double(
+            tmp_path, NoSuchTableError("user"), opened=sentinel
+        )
+        vault_path = double._hub_bootstrap.library.vault_path
+        before = open(vault_path, "rb").read()
+
+        assert Server._open_registered_vault(double) is sentinel
+        assert len(attempts) == 2
+
+        folder = os.path.dirname(vault_path)
+        moved = [n for n in os.listdir(folder) if n.startswith("vault.db.unusable-")]
+        assert len(moved) == 1
+        assert open(os.path.join(folder, moved[0]), "rb").read() == before
+        assert not os.path.exists(vault_path), "the replacement is made by the open"
+        # Without this the new vault would be refused for carrying no fingerprint.
+        assert double._hub_bootstrap.library.vault_uuid is None

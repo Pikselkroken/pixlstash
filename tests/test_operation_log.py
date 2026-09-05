@@ -2,25 +2,25 @@
 
 Covers the three things the design rests on:
 
-1. **Recording** — a metadata mutation appends exactly one operation carrying the
+1. **Recording** - a metadata mutation appends exactly one operation carrying the
    changed facets, the batch id, and the WS-envelope provenance; a no-op
    mutation appends nothing.
-2. **Undo / redo** — undo restores the recorded ``before`` state, redo restores
+2. **Undo / redo** - undo restores the recorded ``before`` state, redo restores
    ``after``, a bulk action is ONE undoable unit via its batch id, and recording
    a new operation invalidates the redo stack.
-3. **The invariants** — the log is append-only (undo mutates only the lifecycle
+3. **The invariants** - the log is append-only (undo mutates only the lifecycle
    markers), the service never reads the origin contextvar, and a locked picture
    set is not walked around by undo.
-4. **The scrapheap lifecycle** — a move to the Scrapheap and a restore out of it
+4. **The scrapheap lifecycle** - a move to the Scrapheap and a restore out of it
    are recorded symmetrically and are reversible in both directions, a bulk move
    is one batch and one Undo, a **permanent** delete is recorded nowhere, and
    undoing a move whose picture has since been purged is refused outright
    (410) rather than half-applied.
-5. **The tag-review decisions** (§21.2) — confirming and rejecting a tag
+5. **The tag-review decisions** (§21.2) - confirming and rejecting a tag
    prediction are recorded, and their undo reverses the *whole* decision: the
    Tag row, the prediction status AND the human-label ledger, with the derived
    ``anomaly_tag_uncertainty`` recomputed and the cached smart score dropped.
-   A half-undo — the tag back but the rejection still on file — is the failure
+   A half-undo - the tag back but the rejection still on file - is the failure
    these tests exist to prevent.
 """
 
@@ -239,7 +239,7 @@ def _tags(server, picture_id):
 
     The pending-retag sentinel (``__tag``) is machine bookkeeping written by the
     importer, not a user tag; it is filtered out here so the assertions read as
-    the user experiences them. It IS part of the recorded before/after state —
+    the user experiences them. It IS part of the recorded before/after state -
     see the round-trip assertion in the recording test.
     """
     return sorted(
@@ -360,7 +360,7 @@ def _prediction(server, picture_id, tag):
 
 
 def _picture_scores(server, picture_id):
-    """``(anomaly_tag_uncertainty, smart_score)`` — the two derived values."""
+    """``(anomaly_tag_uncertainty, smart_score)`` - the two derived values."""
 
     def _read(session):
         picture = session.get(Picture, picture_id)
@@ -406,7 +406,7 @@ def _purge_forever(client, ids):
 
 
 # ---------------------------------------------------------------------------
-# Pure unit tests — no server needed
+# Pure unit tests - no server needed
 # ---------------------------------------------------------------------------
 
 
@@ -428,7 +428,7 @@ def test_diff_states_drops_unchanged_pictures_entirely():
 def test_request_context_reads_the_request_never_a_contextvar():
     """The §15 rule at the op-log's entry point: provenance comes off the request.
 
-    A live ``origin_client_id_var`` must not leak into the recorded operation —
+    A live ``origin_client_id_var`` must not leak into the recorded operation -
     the recorder runs on the DB worker thread where that contextvar is dead, so
     reading it anywhere downstream is the silent-misattribution bug.
     """
@@ -519,7 +519,7 @@ def test_a_client_batch_id_can_never_impersonate_a_server_minted_one():
 
     A caller-supplied correlation id is a grouping hint over its own history
     (§21.2), but it must not be able to attach its requests to a batch the
-    server created — so the validator only accepts the ``cli-`` namespace and
+    server created - so the validator only accepts the ``cli-`` namespace and
     ``new_batch_id`` only mints ``srv-``.
     """
     from pixlstash.utils.request_origin import (
@@ -552,7 +552,7 @@ def test_service_module_never_reads_the_origin_contextvar():
     """Structural guard: a future edit cannot reintroduce a contextvar read.
 
     The same failure shape ``test_source_origin_read_from_data_only`` pins for
-    the broadcaster, pinned here for the operation log — both run off the
+    the broadcaster, pinned here for the operation log - both run off the
     request's task, so both must take origin from data passed to them.
     """
     import ast
@@ -564,7 +564,7 @@ def test_service_module_never_reads_the_origin_contextvar():
     }
     assert "origin_client_id_var" not in referenced, (
         "operation_log_service reads the origin contextvar. It runs on the DB "
-        "worker thread where that contextvar is dead — origin must be passed in "
+        "worker thread where that contextvar is dead - origin must be passed in "
         "explicitly (docs/backend_architecture.md §15)."
     )
     imported = {
@@ -700,7 +700,7 @@ def test_recorded_callback_cannot_commit_independently(client, server):
 def test_an_empty_diff_is_recorded_only_when_targets_are_declared(client, server):
     """The empty-diff escape hatch for operations with no picture facet.
 
-    Default behaviour is unchanged — an empty diff records nothing, so a no-op
+    Default behaviour is unchanged - an empty diff records nothing, so a no-op
     endpoint cannot consume a Ctrl+Z. Passing ``empty_diff_target_ids`` records
     the row anyway, with empty payloads and those targets: the path the dedup
     keep-separate verdict uses, whose whole restore is its post-restore hook.
@@ -734,7 +734,7 @@ def test_an_empty_diff_is_recorded_only_when_targets_are_declared(client, server
     assert operation["undoable"] is True
     assert operation["summary"] == "No facet changed"
     # Undo finds it, writes no picture facet, and still reports (and
-    # announces) the declared targets — their domain state is what the
+    # announces) the declared targets - their domain state is what the
     # operation's post-restore hook changes.
     undone = client.post(f"{API}/operations/undo", json={})
     assert undone.status_code == 200, undone.text
@@ -847,7 +847,7 @@ def test_stacking_is_recorded_and_undone(client, server):
 
 def test_undo_of_stack_creation_deletes_the_emptied_stack_row(client, server):
     """Issue #643 (CSO finding C3): undoing a stack creation must not leave an
-    orphaned empty PictureStack row behind — the mirror of undo-of-dissolve
+    orphaned empty PictureStack row behind - the mirror of undo-of-dissolve
     recreating the row."""
     ids = [_upload(client) for _ in range(2)]
     resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
@@ -892,7 +892,7 @@ def test_undo_keeps_a_stack_an_outside_picture_still_points_at(client, server):
 
 def test_undo_of_a_dissolve_recreates_the_row_and_redo_deletes_it_again(client, server):
     """The pre-existing dissolve-undo behaviour (row recreation) still holds,
-    and its redo now removes the recreated row again — matching the forward
+    and its redo now removes the recreated row again - matching the forward
     dissolve, which deletes the row itself."""
     ids = [_upload(client) for _ in range(2)]
     resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
@@ -1109,7 +1109,7 @@ def test_recording_a_new_operation_invalidates_the_redo_stack(client, server):
 
     superseded = _operations(server, status="superseded")
     assert len(superseded) == 1
-    # The row survives — this is an audit log, not a stack that pops.
+    # The row survives - this is an audit log, not a stack that pops.
     assert superseded[0]["op_type"] == "pictures.tags.add"
 
 
@@ -1184,7 +1184,7 @@ def test_undoing_one_member_of_a_batch_reverts_the_whole_batch(client, server):
     newest = _operations(server, batch_id=batch_id)[0]
     resp = client.post(f"{API}/operations/{newest['id']}/undo")
     assert resp.status_code == 200, resp.text
-    # Both members reverted — a partially-undone bulk action cannot exist.
+    # Both members reverted - a partially-undone bulk action cannot exist.
     assert len(resp.json()["operations"]) == 2
     assert all(_tags(server, pid) == [] for pid in ids)
 
@@ -1225,7 +1225,7 @@ def test_undo_refuses_to_write_a_picture_frozen_by_a_locked_set(client, server):
     resp = client.post(f"{API}/operations/undo")
     assert resp.status_code == 423, resp.text
     assert _tags(server, picture_id) == ["sunset"]
-    # The operation stays applied — a refused undo must not half-commit.
+    # The operation stays applied - a refused undo must not half-commit.
     assert _operations(server)[0]["status"] == "applied"
 
 
@@ -1286,7 +1286,7 @@ def test_scrapheap_lifecycle_announces_restored_not_added(client, server):
     """End to end: the WS envelope calls a scrapheap comeback ``restored``.
 
     Both the op-log undo path and the explicit restore endpoint put a card back,
-    and both used to say ``added`` — which the SPA reads as "new to the vault"
+    and both used to say ``added`` - which the SPA reads as "new to the vault"
     and answers with the sidebar's NEW marker on the counts that grew. That is a
     lie for a picture that has been in the library all along, so the comeback
     gets its own kind. Genuine imports keep ``added``; a re-scrapheap on redo
@@ -1321,7 +1321,7 @@ def test_scrapheap_lifecycle_announces_restored_not_added(client, server):
         if picture_id in (kind.get("picture_ids") or [])
     }
     assert undo_kinds == {"restored"}, emitted
-    # Origin travels in ``data`` (§15) — the undo path runs on the DB worker
+    # Origin travels in ``data`` (§15) - the undo path runs on the DB worker
     # thread where the contextvar is dead.
     assert all("origin_client_id" in kind for kind in emitted)
 
@@ -1379,7 +1379,7 @@ def test_bulk_scrapheap_move_is_one_batch_and_one_undo(client, server):
 
 
 def test_restore_from_the_scrapheap_is_recorded_symmetrically(client, server):
-    """Undoing a restore puts the pictures back — the history stays coherent."""
+    """Undoing a restore puts the pictures back - the history stays coherent."""
     ids = [_upload(client) for _ in range(2)]
     client.request("DELETE", f"{API}/pictures", json={"picture_ids": ids})
     stamps = {pid: _lifecycle(server, pid)[1] for pid in ids}
@@ -1425,7 +1425,7 @@ def test_undoing_a_move_whose_picture_was_purged_refuses_and_changes_nothing(
 ):
     """The fail-closed edge case: a purge is permanent, so the undo is refused.
 
-    Same contract as the locked-set guard — the WHOLE request is refused with a
+    Same contract as the locked-set guard - the WHOLE request is refused with a
     specific error, nothing is written, and the operation stays ``applied``
     rather than being marked undone over a change that did not happen.
     """
@@ -1461,7 +1461,7 @@ def test_a_partially_purged_bulk_move_refuses_the_whole_undo(client, server):
     assert resp.status_code == 410, resp.text
     assert resp.json()["detail"]["picture_ids"] == [ids[1]]
 
-    # The survivors are untouched — the refusal rolled the whole thing back.
+    # The survivors are untouched - the refusal rolled the whole thing back.
     assert _lifecycle(server, ids[0])[0] is True
     assert _lifecycle(server, ids[2])[0] is True
     assert (
@@ -1565,7 +1565,7 @@ ANOMALY_TAG = "watermark"
 def test_reject_is_recorded_and_undo_clears_the_human_negative(client, server):
     """The reported gap: a reject raised no receipt and could not be undone.
 
-    Undo must leave the ledger as if the reject never happened — status back to
+    Undo must leave the ledger as if the reject never happened - status back to
     PENDING and ``label_source`` back to null. A row still carrying a human NEG
     is one the tagger and the training exporter would go on treating as refused,
     which is the half-undo this facet exists to prevent.
@@ -1628,7 +1628,7 @@ def test_reject_of_a_hand_added_tag_round_trips_the_synthetic_manual_row(
     """A tag the tagger never predicted has its NEG parked on an invented row.
 
     That row is the only prediction row a user action can create, so it is also
-    the only one an undo may delete — and a redo has to be able to rebuild it.
+    the only one an undo may delete - and a redo has to be able to rebuild it.
     """
     picture_id = _upload(client)
     assert (
@@ -1729,12 +1729,12 @@ def test_undo_recomputes_the_derived_uncertainty_and_drops_the_cached_score(
 def test_removing_a_tag_chip_end_to_end_is_fully_undoable(client, server):
     """The overlay gesture the bug was reported against, start to finish.
 
-    Removing a chip is two requests — ``tags/remove_all`` then the reject that
+    Removing a chip is two requests - ``tags/remove_all`` then the reject that
     makes the removal durable supervision. Each records its own operation (no
     batch id, exactly like the other single-picture tag ops), and walking both
     back leaves the tag applied with **no** rejection on file.
 
-    This is the *unbatched* path — no ``X-Operation-Batch-Id``, as an external
+    This is the *unbatched* path - no ``X-Operation-Batch-Id``, as an external
     caller would issue it. The in-app gesture stamps both requests with one id
     and takes a single Ctrl+Z; see
     ``test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step``.
@@ -1778,8 +1778,8 @@ def test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step(client, se
     """The fix: one user gesture, one history step, one Ctrl+Z.
 
     The overlay stamps both requests of the chip delete with the same
-    ``X-Operation-Batch-Id``. They still record two operations — the log stays a
-    faithful record of what happened — but they share a batch, and undoing the
+    ``X-Operation-Batch-Id``. They still record two operations - the log stays a
+    faithful record of what happened - but they share a batch, and undoing the
     newest reverts the whole batch, so a single Ctrl+Z brings the tag back AND
     clears the human NEG the reject wrote.
     """
@@ -1832,7 +1832,7 @@ def test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step(client, se
 def test_the_batch_undo_endpoint_reverts_a_client_gesture_in_one_call(client, server):
     """``POST /operations/batches/{batch_id}/undo`` over a client-supplied id.
 
-    Same unit as the implicit undo above, reached the other way — the receipt's
+    Same unit as the implicit undo above, reached the other way - the receipt's
     Undo button knows the batch id it just created and reverts by it.
     """
     picture_id = _upload(client)
@@ -1858,7 +1858,7 @@ def test_the_batch_undo_endpoint_reverts_a_client_gesture_in_one_call(client, se
 def test_a_malformed_gesture_batch_header_is_ignored_never_a_500(client, server):
     """A header is attacker-controllable: bad values degrade, they do not fail.
 
-    Each rejected value records an unbatched operation — exactly the behaviour
+    Each rejected value records an unbatched operation - exactly the behaviour
     every caller had before the header existed.
     """
     picture_id = _upload(client)
@@ -2016,7 +2016,7 @@ def test_get_unknown_operation_is_404(client, server):
 def test_every_operations_route_is_declared_owner_only():
     """Both-direction authz record: the gate, not a handler, guards these.
 
-    Arithmetic completeness — every mounted /operations route has a declaration
+    Arithmetic completeness - every mounted /operations route has a declaration
     and every declaration is OWNER_ONLY. The positive direction (the owner
     reaches them) is exercised by every other test in this module.
     """
@@ -2128,7 +2128,7 @@ def test_a_failing_post_restore_hook_aborts_the_whole_undo(client, server):
     """The hook runs inside the restore's transaction, so it fails closed.
 
     A hook that could fail *after* the state was committed would leave the
-    pictures restored and the feature's own state stale — exactly the split the
+    pictures restored and the feature's own state stale - exactly the split the
     hook exists to prevent.
     """
     try:

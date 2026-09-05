@@ -207,7 +207,7 @@
       </button>
 
       <!-- The one accent-weight action in the pill: it is the only bulk WRITE.
-           The count is on the button, never "all" — the blast radius has to be
+           The count is on the button, never "all" - the blast radius has to be
            visible before the click, and it is what makes the sliders legible.
 
            The name is its own span so the ladder can DROP it and leave
@@ -345,7 +345,7 @@ const assignAccessibleName = computed(() => {
 const clearTitle = computed(() =>
   props.ownsEscape
     ? "Clear search (Esc)"
-    : "Clear search — press Esc twice, or click",
+    : "Clear search - press Esc twice, or click",
 );
 
 function onThresholdInput(event) {
@@ -377,7 +377,7 @@ function stepMinRefs(delta) {
 // ── The one live region ─────────────────────────────────────────────────────
 // Debounced 300ms trailing, matching the grid's own 200ms recut: dragging the
 // slider must produce ONE announcement, not one per pointer sample. The
-// threshold is folded into the same sentence rather than spoken separately —
+// threshold is folded into the same sentence rather than spoken separately -
 // the <output> is aria-live="off" for exactly that reason (it maps to
 // role="status" by default and would double-speak).
 const announcement = ref("");
@@ -579,7 +579,7 @@ onUnmounted(() => {
   gap: var(--space-3);
 }
 
-/* Quiet control recipe. Mirrors `.stack-btn` in the selection half — scoped
+/* Quiet control recipe. Mirrors `.stack-btn` in the selection half - scoped
    styles cannot share it, and lifting it to a global would put a pill-specific
    recipe in everyone's cascade. Keep the two in step. */
 .stack-btn {

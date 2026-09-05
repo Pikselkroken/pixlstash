@@ -20,6 +20,7 @@ whoever can write to the plugin directory can already install a plugin by hand.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ import sys
 import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as metadata_version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator
@@ -217,8 +220,8 @@ def _class_kinds(
 ) -> tuple[dict[str, set[str]], set[str]]:
     """Resolve each class to the plugin kind(s) it derives from.
 
-    Also returns the classes with a base we could not resolve at all — an
-    imported mixin, say — for which the method checks are unreliable.
+    Also returns the classes with a base we could not resolve at all - an
+    imported mixin, say - for which the method checks are unreliable.
     """
     kinds: dict[str, set[str]] = {name: set() for name in classes}
     opaque: set[str] = set()
@@ -384,7 +387,7 @@ def _analyse(source: str, path: Path, *, strict: bool) -> list[PluginClass]:
     if len(image_classes) > 1:
         # _find_plugin_class returns the first *concrete* ImagePlugin subclass
         # the module itself defines (#968), so an abstract base or an imported
-        # class no longer wins — but between two concrete ones it is still a
+        # class no longer wins - but between two concrete ones it is still a
         # dict-ordering accident. Nothing downstream reports this.
         image_classes[0].warnings.append(
             f"{path.name} defines {len(image_classes)} ImagePlugin subclasses "
@@ -404,7 +407,7 @@ def read_source(path: Path) -> str:
 
     ``UnicodeDecodeError`` is a ``ValueError``, not an ``OSError``, so a single
     non-UTF-8 file in a plugin directory would otherwise escape every caller's
-    handler and take `plugins list` down with it — including the entries that
+    handler and take `plugins list` down with it - including the entries that
     are perfectly fine, in the one command whose job is to say what is wrong.
     """
     try:
@@ -477,7 +480,7 @@ def _download_repository(ref: str, workdir: Path) -> Path:
     # sending: an unchecked `--ref ../../../someone-else/evil/zip/main` walks
     # straight out of PLUGINS_REPO and installs code that this CLI then runs
     # unsandboxed in the server process. The repository source is deliberately
-    # narrow — a named plugin from one repository — and this is what keeps it
+    # narrow - a named plugin from one repository - and this is what keeps it
     # narrow.
     if not _REF_RE.match(ref) or ".." in ref.split("/"):
         raise PluginError(
@@ -515,7 +518,7 @@ def _published_dirs(root: Path) -> list[Path]:
 def _declared_name(folder: Path) -> str | None:
     """Return the name a published plugin folder declares, or None if unreadable.
 
-    The same ast-only read the catalogue and the installer do — nothing here
+    The same ast-only read the catalogue and the installer do - nothing here
     imports code that has just come off the network. A folder that will not
     parse, or declares no plugin, is not an error at this point: it is one entry
     the reader cannot be offered, and the others still have to work.
@@ -533,9 +536,9 @@ def _declared_name(folder: Path) -> str | None:
 def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
     """Download the plugin called *name* and return its folder.
 
-    Matched on the plugin's **declared** name first — that is what ``plugins
+    Matched on the plugin's **declared** name first - that is what ``plugins
     available`` prints, what it lands under once installed, what ``plugins
-    list`` shows and what ``plugins remove`` takes — and on the repository's
+    list`` shows and what ``plugins remove`` takes - and on the repository's
     directory name second, because that is a real name too and was the only one
     accepted before. Accepting only the directory name meant the catalogue
     advertised `moondream2` and installing it failed.
@@ -543,7 +546,7 @@ def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
     Both passes look at the **whole** set before choosing, so a declared name
     always beats a directory name rather than merely beating the ones that
     happen to sort after it, and two folders answering to the same name are
-    refused rather than resolved alphabetically — the shape `resolve_removal`
+    refused rather than resolved alphabetically - the shape `resolve_removal`
     already uses for an ambiguous name. Silently picking one would mean the
     plugin a reader installs is decided by a string inside downloaded code that
     nothing in the listing shows them.
@@ -647,7 +650,7 @@ def plan_install(root: Path, *, strict: bool = False) -> InstallPlan:
         source = root
         destination = destination_dir / primary.name
     else:
-        # Everything else installs as the single module that declares it —
+        # Everything else installs as the single module that declares it -
         # always, for image plugins, which the registry only ever reads as one
         # file.
         source = primary.file
@@ -660,7 +663,7 @@ def plan_install(root: Path, *, strict: bool = False) -> InstallPlan:
             ]
             if siblings:
                 # Only the one module travels, so a helper it imports is left
-                # behind and the plugin fails at import — where, for image
+                # behind and the plugin fails at import - where, for image
                 # plugins, nothing reports it. Say so here or nowhere.
                 warnings.append(
                     f"only {source.name} is installed; "
@@ -713,9 +716,9 @@ def install(plan: InstallPlan, *, force: bool = False) -> None:
     if existing and not force:
         raise PluginError(f"{existing[0]} already exists. Pass --force to replace it.")
 
-    # Reinstalling a plugin over itself is a plausible gesture — you edited the
+    # Reinstalling a plugin over itself is a plausible gesture - you edited the
     # installed file, or you tab-completed the path out of the plugin directory
-    # — and without this it deletes the only copy and then fails to find its
+    # - and without this it deletes the only copy and then fails to find its
     # source. --force makes it worse, not better.
     source = plan.source.resolve()
     if any(
@@ -759,6 +762,84 @@ def install(plan: InstallPlan, *, force: bool = False) -> None:
         raise PluginError(f"could not install to {plan.destination}: {exc}") from exc
 
 
+@dataclass
+class DependencyChange:
+    """One package pip would install, and what is there now."""
+
+    name: str
+    version: str
+    #: The version already installed, or None when the package is new here.
+    installed: str | None = None
+
+    @property
+    def moves(self) -> bool:
+        """Whether installing this would change a package already in use.
+
+        The one distinction that matters. Adding a package cannot break what is
+        running; replacing one can, and PixlStash pins every dependency it has,
+        so the thing most likely to be replaced is PixlStash's own torch.
+        """
+        return self.installed is not None and self.installed != self.version
+
+
+def resolve_requirements(requirements: Path) -> list[DependencyChange]:
+    """Return every package installing *requirements* would add or replace.
+
+    Resolved by pip rather than by us: ``--dry-run --report`` runs the real
+    resolver, writes what it would do as JSON, and touches nothing.  The report
+    lists only what is not already satisfied, so an entry is by definition a
+    change, and the entries include transitive dependencies -- which is the
+    point, since a plugin asking for one package can pull in forty.
+
+    Nothing here decides whether the answer is acceptable; it says what would
+    happen, and the caller shows it to the person who has to agree to it.
+    """
+    with TemporaryDirectory(prefix="pixlstash-deps-") as scratch:
+        report = Path(scratch) / "report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--dry-run",
+                "--quiet",
+                "--report",
+                str(report),
+                "-r",
+                str(requirements),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise PluginError(
+                f"pip could not work out what {requirements.name} needs "
+                f"(exit {result.returncode})"
+                + (f": {detail[-1]}" if detail else "")
+                + ". Nothing was installed."
+            )
+        try:
+            entries = json.loads(report.read_text(encoding="utf-8"))["install"]
+        except (OSError, ValueError, KeyError) as exc:
+            raise PluginError(
+                f"pip did not report what it would install: {exc}. "
+                "Nothing was installed."
+            ) from exc
+
+    changes = []
+    for entry in entries:
+        name = entry["metadata"]["name"]
+        try:
+            installed = metadata_version(name)
+        except PackageNotFoundError:
+            installed = None
+        changes.append(DependencyChange(name, entry["metadata"]["version"], installed))
+    return sorted(changes, key=lambda change: change.name.lower())
+
+
 def read_requirements(requirements: Path) -> list[str]:
     """Return the requirement lines, so the CLI can show them before running pip."""
     return [
@@ -768,16 +849,31 @@ def read_requirements(requirements: Path) -> list[str]:
     ]
 
 
-def install_requirements(requirements: Path) -> None:
-    """Install *requirements* with pip."""
+def install_requirements(changes: list[DependencyChange]) -> None:
+    """Install exactly the resolution *changes* describes, and nothing else.
+
+    *changes* is what :func:`resolve_requirements` worked out and what the
+    caller showed the user before asking. Installing it, rather than running
+    ``pip install -r`` again, is what makes that agreement binding: a second
+    run is a second resolution, free to pick different versions, so the torch
+    replacement someone was told would not happen could happen anyway.
+
+    ``--no-deps`` for the same reason. The resolved list already holds every
+    transitive dependency pip found, so letting it resolve again could only add
+    something nobody was shown.
+    """
+    if not changes:
+        return
+    pins = [f"{change.name}=={change.version}" for change in changes]
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+        [sys.executable, "-m", "pip", "install", "--no-deps", *pins],
         check=False,
     )
     if result.returncode != 0:
         raise PluginError(
-            f"pip failed on {requirements} (exit {result.returncode}). The "
-            "plugin was installed; its dependencies were not."
+            f"pip failed installing {', '.join(pins)} (exit "
+            f"{result.returncode}). The plugin was installed; its "
+            "dependencies were not."
         )
 
 
@@ -893,7 +989,7 @@ def _summary(folder: Path) -> str:
     saying what the plugin does. That paragraph is *hard-wrapped*, so the first
     line of it is a fragment ("...so it runs") rather than a sentence: the lines
     are joined back up before the first sentence is taken. A plugin without a
-    README, or with a shape this does not fit, simply has no summary — guessing
+    README, or with a shape this does not fit, simply has no summary - guessing
     harder would put the wrong sentence in a listing people read to choose what
     to install.
     """
@@ -928,7 +1024,7 @@ def _catalogue_entry(folder: Path, installed: set[str]) -> CataloguePlugin:
 
     One unparseable plugin in the repository must not empty the whole listing:
     the reader is choosing between the others, and a refusal that names none of
-    them is useless. Nothing here imports the plugin — this is the same ast-only
+    them is useless. Nothing here imports the plugin - this is the same ast-only
     read the installer does, on code that has just come off the network.
     """
     kind = CAPTIONING if folder.parent.name == "captioning" else IMAGE
@@ -968,7 +1064,7 @@ def catalogue(ref: str = DEFAULT_REF) -> list[CataloguePlugin]:
     """Return every plugin published in the repository at *ref*.
 
     One download of the same archive ``plugins install <name>`` uses, so
-    listing needs no API token, no second host and no rate-limited endpoint —
+    listing needs no API token, no second host and no rate-limited endpoint -
     and shows exactly the set that installing can reach.
     """
     installed = {
@@ -982,8 +1078,8 @@ def catalogue(ref: str = DEFAULT_REF) -> list[CataloguePlugin]:
 def matches(entry: CataloguePlugin, query: str) -> bool:
     """Return whether *entry* matches a case-insensitive *query*.
 
-    Searched across everything the listing shows — name, display name, summary,
-    author and licence — because a reader who can see a word in the output will
+    Searched across everything the listing shows - name, display name, summary,
+    author and licence - because a reader who can see a word in the output will
     expect to be able to search for it. An empty query matches everything.
     """
     needle = query.strip().lower()
@@ -1002,7 +1098,7 @@ def resolve_removal(name: str, kind: str | None = None) -> tuple[str, Path]:
     tidiness. Two things enforce it, and both are needed: the name may not carry
     a path separator (so it cannot name anything but a direct child), and the
     entry may not be a symlink (so following it cannot reach outside either).
-    The symlink is refused rather than followed on purpose — resolving it would
+    The symlink is refused rather than followed on purpose - resolving it would
     stay inside the letter of "delete only plugin files" while deleting a file
     the user did not name.
     """

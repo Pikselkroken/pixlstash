@@ -15,7 +15,7 @@ function mountTicks(props = {}) {
   return mount(StackEdgeTicks, { ...globalOpts, props });
 }
 
-describe("StackEdgeTicks — how many layers", () => {
+describe("StackEdgeTicks - how many layers", () => {
   it("draws nothing for a lone picture", () => {
     // A single photo with a peeking edge would claim a stack that is not there.
     const wrapper = mountTicks({ count: 1 });
@@ -44,7 +44,7 @@ describe("StackEdgeTicks — how many layers", () => {
   });
 });
 
-describe("StackEdgeTicks — it stays decoration", () => {
+describe("StackEdgeTicks - it stays decoration", () => {
   it("hides itself from assistive technology", () => {
     // The badge carries the meaning; announcing two empty layers is noise.
     expect(

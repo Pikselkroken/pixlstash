@@ -3,7 +3,7 @@
 **The problem it solves.** With no registered folder there is nowhere to drop a
 file and nowhere to import a run into, so drag-in is impossible on a fresh
 install. Seeding a ``user`` folder and then forbidding removal of the last one
-would be a lie — a ``user`` folder is an association the owner made, and one the
+would be a lie - a ``user`` folder is an association the owner made, and one the
 owner cannot dissolve is not an association. A zero-folder error state is worse:
 it makes a normal condition (nothing catalogued in place yet) look broken.
 
@@ -13,7 +13,7 @@ picture files:
 
 * **exactly one row always exists**, created at first run and never deleted;
 * it is the default destination for a drop or an import;
-* it is **relocatable but not removable** — there is no association to dissolve,
+* it is **relocatable but not removable** - there is no association to dissolve,
   only a place for the bytes to be;
 * ``user`` and ``foreign`` folders may legitimately number zero. That is not an
   error and gets no message.
@@ -60,7 +60,7 @@ MANAGED_KIND = "managed"
 MANAGED_OWNER = "pixlstash"
 
 # ``root_only``: the store moves as a unit. Note that nothing enforces
-# ``movable`` today — the mover does not read it — so this is a description of
+# ``movable`` today - the mover does not read it - so this is a description of
 # what the folder is, not a permission check. Whether the UI offers moving a
 # single file *out* of the store is a verb question and is not decided here.
 MANAGED_MOVABLE = "root_only"
@@ -75,8 +75,8 @@ MANAGED_DIRNAME = "models"
 # which is where `Add file` and an import land, so a shelf that could not delete
 # from it could not undo either of them.
 #
-# Not the whole rule on its own. `foreign` — one of the two kinds not listed
-# here, beside the `source` roots the scanner never catalogues in place — covers
+# Not the whole rule on its own. `foreign` - one of the two kinds not listed
+# here, beside the `source` roots the scanner never catalogues in place - covers
 # PixlStash's own download store as well as the caches. See
 # `deletes_unclaimed_files`.
 DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
@@ -100,7 +100,7 @@ def deletes_unclaimed_files(folder_kind: str, folder_path: str) -> bool:
     into: the ENGINES there are ours and refused by their own gate wherever they
     live, but a file we merely *found* beside them is not, and it is declared
     (#927) exactly so a 339 MB ``best.pt`` is visible rather than invisible.
-    Visible and unremovable is the wrong half of that — Forget wants every copy
+    Visible and unremovable is the wrong half of that - Forget wants every copy
     gone before it will act, so there would be nothing left but a file manager.
 
     The other two declared roots say no. The InsightFace packs are re-fetched,
@@ -119,21 +119,21 @@ def relocatable_identity(folder) -> Optional[tuple[str, str, str]]:
 
     A relocation registers its destination as an ordinary ``user`` folder while
     the files move and promotes it back in one transaction at the end, so it has
-    to know what the folder *is* — and that answer differs per root. This is the
+    to know what the folder *is* - and that answer differs per root. This is the
     one place that says which roots relocate at all; the route enforces it and
     ``GET /model-folders`` reports it, from here, rather than each deciding.
 
     Three do. The managed store, which is storage PixlStash owns outright; the
     folder PixlStash downloads its own engines into, whose location became a
     recorded setting in #905 (closing the long-open #112); and the InsightFace
-    packs, whose root became one in #906 — recorded the same way and for the same
+    packs, whose root became one in #906 - recorded the same way and for the same
     reason, because it is machine-global too. The fourth declared root does not:
-    the HuggingFace cache is ``fixed`` — its location is read from the
+    the HuggingFace cache is ``fixed`` - its location is read from the
     environment at import by a library shared with every other tool on the
     machine, so "moving" it is a restart and a re-download.
 
     The two recorded roots return the same identity because ``declare_folder``
-    writes the same three columns for every root PixlStash declares — which is
+    writes the same three columns for every root PixlStash declares - which is
     also why each is recognised by *path* rather than by those columns.
 
     Args:
@@ -155,7 +155,7 @@ def relocatable_identity(folder) -> Optional[tuple[str, str, str]]:
 def find_managed_folder(hub: HubDatabase) -> Optional[dict]:
     """Return the managed folder row, or None before first-run creation.
 
-    If more than one exists — which nothing should be able to produce — the
+    If more than one exists - which nothing should be able to produce - the
     lowest id wins and the rest are logged loudly rather than deleted. Deleting a
     folder row drops its ``model_file`` rows, so guessing wrong here would
     tombstone real locations to tidy up a bookkeeping error.
@@ -194,7 +194,7 @@ def ensure_managed_folder(hub: HubDatabase, config_dir: str) -> Optional[dict]:
 
     Returns:
         The managed folder row, or ``None`` if the directory could not be
-        created — a shelf with no default destination is degraded but usable,
+        created - a shelf with no default destination is degraded but usable,
         and refusing to start the server over it would be worse.
     """
     existing = find_managed_folder(hub)

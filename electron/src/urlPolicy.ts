@@ -30,7 +30,7 @@ export function redactUrl(target: string): string {
 }
 
 /**
- * Decide whether the window may load `target` — used by BOTH the top-level
+ * Decide whether the window may load `target` - used by BOTH the top-level
  * navigation guard and `setWindowOpenHandler`, so the origin policy lives in one
  * place the way the scheme policy already does. The privileged
  * `pixlstashDesktop` preload bridge stays injected across same-window
@@ -39,12 +39,12 @@ export function redactUrl(target: string): string {
  * installAccelerator, …). We therefore allow ONLY the content we load ourselves
  * and block everything else (deny-by-default):
  *
- *  - `file://` — ONLY files inside our own packaged renderer directory
+ *  - `file://` - ONLY files inside our own packaged renderer directory
  *    (renderer/index.html splash, renderer/setup.html, their assets). A blanket
  *    `file:` allow would let a navigated page load any local HTML under the
  *    privileged preload, so we resolve the target path and require it to live
  *    under `rendererDir`.
- *  - the live loopback backend origin — http://127.0.0.1:<ephemeral port>. The
+ *  - the live loopback backend origin - http://127.0.0.1:<ephemeral port>. The
  *    port is chosen fresh per backend launch, so the allowed origin is derived
  *    from the URL we actually loaded (`currentUrl`), never hardcoded. Before the
  *    backend is up `currentUrl` is null; we then permit only the loopback host
@@ -54,8 +54,8 @@ export function redactUrl(target: string): string {
  * Every host check compares the PARSED hostname, never a string prefix: a prefix
  * test lets `http://127.0.0.1.example.com/` and `http://localhost.example.com/`
  * through as "loopback" (#1020). The scheme is checked too, because an opaque
- * scheme can carry a matching origin — `new URL('blob:http://127.0.0.1:1234/x')`
- * reports origin `http://127.0.0.1:1234` — and such a document is authored by
+ * scheme can carry a matching origin - `new URL('blob:http://127.0.0.1:1234/x')`
+ * reports origin `http://127.0.0.1:1234` - and such a document is authored by
  * the page, not served by us.
  */
 export function isAllowedNavigation(
@@ -71,7 +71,7 @@ export function isAllowedNavigation(
     return false;
   }
   // Embedded credentials are never part of anything we load ourselves, and
-  // `url.origin` deliberately ignores them — so refuse them rather than let
+  // `url.origin` deliberately ignores them - so refuse them rather than let
   // `http://someone@127.0.0.1:<port>/` reach the backend as the loopback origin.
   if (url.username || url.password) {
     console.warn(`[nav] blocking URL carrying embedded credentials: ${redactUrl(target)}`);
@@ -95,7 +95,7 @@ export function isAllowedNavigation(
   // custom scheme are refused before the origin comparison below sees them.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
   // The running backend, pinned to the exact loopback origin we loaded. Once we
-  // know that origin it is the ONLY http one allowed — another port on the same
+  // know that origin it is the ONLY http one allowed - another port on the same
   // loopback host is a different local service, and letting the window load it
   // would carry the privileged preload bridge onto its pages.
   if (currentUrl) {

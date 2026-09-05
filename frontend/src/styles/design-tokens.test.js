@@ -3,12 +3,12 @@
  *
  * The bug this exists to stop: secondary text was written as a raw `opacity: 0.6`
  * in 37 places and measured 4.01:1 on the light sidebar and 4.48:1 on the dark
- * one — both under the 4.5:1 AA floor for body text (WCAG 1.4.3). The value now
+ * one - both under the 4.5:1 AA floor for body text (WCAG 1.4.3). The value now
  * lives in one token, so the only way to reintroduce the failure is to lower
  * that token, and this test is what refuses it.
  *
- * Both inputs are read from the files that actually ship — the token from
- * design-tokens.css, the theme colours from main.js — so the assertion tracks a
+ * Both inputs are read from the files that actually ship - the token from
+ * design-tokens.css, the theme colours from main.js - so the assertion tracks a
  * palette change too, not just the opacity.
  */
 import { readFileSync } from "node:fs";
@@ -60,8 +60,8 @@ const opacity = Number(
  * yields its own palette (the two themes reuse the same key names).
  *
  * Keyed on the theme's NAME, never on one of its colours: keying on a hex
- * would break the moment the palette it is meant to police changes — the
- * Camp B migration edits exactly those values — and the guard would then fail
+ * would break the moment the palette it is meant to police changes - the
+ * Camp B migration edits exactly those values - and the guard would then fail
  * for the wrong reason. Both failure modes throw and say what moved, so a
  * rename can never degrade into a silently wrong comparison.
  */
@@ -69,7 +69,7 @@ function themeBlock(name) {
   const start = mainJs.indexOf(`const ${name} = {`);
   if (start === -1) {
     throw new Error(
-      `theme '${name}' not found in main.js — renamed or moved? This guard ` +
+      `theme '${name}' not found in main.js - renamed or moved? This guard ` +
         `must be repointed at the live themes, not deleted.`,
     );
   }

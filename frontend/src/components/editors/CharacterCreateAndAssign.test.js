@@ -127,7 +127,7 @@ describe("CharacterEditor unwraps the mutation envelope", () => {
   });
 });
 
-describe("CharacterEditor — multi-project membership", () => {
+describe("CharacterEditor - multi-project membership", () => {
   it("loads every project and PATCHes the complete edited selection", async () => {
     const wrapper = mount(CharacterEditor, {
       props: {
@@ -281,7 +281,7 @@ describe("overlay flow: the face is actually assigned", () => {
   });
 });
 
-// The adapter tray is wired here, not tested here — `AdapterTray.test.js` owns
+// The adapter tray is wired here, not tested here - `AdapterTray.test.js` owns
 // its behaviour. What only this file can prove is the WIRING: that the editor
 // mounts it at all, that it hands it THIS person, and that an unsaved person
 // gets no tray. All three are invisible to the tray's own suite, and a tray
@@ -293,7 +293,7 @@ const AdapterTrayStub = {
   template: `<div class="adapter-tray-stub" :data-type="entityType" :data-id="entityId"></div>`,
 };
 
-describe("CharacterEditor — adapter tray", () => {
+describe("CharacterEditor - adapter tray", () => {
   function mountWithTray(props) {
     return mount(CharacterEditor, {
       props: { backendUrl: "http://x", projects: [], ...props },
@@ -331,7 +331,7 @@ describe("CharacterEditor — adapter tray", () => {
       character: { id: null, name: "" },
     });
     await flushPromises();
-    // Mounted, but with nothing to read — the tray renders nothing at all for a
+    // Mounted, but with nothing to read - the tray renders nothing at all for a
     // null id, which is what keeps a create dialog from carrying a section that
     // can only ever say "none".
     expect(wrapper.find(".adapter-tray-stub").attributes("data-id")).toBe(

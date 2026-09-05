@@ -1,4 +1,4 @@
-"""Near-neighbour label-disagreement kernel — the shared core of the tag-suggestion scan.
+"""Near-neighbour label-disagreement kernel - the shared core of the tag-suggestion scan.
 
 Pure NumPy, no PixlStash deps, so both the CLI scanner
 (``scripts/near_neighbor_label_disagreement.py``) and the in-app scan service can call
@@ -16,8 +16,8 @@ def dedupe_by_pair(rows: list[dict]) -> list[dict]:
     """Collapse rows describing the same unordered {picture, twin} pair, keeping the
     highest-scoring one.
 
-    A pair where a tagged image and its untagged twin disagree yields two suspects — a
-    "remove" for the tagged one and an "add" for the untagged one — which are the *same*
+    A pair where a tagged image and its untagged twin disagree yields two suspects - a
+    "remove" for the tagged one and an "add" for the untagged one - which are the *same*
     review (the queue card is symmetric over the pair). Keeping one per pair avoids
     showing it twice. Each row must have ``picture_id``, ``twin_picture_id`` and ``score``.
     """
@@ -36,7 +36,7 @@ def knn_disagreement(emb: np.ndarray, has_tag: np.ndarray, k: int, block: int = 
 
     Args:
         emb: (n, dim) unit-norm embeddings (cosine == dot product).
-        has_tag: (n,) bool mask — whether each image carries the (merged) tag.
+        has_tag: (n,) bool mask - whether each image carries the (merged) tag.
         k: neighbours per image.
         block: rows per similarity block (memory/speed trade-off).
 
@@ -62,7 +62,7 @@ def knn_disagreement_with_neighbors(
 
     Args:
         emb: (n, dim) unit-norm embeddings (cosine == dot product).
-        has_tag: (n,) bool mask — whether each image carries the (merged) tag.
+        has_tag: (n,) bool mask - whether each image carries the (merged) tag.
         k: neighbours per image.
         block: rows per similarity block (memory/speed trade-off).
 
@@ -149,8 +149,8 @@ def nearest_opposite_by_hamming(
 
     Args:
         phash_ints: (n,) array of 64-bit dhash values (any integer dtype; read as uint64).
-        valid_mask: (n,) bool — rows with a parseable phash. Invalid rows are ignored.
-        has_tag: (n,) bool — whether each row carries the (merged) tag.
+        valid_mask: (n,) bool - rows with a parseable phash. Invalid rows are ignored.
+        has_tag: (n,) bool - whether each row carries the (merged) tag.
         i: row to find a near-duplicate for. Must itself have a valid phash.
         max_hamming: inclusive Hamming-distance threshold (~<=8 bits ≈ near-identical).
         twin_sim: optional (n,) CLIP cosine array used only to break ties (higher wins).

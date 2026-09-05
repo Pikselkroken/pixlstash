@@ -2,7 +2,7 @@
 
 `is_local_ip` / `is_loopback_ip` back the `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY`
 host-capability tiers. A genuinely malformed host (e.g. a bogus `X-Forwarded-For`
-hop admitted by a mis-trusted proxy) must NOT be admitted as loopback/local — it
+hop admitted by a mis-trusted proxy) must NOT be admitted as loopback/local - it
 fails closed. The one exception is the in-process TestClient sentinel, kept so the
 suite is not blocked.
 
@@ -44,7 +44,7 @@ def test_ipv6_addresses_classified_correctly():
     # ::1 loopback
     assert is_loopback_ip("::1") is True
     assert is_local_ip("::1") is True
-    # Unique-local (ULA, fc00::/7 — the Tailscale ULA prefix lives here) is
+    # Unique-local (ULA, fc00::/7 - the Tailscale ULA prefix lives here) is
     # private but not loopback
     assert is_loopback_ip("fd7a:115c:a1e0::1") is False
     assert is_local_ip("fd7a:115c:a1e0::1") is True
@@ -71,7 +71,7 @@ class _FakeRequest:
 
 def test_xff_from_trusted_proxy_resolves_to_real_client():
     # A LAN client behind a trusted proxy resolves to the client and is judged
-    # local (not loopback) — the legitimate reverse-proxy path still works.
+    # local (not loopback) - the legitimate reverse-proxy path still works.
     req = _FakeRequest(host=PRIVATE_10_IPV4, xff=LAN_IPV4)
     ip = get_real_client_ip(req, trusted_proxies=[PRIVATE_10_IPV4])
     assert ip == LAN_IPV4
@@ -81,7 +81,7 @@ def test_xff_from_trusted_proxy_resolves_to_real_client():
 
 def test_xff_from_untrusted_peer_cannot_spoof_loopback():
     # An untrusted direct peer setting X-Forwarded-For: 127.0.0.1 must NOT be
-    # admitted as loopback — the direct (untrusted) peer stands.
+    # admitted as loopback - the direct (untrusted) peer stands.
     req = _FakeRequest(host="8.8.8.8", xff="127.0.0.1")
     ip = get_real_client_ip(req, trusted_proxies=[PRIVATE_10_IPV4])
     assert ip == "8.8.8.8"
@@ -98,7 +98,7 @@ def test_malformed_direct_host_denied_end_to_end():
 
 
 def test_missing_client_defaults_to_loopback():
-    # No socket peer (e.g. some ASGI edge cases) defaults to 127.0.0.1 — a
+    # No socket peer (e.g. some ASGI edge cases) defaults to 127.0.0.1 - a
     # parseable loopback, so the desktop/loopback paths are not over-blocked.
     req = _FakeRequest(host=None)
     ip = get_real_client_ip(req, trusted_proxies=[])

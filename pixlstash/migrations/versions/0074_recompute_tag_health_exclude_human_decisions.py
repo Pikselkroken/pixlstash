@@ -7,7 +7,7 @@ service now restricts both to un-reviewed rows (``label_state == "UNKNOWN"``), s
 existing cached ``tag_health`` rows hold stale, over-counted values.
 
 Unlike the ``smart_score`` finder pattern, the board is NOT refreshed by a
-``Missing*Finder`` scanning for NULL columns — it is rebuilt wholesale, and its
+``Missing*Finder`` scanning for NULL columns - it is rebuilt wholesale, and its
 auto-rebuild is gated on ``tag_health_service.is_stale`` (``latest_change >
 computed_at``), which a pure code change never trips. NULL-resetting a column is
 therefore the wrong lever here: a NULL ``computed_at`` reads as "never built"
@@ -16,7 +16,7 @@ leave the stale rows on screen claiming freshness. Instead we backdate
 ``computed_at`` to the epoch so ``is_stale`` flips True on any non-empty vault and
 ``TagHealthAutoRebuildFinder`` recomputes the board within its check interval; the
 (slightly stale) old rows remain visible, flagged stale, until it does. Schema-only
-otherwise — no columns are added or removed.
+otherwise - no columns are added or removed.
 
 Revision ID: 0074_recompute_tag_health_exclude_human_decisions
 Revises: 0073_add_pictureset_locked

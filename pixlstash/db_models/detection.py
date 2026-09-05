@@ -23,7 +23,7 @@ class Detection(SQLModel, table=True):
 
     Mirrors :class:`~pixlstash.db_models.face.Face`'s bbox-as-JSON convention so
     the frontend overlay, scope enforcement, and copy-on-output logic can be
-    reused — but stores an open-vocabulary ``label`` (e.g. ``"dog"``) instead of
+    reused - but stores an open-vocabulary ``label`` (e.g. ``"dog"``) instead of
     a face/character. Produced by a user-triggered detection pass (see
     :class:`~pixlstash.tasks.detection_task.DetectionTask`), never by a
     background WorkFinder.

@@ -297,7 +297,7 @@ class PreviewMixin:
         # Fetch live hashes, computing and persisting any that are NULL so
         # existing pictures (pre-migration) can be compared correctly. NULL
         # rows are batched into a single bulk Core UPDATE rather than one
-        # UPDATE per picture — the context-menu fans out N pictures × M recent
+        # UPDATE per picture - the context-menu fans out N pictures × M recent
         # snapshots and the per-row execute path saturated the writer queue
         # with single-row updates.
         def _get_live_hashes(session: Session) -> dict[int, str | None]:
@@ -324,7 +324,7 @@ class PreviewMixin:
                 # Bulk Core UPDATE: one prepared statement, N parameter sets.
                 # Target ``Picture.__table__`` (Core ``Table``) rather than the
                 # ORM ``Picture`` mapper so SQLAlchemy doesn't try to route this
-                # through the ORM "bulk by primary key" path — that path
+                # through the ORM "bulk by primary key" path - that path
                 # requires ``id`` in every row and clashes with our explicit
                 # WHERE bindparam. Core DML also keeps the after_flush hash
                 # hook from re-firing on this backfill write.
@@ -344,7 +344,7 @@ class PreviewMixin:
 
         # Snapshot-side hashes. New snapshots ship a complete {id: hash} map in
         # an uncompressed sidecar, so an interactive compare never has to touch
-        # — let alone decompress — the archive. The legacy file path only runs
+        # - let alone decompress - the archive. The legacy file path only runs
         # for old uncompressed snapshots that predate the sidecar.
         sidecar_hashes = self._vault.snapshot_service.load_picture_hashes(snapshot_id)
 
@@ -353,7 +353,7 @@ class PreviewMixin:
             # JSON object keys are strings; look up by str(pid).
             snap_hashes = {pid: sidecar_hashes.get(str(pid)) for pid in picture_ids}
         elif is_compressed(snapshot_path):
-            # Compressed but no manifest map — should not happen for snapshots
+            # Compressed but no manifest map - should not happen for snapshots
             # created by this version. Don't try to open the archive as a DB;
             # report everything changed so the restore stays available.
             logger.warning(
@@ -409,7 +409,7 @@ class PreviewMixin:
                     logger.warning(
                         "RestoreService.compare_hashes: failed to read snapshot "
                         "%d at %s (schema revision %s, head %s) for %d picture "
-                        "id(s): %s — reporting all as changed.",
+                        "id(s): %s - reporting all as changed.",
                         snapshot_id,
                         snapshot_path,
                         _snapshot_schema_revision(snapshot_path),
@@ -525,7 +525,7 @@ class PreviewMixin:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                 return
 
-            # Already at head — fill any NULL hashes on the original.
+            # Already at head - fill any NULL hashes on the original.
             self._fill_snapshot_hashes_at(abs_snapshot, reset_all=reset_all)
 
     def _fill_snapshot_hashes_at(self, db_path: str, reset_all: bool = False) -> None:
@@ -611,7 +611,7 @@ class PreviewMixin:
         revert / recreate / delete / missing-file / unchanged, then lists only
         the changed ones (capped at ``MAX_RESOURCES``). Unchanged pictures are
         counted but never fill the resource table, so the cap is spent on the
-        rows the user cares about. Only id/path/hash columns are scanned — the
+        rows the user cares about. Only id/path/hash columns are scanned - the
         now-retained embeddings are never pulled into memory for the full set.
 
         Args:
@@ -624,7 +624,7 @@ class PreviewMixin:
 
         MAX_RESOURCES = 200
 
-        # Lightweight scan — id, file_path, metadata_hash only.
+        # Lightweight scan - id, file_path, metadata_hash only.
         snap_rows = snap_session.exec(
             select(Picture.id, Picture.file_path, Picture.metadata_hash)
         ).all()
@@ -653,7 +653,7 @@ class PreviewMixin:
         shown_reverts: list = []  # (ResourcePreview, picture_id) for tag diffing
 
         for pid, file_path, scanned_hash in snap_rows:
-            # File presence — a picture whose file vanished is dropped on
+            # File presence - a picture whose file vanished is dropped on
             # restore, so it counts as a change regardless of its hash.
             file_ok = True
             if file_path:
@@ -696,7 +696,7 @@ class PreviewMixin:
                     )
                 continue
 
-            # Present in both — changed iff the metadata hash differs (a NULL
+            # Present in both - changed iff the metadata hash differs (a NULL
             # on either side is treated as "can't confirm identical" → changed).
             s_hash = _snap_hash(pid, scanned_hash)
             l_hash = live_hash.get(pid)
@@ -984,7 +984,7 @@ class PreviewMixin:
             "id",
             "file_path",
             "created_at",
-            # Derived/regenerable scores and internal hash — not user-controlled
+            # Derived/regenerable scores and internal hash - not user-controlled
             # metadata, so they should not surface as differences in the preview.
             "aesthetic_score",
             "smart_score",
@@ -1054,7 +1054,7 @@ class PreviewMixin:
     def _finalise_preview_summary(self, preview: RestorePreview) -> None:
         """Compute the summary dict on *preview* from its resources list.
 
-        Idempotent — safe to call multiple times.
+        Idempotent - safe to call multiple times.
 
         Args:
             preview: Preview to update.

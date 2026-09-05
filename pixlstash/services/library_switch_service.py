@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import re
 import shutil
 import threading
 from enum import Enum
@@ -40,6 +39,8 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.hub.bootstrap import (
+    known_vault_revisions,
+    newer_library_message,
     registered_vault_path,
 )
 from pixlstash.routes.pictures import clear_stats_cache
@@ -73,17 +74,30 @@ class LibrarySwitchError(LibraryError):
     """A switch was refused or failed, with the session left on its old library."""
 
 
-def known_vault_revisions() -> set[str]:
-    """Return every Alembic revision id this build understands."""
-    revisions: set[str] = set()
-    pattern = re.compile(r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M)
-    for path in _MIGRATIONS_DIR.glob("*.py"):
-        if path.stem.startswith("__"):
-            continue
-        match = pattern.search(path.read_text(encoding="utf-8"))
-        if match:
-            revisions.add(match.group(1))
-    return revisions
+def _bring_up(vault, label: str) -> None:
+    """Build the inference engine, then start the vault's background workers.
+
+    ``Vault.start()`` alone gets the WorkPlanner running, but every
+    engine-gated finder - tags, descriptions, face extraction, embeddings,
+    likeness - returns ``None`` for as long as ``Vault._engine`` is ``None``,
+    so a switched-to library would sit there with the planner sweeping and no
+    AI work ever queued, until the next restart. ``app.main`` does this for the
+    boot vault; a switch has to do it for its own.
+
+    A failed engine build costs the AI workers, not the switch: the library is
+    perfectly usable without them, and raising here would roll the user back to
+    the library they just left.
+    """
+    try:
+        vault.ensure_ready()
+    except Exception:
+        logger.exception(
+            "Could not build the inference engine for the %s library; it will "
+            "serve without tagging, descriptions, face extraction or embeddings "
+            "until the next restart",
+            label,
+        )
+    vault.start()
 
 
 def assert_vault_not_newer(vault_path: str) -> None:
@@ -118,9 +132,7 @@ def assert_vault_not_newer(vault_path: str) -> None:
     unknown = [row[0] for row in rows if row[0] and row[0] not in known]
     if unknown:
         raise LibrarySwitchError(
-            f"This library was last opened by a newer version of PixlStash "
-            f"(database revision {', '.join(unknown)}). Update PixlStash before "
-            "switching to it. Nothing has been changed."
+            newer_library_message(unknown, library=f"The library at {vault_path}")
         )
 
 
@@ -237,7 +249,7 @@ class LibrarySwitchService:
             target = registry.by_uuid(library_uuid)
             if target is None or not target.attached:
                 raise LibraryNotFoundError(
-                    f"No attached library with id {library_uuid}."
+                    f"No attached library with uuid {library_uuid}."
                 )
             if target.is_active:
                 logger.info("Library %s is already active; nothing to do", target.name)
@@ -245,6 +257,19 @@ class LibrarySwitchService:
             try:
                 self._server.library_coordinator.begin_switch()
             except RuntimeError as exc:
+                # A refused switch is now a reachable, expected state rather
+                # than a rare one: a folder-mapping commit holds a read lease
+                # for as long as it runs, precisely so it cannot be retargeted
+                # at another library half way through. "Timed out waiting for
+                # active-library readers" is the right mechanism and the wrong
+                # sentence to hand the owner, so name the work instead.
+                busy = self._what_is_holding_the_library()
+                if busy:
+                    raise LibrarySwitchError(
+                        f"This library is busy: {busy}. Switching now would "
+                        "leave that work writing into the other library, so it "
+                        "waits. Let it finish, or stop it, then switch."
+                    ) from exc
                 raise LibrarySwitchError(str(exc)) from exc
             try:
                 return self._swap(target)
@@ -254,6 +279,27 @@ class LibrarySwitchService:
                 raise
         finally:
             self._lock.release()
+
+    def _what_is_holding_the_library(self) -> Optional[str]:
+        """Name the long-running work a switch is waiting on, when it can be.
+
+        The coordinator counts readers; it does not know what they are. These
+        two are the only holders that keep a lease for minutes rather than
+        milliseconds, so they are what an owner is actually waiting on when a
+        switch refuses. Returns ``None`` when nothing recognisable is running,
+        and the caller falls back to the coordinator's own words.
+        """
+        with self._server.folder_structure_commit_lock:
+            commit = self._server.folder_structure_commit
+            if commit and commit.get("status") in ("queued", "running"):
+                return "a folder mapping is still being organised"
+        for task in list(getattr(self._server, "import_tasks", {}).values()):
+            if isinstance(task, dict) and task.get("status") in (
+                "queued",
+                "running",
+            ):
+                return "an import is still running"
+        return None
 
     def _swap(self, target: Library) -> Library:
         """Open the target, then retire the current vault. Never the reverse."""
@@ -304,7 +350,7 @@ class LibrarySwitchService:
             # Treat any exception from this point as a retired old handle.
             old_retirement_started = True
             previous.close()
-            incoming.start()
+            _bring_up(incoming, "incoming")
 
             # The candidate is now fully started and admission is still closed.
             # Remove every old-generation capability/artifact before publishing
@@ -366,7 +412,7 @@ class LibrarySwitchService:
                     recovered.auth_service = self._server.auth
                     self._server.apply_user_settings_to_vault(recovered)
                     self._server.reconcile_library_settings(recovered, previous_library)
-                    recovered.start()
+                    _bring_up(recovered, "recovered previous")
                     self._server.library_registry.set_active(previous_library.id)
                     self._server.vault = recovered
                     self._server.auth.vault_db = recovered.db

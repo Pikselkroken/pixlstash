@@ -12,7 +12,7 @@ with ``docker exec``.
 
 The library verbs destroy nothing: ``detach`` deregisters a library and never
 touches its files, and there is deliberately no ``--delete`` flag. ``restore``
-is the one that looks like an exception and is not — it writes only to a folder
+is the one that looks like an exception and is not - it writes only to a folder
 it has proved empty, and *moves* the configuration it replaces into a dated
 folder beside itself, printing the command that reopens it. ``plugins remove``
 does delete, because a CLI that installs plugins and cannot uninstall them is
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from pixlstash.hub.cli_hint import desktop_windows_command
@@ -36,7 +37,7 @@ from pixlstash.hub.registry import (
     resolve_path,
 )
 from pixlstash.hub.schema import HubSchemaTooNewError
-from pixlstash import plugin_install
+from pixlstash import plugin_create, plugin_install
 from pixlstash.plugin_install import PluginError
 
 # Exit codes. 0 success, 1 a refusal the user can act on (not a vault, already
@@ -162,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Print every registered library with its id, name and folder. "
             "`*` marks the active one; `(not found)` marks a registration "
-            "whose folder is missing — reconnect the drive, or point it "
+            "whose folder is missing - reconnect the drive, or point it "
             "somewhere new with `relocate`."
         ),
     )
@@ -193,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
             "hold vault.db, and any login or tokens inside that vault are "
             "ignored rather than imported. Attaching a library that was "
             "detached earlier revives its original registration, and with it "
-            "the share links and API tokens issued from it — but only while "
+            "the share links and API tokens issued from it - but only while "
             "the folder still holds that same library; a different one at "
             "that path is registered as a new library and the old tokens stay "
             "inert. Overlapping an existing library warns rather than refuses."
@@ -213,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the folder changes. The registration is kept rather than "
             "deleted, so attaching this library again brings back its share "
             "links and API tokens; until then they are inert. The active "
-            "library is refused — switch to another one first."
+            "library is refused - switch to another one first."
         ),
     )
     detach_parser.add_argument("library", help=LIBRARY_ARG_HELP)
@@ -244,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
             "not included. An existing destination file is never overwritten. "
             "Read it back with `restore`, or by hand: it is a zstd-compressed "
             "tar (a plain tar with --no-compress) holding manifest.json, "
-            "vault.db, hub.db and — unless --metadata-only was given — the "
+            "vault.db, hub.db and - unless --metadata-only was given - the "
             "library's own files under images/."
         ),
     )
@@ -309,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
             "launch offers this same approval as a `[y/N]` prompt instead, "
             "so this command is for a non-interactive upgrade (a service, a "
             "container, a script) or for approving it ahead of time. This "
-            "records the approval and nothing else — the copy, the "
+            "records the approval and nothing else - the copy, the "
             "verification and the blanking of the old identity happen the "
             "next time PixlStash starts."
         ),
@@ -337,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
-    """Add the `plugins` group: install, list, remove."""
+    """Add the `plugins` group: create, install, test, available, list, remove."""
     plugins = groups.add_parser(
         "plugins",
         help="Install, list and remove plugins.",
@@ -399,7 +400,254 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Also pip-install the plugin's requirements.txt, if it has one.",
     )
+    install_parser.add_argument(
+        "--force-deps",
+        action="store_true",
+        help=(
+            "Install the dependencies even when they replace a package "
+            "PixlStash is using. This can stop PixlStash starting."
+        ),
+    )
     install_parser.set_defaults(handler=_cmd_plugins_install)
+
+    create_parser = commands.add_parser(
+        "create",
+        help="Start a new plugin as a branch in a checkout of the plugins repo.",
+        # Wrapped by hand: the two-line summary of what lands on disk is what
+        # someone needs before they run a command that clones a repository.
+        description=(
+            "Set up everything a plugin pull request needs, so the only work\n"
+            "left is the plugin itself. Run it with no arguments and it asks:\n"
+            "what kind of plugin, what it should do, what to call it. Give\n"
+            "a name and --kind and it asks nothing.\n"
+            "\n"
+            "It first works out whether it can fork\n"
+            f"{plugin_install.PLUGINS_REPO} for you, naming the repository it\n"
+            "would create on your account, and says why not when it cannot.\n"
+            "The first question asked is the way out: its last numbered\n"
+            "option stops before anything is forked, cloned or written.\n"
+            "Then it clones,\n"
+            "branches, copies one of the repository's\n"
+            "example plugins to `plugins/<kind>/<name>/`, renames its folder,\n"
+            "module and class, puts your name and licence in the header,\n"
+            "writes what you said it should do into its README, and prints\n"
+            "the commands that open the pull request.\n"
+            "\n"
+            "Last, it offers a one-line `claude` or `codex` command pointing\n"
+            "the agent at that README. The rest of the brief is the plugins\n"
+            "repository's own AGENTS.md, which both agents read for\n"
+            "themselves. It prints the command rather than running it:\n"
+            "starting an agent on your checkout is your call.\n"
+            "\n"
+            "Nothing is committed, nothing is pushed and no pull request is\n"
+            "opened: the plugin at that point is still the example, and the\n"
+            "repository takes one finished plugin per pull request.\n"
+            "\n"
+            "The copy is the example CI keeps green rather than a template\n"
+            "kept in PixlStash, so a scaffold cannot be out of date with the\n"
+            "contract tests it has to pass. Nothing is imported or run."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    create_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help=(
+            "The new plugin's name: lower-case, starting with a letter, "
+            "letters, digits and underscores only. It names the folder, the "
+            "module, the branch and the plugin's `name` attribute. Asked for "
+            "if you leave it out."
+        ),
+    )
+    create_parser.add_argument(
+        "--kind",
+        choices=[plugin_install.CAPTIONING, plugin_install.IMAGE],
+        default=None,
+        help=(
+            "What you are writing: `captioning` turns an image into tags or a "
+            "description, `image` turns a picture into another picture (the "
+            "Filters menu). It picks the directory, the example and the "
+            "shape. Asked for if you leave it out."
+        ),
+    )
+    create_parser.add_argument(
+        "--purpose",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "What the plugin should do, in a sentence or three. It becomes "
+            "the README's opening paragraph, the class `description`, and "
+            "what a coding agent is told to build. Asked for if you leave it "
+            "out and there is a terminal to ask on."
+        ),
+    )
+    create_parser.add_argument(
+        "--agent",
+        choices=[*sorted(plugin_create.AGENTS), "no"],
+        default=None,
+        help=(
+            "Print a command handing the plugin to this coding agent, instead "
+            "of asking which. `no` prints none."
+        ),
+    )
+    create_parser.add_argument(
+        "--dir",
+        dest="directory",
+        default=plugin_create.DEFAULT_CHECKOUT,
+        metavar="PATH",
+        help=(
+            "Where the checkout lives (default: ./"
+            f"{plugin_create.DEFAULT_CHECKOUT}). An existing checkout is "
+            "reused and branched again; anything else there is refused."
+        ),
+    )
+    create_parser.add_argument(
+        "--from",
+        dest="example",
+        default=None,
+        metavar="PLUGIN",
+        help=(
+            "Copy this published plugin instead of the default example "
+            f"({plugin_create.DEFAULT_EXAMPLES[plugin_install.CAPTIONING]} or "
+            f"{plugin_create.DEFAULT_EXAMPLES[plugin_install.IMAGE]}). Use it "
+            "to start from something closer to what you are building."
+        ),
+    )
+    create_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Branch to create (default: add-<name>).",
+    )
+    create_parser.add_argument(
+        "--display-name",
+        default=None,
+        metavar="LABEL",
+        help=(
+            "The label PixlStash shows in its menus (default: the name with "
+            "the underscores turned into spaces)."
+        ),
+    )
+    create_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "One line saying what the plugin does, shown in the UI. Left as a "
+            "TODO in the source when you do not give it."
+        ),
+    )
+    create_parser.add_argument(
+        "--author",
+        default=None,
+        metavar="'NAME <CONTACT>'",
+        help=(
+            "Who to credit, as `Your Name <you@example.com>` or a URL between "
+            "the brackets. Defaults to your git identity; the repository's "
+            "tests require this shape."
+        ),
+    )
+    create_parser.add_argument(
+        "--license",
+        dest="plugin_license",
+        default=None,
+        metavar="SPDX",
+        help=(
+            "The license of your plugin's own code, as an SPDX identifier "
+            "where there is one (default: MIT). This says nothing about the "
+            "license of any model it downloads; that goes in `models`."
+        ),
+    )
+    create_parser.add_argument(
+        "--no-fork",
+        dest="fork",
+        action="store_false",
+        help=(
+            "Clone the repository directly instead of forking it first. You "
+            "will not be able to push until you point `origin` somewhere you "
+            "can, so this is for looking rather than contributing."
+        ),
+    )
+    create_parser.set_defaults(handler=_cmd_plugins_create)
+
+    submit_parser = commands.add_parser(
+        "submit",
+        help="Check, commit, push and open the pull request for a new plugin.",
+        # Wrapped by hand: what it pushes, and where, is what someone needs to
+        # read before running a command that publishes their work.
+        description=(
+            "Finish what `plugins create` started. It runs the repository's\n"
+            "own checks, stages the one plugin folder, commits it, pushes the\n"
+            "branch, and opens the pull request.\n"
+            "\n"
+            "Which plugin is read off the branch, so from a checkout `plugins\n"
+            "create` made there is nothing to type. Only the plugin's own\n"
+            "folder is staged: the checkout is yours and may hold other work,\n"
+            "and the repository takes one plugin per pull request.\n"
+            "\n"
+            "It stops on a failing check, and asks before it pushes, because\n"
+            "pushing and opening a pull request are the two steps that leave\n"
+            "this machine. --yes skips the question; --dry-run stops after\n"
+            "the checks and pushes nothing.\n"
+            "\n"
+            "You are asked what you tested the plugin against, which goes in\n"
+            "the pull request. CI checks the shape of a model-backed plugin\n"
+            "and never runs the model, so that sentence is what makes it\n"
+            "reviewable at all."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    submit_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help=(
+            "Which plugin to submit. Taken from the branch name (`add-<name>`) "
+            "when you leave it out."
+        ),
+    )
+    submit_parser.add_argument(
+        "--dir",
+        dest="directory",
+        default=plugin_create.DEFAULT_CHECKOUT,
+        metavar="PATH",
+        help=(
+            "The checkout holding the plugin (default: ./"
+            f"{plugin_create.DEFAULT_CHECKOUT})."
+        ),
+    )
+    submit_parser.add_argument(
+        "--tested",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "What you ran the plugin against: which model, which PixlStash "
+            "version, on what hardware. Goes in the pull request. Asked for "
+            "if you leave it out."
+        ),
+    )
+    submit_parser.add_argument(
+        "--message",
+        default=None,
+        metavar="TEXT",
+        help="Commit message and pull request title (default: `Add <name>`).",
+    )
+    submit_parser.add_argument(
+        "--skip-checks",
+        action="store_true",
+        help=(
+            "Do not run ruff and pytest. CI runs them anyway, so this only "
+            "moves where you find out."
+        ),
+    )
+    submit_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run the checks and stop. Nothing is committed or pushed.",
+    )
+    submit_parser.add_argument(
+        "--yes", action="store_true", help="Do not ask before pushing."
+    )
+    submit_parser.set_defaults(handler=_cmd_plugins_submit)
 
     test_parser = commands.add_parser(
         "test",
@@ -410,7 +658,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
         description=(
             "A development aid for writing a plugin. NOT a security scanner:\n"
             "it does not tell you whether a plugin is safe, it RUNS it. The\n"
-            "module body — and the model itself, with --image — executes in\n"
+            "module body - and the model itself, with --image - executes in\n"
             "this process, with your permissions, exactly as it would in the\n"
             "server. Nothing is sandboxed, and nothing here inspects what the\n"
             "code does. Only test a plugin you would have installed anyway.\n"
@@ -418,12 +666,12 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "What it does check: that the plugin imports the way the server\n"
             "imports it at start-up, that every plugin class it defines\n"
             "registers, and that its parameter schema is one the settings\n"
-            "screen can render — the last of which the server does not check\n"
+            "screen can render - the last of which the server does not check\n"
             "and which fails quietly when it is wrong. Prints what registered.\n"
             "\n"
             "A `problem:` means the plugin will not work and exits 1. A\n"
-            "`warning:` means it works and could be tidier — a parameter with\n"
-            "no label, no capability flag set — and exits 0.\n"
+            "`warning:` means it works and could be tidier - a parameter with\n"
+            "no label, no capability flag set - and exits 0.\n"
             "\n"
             "Passing still is not the same as working in PixlStash: a plugin\n"
             "that hangs at import hangs the server's boot and would hang this\n"
@@ -444,7 +692,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "defaults and print what comes back. This loads the model, so it "
             "is the slow one. It stops rather than running when the plugin "
             "reports its model is missing, but a plugin that downloads inside "
-            "init() will still do so — nothing here can prevent that."
+            "init() will still do so - nothing here can prevent that."
         ),
     )
     test_parser.set_defaults(handler=_cmd_plugins_test)
@@ -485,7 +733,7 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "Print both plugin directories and what is installed in them. "
             "`!` marks a plugin that will not load as it stands and `*` one "
             "that replaces a built-in. Nothing is imported here, so a failure "
-            "that only happens at import — a missing dependency, say — is not "
+            "that only happens at import - a missing dependency, say - is not "
             "visible in this listing."
         ),
     )
@@ -528,6 +776,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return args.handler(args)
         except PluginError as exc:
             print(f"error: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        except KeyboardInterrupt:
+            # Ctrl-C is the other way out of the wizard, and a traceback is a
+            # poor answer to someone who just said stop. What has already
+            # happened has happened; the message says only that this stopped.
+            print("\nStopped.", file=sys.stderr)
             return EXIT_REFUSED
 
     try:
@@ -723,7 +977,7 @@ def _cmd_restore(args: argparse.Namespace) -> int:
         print()
         print("Your current library folder is NOT touched, and nothing is deleted.")
         # The credentials come out of the archive, so restoring one you did not
-        # make is handing its author the owner account on this machine — which
+        # make is handing its author the owner account on this machine - which
         # reaches the host-capability routes, not just the restored pictures.
         # Worth saying plainly: the rest of this output reads reassuring.
         print(
@@ -841,13 +1095,419 @@ def _cmd_rename(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _confirm(question: str) -> bool:
-    """Ask for a y/n on stdin. A closed stdin is a no, not a yes."""
+def _confirm(question: str, default: bool = False) -> bool:
+    """Ask for a y/n on stdin, Enter taking *default*.
+
+    *default* is True only where the question follows a full itemised list of
+    what is about to happen, which is the one case where Enter is an informed
+    answer rather than a shrug.
+
+    A closed stdin is a no whatever the default: Enter means a person read the
+    list and pressed a key, and no stdin at all means nobody did.
+    """
     try:
-        answer = input(f"{question} [y/N] ")
+        answer = input(f"{question} {'(Y/n)' if default else '[y/N]'} ").strip().lower()
     except EOFError:
         return False
-    return answer.strip().lower() in ("y", "yes")
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def _ask(question: str, default: str = "") -> str:
+    """Ask one question on stdin, returning *default* on a bare Enter.
+
+    A closed stdin raises rather than silently taking the default: the wizard's
+    questions have no answer that is safe to invent, and a scaffold built from
+    guesses is worse than a refusal that says which question went unanswered.
+    """
+    suffix = f" [{default}]" if default else ""
+    try:
+        answer = input(f"{question}{suffix}: ").strip()
+    except EOFError as exc:
+        raise PluginError(
+            f"no answer to {question!r}, and stdin is closed. Pass the answers "
+            "as options instead - `plugins create --help` lists them."
+        ) from exc
+    return answer or default
+
+
+#: The answer that stops the wizard, wherever one is offered.
+ABORT = "abort"
+
+
+def _ask_choice(question: str, options: dict[str, str]) -> str:
+    """Ask for one of *options* by number, or by name, until an answer fits.
+
+    Numbered because these are line prompts: every answer costs an Enter, so
+    the shortest one worth offering is a single digit.  The names still work,
+    since a reader who has just read `captioning` off the screen should not be
+    told off for typing it.
+    """
+    keys = list(options)
+    width = max(len(key) for key in keys)
+    print(f"\n{question}")
+    for number, key in enumerate(keys, start=1):
+        print(f"  {number}  {key:<{width}}  {options[key]}")
+    while True:
+        answer = _ask("Choose", "1").lower()
+        if answer.isdigit() and 1 <= int(answer) <= len(keys):
+            return keys[int(answer) - 1]
+        if answer in options:
+            return answer
+        print(f"  Choose 1 to {len(keys)}, or type the name.")
+
+
+def _ask_paragraph(question: str) -> str:
+    """Ask for as many lines as the contributor wants, ending on a blank one.
+
+    What a plugin should do is the one answer that does not fit on a line, and
+    it is the answer everything downstream is built from - the README, the
+    class description, the prompt handed to a coding agent. Truncating it to
+    what fits before the Enter key would be the wizard's own fault.
+    """
+    print(f"\n{question}")
+    print("(Several lines are fine. Finish with an empty line.)")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input("  ")
+        except EOFError:
+            break
+        if not line.strip():
+            break
+        lines.append(line.strip())
+    return " ".join(lines)
+
+
+def _ask_name(kind: str, checkout: Path) -> str:
+    """Ask for a plugin name until it is one, explaining each refusal.
+
+    Checked against the checkout, which is why the clone happens before this
+    question rather than after all of them: a name the repository already
+    publishes is the commonest thing to get wrong, and finding out after
+    answering everything means answering everything again.
+    """
+    while True:
+        name = _ask("Name (snake_case, e.g. edge_glow)")
+        try:
+            plugin_create.check_name_free(checkout, name, kind)
+            return name
+        except PluginError as exc:
+            print(f"  {exc}")
+
+
+def _report_readiness(readiness: plugin_create.ForkReadiness) -> bool:
+    """Print what this machine can do about a pull request, and ask if it cannot.
+
+    Asked before anything is cloned, because the answer decides whether the
+    last two steps this command prints are true - and being told at the end
+    that you cannot push is being told too late to do anything about it.
+    """
+    print(f"\n{readiness.explanation}")
+    if readiness.mode != plugin_create.MANUAL:
+        return True
+    print(f"{readiness.remedy}")
+    return _confirm("Carry on and set the plugin up anyway?")
+
+
+def _note_readiness(readiness: plugin_create.ForkReadiness) -> None:
+    """Say how this checkout will reach GitHub, without asking anything.
+
+    The non-interactive half of `_report_readiness`. "origin is the upstream
+    repository" with nothing to explain it reads as something having gone
+    wrong, when for a maintainer it is the expected answer.
+    """
+    print(readiness.explanation)
+
+
+def _plugin_answers(
+    args: argparse.Namespace, checkout: Path, kind: str
+) -> dict[str, object]:
+    """Ask for whatever was not given on the command line."""
+    purpose = args.purpose or _ask_paragraph("What should it do?")
+    name = args.name or _ask_name(kind, checkout)
+    plugin_license = args.plugin_license or _ask(
+        "\nLicence for your own code (SPDX)", "MIT"
+    )
+    return {"purpose": purpose, "name": name, "license": plugin_license}
+
+
+def _ask_kind() -> str | None:
+    """Ask what kind of plugin this is, or None if the answer is to stop.
+
+    The last question asked before anything is created, and so the one that
+    carries the way out: by the time a name is being chosen there is a fork on
+    the contributor's account and a clone on their disk.
+    """
+    answer = _ask_choice(
+        "What kind of plugin is it?",
+        {
+            plugin_install.IMAGE: (
+                "turns a picture into another picture (the Filters menu)"
+            ),
+            plugin_install.CAPTIONING: ("turns an image into tags or a description"),
+            ABORT: "stop here, creating nothing",
+        },
+    )
+    return None if answer == ABORT else answer
+
+
+def _cmd_plugins_create(args: argparse.Namespace) -> int:
+    """Set a plugin up as a branch, asking for whatever was not given."""
+    interactive = not (args.name and args.kind)
+    if interactive and not sys.stdin.isatty():
+        raise PluginError(
+            "a name and --kind are needed, and there is no terminal to ask on. "
+            "Pass them as arguments: `plugins create <name> --kind image`."
+        )
+
+    readiness = (
+        plugin_create.fork_readiness()
+        if args.fork
+        else plugin_create.ForkReadiness(
+            plugin_create.MANUAL,
+            "--no-fork was given, so nothing will be forked.",
+            f"Fork https://github.com/{plugin_install.PLUGINS_REPO} on the web "
+            "and point `origin` at it when you are ready to push.",
+        )
+    )
+    if interactive:
+        if not _report_readiness(readiness):
+            print("Nothing was created.")
+            return EXIT_REFUSED
+    else:
+        _note_readiness(readiness)
+
+    directory = Path(args.directory).expanduser()
+    checkout_state = None
+    kind = args.kind
+    if interactive:
+        # The kind is asked before anything is created, because it is the last
+        # moment at which stopping costs nothing: the step after it forks the
+        # repository onto the contributor's account and clones it.
+        if kind is None:
+            kind = _ask_kind()
+            if kind is None:
+                print("\nStopped. Nothing was forked, cloned or created.")
+                return EXIT_REFUSED
+        # Cloned before the remaining questions, so `_ask_name` can check the
+        # name against what the repository actually publishes and ask again.
+        print("\nFetching the plugins repository...")
+        checkout_state = plugin_create.obtain_checkout(
+            directory, fork=readiness.can_fork
+        )
+    answers = (
+        _plugin_answers(args, directory, kind)
+        if interactive
+        else {
+            "purpose": args.purpose,
+            "name": args.name,
+            "license": args.plugin_license or "MIT",
+        }
+    )
+
+    result = plugin_create.create(
+        answers["name"],
+        kind,
+        directory=directory,
+        example=args.example,
+        branch=args.branch,
+        display_name=args.display_name,
+        description=args.description,
+        purpose=answers["purpose"],
+        author=args.author,
+        plugin_license=answers["license"],
+        readiness=readiness,
+        checkout_state=checkout_state,
+    )
+    _report_created(result)
+
+    agent = args.agent
+    if interactive and agent is None:
+        agent = _ask_choice(
+            "Hand it to a coding agent?",
+            {
+                **{
+                    name: f"print a `{name}` command that writes the plugin"
+                    for name in sorted(plugin_create.AGENTS)
+                },
+                "no": "just show me the steps",
+            },
+        )
+    if agent and agent != "no":
+        _report_agent_command(agent, result)
+    return EXIT_OK
+
+
+def _report_created(result: plugin_create.CreateResult) -> None:
+    """Say what landed on disk, and what has to happen to it."""
+    origin = "your fork" if result.forked else plugin_install.PLUGINS_REPO
+    print()
+    print(
+        f"{'Reused' if result.reused else 'Cloned into'} {result.checkout} "
+        f"(origin: {origin})"
+    )
+    print(f"Branch:  {result.branch}")
+    print(f"Plugin:  {result.folder}  (copied from {result.example})")
+    print()
+
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    if result.warnings:
+        print()
+
+    # Paths are printed relative to the checkout because every command below
+    # runs from inside it, and an absolute path in step 4 would not paste into
+    # the `git add` in step 5.
+    folder = result.folder.relative_to(result.checkout)
+    # Two steps, because only the first is yours: `plugins submit` runs the
+    # checks, commits, pushes and opens the pull request. A list of the six
+    # commands it runs would be a list of things to get wrong by hand.
+    print("Next:")
+    print(f"  1. cd {result.checkout}")
+    print(f"     Write the plugin:  {result.module.relative_to(result.checkout)}")
+    print(f"     Expand the README: {result.readme.relative_to(result.checkout)}")
+    if result.kind == plugin_install.CAPTIONING:
+        print(f"     Try it:            {invoked_as()} plugins test {folder}")
+    else:
+        # `plugins test` checks captioning plugins only, so pointing an image
+        # plugin at it would send someone to a command that refuses them.
+        print(
+            f"     Try it:            {invoked_as()} plugins install {folder} --force"
+        )
+        print("                        then use it from the Filters menu")
+    print(f"  2. {invoked_as()} plugins submit")
+    print("     Checks it, commits it, pushes it, opens the pull request.")
+
+
+def _report_agent_command(agent: str, result: plugin_create.CreateResult) -> None:
+    """Print the command that hands the plugin to a coding agent.
+
+    Printed rather than run. Starting an agent that edits a checkout is the
+    contributor's decision to make in their own terminal, where they can see
+    what it does, and it belongs to step 2 rather than to this command.
+    """
+    command = plugin_create.agent_command(agent, result)
+    print()
+    print(f"To have {agent} write it, paste this anywhere:")
+    print()
+    print(f"  {command}")
+    print()
+    print(
+        "Read what it writes before you commit it: a plugin runs unsandboxed "
+        "in the server process, and a reviewer will ask what you ran it against."
+    )
+
+
+def _cmd_plugins_submit(args: argparse.Namespace) -> int:
+    """Run the checks, commit the plugin, push it and open the pull request."""
+    submission = plugin_create.find_submission(Path(args.directory), args.name)
+    print(f"Plugin:  {submission.folder}")
+    print(f"Branch:  {submission.branch}")
+
+    if args.skip_checks:
+        print("\nChecks skipped.")
+    else:
+        missing = plugin_create.missing_tools(submission)
+        if missing:
+            raise PluginError(plugin_create.dev_setup_hint(submission, missing))
+        print(f"\nRunning the repository's checks with {submission.python}")
+        failed = plugin_create.run_checks(submission)
+        if failed:
+            # Stopping here is the point of running them: the same failure in
+            # CI costs a red pull request and a force-push to fix.
+            raise PluginError(
+                f"{', '.join(failed)} failed. Fix that and run this again, or "
+                "pass --skip-checks to submit anyway."
+            )
+        print("\nChecks passed.")
+
+    if args.dry_run:
+        print("Stopping here: --dry-run. Nothing was committed or pushed.")
+        return EXIT_OK
+
+    message = args.message or f"Add {submission.name}"
+    tested = args.tested
+    if tested is None:
+        if not sys.stdin.isatty():
+            raise PluginError(
+                "the pull request has to say what you tested the plugin "
+                "against, and there is no terminal to ask on. Pass --tested."
+            )
+        tested = _ask_paragraph(
+            "What did you test it against? (which model, which PixlStash "
+            "version, what hardware)"
+        )
+    if not tested.strip():
+        raise PluginError(
+            "the pull request has to say what you tested the plugin against. "
+            "CI checks the shape of a model-backed plugin and never runs the "
+            "model, so this is what makes it reviewable."
+        )
+
+    print(
+        f"\nAbout to commit {submission.folder.name}, push {submission.branch} "
+        f"to origin, and open a pull request on {plugin_install.PLUGINS_REPO}."
+    )
+    if not args.yes and not _confirm("Go ahead?"):
+        print("Nothing was pushed.")
+        return EXIT_REFUSED
+
+    plugin_create.commit(submission, message)
+    plugin_create.push(submission)
+    url = plugin_create.open_pull_request(
+        submission, message, plugin_create.pull_request_body(submission, tested)
+    )
+    print(f"\n{url}")
+    return EXIT_OK
+
+
+def _report_dependencies(
+    changes: list[plugin_install.DependencyChange], *, force: bool
+) -> bool:
+    """List what pip would install, and say whether it may go ahead.
+
+    Every package is named, transitive ones included: a plugin's
+    requirements.txt asking for one package routinely pulls in dozens, and
+    "pip will install moondream2" is not what is about to happen to the
+    environment PixlStash runs in.
+    """
+    if not changes:
+        print("Everything it needs is already installed.")
+        return True
+
+    print("\nThis operation will install the following Python packages:")
+    width = max(len(change.name) for change in changes)
+    for change in changes:
+        note = f"replaces {change.installed}" if change.moves else "new"
+        print(f"  {change.name:<{width}}  {change.version:<12}  {note}")
+
+    moved = [change for change in changes if change.moves]
+    if not moved:
+        return True
+
+    # The refusal this whole mechanism exists for. PixlStash pins every
+    # dependency it has, so a plugin that replaces one is a plugin that can
+    # stop the application starting, and the damage would not show until the
+    # next boot, long after anyone would connect it to installing a plugin.
+    print()
+    for change in moved:
+        print(
+            f"warning: this replaces {change.name} {change.installed} with "
+            f"{change.version}, which PixlStash itself is using."
+        )
+    if not force:
+        print(
+            "\nRefused: a plugin may add packages, but not change one that is "
+            "already in use. Install it without --with-deps and put its "
+            "dependencies somewhere of your own, or pass --force-deps if you "
+            "accept that PixlStash may stop working.",
+            file=sys.stderr,
+        )
+        return False
+    print("Proceeding anyway: --force-deps.")
+    return True
 
 
 def _cmd_plugins_install(args: argparse.Namespace) -> int:
@@ -866,10 +1526,15 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             "permissions."
         )
 
-        requirements: list[str] = []
+        changes: list[plugin_install.DependencyChange] = []
         if args.with_deps and plan.requirements:
-            requirements = plugin_install.read_requirements(plan.requirements)
-            print("pip will install: " + (", ".join(requirements) or "(nothing)"))
+            # Resolved before anything is copied. pip is asked what it would
+            # do, and it is asked first, so a plugin whose dependencies cannot
+            # be had leaves nothing behind to clean up.
+            print(f"\nResolving {plan.requirements.name}...")
+            changes = plugin_install.resolve_requirements(plan.requirements)
+            if not _report_dependencies(changes, force=args.force_deps):
+                return EXIT_REFUSED
         elif plan.requirements:
             print(
                 f"note: this plugin ships {plan.requirements.name}. It is NOT "
@@ -879,13 +1544,18 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
         if args.dry_run:
             print("Dry run: nothing was written.")
             return EXIT_OK
-        if not args.yes and not _confirm("Install it?"):
+        # Default yes only when the packages have just been listed one by one.
+        question, default = ("Is this OK", True) if changes else ("Install it?", False)
+        if not args.yes and not _confirm(question, default):
             print("Cancelled. Nothing was written.")
             return EXIT_REFUSED
 
         plugin_install.install(plan, force=args.force)
-        if requirements:
-            plugin_install.install_requirements(plan.requirements)
+        if changes:
+            # The resolution that was shown and agreed to, not the file it came
+            # from: re-reading the file would resolve it a second time and
+            # could install something nobody was asked about.
+            plugin_install.install_requirements(changes)
 
     print(f"Installed {plan.name} to {plan.destination}")
     if plan.kind == plugin_install.CAPTIONING:
@@ -902,7 +1572,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
     from pixlstash import plugin_check
 
     # Printed *before* the load, because after it the plugin's code has
-    # already run — and if the plugin hangs at import, this line is the last
+    # already run - and if the plugin hangs at import, this line is the last
     # thing on screen and the one that explains what is hanging.
     print(
         f"About to run {args.path} in this process, unsandboxed, with your "
@@ -927,7 +1597,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         )
         print(
             f'\nRegistered "{check.name}"  '
-            f"({schema.get('display_name') or check.name})  — "
+            f"({schema.get('display_name') or check.name})  - "
             f"{capabilities or 'no capability flags'}"
         )
         _print_parameters(schema.get("parameters"))
@@ -949,7 +1619,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
     if not report.ok:
         print(
             "\nThis plugin would not work as it stands. Fix the above and run "
-            "this again — no restart needed.",
+            "this again - no restart needed.",
             file=sys.stderr,
         )
         return EXIT_REFUSED
@@ -958,7 +1628,7 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         "\nIt loads, registers and renders. That is a contract check, and it "
         "is neither a quality one nor a safety one: it says nothing about "
         "whether the captions are any good, and nothing about whether this "
-        "plugin is safe to install — it just ran it. A plugin that hangs at "
+        "plugin is safe to install - it just ran it. A plugin that hangs at "
         "import would hang the server's boot the same way it would hang this "
         "command."
     )
@@ -1082,7 +1752,7 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
         print("\n" + "    ".join(legend))
     print(
         "\nRead statically: no plugin is imported here, so a failure that only "
-        "happens at import — a missing dependency, say — is invisible above. "
+        "happens at import - a missing dependency, say - is invisible above. "
         "For a captioning plugin the server reports it under Settings › "
         "Auto-tagging; for an image filter it is reported nowhere, so check the "
         "server log."

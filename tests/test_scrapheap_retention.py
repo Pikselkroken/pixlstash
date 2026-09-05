@@ -1,8 +1,8 @@
 """Scrapheap auto-purge / retention tests (v1.8.0).
 
 This is an AUTOMATIC file-destruction path, so the suite asserts both
-directions everywhere: what MUST be destroyed once its window expires, and —
-more importantly — everything that must NEVER be destroyed by a timer
+directions everywhere: what MUST be destroyed once its window expires, and -
+more importantly - everything that must NEVER be destroyed by a timer
 (protected reference-folder originals, "Never", pictures inside their window,
 pictures with no ``deleted_at``, and anything at all during a config save).
 
@@ -59,7 +59,7 @@ _MIGRATIONS_DIR = os.path.join(_PROJECT_ROOT, "pixlstash")
 # Auto-purge SHIPS OFF (``scrapheap_service.DEFAULT_RETENTION_DAYS is None``):
 # nothing is destroyed on a timer the user never chose. So the baseline install
 # this suite exercises is one where the user has EXPLICITLY turned auto-empty on
-# at the shortest window — that is what makes the "what the sweep destroys"
+# at the shortest window - that is what makes the "what the sweep destroys"
 # tests meaningful. The off-by-default behaviour has its own section below.
 _ENABLED_RETENTION_DAYS = 30
 
@@ -263,7 +263,7 @@ def test_bulk_soft_delete_stamps_deleted_at(server, tmp_path):
 
 def test_redelete_does_not_extend_the_window(server, tmp_path):
     """Re-issuing DELETE on an already-scrapheaped picture must not restart the
-    clock — otherwise a stray client call silently grants an extra window."""
+    clock - otherwise a stray client call silently grants an extra window."""
     client = _client(server)
     pic_id, _path = _make_reference_picture(
         server, str(tmp_path / "refs"), "c.png", allow_delete=True
@@ -376,12 +376,12 @@ def test_migration_backfills_deleted_at_for_existing_scrapheap_rows():
 
 
 def test_reduction_grace_is_a_floor_not_a_per_picture_extension():
-    """F1 — the grace must protect pictures of ANY age, not just the [30,31) band.
+    """F1 - the grace must protect pictures of ANY age, not just the [30,31) band.
 
     Measuring the grace from each picture's own ``deleted_at`` only ever moved
     the deadline of a picture already within a day of expiry. A 400-day-old
     picture stayed instantly purgeable, so `Never -> 30` (or `120 -> 30`) would
-    wipe a long-lived scrapheap on the very next 15-minute sweep — seconds after
+    wipe a long-lived scrapheap on the very next 15-minute sweep - seconds after
     a dropdown that saves on change with no confirmation.
     """
     reduced_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
@@ -395,7 +395,7 @@ def test_reduction_grace_is_a_floor_not_a_per_picture_extension():
         == floor
     )
 
-    # 31 days old — also the floor (deleted_at + 30 already passed).
+    # 31 days old - also the floor (deleted_at + 30 already passed).
     old_ish = reduced_at - timedelta(days=31)
     assert (
         scrapheap_service.compute_purge_at(old_ish, 30, reduced_at, is_protected=False)
@@ -505,7 +505,7 @@ def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
 
     ``_last_check_at`` was initialised to ``0.0`` and compared as an absolute
     monotonic instant, so on any host whose uptime is below the 15-minute check
-    interval the very first ``find_task()`` returned ``None`` — the retention
+    interval the very first ``find_task()`` returned ``None`` - the retention
     sweep silently did nothing until the machine had been up long enough. It
     self-heals, which is exactly why it went unnoticed: a finder that finds
     nothing is indistinguishable from "nothing to do".
@@ -532,7 +532,7 @@ def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
     task = finder.find_task()
     assert task is not None, (
         "The first sweep after start-up must run regardless of the host's "
-        "uptime — _last_check_at must be a None sentinel, not an absolute "
+        "uptime - _last_check_at must be a None sentinel, not an absolute "
         "monotonic instant"
     )
     assert task.run()["purged"] == 1
@@ -598,7 +598,7 @@ def test_purge_removes_expired_unprotected_and_skips_protected(server, tmp_path)
         "it rather than resurrecting it"
     )
 
-    # Protected: completely untouched — this is the whole point of the policy.
+    # Protected: completely untouched - this is the whole point of the policy.
     prot = _get_picture(server, prot_id)
     assert prot is not None and prot.deleted is True, (
         "A protected reference original must stay in the scrapheap forever"
@@ -614,7 +614,7 @@ def test_purge_task_refuses_a_protected_id_handed_to_it_directly(server, tmp_pat
     a protected original.
 
     The finder filters protected rows out of its candidate query, so the task's
-    ``include_protected=False`` is otherwise untested — and a single flipped
+    ``include_protected=False`` is otherwise untested - and a single flipped
     argument there would silently turn the timer into a destroyer of reference
     originals. This test drives the task with a protected id on purpose.
     """
@@ -873,7 +873,7 @@ def test_soft_delete_of_a_locked_member_is_refused(server, tmp_path):
 
 
 def test_auto_purge_never_destroys_a_locked_set_member(server, tmp_path):
-    """F3 — a whole-set freeze must not be silently defeated by a timer.
+    """F3 - a whole-set freeze must not be silently defeated by a timer.
 
     ``DELETE /pictures/{id}`` refuses a locked member with 423, so an unattended
     sweep 30 days later must not do what the user is forbidden to do by hand.
@@ -903,7 +903,7 @@ def test_auto_purge_never_destroys_a_locked_set_member(server, tmp_path):
 
     # Layer 2: refused even when handed to the task directly. The lock is
     # reported as its own outcome, not folded into the retention "retained"
-    # bucket — it is a different, path-independent reason to keep the row.
+    # bucket - it is a different, path-independent reason to keep the row.
     assert ScrapheapRetentionPurgeTask(server.vault, [pic_id]).run() == {
         "purged": 0,
         "skipped": 0,
@@ -951,7 +951,7 @@ def test_auto_purge_resumes_once_the_set_is_unlocked(server, tmp_path):
 
 
 def test_task_re_checks_the_deadline_and_refuses_an_in_window_picture(server, tmp_path):
-    """F4 — a finder bug must not be able to destroy an in-window picture.
+    """F4 - a finder bug must not be able to destroy an in-window picture.
 
     The deadline used to be checked in exactly one place. Here the task is
     handed an id that is NOT due; the guard must retain it.
@@ -980,7 +980,7 @@ def test_task_re_checks_the_deadline_and_refuses_an_in_window_picture(server, tm
 
 
 def test_restore_then_redelete_between_planning_and_purge_is_safe(server, tmp_path):
-    """F4 — the real TOCTOU: the task runs at LOW priority and can be queued.
+    """F4 - the real TOCTOU: the task runs at LOW priority and can be queued.
 
     The finder selects an expired picture; before the task runs the user restores
     it and deletes it again, so its deadline is now 30 days out. Re-checking at
@@ -1058,7 +1058,7 @@ def test_delete_forever_never_destroys_a_locked_member(
     """The IRREVERSIBLE path must honour the lock at BOTH flag values.
 
     ``DELETE /pictures/{id}`` refuses a locked member with 423, the bulk
-    soft-delete skips it, and the auto-purge sweep skips it — so this endpoint
+    soft-delete skips it, and the auto-purge sweep skips it - so this endpoint
     destroying it outright had the safety ordering exactly backwards.
     ``include_protected=true`` overrides the reference-folder protection; it does
     NOT override a locked set.
@@ -1148,7 +1148,7 @@ def test_delete_forever_destroys_the_member_once_the_set_is_unlocked(server, tmp
 
 
 def test_delete_forever_skips_a_locked_stack_sibling(server, tmp_path):
-    """A stack sibling of a locked-set member is frozen transitively — the
+    """A stack sibling of a locked-set member is frozen transitively - the
     manual path uses the same shared lookup, so it inherits that."""
     client = _client(server)
     member_id, _ = _make_reference_picture(
@@ -1233,7 +1233,7 @@ def _scrapheap_two(server, tmp_path, client):
 
 
 def test_delete_forever_refuses_without_a_confirmation(server, tmp_path):
-    """BLOCKER #3 — the type-to-confirm dialog is client-side and proves nothing.
+    """BLOCKER #3 - the type-to-confirm dialog is client-side and proves nothing.
 
     A bare, bodyless DELETE used to destroy the ENTIRE scrapheap and its files.
     CORS admits any localhost/LAN-IP port with credentials, so a page on another
@@ -1243,7 +1243,7 @@ def test_delete_forever_refuses_without_a_confirmation(server, tmp_path):
     client = _client(server)
     made = _scrapheap_two(server, tmp_path, client)
 
-    # No body at all — the exact shape that emptied the whole scrapheap.
+    # No body at all - the exact shape that emptied the whole scrapheap.
     resp = client.request("DELETE", "/api/v1/pictures/scrapheap")
     assert resp.status_code == 400, resp.text
     assert "confirm_token" in resp.json()["detail"]
@@ -1394,8 +1394,8 @@ def _restore_between_planning_and_purge(monkeypatch, picture_id):
     """Commit a restore of ``picture_id`` in the window before the DELETE.
 
     Models a ``POST /pictures/scrapheap/restore`` that lands after the purge has
-    selected its ids and before the rows are deleted. Injected at the real seam —
-    ``purge_rows_in_session``, the function that issues the DELETE — so the test
+    selected its ids and before the rows are deleted. Injected at the real seam -
+    ``purge_rows_in_session``, the function that issues the DELETE - so the test
     holds whether the purge is one DB submission or several.
     """
     original = scrapheap_service.purge_rows_in_session
@@ -1415,12 +1415,12 @@ def _restore_between_planning_and_purge(monkeypatch, picture_id):
 def test_delete_forever_does_not_destroy_a_picture_restored_mid_purge(
     server, tmp_path, monkeypatch
 ):
-    """BLOCKER #4 — the purge must re-check ``deleted`` where it deletes.
+    """BLOCKER #4 - the purge must re-check ``deleted`` where it deletes.
 
     The purge selects its ids while the pictures are scrapheaped, then deletes
     BY ID. A restore landing in between makes those ids live again, so an
     unqualified ``DELETE ... WHERE id IN (...)`` hard-deletes rows the user just
-    rescued — and removes their files from disk. Both directions asserted: the
+    rescued - and removes their files from disk. Both directions asserted: the
     restored picture survives intact, and the one still in the scrapheap is
     still destroyed (under-deleting is its own regression).
     """
@@ -1443,7 +1443,7 @@ def test_delete_forever_does_not_destroy_a_picture_restored_mid_purge(
     rescued = _get_picture(server, restored_id)
     assert rescued is not None, (
         "A picture restored between the id selection and the DELETE was "
-        "permanently destroyed — the purge must re-check `deleted`"
+        "permanently destroyed - the purge must re-check `deleted`"
     )
     assert rescued.deleted is False
     assert os.path.isfile(restored_path), (
@@ -1501,7 +1501,7 @@ def test_purge_rows_skips_ids_that_left_the_scrapheap(server, tmp_path):
     )
 
     def _mark(session: Session):
-        # `gone` is in the scrapheap, `live` never was — exactly the state the
+        # `gone` is in the scrapheap, `live` never was - exactly the state the
         # purge finds after a concurrent restore.
         pic = session.get(Picture, gone_id)
         pic.deleted = True
@@ -1541,11 +1541,11 @@ def test_purge_rows_skips_ids_that_left_the_scrapheap(server, tmp_path):
 def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
     server, tmp_path, monkeypatch
 ):
-    """F1 — the guarded DELETE, not the re-check, must decide what was destroyed.
+    """F1 - the guarded DELETE, not the re-check, must decide what was destroyed.
 
     Deriving the skip list from the re-check SELECT alone saved the ROW but left
     the caller unlinking the FILE and the ledger asserting ``file_removed=True``
-    — a live picture with no original on disk that neither restore nor a re-scan
+    - a live picture with no original on disk that neither restore nor a re-scan
     recovers. Here the re-check blesses both ids and the restore lands after it,
     so the DELETE's own ``deleted`` predicate spares one of them.
     """
@@ -1585,7 +1585,7 @@ def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
     # permanent deletion that never happened.
     assert _get_picture(server, saved_id) is not None
     assert os.path.isfile(saved_path), (
-        "A row the DELETE spared had its file unlinked — the skip list must "
+        "A row the DELETE spared had its file unlinked - the skip list must "
         "come from what the DELETE actually removed"
     )
     assert _ledger_flags_for(server, saved_path) == [], (
@@ -1615,11 +1615,11 @@ def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
 def test_a_removal_target_with_no_picture_id_is_refused_not_unlinked(
     server, tmp_path, monkeypatch
 ):
-    """F1 sibling — an unidentifiable target must fail CLOSED, not open.
+    """F1 sibling - an unidentifiable target must fail CLOSED, not open.
 
     The skip filter matches removal targets by picture id. A target carrying no
     id cannot be shown to have been destroyed, so admitting it unconditionally
-    unlinked a file for a row that may still exist — including on the rollback
+    unlinked a file for a row that may still exist - including on the rollback
     path, where nothing was destroyed at all. Unreachable today (a persisted
     Picture always has a PK), but "unknown" must never mean "delete it" on the
     one irreversible path.
@@ -1645,7 +1645,7 @@ def test_a_removal_target_with_no_picture_id_is_refused_not_unlinked(
 
     body = _delete_forever(client, False)
 
-    # The row is still purged — this guards the FILE, not the row.
+    # The row is still purged - this guards the FILE, not the row.
     assert body["deleted_count"] == 1, body
     assert _get_picture(server, pic_id) is None
     assert os.path.isfile(path), (
@@ -1764,7 +1764,7 @@ def test_manual_delete_forever_is_not_subject_to_the_retention_guard(server, tmp
     )
     delete_resp = client.delete(f"/pictures/{pic_id}")
     assert delete_resp.status_code == 200, delete_resp.text
-    # Deleted seconds ago — nowhere near its deadline.
+    # Deleted seconds ago - nowhere near its deadline.
 
     resp = client.request(
         "DELETE",
@@ -1803,11 +1803,11 @@ def test_successful_removal_keeps_file_removed_true(server, tmp_path):
 def test_failed_removal_corrects_the_ledger_to_file_kept(server, tmp_path, monkeypatch):
     """If os.remove raises, the ledger must not keep asserting "genuinely gone".
 
-    The row is written before the file is touched (deliberately — writing it
+    The row is written before the file is touched (deliberately - writing it
     afterwards would leave a window with no ledger entry, which is how the
     reference-folder scan resurrects deleted content), so file_removed=True is a
     PREDICTION. When the removal fails, the prediction is wrong and the row must
-    be corrected to False — the accurate "removed from library, file kept" —
+    be corrected to False - the accurate "removed from library, file kept" -
     or restore would drop the picture forever on the strength of a deletion that
     never happened.
     """
@@ -1853,7 +1853,7 @@ def test_failed_removal_never_downgrades_another_purges_ledger_row(
 
     No API route can currently build that collision (reference folders reject
     overlapping roots with 409, the routine scan skips ledgered paths, explicit
-    re-import clears the row) — which is exactly why this asserts the structural
+    re-import clears the row) - which is exactly why this asserts the structural
     guarantee rather than relying on those surrounding guards holding forever.
     """
     client = _client(server)
@@ -1891,8 +1891,8 @@ def test_failed_removal_never_downgrades_another_purges_ledger_row(
 
     assert os.path.isfile(path_p), "C2's file survived, which is the premise"
     assert _ledger_flags_for(server, path_p) == [True], (
-        "purge B did not write this row — it records purge A's genuinely "
-        "destroyed content C1 — so a failed removal in B must NOT downgrade it"
+        "purge B did not write this row - it records purge A's genuinely "
+        "destroyed content C1 - so a failed removal in B must NOT downgrade it"
     )
 
 
@@ -1901,7 +1901,7 @@ def test_failed_removal_still_downgrades_the_row_this_purge_wrote(
 ):
     """Over-blocking guard: the ownership bound must not disable the F5 fix.
 
-    A row this purge DID write is still corrected to False on a failed removal —
+    A row this purge DID write is still corrected to False on a failed removal -
     that correction is the whole point, and narrowing it to owned rows must not
     quietly turn it off.
     """
@@ -2022,7 +2022,7 @@ def test_missing_file_purge_task_skips_unreachable_locations(server, tmp_path):
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 0}, result
+    assert result == {"purged": 0, "repaired": 0, "deferred": 0}, result
     assert _get_picture(server, pic_id) is not None, (
         "a picture on an unmounted volume must not be reaped as missing"
     )
@@ -2045,7 +2045,10 @@ def test_missing_file_purge_task_still_reaps_a_genuinely_deleted_file(server, tm
     result = MissingFilePurgeTask(
         database=server.vault.db, pictures=pictures
     )._run_task()
-    assert result == {"purged": 1}, result
+    # Exact equality on purpose: nothing may be quietly repaired or deferred
+    # instead of reaped. The move-journal guard must not become a blanket
+    # exemption for every missing file.
+    assert result == {"purged": 1, "repaired": 0, "deferred": 0}, result
     assert _get_picture(server, pic_id) is None
     assert _ledger_flags_for(server, path) == [True]
 
@@ -2165,7 +2168,7 @@ def test_impact_excludes_protected_and_locked(server, tmp_path):
 
 
 def test_impact_counts_pictures_expiring_during_the_grace_day(server, tmp_path):
-    """Evaluated at the grace floor, not at now — otherwise it understates.
+    """Evaluated at the grace floor, not at now - otherwise it understates.
 
     A picture that crosses its deadline DURING the grace day is destroyed by the
     first sweep after the floor elapses, so the confirmation must include it.
@@ -2564,7 +2567,7 @@ def test_config_save_never_purges_synchronously(server, tmp_path):
 
 # ── Auto-purge ships OFF until the user turns it on ───────────────────────────
 # v1.8.0 introduces a timer that permanently removes files from disk. Nobody may
-# get that from a setting they never chose, so the default is "Never" — on a
+# get that from a setting they never chose, so the default is "Never" - on a
 # fresh install AND on one upgraded from a release that had no such setting.
 # Both directions are asserted: OFF must destroy nothing however old the
 # scrapheap, and an explicit opt-in must still purge (a default of OFF that
@@ -2853,7 +2856,7 @@ def test_listing_purge_at_matches_what_the_sweep_does(server, tmp_path):
 
 
 def test_listing_agrees_with_the_sweep_about_a_locked_picture(server, tmp_path):
-    """N-1 — the listing must not advertise a deadline the sweep will not act on.
+    """N-1 - the listing must not advertise a deadline the sweep will not act on.
 
     A locked scrapheap picture past its deadline used to be served
     ``purge_at=<past>`` + ``auto_purge_exempt=False``, so the grid rendered a
@@ -2876,7 +2879,7 @@ def test_listing_agrees_with_the_sweep_about_a_locked_picture(server, tmp_path):
     assert row["auto_purge_exempt"] is True
     assert row["auto_purge_exempt_reason"] == "locked"
     assert row["purge_at"] is None, (
-        "A locked picture must show no countdown — the sweep will never take it"
+        "A locked picture must show no countdown - the sweep will never take it"
     )
     # ...and the sweep agrees.
     assert _run_purge_sweep(server) is None
@@ -2943,7 +2946,7 @@ def test_listing_exempt_reason_protected_wins_over_locked(server, tmp_path):
 
 def test_listing_marks_a_stack_sibling_freeze_as_locked(server, tmp_path):
     """The lock lookup must catch the live-stack-sibling freeze, not just direct
-    set membership — the listing uses the same helper as the sweep."""
+    set membership - the listing uses the same helper as the sweep."""
     client = _client(server)
     member_id, _ = _make_reference_picture(
         server, str(tmp_path / "m"), "stack_member.png", allow_delete=True
@@ -2966,7 +2969,7 @@ def test_listing_marks_a_stack_sibling_freeze_as_locked(server, tmp_path):
 
     server.vault.db.run_task(_stack)
     # Soft-delete FIRST (a locked stack refuses the delete with 423), then lock
-    # only ONE of the two — the sibling is frozen transitively.
+    # only ONE of the two - the sibling is frozen transitively.
     for pid in (member_id, sibling_id):
         delete_resp = client.delete(f"/pictures/{pid}")
         assert delete_resp.status_code == 200, delete_resp.text
@@ -2987,7 +2990,7 @@ def test_listing_marks_a_stack_sibling_freeze_as_locked(server, tmp_path):
 
 
 def test_locked_lookup_survives_a_large_scrapheap_scope(server):
-    """N-2 — the lock lookup works at SQLite's historical 999-var ceiling."""
+    """N-2 - the lock lookup works at SQLite's historical 999-var ceiling."""
     engine = server.vault.db._engine
 
     def _set_limit(dbapi_conn, _record):

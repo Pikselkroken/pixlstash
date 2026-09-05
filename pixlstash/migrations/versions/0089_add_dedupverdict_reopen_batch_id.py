@@ -1,4 +1,4 @@
-"""Add ``dedupverdict.reopen_batch_id`` — the undo-of-clear correlation key.
+"""Add ``dedupverdict.reopen_batch_id`` - the undo-of-clear correlation key.
 
 Clearing a ``stacked`` duplicate decision now dissolves the stack the verdict
 created (restoring the recorded pre-verdict stack state) and records that
@@ -10,7 +10,7 @@ stack would no longer find its verdict). Hence a second, additive correlation
 column: the batch id of the most recent picture-touching clear.
 
 Schema-only and additive; no reprocessing reset is needed. The column is NULL
-for every existing row, which is correct — no clear has touched their pictures.
+for every existing row, which is correct - no clear has touched their pictures.
 
 Revision ID: 0089_add_dedupverdict_reopen_batch_id
 Revises: 0088_add_dedup_tier_tables

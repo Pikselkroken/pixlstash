@@ -23,7 +23,7 @@ class TaskStatus(str, Enum):
 class TaskPriority(int, Enum):
     """Task execution priority. Lower value = higher priority (min-heap ordering)."""
 
-    URGENT = 0  # user-triggered interactive tasks — skip ahead of everything
+    URGENT = 0  # user-triggered interactive tasks - skip ahead of everything
     HIGH = 1
     MEDIUM = 2
     LOW = 3
@@ -84,7 +84,7 @@ class BaseTask(ABC):
 
         The retry lives here rather than in the runner so that the task's
         completion bookkeeping (``_done_event``, ``completed_at``) fires once,
-        after the last attempt — a waiter in ``submit_and_wait`` must not see a
+        after the last attempt - a waiter in ``submit_and_wait`` must not see a
         task settle and then start running again.
 
         Args:
@@ -92,8 +92,8 @@ class BaseTask(ABC):
                 attempt that is *going* to be retried, never after the last one.
                 It owns freeing the GPU, pausing before the retry, and telling
                 the user; see ``TaskRunner._pause_and_report_vram_oom``. It may
-                raise to abandon the remaining attempts — the runner does that
-                when it is shutting down — and the task then fails with what it
+                raise to abandon the remaining attempts - the runner does that
+                when it is shutting down - and the task then fails with what it
                 raised.
 
         Returns:
@@ -108,8 +108,8 @@ class BaseTask(ABC):
             self.started_at = datetime.utcnow()
             self.status = TaskStatus.RUNNING
             for attempt in range(1, self.VRAM_OOM_ATTEMPTS + 1):
-                # Recorded before the attempt runs, so whatever ends the task —
-                # success, a different exception, a shutdown — the count says
+                # Recorded before the attempt runs, so whatever ends the task -
+                # success, a different exception, a shutdown - the count says
                 # which attempt that was rather than which one last OOMed.
                 self.attempts_used = attempt
                 try:
@@ -117,7 +117,7 @@ class BaseTask(ABC):
                     # Deliberately COMPLETED even when the cancel event is set.
                     # A task that returned normally did whatever work it did,
                     # and reporting CANCELLED here would race the cancel against
-                    # a task that had already finished — and suppress
+                    # a task that had already finished - and suppress
                     # ``Vault._on_task_complete``, which only fires for
                     # COMPLETED, over rows ``_run_task`` has already committed.
                     self.status = TaskStatus.COMPLETED

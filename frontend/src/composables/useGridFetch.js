@@ -129,6 +129,12 @@ export function useGridFetch(
   const imagesLoading = ref(false);
   const imagesError = ref(null);
   const totalAllPicturesCount = ref(0);
+  // Whether the count above is an ANSWER or still the initial zero. The catch
+  // below swallows a failure and leaves the ref at 0, which reads as "the
+  // library is empty" - true for a fresh install and false for a share session
+  // the summary route refuses, a backend restart, or any timeout. Anything that
+  // acts on emptiness has to know which zero it is looking at.
+  const totalAllPicturesCountLoaded = ref(false);
   const totalCurrentCategoryCount = ref(0);
   const gridReady = ref(false);
   const gridLoadEpoch = ref(0);
@@ -207,7 +213,7 @@ export function useGridFetch(
       // Both suggestion knobs belong in the key: moving either changes which
       // pictures the grid shows, so a fetch that early-returns as a no-op would
       // leave the grid disagreeing with the count in the bar. The rebuild costs
-      // no network call — the ranked list and its rows are both cached.
+      // no network call - the ranked list and its rows are both cached.
       faceSearchThreshold: faceSearchCharacter?.value
         ? (faceSearchThreshold?.value ?? null)
         : null,
@@ -800,7 +806,7 @@ export function useGridFetch(
             ? sortStore.selectedDescending
             : true;
         // For CHARACTER_LIKENESS the backend also needs reference_character_id in
-        // both the stream and count URLs — the reference determines the row set.
+        // both the stream and count URLs - the reference determines the row set.
         const _refCharSuffix =
           _sort === "CHARACTER_LIKENESS" &&
           sortStore.selectedSimilarityCharacter
@@ -812,7 +818,7 @@ export function useGridFetch(
         // Build character/set + project filter params for count and stream URLs.
         const _charP = new URLSearchParams();
         if (hasSetSelection.value) {
-          // Set view — mirrors _appendSelectionParams set branch.
+          // Set view - mirrors _appendSelectionParams set branch.
           if (isSetOverlapView.value) {
             for (const setId of normalizedSelectedSetIds.value) {
               _charP.append("set_ids", String(setId));
@@ -935,7 +941,7 @@ export function useGridFetch(
         _appendMediaTypeParams(_formatP);
         const _formatSuffix = _formatP.size ? `&${_formatP.toString()}` : "";
         // Build filter-menu params for count and stream URLs.
-        // Each labelled block corresponds to a separate commit — remove any single
+        // Each labelled block corresponds to a separate commit - remove any single
         // block to bisect a regression.
         const _filterP = new URLSearchParams();
         // Filter params: score range
@@ -1040,7 +1046,7 @@ export function useGridFetch(
           allGridImages.value = grid;
         };
 
-        // 1. Fast total count — single indexed SQL query.
+        // 1. Fast total count - single indexed SQL query.
         const countStartedAt = getNowMs();
         const countBody = await getPictureCount(
           `stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`,
@@ -1050,7 +1056,7 @@ export function useGridFetch(
         const total =
           typeof countBody?.count === "number" ? countBody.count : 0;
 
-        // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
+        // 2. Pre-build placeholder grid - scroll area immediately reflects full size.
         const placeholderStartedAt = getNowMs();
         const cols = gridStore.columns || 1;
         // Compute window count from actual viewport capacity so visibleEnd covers
@@ -1114,7 +1120,7 @@ export function useGridFetch(
         );
         // Fetch tail in parallel with the first batch whenever the gap is large
         // enough to matter for user responsiveness.  Use a fixed threshold of
-        // 1000 items — independent of BG_BATCH — so that medium-sized
+        // 1000 items - independent of BG_BATCH - so that medium-sized
         // collections (gap 1000–5000) still get the tail batch early instead of
         // waiting for a single large background request to complete.
         const TAIL_THRESHOLD = 1000;
@@ -1261,7 +1267,7 @@ export function useGridFetch(
         // Safety net: trim trailing placeholders the stream never filled.  If the
         // count and stream queries ever drift again (stream yields fewer rows than
         // COUNT(*)), the surplus tail cells would sit as permanent spinners.  Only
-        // the contiguous trailing run of id-less cells is dropped — mid-grid holes
+        // the contiguous trailing run of id-less cells is dropped - mid-grid holes
         // are left alone.
         const _finalGrid = allGridImages.value;
         let _filledEnd = _finalGrid.length;
@@ -1321,7 +1327,7 @@ export function useGridFetch(
       const newImages = mapGridImages(images);
       resetThumbnailState();
       if (overlayOpen.value) {
-        // Don't replace allGridImages while the overlay is open — the filmstrip
+        // Don't replace allGridImages while the overlay is open - the filmstrip
         // and prev/next navigation read from it directly. Store the fetched
         // result and apply it once the overlay closes.
         pendingGridImages.value = newImages;
@@ -1407,7 +1413,7 @@ export function useGridFetch(
       }
       fetchError = e;
       imagesError.value = e.message;
-      // Don't wipe the grid on a transient error while the overlay is open —
+      // Don't wipe the grid on a transient error while the overlay is open -
       // the user would see the grid flash empty behind the overlay.
       if (!overlayOpen.value) {
         allGridImages.value = [];
@@ -1460,6 +1466,7 @@ export function useGridFetch(
         userPrefsStore.applyTagFilter ? { apply_tag_filter: true } : undefined,
       );
       totalAllPicturesCount.value = Number(data.image_count) || 0;
+      totalAllPicturesCountLoaded.value = true;
     } catch (e) {
       console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
     }
@@ -1551,6 +1558,7 @@ export function useGridFetch(
     imagesLoading,
     imagesError,
     totalAllPicturesCount,
+    totalAllPicturesCountLoaded,
     totalCurrentCategoryCount,
     gridReady,
     gridLoadEpoch,

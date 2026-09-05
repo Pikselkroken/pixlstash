@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe("ThumbnailUpgradeBanner", () => {
   // An in-place rotate NULLs the thumbnail dimensions of exactly the pictures it
-  // turned, to re-queue their bitmaps — through this same worker, whose
+  // turned, to re-queue their bitmaps - through this same worker, whose
   // `remaining` is a library-wide count. So turning three photos used to raise a
   // determinate progress bar reading "12,070 / 12,073", on an action that
   // already shows itself on the tiles it is turning.
@@ -121,7 +121,7 @@ describe("ThumbnailUpgradeBanner", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".tub-banner").exists()).toBe(false);
 
-    // Snapshot present but already complete from a cold start — no prior active
+    // Snapshot present but already complete from a cold start - no prior active
     // state, so no completion beat and nothing to show.
     store.workerSnapshots = {
       [WORKER_KEY]: snapshot({ total: 100, current: 100, remaining: 0 }),
@@ -170,7 +170,7 @@ describe("ThumbnailUpgradeBanner", () => {
     await wrapper.find(".tub-dismiss").trigger("click");
     expect(wrapper.find(".tub-banner").exists()).toBe(false);
 
-    // Regeneration keeps going — the banner must not reappear.
+    // Regeneration keeps going - the banner must not reappear.
     store.workerSnapshots = {
       [WORKER_KEY]: snapshot({ total: 100, current: 60, remaining: 40 }),
     };

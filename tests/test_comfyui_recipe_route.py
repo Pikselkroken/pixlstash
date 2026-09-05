@@ -110,7 +110,8 @@ def env():
     try:
         client = TestClient(server.api, raise_server_exceptions=True)
         r = client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
 
@@ -266,7 +267,7 @@ class TestRunRecipeRefusesPixlStashNodes:
 
     The loaders serialise a choice as ``"<name> #<id>"``, so replaying the file
     re-applies whatever project / set / character / picture id was current when
-    it was written — ids that may name a deleted project, or one that now lives
+    it was written - ids that may name a deleted project, or one that now lives
     in a different library. Before this refusal that surfaced as a raw SQLite
     FOREIGN KEY error from the saver's own import, *after* the images had
     already been imported.

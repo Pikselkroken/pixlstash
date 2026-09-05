@@ -20,7 +20,7 @@ Tasks covered:
                                                     and queue drained
 
 Tasks intentionally excluded (require external setup):
-    - WatchFolderImportTask — needs watch folder config
+    - WatchFolderImportTask - needs watch folder config
 """
 
 import gc
@@ -505,7 +505,7 @@ def test_full_pipeline_on_real_pictures():
             logger.info("LikenessTask queue drained; likeness pairs written.")
 
             # ------------------------------------------------------------------ #
-            # Assertions — fetch all data in a single session
+            # Assertions - fetch all data in a single session
             # ------------------------------------------------------------------ #
             def fetch_picture_data(session):
                 pics = session.exec(
@@ -563,7 +563,7 @@ def test_full_pipeline_on_real_pictures():
                     failures.append(f"{name}: missing {', '.join(failed)}")
 
                 logger.info(
-                    "[%s] %s — tags=%d, desc=%s, img_emb=%s, txt_emb=%s, "
+                    "[%s] %s - tags=%d, desc=%s, img_emb=%s, txt_emb=%s, "
                     "quality=%s, faces=%d, lk_params=%s, size_bin=%s",
                     "FAIL" if failed else "OK",
                     name,

@@ -44,6 +44,11 @@ import {
 
 const requestInterceptor = requestInterceptors[0];
 
+// The real `AxiosHeaders`, reached past this file's own `vi.mock("axios")`.
+// It is a named export of the package - `axios/unsafe/...` is a private path
+// and would break on an axios release for no reason to do with this app.
+const { AxiosHeaders } = await vi.importActual("axios");
+
 beforeEach(() => {
   activateShareToken(null);
   setRequestClientId(null);
@@ -51,8 +56,8 @@ beforeEach(() => {
 
 describe("newOperationBatchId", () => {
   // Load-bearing: the backend accepts client ids only in the `cli-` namespace
-  // and mints its own as `srv-`, so a client can never name — and attach itself
-  // to — a server-created batch. It also validates the charset and a bounded
+  // and mints its own as `srv-`, so a client can never name - and attach itself
+  // to - a server-created batch. It also validates the charset and a bounded
   // length, and IGNORES anything else, which would silently unbatch the gesture.
   it("mints an id in the namespace and charset the backend accepts", () => {
     const id = newOperationBatchId();
@@ -70,7 +75,7 @@ describe("newOperationBatchId", () => {
 
 // The single chokepoint every store holding scope-filtered server data hangs
 // its cache-drop on (issue #646, condition C1). One mechanism, not one per
-// store — a store that had to detect a credential change itself would be a
+// store - a store that had to detect a credential change itself would be a
 // store that eventually misses one.
 describe("onSessionReset", () => {
   it("fires on logout, before the request that ends the session", async () => {
@@ -311,5 +316,63 @@ describe("backend WebSocket URL normalization", () => {
     expect(appendShareToken("wss://external.example/ws")).toBe(
       "wss://external.example/ws",
     );
+  });
+});
+
+describe("a multipart body does not inherit the JSON default", () => {
+  // The instance sets `Content-Type: application/json` for every request, and
+  // axios 1.x reads THAT in `transformRequest`: a FormData under a JSON content
+  // type is rewritten as `JSON.stringify(formDataToJSON(form))`, in which a File
+  // or Blob serialises to `{}`. `POST /models/{id}/icon` therefore received the
+  // body `{"file":{}}` and answered 422 - the model shelf's Set Thumbnail verb,
+  // both of its routes, silently dead.
+  //
+  // Cleared in the interceptor rather than at each call site because three of
+  // the four uploaders remembered to pass the header and the fourth did not.
+  // The header is DELETED, never set: only the browser can write the boundary.
+  //
+  // The REAL `AxiosHeaders` is what production hands the interceptor, so the
+  // first case below is the shape that actually ships rather than a stand-in
+  // for it. A plain object is covered too, because a hand-assembled config is
+  // what every other test in this file passes.
+  function interceptForm(headers) {
+    return requestInterceptor({
+      url: "/models/12/icon",
+      method: "post",
+      data: new FormData(),
+      headers,
+    });
+  }
+
+  it("drops it from the AxiosHeaders production actually sends", () => {
+    const headers = AxiosHeaders.from({
+      Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json",
+    });
+    const config = interceptForm(headers);
+    expect(config.headers.get("Content-Type")).toBeUndefined();
+    // Everything else survives: this clears one header, it does not reset them.
+    expect(config.headers.get("Accept")).toContain("application/json");
+  });
+
+  it("drops it from a plain headers bag, however it is spelled", () => {
+    expect(
+      interceptForm({ "Content-Type": "application/json" }).headers[
+        "Content-Type"
+      ],
+    ).toBeUndefined();
+    expect(
+      Object.keys(interceptForm({ "content-type": "application/json" }).headers),
+    ).not.toContain("content-type");
+  });
+
+  it("leaves a JSON body's content type alone", () => {
+    const config = requestInterceptor({
+      url: "/models/icons/clear",
+      method: "post",
+      data: { ids: [12] },
+      headers: AxiosHeaders.from({ "Content-Type": "application/json" }),
+    });
+    expect(config.headers.get("Content-Type")).toBe("application/json");
   });
 });

@@ -63,6 +63,86 @@ class TaggingWorkflow:
         """Return the quality-crop image size expected by the PixlStash tagger."""
         return int(self._engine.pixlstash_tagger_service._image_size_quality_crop)
 
+    def active_plugin_name(self, engine_override: str | None = None) -> str:
+        """The plugin :meth:`tag_images` runs for the full-image pass.
+
+        *engine_override* wins when given (``""`` means no tagging); otherwise
+        ``tagger_settings['active_tag_plugin']``, defaulting to
+        ``'pixlstash_tagger'``.
+        """
+        if engine_override is not None:
+            return engine_override
+        return self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
+
+    def active_model_version(self, engine_override: str | None = None) -> str:
+        """The ``model_version`` to stamp on predictions from the active plugin.
+
+        This is the sole staleness key for stored predictions - rows whose
+        version differs from the current one are deleted and rewritten - so it
+        has to change whenever the numbers do.  Plugin versions are qualified
+        with the plugin name; the built-in PixlStash tagger keeps its bare
+        ``v<n>`` so its existing rows are not orphaned.
+
+        Args:
+            engine_override: Same meaning as in :meth:`active_plugin_name`.
+
+        Returns:
+            The version string, ``'unknown'`` when nothing can say.
+        """
+        # Imported here, not at module scope: this is an inference module and
+        # pulling a db_models table in at import time is the only such edge in
+        # the package. It also reorders native library loading on Windows.
+        from pixlstash.db_models.tag_prediction import (
+            qualify_plugin_model_version,
+            UNKNOWN_MODEL_VERSION,
+        )
+
+        active = self.active_plugin_name(engine_override)
+        if not active:
+            return UNKNOWN_MODEL_VERSION
+
+        if active == "pixlstash_tagger":
+            try:
+                version_fn = getattr(self._engine, "pixlstash_tagger_version", None)
+                if callable(version_fn):
+                    return f"v{version_fn()}"
+                logger.warning(
+                    "[TaggingWorkflow] engine has no pixlstash_tagger_version(); "
+                    "predictions will be stamped %r and never go stale.",
+                    UNKNOWN_MODEL_VERSION,
+                )
+            except Exception:
+                logger.warning(
+                    "pixlstash_tagger_version() failed, using %r model version",
+                    UNKNOWN_MODEL_VERSION,
+                    exc_info=True,
+                )
+            return UNKNOWN_MODEL_VERSION
+
+        from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+        version = ""
+        plugin = get_tagger_plugin_manager().get_plugin(active)
+        if plugin is None:
+            logger.warning(
+                "[TaggingWorkflow] active_tag_plugin %r not found while resolving "
+                "its model version; predictions will be stamped %r.",
+                active,
+                UNKNOWN_MODEL_VERSION,
+            )
+        else:
+            try:
+                version = plugin.model_version() or ""
+            except Exception:
+                logger.warning(
+                    "[TaggingWorkflow] %r.model_version() failed; predictions will "
+                    "be stamped %r and never go stale.",
+                    active,
+                    UNKNOWN_MODEL_VERSION,
+                    exc_info=True,
+                )
+        return qualify_plugin_model_version(active, version)
+
     # ------------------------------------------------------------------
     # Public inference methods
     # ------------------------------------------------------------------
@@ -72,7 +152,7 @@ class TaggingWorkflow:
         image_paths,
         stop_event=None,
         preloaded_images=None,
-        out_raw_pixlstash_scores: dict | None = None,
+        out_raw_scores: dict | None = None,
         engine_override: str | None = None,
     ) -> dict[str, list[str]]:
         """Tag a batch of images using the active tag plugin.
@@ -87,21 +167,19 @@ class TaggingWorkflow:
             stop_event: Optional :class:`threading.Event` to interrupt inference.
             preloaded_images: Optional ``{path: PIL.Image}`` map to skip
                 re-loading images from disk.
-            out_raw_pixlstash_scores: When provided, per-label confidence scores
-                from the PixlStash tagger's full-image pass are written here
-                (``{path: {label: float}}``).  Only populated when the active
-                plugin is ``'pixlstash_tagger'``.
+            out_raw_scores: When provided, per-label confidence scores from
+                the full-image pass are written here (``{path: {label: float}}``).
+                Populated for the PixlStash tagger and for any third-party
+                plugin whose :class:`~pixlstash.tagger_plugins.base.TagResult`
+                objects carry a confidence; left empty for a plugin that
+                reports none (WD14 thresholds internally and reports none).
             engine_override: If given, run this specific plugin instead of the
                 configured ``active_tag_plugin``.
 
         Returns:
             ``{path: [tag, ...]}`` mapping.
         """
-        active = (
-            engine_override
-            if engine_override is not None
-            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
-        )
+        active = self.active_plugin_name(engine_override)
 
         if not active:
             return {}
@@ -138,11 +216,14 @@ class TaggingWorkflow:
                 image_paths,
                 stop_event=stop_event,
                 preloaded_images=preloaded_map,
-                out_raw_scores=out_raw_pixlstash_scores,
+                out_raw_scores=out_raw_scores,
             )
 
         return self._tag_images_single_plugin(
-            active, image_paths, stop_event=stop_event
+            active,
+            image_paths,
+            stop_event=stop_event,
+            out_raw_scores=out_raw_scores,
         )
 
     def tag_quality_crops(
@@ -163,7 +244,7 @@ class TaggingWorkflow:
                 written into this dict during the same GPU pass.
 
         Returns:
-            ``{key: [quality_tag, ...]}`` — keys with no matching whitelist
+            ``{key: [quality_tag, ...]}`` - keys with no matching whitelist
             tags are omitted.
         """
         if not items:
@@ -277,11 +358,7 @@ class TaggingWorkflow:
             engine_override: If given, pre-load this specific plugin instead
                 of the configured ``active_tag_plugin``.
         """
-        active = (
-            engine_override
-            if engine_override is not None
-            else self._tagger_settings.get("active_tag_plugin") or "pixlstash_tagger"
-        )
+        active = self.active_plugin_name(engine_override)
         if not active:
             return
 
@@ -330,6 +407,7 @@ class TaggingWorkflow:
         plugin_name: str,
         image_paths,
         stop_event=None,
+        out_raw_scores: dict | None = None,
     ) -> dict[str, list[str]]:
         """Dispatch tagging to a single named third-party plugin.
 
@@ -337,6 +415,10 @@ class TaggingWorkflow:
             plugin_name: The registered plugin name (e.g. ``'joycaption'``).
             image_paths: Sequence of absolute image/video file paths.
             stop_event: Optional :class:`threading.Event` to interrupt.
+            out_raw_scores: When provided, the confidences the plugin reported
+                are written here as ``{path: {tag: float}}``.  A plugin that
+                returns ``TagResult.confidence=None`` contributes nothing, so
+                the caller cannot tell "no confidence" from "scored zero".
 
         Returns:
             ``{path: [tag, ...]}`` or an empty dict on failure.
@@ -393,6 +475,14 @@ class TaggingWorkflow:
         for path, tag_results in raw.items():
             path_str = str(path)
             combined[path_str] = sorted(tr.tag for tr in tag_results)
+            if out_raw_scores is not None:
+                scores = {
+                    tr.tag: float(tr.confidence)
+                    for tr in tag_results
+                    if tr.confidence is not None
+                }
+                if scores:
+                    out_raw_scores[path_str] = scores
         return combined
 
     # ------------------------------------------------------------------

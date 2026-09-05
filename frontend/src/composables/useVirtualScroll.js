@@ -8,9 +8,10 @@ import {
 import { rowHeightForSizeLevel } from "../utils/thumbnailSizes";
 import { useGridStore } from "../stores/useGridStore";
 
-// Constants shared with ImageGrid.vue
-const MIN_THUMBNAIL_SIZE = 128;
-const MAX_THUMBNAIL_SIZE = 384;
+// Constants shared with ImageGrid.vue. Cut 25% alongside the ladder in
+// thumbnailSizes.js (owner call, 2026-09-03).
+const MIN_THUMBNAIL_SIZE = 96;
+const MAX_THUMBNAIL_SIZE = 288;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 const VIEW_WINDOW = 100;
 
@@ -19,13 +20,13 @@ const VIEW_WINDOW = 100;
  * scrolling image grid.
  *
  * Two layout modes, selected by `gridStore.thumbnailMode`:
- * - `'square'` (default): the original uniform grid — `cols` items per row,
+ * - `'square'` (default): the original uniform grid - `cols` items per row,
  *   every row `rowHeight` px tall, `index → row` is `floor(index / cols)`.
  * - `'justified'`: Google-Photos-style rows packed by `useJustifiedLayout`.
  *   Row heights are near-uniform but items-per-row varies, so all
  *   index↔row↔pixel arithmetic goes through the packed layout
  *   (`rowStarts` / `rowOffsets`) instead of column arithmetic. In both modes
- *   `visibleStart`/`visibleEnd` are ITEM indices — the contract the parent's
+ *   `visibleStart`/`visibleEnd` are ITEM indices - the contract the parent's
  *   thumbnail fetching relies on.
  *
  * @param {import('vue').Ref} scrollWrapper - Ref to the scrollable container element.
@@ -81,8 +82,8 @@ export function useVirtualScroll(
   // exceed the real (possibly fractional) box and wrap unexpectedly.
   const justifiedContainerWidth = ref(0);
 
-  // The packed row model. Pure arithmetic over the aspect-ratio list — no DOM
-  // reads — and deterministic, so recomputing on resize/fetch cannot thrash
+  // The packed row model. Pure arithmetic over the aspect-ratio list - no DOM
+  // reads - and deterministic, so recomputing on resize/fetch cannot thrash
   // thumbnails. Null while unmeasured/empty (the parent falls back to the
   // uniform path until the first measure lands).
   const justifiedLayout = computed(() => {
@@ -167,7 +168,7 @@ export function useVirtualScroll(
   // would visibly jump on every window/sidebar resize. We therefore capture
   // the first item of the current top-visible row under the OLD layout before
   // changing the width, then restore scrollTop to that item's row offset in
-  // the NEW layout — the user keeps looking at the same picture.
+  // the NEW layout - the user keeps looking at the same picture.
   function remeasureJustifiedWidth() {
     const rect = gridContainer.value?.getBoundingClientRect?.();
     const measured = Math.floor(
@@ -202,7 +203,7 @@ export function useVirtualScroll(
   // ── Visible-range calculation (shared by scroll + immediate recalc) ───────
   // Returns ITEM indices in both modes: [start, end) is exactly the set of
   // items whose row intersects the viewport. This is the contract the parent's
-  // updateVisibleThumbnails depends on — if these drifted from what is painted
+  // updateVisibleThumbnails depends on - if these drifted from what is painted
   // the grid would show blank tiles.
   function computeVisibleRange() {
     const el = scrollWrapper.value;
@@ -235,7 +236,7 @@ export function useVirtualScroll(
   // In justified mode the buffered endpoints are snapped OUTWARD to row
   // boundaries: renderStart down to the start of its row, renderEnd up to the
   // end of its row. Two invariants follow:
-  //   1. every rendered row is complete — flex-wrap line breaks can only match
+  //   1. every rendered row is complete - flex-wrap line breaks can only match
   //      the packed model when no row is partially rendered, and
   //   2. [visibleStart, visibleEnd) ⊆ [renderStart, renderEnd) even when the
   //      visible range is a uniform-math estimate (as right after a fetch).
@@ -339,7 +340,7 @@ export function useVirtualScroll(
 
   // ── Immediate visible-range recalculation ──────────────────────────────────
   // Used when the layout changes (column count, compact mode, justified
-  // repack) without a scroll event — the debounced onGridScroll would not fire
+  // repack) without a scroll event - the debounced onGridScroll would not fire
   // in time to fill the newly visible slots.
   function recalculateVisibleRange() {
     const range = computeVisibleRange();

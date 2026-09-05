@@ -1,14 +1,14 @@
 """In-place rotate: the EXIF-orientation facet and its undo (#950, §21.5).
 
 ``POST /pictures/rotate`` turns a photo by rewriting one EXIF field and copying
-every pixel byte through. What makes it undoable — where a crop or a re-encode is
-not — is that the operation log stores the **whole prior state**: the orientation
+every pixel byte through. What makes it undoable - where a crop or a re-encode is
+not - is that the operation log stores the **whole prior state**: the orientation
 the file had, absolutely, and nothing else.
 
 The assertions here are the ones that fail if that stops being true:
 
-1. **Only the orientation is recorded.** Every other consequence of a rotate —
-   the face and detection boxes, the pixel digest, the thumbnail dimensions — is
+1. **Only the orientation is recorded.** Every other consequence of a rotate -
+   the face and detection boxes, the pixel digest, the thumbnail dimensions - is
    derived, and a derived value in the recorded state is a second source of truth
    waiting to drift. A test asserting the boxes come back is not enough on its
    own: they could come back *because they were snapshotted*, which is the
@@ -67,7 +67,7 @@ API = "/api/v1"
 # The two finders whose whole job is to undo what a rotate does to the derived
 # columns. ``apply_orientation`` NULLs them precisely so these sweeps re-derive
 # them, which makes "the column is NULL" a state with a background thread racing
-# to end it — the sweep interval floors at 0.05 s while there is work, and the
+# to end it - the sweep interval floors at 0.05 s while there is work, and the
 # uploads this module makes keep the planner in exactly that fast cycle.
 #
 # That is not a product bug to fix, it is the product working; the assertions
@@ -77,11 +77,11 @@ _REGENERATION_FINDERS = (
     # ThumbnailGenerationTask selects on `thumbnail_width IS NULL` and writes the
     # regenerated bitmap's dimensions back. On a loaded runner it landed between
     # the rotate's response and the row read, and shard 8 of the CI gate failed
-    # on `assert 48 is None` — 48 being the width of the *re*-derived 48x64
+    # on `assert 48 is None` - 48 being the width of the *re*-derived 48x64
     # bitmap, not the stale 64x48 one, so the sweep was demonstrably the writer.
     TaskType.THUMBNAIL_GENERATION,
     # ImageEmbeddingTask selects on `image_embedding IS NULL` and owns the
-    # perceptual hash beside it — the same race, one assertion further down.
+    # perceptual hash beside it - the same race, one assertion further down.
     TaskType.IMAGE_EMBEDDING,
 )
 
@@ -94,7 +94,7 @@ def _disable_regeneration_finders(server):
     (``vault.worker_unavailable_reason``), and nearly every test here uploads.
     Only the two finders above go, and neither is consulted by the import path.
 
-    Thumbnail columns are still populated — the import writes them itself
+    Thumbnail columns are still populated - the import writes them itself
     (``ImageUtils`` renders the bitmap from the uploaded bytes), so a picture
     still arrives with dimensions for the rotate to clear.
 
@@ -155,7 +155,7 @@ def reset_operation_log(_env):
     """Every test starts from an empty log.
 
     These assertions read "the newest operation" and "the recorded state", so an
-    earlier test's rows would be read as this test's — an assertion passing for
+    earlier test's rows would be read as this test's - an assertion passing for
     the wrong reason. Truncating ``operation`` is the whole reset: nothing
     references it by foreign key and only request-driven code writes it.
 
@@ -166,7 +166,7 @@ def reset_operation_log(_env):
     The second check is that the re-derivation finders are still detached, so a
     later test cannot silently run with a sweep refilling the columns a rotate
     NULLs. It lives here rather than in a "runs last" canary because the CI gate
-    shards tests individually — a canary would only guard its own shard.
+    shards tests individually - a canary would only guard its own shard.
     """
     _client, server, disabled_finders = _env
 
@@ -323,7 +323,7 @@ def test_rotate_records_only_the_orientation(client, server):
     before, after = _recorded_state(server)
     key = str(picture_id)
     assert before == {key: {"orientation": 1}}, (
-        "before_state must carry the orientation and nothing else — a bbox, a "
+        "before_state must carry the orientation and nothing else - a bbox, a "
         "pixel_sha or a thumbnail dimension here is a derived value snapshotted, "
         "which is the second source of truth §21 exists to prevent"
     )
@@ -382,7 +382,7 @@ def test_rotate_requeues_the_embedding_and_perceptual_hash(client, server):
 
     Left stale they are worse than absent: the near-duplicate tiers would compare
     a turned picture against its own pre-turn neighbours and mis-group it. The
-    repair is the codebase's standard one — NULL the column and let the finder
+    repair is the codebase's standard one - NULL the column and let the finder
     that selects on it queue the work.
     """
     picture_id = _upload(client)
@@ -429,7 +429,7 @@ def test_undo_restores_the_boxes_without_ever_recording_them(client, server):
     before, after = _recorded_state(server)
     for state in (before, after):
         assert set(state[str(picture_id)]) == {"orientation"}, (
-            "the boxes must not appear in the recorded state — if they do, the "
+            "the boxes must not appear in the recorded state - if they do, the "
             "restore below proves nothing about re-derivation"
         )
 
@@ -441,7 +441,7 @@ def test_undo_restores_the_boxes_without_ever_recording_them(client, server):
 
 
 def test_applying_a_recorded_state_twice_is_a_no_op(client, server):
-    """Idempotence — the property a stored delta could not have."""
+    """Idempotence - the property a stored delta could not have."""
     picture_id = _upload(client)
     assert _rotate(client, [picture_id], "ccw").status_code == 200
     before, _after = _recorded_state(server)
@@ -561,13 +561,13 @@ def test_the_batch_thumbnail_endpoint_serves_a_version_carrying_the_orientation(
     """Through the real endpoint, because the helper alone proves nothing.
 
     ``POST /pictures/thumbnails`` loads pictures with an explicit
-    ``select_fields`` allowlist, and the rows outlive that session — so a field
+    ``select_fields`` allowlist, and the rows outlive that session - so a field
     the handler reads but the allowlist omits is DEFERRED, and reading it raises
     ``DetachedInstanceError`` for every picture in the batch. ``getattr(pic, …,
     None)`` does not soften it: SQLAlchemy raises that, not ``AttributeError``.
 
     This shipped broken and was caught by hand, because the sibling test below
-    calls ``thumbnail_cache_version`` inside a DB task on a session-bound row — it
+    calls ``thumbnail_cache_version`` inside a DB task on a session-bound row - it
     exercises the formula and never the endpoint that has to produce it. Assert
     on the response.
     """
@@ -647,9 +647,9 @@ def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
 
     ``apply_orientation`` NULLs the dimensions to re-queue ``ThumbnailGenerationTask``
     and leaves the ``_thumb.webp`` on disk. Until that sweep lands, ``GET
-    /pictures/thumbnails/{id}.webp`` used to hand the pre-rotate bitmap back —
+    /pictures/thumbnails/{id}.webp`` used to hand the pre-rotate bitmap back -
     its source-newer-than-thumbnail check ran only for reference-folder
-    pictures — and the grid painted the photo the wrong way round, correcting
+    pictures - and the grid painted the photo the wrong way round, correcting
     itself later when the sweep announced. This module has that sweep detached
     (``_REGENERATION_FINDERS``), so a bitmap that comes back turned can only
     have been rebuilt by the route.
@@ -672,7 +672,7 @@ def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
 
     after_w, after_h = _served_size()
     assert after_w < after_h, (
-        f"the thumbnail route served {after_w}x{after_h} after a quarter turn — "
+        f"the thumbnail route served {after_w}x{after_h} after a quarter turn - "
         f"the pre-rotate bitmap. The grid paints that until the background sweep "
         f"gets round to the picture, which is the wrong-then-right refresh."
     )
@@ -686,7 +686,7 @@ def test_a_rotated_png_is_SERVED_turned_because_no_browser_turns_it(client, serv
     tag with `write_orientation` and reading `naturalWidth`/`naturalHeight`
     back: Chromium 148 and Firefox 150 both apply it for JPEG and both IGNORE it
     for PNG, exactly as they ignore WebP's. So a rotated PNG showed a turned
-    thumbnail beside an unturned full view — and around five-sixths of a ComfyUI
+    thumbnail beside an unturned full view - and around five-sixths of a ComfyUI
     library is PNG.
 
     The fix is in the media route, so the assertion has to be on the RESPONSE
@@ -712,7 +712,7 @@ def test_a_rotated_png_is_SERVED_turned_because_no_browser_turns_it(client, serv
     assert _served_size() == (48, 64), (
         "the media route served the PNG unturned. No browser applies a PNG's "
         "eXIf orientation, so this response is the only thing that can turn it "
-        "— the lightbox shows these bytes beside an already-turned thumbnail"
+        " - the lightbox shows these bytes beside an already-turned thumbnail"
     )
 
 
@@ -774,8 +774,8 @@ def test_the_grid_projection_carries_the_orientation(client, server):
     ``mediaVersion`` (frontend/src/utils/media.js) keys the full-size media
     URL's ``?v=`` on the orientation, and the grid's ``prefetchFullImage`` and
     the lightbox's neighbour preloads build that URL from the same row. Drop the
-    field from ``Picture.grid_fields()`` — or from ``GridPicture``, which SILENTLY
-    strips anything it does not declare — and all three go back to agreeing on
+    field from ``Picture.grid_fields()`` - or from ``GridPicture``, which SILENTLY
+    strips anything it does not declare - and all three go back to agreeing on
     one unchanging URL, so a turned picture opens on the prefetched pre-rotate
     bytes.
     """
@@ -806,8 +806,8 @@ def test_two_concurrent_rotates_do_not_lose_one(client, server):
     """The current orientation is read on the DB queue, not in the handler.
 
     Read in the handler, two clockwise rotates arriving together would both see
-    1, both write 6, and one turn would vanish. Read inside the recorded task —
-    which the DB queue serialises — the second sees 6 and writes 3.
+    1, both write 6, and one turn would vanish. Read inside the recorded task -
+    which the DB queue serialises - the second sees 6 and writes 3.
     """
     picture_id = _upload(client)
 
@@ -866,12 +866,12 @@ def _forge_write_token(server, set_id):
     """Mint a *write-enabled* picture-set-scoped token by writing the hub row.
 
     ``create_token`` refuses any scope but ``ALL``/``READ``, so a write-enabled
-    resource-scoped token has no mint path through the API today — the shape is
+    resource-scoped token has no mint path through the API today - the shape is
     nonetheless fully honoured downstream, and it is the principal this route's
     ``PICTURE_SCOPED`` declaration exists for. The auth middleware builds a
     ``TokenScope`` for **every** non-``ALL`` scope and admits a non-GET only for
     a scope in ``auth.WRITE_ENABLED_SCOPES``, and ``enforce_picture_scope`` reads
-    ``resource_type``/``resource_id`` and never ``scope`` — so this row exercises
+    ``resource_type``/``resource_id`` and never ``scope`` - so this row exercises
     exactly the "write-enabled, and does the grant reach the picture" path the
     gate is being asked to decide. Forged rather than minted for the same reason
     ``tests/test_snapshots_auth.py`` forges: the row is the thing under test.
@@ -917,9 +917,9 @@ def _as(server, token):
 def test_a_write_enabled_grant_that_reaches_the_picture_can_rotate_it(client, server):
     """The positive the PICTURE_SCOPED declaration exists for.
 
-    The in-place write is a metadata-only orientation splice — pixels byte for
+    The in-place write is a metadata-only orientation splice - pixels byte for
     byte identical, exactly reversible, refused at the sink for a reference
-    folder — so a write-enabled grant that already reaches the picture is
+    folder - so a write-enabled grant that already reaches the picture is
     entitled to it, the same as every other per-picture mutation here.
     """
     picture_id = _upload(client)
@@ -969,7 +969,7 @@ def test_a_write_enabled_grant_that_excludes_the_picture_is_refused_by_the_gate(
 
 
 def test_a_mixed_batch_is_refused_whole_and_rotates_neither(client, server):
-    """One out-of-scope id poisons the whole batch — no partial application.
+    """One out-of-scope id poisons the whole batch - no partial application.
 
     The gate resolves ``picture_ids`` element by element and raises on the first
     id outside the grant, *before* the handler body runs, so there is no window
@@ -1010,7 +1010,7 @@ def test_a_read_only_token_is_refused_by_the_middleware_not_the_gate(client, ser
     ``READ_SAFE_POST_PATHS``, so the auth middleware refuses a READ token's POST
     before routing. That is what makes *write-enabled* the operative condition
     and leaves the gate to answer only *does this grant reach this picture*. The
-    ``"Token is read-only"`` body is how the two refusals are told apart — the
+    ``"Token is read-only"`` body is how the two refusals are told apart - the
     gate's says "not authorised to access this picture".
     """
     picture_id = _upload(client)
@@ -1030,7 +1030,7 @@ def test_a_read_only_token_is_refused_by_the_middleware_not_the_gate(client, ser
     assert refused.status_code == 403, refused.text
     assert refused.json()["detail"] == "Token is read-only", (
         "the READ refusal must come from the auth middleware's non-GET block, "
-        "not from the gate — if this ever reads as a membership refusal the "
+        "not from the gate - if this ever reads as a membership refusal the "
         "route has been added to READ_SAFE_POST_PATHS"
     )
 
@@ -1057,7 +1057,7 @@ def test_the_owner_is_not_over_blocked(client, server):
 def test_undo_announces_that_the_pixels_changed(client, server):
     """A bare ``updated`` leaves the grid painting the pre-rotate bitmap.
 
-    A rotate rewrites the FILE, so the card's thumbnail URL changes — and that
+    A rotate rewrites the FILE, so the card's thumbnail URL changes - and that
     URL comes from the batch-thumbnail endpoint, never from
     ``GET /pictures/{id}/metadata``. The client's targeted refresh re-reads
     metadata, so without the field being named it repaints the same stale tile

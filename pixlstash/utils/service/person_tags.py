@@ -10,7 +10,7 @@ decides, and the strip is category-aware:
   * The broader person/body tags (hair, hand, shoulder…) are stripped only when the
     description confirms a true non-person object ("wooden wardrobe", "motorcycle").
 
-The vocabulary here is a STARTER set, deliberately conservative — clothing and
+The vocabulary here is a STARTER set, deliberately conservative - clothing and
 accessory tags are excluded, because a product photo of a dress legitimately carries
 "dress" with no person in frame. Refine ``PERSON_TAGS`` from real co-occurrence on
 no-face pictures with ``scripts/report_impossible_tags.py`` before trusting the
@@ -23,7 +23,7 @@ import re
 
 from pixlstash.db_models.tag import is_description_sentinel
 
-# Tags that literally require a visible face — wrong on any no-face picture.
+# Tags that literally require a visible face - wrong on any no-face picture.
 FACE_REQUIRING_TAGS = frozenset(
     {
         "face",
@@ -70,7 +70,7 @@ FACE_REQUIRING_TAGS = frozenset(
     }
 )
 
-# Hair tags — a person's hair. Strip only when the description confirms an object.
+# Hair tags - a person's hair. Strip only when the description confirms an object.
 _HAIR_TAGS = frozenset(
     {
         "hair",
@@ -106,7 +106,7 @@ _HAIR_TAGS = frozenset(
     }
 )
 
-# Body-part tags — only meaningful with a body present.
+# Body-part tags - only meaningful with a body present.
 _BODY_TAGS = frozenset(
     {
         "hand",
@@ -151,7 +151,7 @@ _BODY_TAGS = frozenset(
 PERSON_TAGS = FACE_REQUIRING_TAGS | _HAIR_TAGS | _BODY_TAGS
 
 # "There is no person here" meta-tags. A no-face picture that the tagger marked with
-# one of these *and* still gave person-tags contradicts itself — the person-tags are the
+# one of these *and* still gave person-tags contradicts itself - the person-tags are the
 # suspects (we never remove the meta-tag itself; on a faced picture it's the meta-tag
 # that's wrong, which this tool deliberately leaves alone by staying no-face-gated).
 OBJECT_META_TAGS = frozenset({"no humans", "scenery", "no people", "nobody"})
@@ -240,7 +240,7 @@ _BODY_PART_WORDS = frozenset(
 )
 
 # Full-person / face words: their presence means a whole person or face may be shown,
-# so we must NOT downgrade to a bodypart crop — keep it ambiguous (strip only the
+# so we must NOT downgrade to a bodypart crop - keep it ambiguous (strip only the
 # face-requiring tags, never the hair/body ones).
 _FULL_PERSON_WORDS = frozenset(
     {
@@ -270,9 +270,9 @@ SOURCE_NO_FACE = "impossible:no_face"  # face-requiring tag, no detected face
 SOURCE_OBJECT = "impossible:object"  # caption describes a non-person object
 IMPOSSIBLE_SOURCES = (SOURCE_NO_HUMANS, SOURCE_NO_FACE, SOURCE_OBJECT)
 
-TIER_NO_HUMANS_SCORE = 0.95  # meta-tag evidence — strongest
-TIER_NO_FACE_SCORE = 0.85  # face tag with no face — almost always wrong
-TIER_OBJECT_SCORE = 0.70  # caption-based — caption-miss risk, lowest
+TIER_NO_HUMANS_SCORE = 0.95  # meta-tag evidence - strongest
+TIER_NO_FACE_SCORE = 0.85  # face tag with no face - almost always wrong
+TIER_OBJECT_SCORE = 0.70  # caption-based - caption-miss risk, lowest
 
 _WORD_RE = re.compile(r"[a-z]+")
 
@@ -324,24 +324,24 @@ def plan_strips(description: str | None, tags: list[str] | set[str]) -> dict:
     """Decide which signal fires for a picture, which tags to flag, and the score.
 
     Each picture gets exactly one signal (one suggestion ``source``); all its flagged
-    tags carry that source. Precedence is by evidence strength — the broader, more
+    tags carry that source. Precedence is by evidence strength - the broader, more
     certain object signals win over the face-only one:
 
-      1. **no_humans** — an ``OBJECT_META_TAGS`` tag present → strip every person-tag.
-      2. **object**    — caption describes a non-person object → strip every person-tag.
-      3. **no_face**   — a face-requiring tag present → strip just the face-requiring
+      1. **no_humans** - an ``OBJECT_META_TAGS`` tag present → strip every person-tag.
+      2. **object**    - caption describes a non-person object → strip every person-tag.
+      3. **no_face**   - a face-requiring tag present → strip just the face-requiring
          tags (keep hair/body, which can be legit on a no-face body-part shot).
 
     Args:
         description: The picture's caption (may be ``None`` / a sentinel).
         tags: The tags currently on the picture (any iterable of tag strings). The
             ``OBJECT_META_TAGS`` evidence is read from here too; the meta-tag itself is
-            never flagged — only person-tags are.
+            never flagged - only person-tags are.
 
     Returns:
         ``{"source", "verdict", "flag", "score", "person_present", "face_present"}``.
         ``source`` is ``None`` and ``flag`` empty when nothing fires (e.g. a no-face
-        body-part shot with only hair tags and no object evidence — left untouched).
+        body-part shot with only hair tags and no object evidence - left untouched).
     """
     person_present = {t for t in tags if is_person_tag(t)}
     face_present = {t for t in tags if is_face_requiring(t)}

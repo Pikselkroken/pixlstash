@@ -1,4 +1,4 @@
-// Characters (people) resource — /characters.
+// Characters (people) resource - /characters.
 //
 // Membership here is by FACE, not by picture: assigning a person to a picture
 // attaches that person to the faces detected in it, so a picture with no
@@ -30,7 +30,7 @@ function charactersUrl(path = "") {
  * stays for the sidebar, which wants the failure as a rejection.
  *
  * The route is cookie-authenticated, so a share token has to ride in the query
- * — an `<img>` sends no header.
+ * - an `<img>` sends no header.
  *
  * @param {number|string} id
  * @returns {string}
@@ -100,7 +100,7 @@ export async function deleteCharacter(id) {
  *
  * @param {Array<number|string>} pictureIds
  * @returns {Promise<Object>} the response body: character id → picture ids,
- *   plus `pictures_with_faces` — the subset that has a face at all, which is
+ *   plus `pictures_with_faces` - the subset that has a face at all, which is
  *   the only subset an assignment can ever apply to.
  */
 export async function getCharacterMembership(pictureIds) {
@@ -129,7 +129,7 @@ export async function addCharacterFaces(id, pictureIds) {
  * Unassign a character from the faces in the given pictures.
  *
  * The ids travel in a request BODY on a DELETE, which Axios only sends when it
- * is passed as `config.data` — hence the shape below.
+ * is passed as `config.data` - hence the shape below.
  *
  * @param {number|string} id
  * @param {Array<number|string>} pictureIds

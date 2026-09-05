@@ -155,7 +155,7 @@ function press(key, init = {}) {
 
 // jsdom lacks PointerEvent and vue-test-utils cannot assign the readonly
 // clientX/deltaY getters on wheel/pointer events, so these dispatch REAL
-// constructed events — the same objects a browser hands the listeners.
+// constructed events - the same objects a browser hands the listeners.
 async function wheelCanvas(wrapper, deltaY, cursor = { x: 400, y: 300 }) {
   const ev = new WheelEvent("wheel", {
     bubbles: true,
@@ -254,7 +254,7 @@ describe("ImageOverlay cold media bootstrap", () => {
   // (`Picture.grid_fields()`), so the <img> starts on the URL the metadata
   // fetch will go on to confirm. Nothing about the src may move when that
   // fetch lands: swapping it would swap the element too (`:key="fullImageSrc"`)
-  // — a blank frame plus a second download of bytes already on screen.
+  // - a blank frame plus a second download of bytes already on screen.
   it("does not touch the URL when metadata confirms the orientation", async () => {
     let resolveMetadata;
     metadataResponse = new Promise((resolve) => {
@@ -366,7 +366,7 @@ describe("ImageOverlay cold media bootstrap", () => {
   });
 });
 
-describe("ImageOverlay zoom — the continuous wheel", () => {
+describe("ImageOverlay zoom - the continuous wheel", () => {
   it("enters at fit and shows the computed fit percentage, not the word Fit", async () => {
     const wrapper = await openMeasured();
     expect(zoomLabel(wrapper)).toBe("50%");
@@ -402,7 +402,7 @@ describe("ImageOverlay zoom — the continuous wheel", () => {
     );
   });
 
-  it("a big out-wheel rests at fit — hard clamp, no exit, overlay stays open", async () => {
+  it("a big out-wheel rests at fit - hard clamp, no exit, overlay stays open", async () => {
     const wrapper = await openMeasured();
     press("z"); // 100%
     await wrapper.vm.$nextTick();
@@ -416,18 +416,18 @@ describe("ImageOverlay zoom — the continuous wheel", () => {
   });
 });
 
-describe("ImageOverlay zoom — snap stops", () => {
+describe("ImageOverlay zoom - snap stops", () => {
   it("Z toggles fit ↔ 100%, and the button title narrates both directions", async () => {
     const wrapper = await openMeasured();
     const btn = wrapper.find(".zoom-btn");
     expect(btn.attributes("title")).toBe(
-      "Zoom 50% (fit) — click for 100% (Z)",
+      "Zoom 50% (fit) - click for 100% (Z)",
     );
     press("z");
     await wrapper.vm.$nextTick();
     expect(zoomLabel(wrapper)).toBe("100%");
     expect(mediaTransform(wrapper).scale).toBeCloseTo(2, 5);
-    expect(btn.attributes("title")).toBe("Zoom 100% — click to fit (Z)");
+    expect(btn.attributes("title")).toBe("Zoom 100% - click to fit (Z)");
     press("z");
     await wrapper.vm.$nextTick();
     expect(zoomLabel(wrapper)).toBe("50%");
@@ -464,7 +464,7 @@ describe("ImageOverlay zoom — snap stops", () => {
   });
 });
 
-describe("ImageOverlay zoom — pan", () => {
+describe("ImageOverlay zoom - pan", () => {
   it("clamps the drag so the image edge never crosses the viewport edge, and re-centres at fit", async () => {
     const wrapper = await openMeasured();
     press("z"); // 100%: range is ±400/±300
@@ -507,7 +507,7 @@ describe("ImageOverlay zoom — pan", () => {
   });
 });
 
-describe("ImageOverlay zoom — the readout and the announcer", () => {
+describe("ImageOverlay zoom - the readout and the announcer", () => {
   it("the label re-fits on resize: a smaller viewport shows the new fit percentage", async () => {
     const wrapper = await openMeasured();
     expect(zoomLabel(wrapper)).toBe("50%");
@@ -549,7 +549,7 @@ describe("ImageOverlay zoom — the readout and the announcer", () => {
   });
 });
 
-describe("ImageOverlay zoom — overlays ride the transform", () => {
+describe("ImageOverlay zoom - overlays ride the transform", () => {
   it("face bboxes keep their layout-space position at an intermediate scale", async () => {
     const wrapper = await openMeasured();
     await wrapper.find('[aria-label="Toggle face bounding boxes"]').trigger("click");
@@ -613,7 +613,7 @@ describe("ImageOverlay zoom — overlays ride the transform", () => {
   });
 });
 
-describe("ImageOverlay zoom — what the wheel does NOT do", () => {
+describe("ImageOverlay zoom - what the wheel does NOT do", () => {
   it("the canvas wheel never navigates: the image stays put while the scale moves", async () => {
     const wrapper = await openMeasured();
     const srcBefore = wrapper.find(".overlay-img").attributes("src");

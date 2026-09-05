@@ -107,7 +107,7 @@ class ImagePlugin(ABC):
         ):
             raise TypeError(
                 f"{type(self).__name__}.models must be a list of "
-                "{'name': ..., 'license': ...} dicts — one entry per model, "
+                "{'name': ..., 'license': ...} dicts - one entry per model, "
                 "a list even when there is only one"
             )
         return {

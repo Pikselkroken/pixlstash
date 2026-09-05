@@ -2,7 +2,7 @@
   <!-- The floating pill, the SAME object the photo grid docks over its tiles:
        bottom-centre, panel surface, pill radius, elevation-4. Nine labelled
        buttons in a docked bar was a sentence to re-read on every selection;
-       a row of icons is a chord you learn once, and the words are never gone —
+       a row of icons is a chord you learn once, and the words are never gone -
        hover has them and right-click has all of them (#904). The last of them
        is the only one that destroys bytes, which is why it is the only one in
        the error colour (#933). -->
@@ -66,8 +66,8 @@
          Every verb below carries BOTH `aria-label` and `title`, and they say
          different things on purpose. The label is the verb and never changes,
          so a screen reader hears a stable name and voice control has something
-         to say; the tooltip is the REFUSAL — "Only files that are actually on
-         this machine can be moved" — and changes with the selection. `title`
+         to say; the tooltip is the REFUSAL - "Only files that are actually on
+         this machine can be moved" - and changes with the selection. `title`
          alone is not an accessible name a reader can rely on, and it does not
          exist at all on touch. -->
     <v-menu
@@ -154,10 +154,10 @@
       <v-icon size="19">mdi-folder-move-outline</v-icon>
     </button>
 
-    <!-- The two single-item verbs ride along DISABLED rather than disappearing:
-         a row of buttons that reflows as the selection grows is a row you have
-         to re-read, and a disabled button with its reason in the tooltip
-         teaches where the verb lives. -->
+    <!-- Rename rides along DISABLED rather than disappearing: a row of buttons
+         that reflows as the selection grows is a row you have to re-read, and a
+         disabled button with its reason in the tooltip teaches where the verb
+         lives. -->
     <button
       class="selbar-btn"
       type="button"
@@ -174,8 +174,7 @@
       class="selbar-btn"
       type="button"
       data-verb="set-icon"
-      aria-label="Set icon"
-      :disabled="!single"
+      aria-label="Set thumbnail"
       :title="iconTitle"
       @click="emit('set-icon')"
     >
@@ -312,7 +311,7 @@ const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
 
 // The keycap beside "Select all shown", so the chord is taught where the button
-// is — the same job the `Esc` cap next to Clear does. Read once at setup: the
+// is - the same job the `Esc` cap next to Clear does. Read once at setup: the
 // platform cannot change under a mounted component.
 const selectAllHint = formatKeyHint(selectAllKeyHint());
 
@@ -320,14 +319,14 @@ const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
 const contextOpen = ref(false);
-/** `[x, y]` in client coordinates — what v-menu's `target` takes. */
+/** `[x, y]` in client coordinates - what v-menu's `target` takes. */
 const contextAt = ref([0, 0]);
 
 /**
  * Open the context menu at a pointer.
  *
  * Called by the view, which has already made the right-clicked row the
- * selection — the file-manager rule: right-clicking a row that is not selected
+ * selection - the file-manager rule: right-clicking a row that is not selected
  * selects it, right-clicking one that is leaves the selection alone.
  *
  * @param {number} x - clientX.
@@ -382,7 +381,7 @@ const countTitle = computed(() => {
  *
  * `missing` is a fact (the folder was readable and the file was not in it);
  * `present` and `unreachable` both mean the bytes may still be out there, and
- * the second is the dangerous one — an unplugged drive must never be read as a
+ * the second is the dangerous one - an unplugged drive must never be read as a
  * deletion. The server enforces exactly this; the bar only stops the owner
  * pressing a button that would come back refused.
  */
@@ -396,10 +395,12 @@ const renameTitle = computed(() =>
   single.value ? "Rename this model" : "Select one model to rename it",
 );
 
+// Counted off `selectedModelIds` rather than the rows, the way the write is: a
+// ticked run is one row and twelve models.
 const iconTitle = computed(() =>
-  single.value
+  store.selectedModelIds.length === 1
     ? "Give this model a picture"
-    : "Select one model to give it a picture",
+    : `Give the same picture to all ${store.selectedModelIds.length} models`,
 );
 
 const withIcons = computed(() =>
@@ -417,8 +418,8 @@ const clearIconTitle = computed(() =>
  *
  * Cosmetic ONLY: it decides which word the delete verb shows, never what the
  * verb does. What it does comes off the triggering event's own `shiftKey`, so a
- * key state this ref missed — the window lost focus mid-press, the menu was
- * opened from a keyboard shortcut — can make the label a moment stale and can
+ * key state this ref missed - the window lost focus mid-press, the menu was
+ * opened from a keyboard shortcut - can make the label a moment stale and can
  * never make a trash into an unlink. The confirmation names the operation
  * either way, and that is the gate.
  *
@@ -458,7 +459,7 @@ const foldersById = computed(
  *
  * The same gates the route enforces, so the button is never offered where it
  * could only come back refused. Unlike Forget, this one acts on files that are
- * THERE — which is why the tooltip says where they are going.
+ * THERE - which is why the tooltip says where they are going.
  */
 const deletable = computed(() =>
   deletableModels(store.selectedRows, foldersById.value),
@@ -500,7 +501,7 @@ const forgetTitle = computed(() => {
  * meaning: "this character uses this LoRA" is not a thing you say about a base
  * model, and the route 400s. A row with no `sha256` is refused on addressing:
  * the attachment table is keyed by the interop hash and a 24 GB file the hash
- * worker has not reached yet has none, so there is nothing to write against —
+ * worker has not reached yet has none, so there is nothing to write against -
  * it becomes assignable on its own once the hash lands.
  *
  * Gated the same way Forget is, and for the same reason: the verb acts on the
@@ -553,7 +554,7 @@ const assignTitle = computed(() => {
  * The copies in the selection a move could pick up.
  *
  * Gated per COPY and not per model, so a model with one file on an unplugged
- * NAS and another on this disk IS movable — its present copy is. What the
+ * NAS and another on this disk IS movable - its present copy is. What the
  * button acts on and what the tooltip counts are the same list, and the view
  * recomputes it for the dialog rather than this being handed up, because a drop
  * onto a folder header has to reach the same list without a selection.
@@ -582,21 +583,21 @@ const moveTitle = computed(() => {
  * one thing".
  *
  * **An already-stacked row is no longer a refusal.** Stacking two stacks fuses
- * them — the route absorbs their stacks whole and removes the emptied rows —
+ * them - the route absorbs their stacks whole and removes the emptied rows -
  * so the gate that used to read "something here is already part of a run" was
  * blocking the operation this bar now exists to offer.
  *
  * Every other gate the route enforces (`services/stack_detector.apply_stack`)
  * is checked here, so the button is never offered where it could only come back
  * refused: two or more models, adapters only, each with a copy actually
- * present, and ONE folder holding all of them — a stack is files that sit
+ * present, and ONE folder holding all of them - a stack is files that sit
  * together, and stacking across folders would invent one and put its members on
  * two drives.
  *
  * The gate and its sentence are ONE computed rather than a boolean beside a
  * message that has to be kept in step with it. Written as two, the tooltip
  * named the shared-folder rule for every refusal the boolean made after the
- * cheap checks — so a selection blocked by an unplugged drive was told its files
+ * cheap checks - so a selection blocked by an unplugged drive was told its files
  * were in different folders, which is a different fact and sends the reader to
  * fix the wrong thing.
  */
@@ -654,7 +655,7 @@ const stackTitle = computed(() => {
  * The two are told apart by `members`: {@link collapseStacks} gives every
  * stacked row in `visibleRows` that array, and a member picked out of an
  * expanded strip is a raw shelf row without it. That distinction is the whole
- * basis of the two verbs below — both act *inside* a run, which is exactly what
+ * basis of the two verbs below - both act *inside* a run, which is exactly what
  * selecting the collapsed row cannot express.
  */
 const selectedMembers = computed(() =>
@@ -678,7 +679,7 @@ const unstackRefusal = computed(() => {
     return "Something here is not part of a stack";
   }
   if (selectedMembers.value.length) {
-    return "That is one file of a run — select the run itself to break it up";
+    return "That is one file of a run - select the run itself to break it up";
   }
   return "";
 });
@@ -707,14 +708,14 @@ const unstackTitle = computed(() => {
  * Why this selection cannot be made the cover, or `""` when it can.
  *
  * One file, and one that is not already the face of its run. The cover is what
- * the shelf draws for the whole stack — its name, its kind, its base — and the
+ * the shelf draws for the whole stack - its name, its kind, its base - and the
  * filenames pick it when the stack is built; this is the owner saying the
  * heuristic chose the wrong checkpoint.
  */
 const coverRefusal = computed(() => {
   const members = selectedMembers.value;
   if (store.selectedRows.length !== 1 || members.length !== 1) {
-    return "Open a run and pick one file inside it — a run has one cover";
+    return "Open a run and pick one file inside it - a run has one cover";
   }
   if (members[0].stack_position === 0) {
     return "This file already stands for its run";
@@ -742,7 +743,7 @@ const releaseRefusal = computed(() => {
     return "Something here is not part of a run";
   }
   if (rows.length !== selectedMembers.value.length) {
-    return "That is a whole run — use Ungroup to break it up";
+    return "That is a whole run - use Ungroup to break it up";
   }
   return "";
 });
@@ -889,7 +890,7 @@ const verbHandlers = computed(() => ({
 /**
  * The verb list itself, as a render function rather than a second `.vue` file.
  *
- * It is drawn twice — once under `⋯` and once at the pointer — from one array,
+ * It is drawn twice - once under `⋯` and once at the pointer - from one array,
  * and it is the ONE place the design's ordering lives: rename and set icon
  * first because they are about this row, then the properties, then the two that
  * move files, then removal. A separate component would need every gate above
@@ -941,19 +942,17 @@ const VerbMenu = (props) => {
           kbd: "F2",
         })
       : null,
-    props.single
-      ? item("mdi-image-outline", "Set icon…", {
-          on: () => props.onVerb("set-icon"),
-          title: props.iconTitle,
-        })
-      : null,
+    item("mdi-image-outline", "Set thumbnail…", {
+      on: () => props.onVerb("set-icon"),
+      title: props.iconTitle,
+    }),
     props.hasIcons
-      ? item("mdi-image-off-outline", "Clear icon", {
+      ? item("mdi-image-off-outline", "Clear thumbnail", {
           on: () => props.onVerb("clear-icons"),
           title: props.clearIconTitle,
         })
       : null,
-    props.single || props.hasIcons ? sep() : null,
+    sep(),
     item("mdi-cube-outline", "Set base model…", {
       on: () => props.onVerb("set-base-model"),
     }),
@@ -996,7 +995,7 @@ const VerbMenu = (props) => {
       title: props.moveTitle,
     }),
     sep(),
-    // The two verbs that answer "where is this file, actually" — the first
+    // The two verbs that answer "where is this file, actually" - the first
     // asks the server's own desktop, the second answers on this machine.
     // Single selection only for the opener: it is one window per press.
     props.single
@@ -1020,7 +1019,7 @@ const VerbMenu = (props) => {
       disabled: !props.forgettable,
       title: props.forgetTitle,
     }),
-    // The label IS the operation here, and it changes under Shift — the
+    // The label IS the operation here, and it changes under Shift - the
     // file-manager gesture, spelled the way Windows Explorer spells it. The
     // event is handed on rather than the tracked key state, so what runs is
     // what the reader's hand was doing at the moment they pressed.
@@ -1168,12 +1167,12 @@ defineExpose({
 /* The flyout skin is drawn for the grid's context menu, whose rows are
    `.ctx-item`: 14px inset, square full-bleed hover, an 18px glyph at full
    strength. Every one of those is wrong beside a `.shelf-mi`, and the indent is
-   only the one that is obvious — the two Assign rows also drew a square hover
+   only the one that is obvious - the two Assign rows also drew a square hover
    wash in a menu of rounded ones, in neutral grey where every neighbour uses
    the accent `--hover-wash`.
 
    `.ate` is repeated to reach (0,4,0). The rule being overridden is SCOPED, so
-   it compiles to `.ate--flyout .ate-btn[data-v-…]` and counts three — which is
+   it compiles to `.ate--flyout .ate-btn[data-v-…]` and counts three - which is
    also why the plain `.shelf-menu .ate-btn` above it has never applied to a
    flyout. */
 .shelf-menu .ate.ate--flyout .ate-btn {
@@ -1189,7 +1188,7 @@ defineExpose({
    already dims. Colour only: a `v-icon` with a numeric `size` writes `font-size`
    as an INLINE style, so the 18px glyph cannot be brought down to the 16px the
    `.shelf-mi` rows use without `!important`. Its box is 18px either way, so the
-   labels still line up — the glyph is a shade larger and that is all. */
+   labels still line up - the glyph is a shade larger and that is all. */
 .shelf-menu .ate--flyout .ate-btn > .v-icon:not(.ate-chevron) {
   color: rgba(var(--v-theme-on-surface), 0.7);
 }

@@ -32,32 +32,25 @@ from pixlstash.utils.caption_file_utils import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.layout_move_service import (
+    claim_own_moves,
+    prune_move_journal,
+)
+from pixlstash.services.move_reconciliation_service import record_pending_reviews
+from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
+from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
+from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
-
-_SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".bmp",
-        ".heic",
-        ".heif",
-        ".avif",
-    }
-)
 
 _BUILD_CHUNK_SIZE = 128
 _MAX_BUILD_WORKERS = 8
 
 
 def _is_supported_file(file_path: str) -> bool:
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in _SUPPORTED_IMAGE_EXTS:
-        return True
-    return VideoUtils.is_video_file(file_path)
+    return is_supported_media_file(file_path)
 
 
 class ReferenceFolderScanTask(BaseTask):
@@ -66,11 +59,26 @@ class ReferenceFolderScanTask(BaseTask):
     New files found on disk are inserted as Picture rows with their absolute
     paths so that PixlStash serves them directly from their original location.
     Files that have been removed from disk since the last scan have their DB
-    records deleted.
+    records deleted, unless the same pixels turned up at a new path in the same
+    pass: that is a move, and the existing record follows the file rather than
+    being replaced by a fresh one.
 
     Phase-2 path validation (resolve mapping → blocklist → isdir/access) is
     performed before any filesystem work.  On failure the folder status is set
     to ``mount_error`` and the task exits without touching the picture table.
+
+    A followed move is attributed before it is reported: a pair the move
+    journal claims was made by PixlStash itself (v1.11 Phase 4b), and every
+    other pair was made by the owner.  ``external_moved_picture_ids`` in the
+    result is that second list, and it is what Phase 5 reconciles.  Without the
+    split, PixlStash's own writes come back through this scan as owner intent
+    and the two flip each other for ever.
+
+    Of that list, only the moves inside a root that has a *layout* are queued
+    for review (``external_moves_queued_for_review``,
+    ``move_reconciliation_service.record_pending_reviews``): a root with no
+    layout has no vocabulary a folder name could contradict, so there is
+    nothing for Phase 5 to reconcile even though the file still moved.
     """
 
     def __init__(
@@ -98,6 +106,9 @@ class ReferenceFolderScanTask(BaseTask):
         # _run_task(); None means "use known conventions / module defaults".
         self._tags_suffix: str | None = None
         self._description_suffix: str | None = None
+        # The folder's layout, loaded at the start of _run_task(); None means
+        # "no layout", same as an unset column (v1.11 Phase 5).
+        self._layout = None
 
     def _run_task(self):
         resolved = self._resolved_path
@@ -105,7 +116,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         if not os.path.isdir(resolved):
             logger.warning(
-                "Reference folder %s (resolved: %s) is not a directory — marking mount_error",
+                "Reference folder %s (resolved: %s) is not a directory - marking mount_error",
                 self._folder_path,
                 resolved,
             )
@@ -114,7 +125,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         if not os.access(resolved, os.R_OK | os.X_OK):
             logger.warning(
-                "Reference folder %s (resolved: %s) is not readable — marking mount_error",
+                "Reference folder %s (resolved: %s) is not readable - marking mount_error",
                 self._folder_path,
                 resolved,
             )
@@ -134,6 +145,8 @@ class ReferenceFolderScanTask(BaseTask):
                 bool(rf.sync_tags),
                 bool(rf.sync_descriptions),
                 bool(rf.pending_reimport),
+                rf.layout,
+                rf.layout_unfiled,
             )
 
         config = self._db.run_task(fetch_folder_config, priority=DBPriority.LOW)
@@ -143,7 +156,25 @@ class ReferenceFolderScanTask(BaseTask):
             sync_tags,
             sync_descriptions,
             pending_reimport,
-        ) = config or (None, None, False, False, False)
+            layout_text,
+            layout_unfiled,
+        ) = config or (None, None, False, False, False, None, None)
+        # v1.11 Phase 5: only a laid-out root has a vocabulary a folder name
+        # can contradict, so only a laid-out root's moves are worth queuing for
+        # reconciliation at all (see move_reconciliation_service.record_pending_reviews).
+        try:
+            self._layout = parse_layout(
+                layout_text, layout_unfiled or DEFAULT_LAYOUT.unfiled
+            )
+        except ValueError as exc:
+            logger.error(
+                "Reference folder %s: layout %r is not usable: %s. Moves made "
+                "outside PixlStash will not be reconciled until it is corrected.",
+                self._folder_path,
+                layout_text,
+                exc,
+            )
+            self._layout = None
 
         # When a synced folder has no explicit suffix yet (a migrated folder or a
         # Docker folder added before its mount was reachable), detect the naming
@@ -168,15 +199,34 @@ class ReferenceFolderScanTask(BaseTask):
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
-        # may have been written next to source files by an older version — they
+        # may have been written next to source files by an older version - they
         # are not real pictures and would cause infinite re-indexing churn.
         _thumb_suffix = f"_thumb{THUMBNAIL_EXTENSION}"
         other_roots = self._other_resolved_paths
         disk_paths: set[str] = set()
+        views_roots: list[str] = []
         for root, dirs, files in os.walk(resolved, topdown=True):
             # Prune subdirectories that are roots of other reference folders so
             # their files are only indexed by their own scan task.
             dirs[:] = [d for d in dirs if os.path.join(root, d) not in other_roots]
+            # Prune a PixlStash Views tree. Every file under it is a link to a
+            # picture indexed somewhere else already, and os.walk lists a
+            # symlinked *file* in ``files`` -- only symlinked directories are
+            # skipped by default -- so without this each picture would be
+            # indexed a second time under its view path. views_service refuses
+            # to publish inside a reference folder, but a folder can be
+            # registered as one after a tree was published there.
+            #
+            # The root is REMEMBERED, not merely skipped, because "absent from
+            # disk_paths" is what this task hard-deletes a Picture row for --
+            # tags, scores, memberships and all. Pruning alone would turn a
+            # marker file appearing over an indexed folder into a silent
+            # library deletion, which is a far worse failure than the double
+            # indexing this prune exists to prevent.
+            if VIEWS_MARKER_NAME in files:
+                dirs[:] = []
+                views_roots.append(root)
+                continue
             for file_name in files:
                 if file_name.endswith(_thumb_suffix):
                     continue
@@ -229,7 +279,7 @@ class ReferenceFolderScanTask(BaseTask):
         # scan once it completes (see the end of _run_task).  No routine path
         # (sync-toggle, rename, relocate, mount-recovery, watcher, periodic
         # re-scan) ever sets it, so a routine scan can never override the ledger
-        # — this closes the edge where an already-emptied folder whose
+        # - this closes the edge where an already-emptied folder whose
         # last_scanned was reset would have resurfaced removed-but-kept files.
         # On the explicit path we re-import ledger-listed files that are actually
         # present on disk and clear their ledger entries so restore resurfaces
@@ -250,12 +300,30 @@ class ReferenceFolderScanTask(BaseTask):
             }
             override_path_shas = set()
         removed_paths = set(existing_by_path.keys()) - disk_paths
+        if views_roots:
+            # A path under a pruned views tree was not looked for, so its
+            # absence from disk_paths says nothing about whether the file is
+            # there. Deleting its row would be acting on a question never asked.
+            skipped = {
+                path
+                for path in removed_paths
+                if any(path_is_within(path, views_root) for views_root in views_roots)
+            }
+            if skipped:
+                logger.info(
+                    "Reference folder %s: %d indexed pictures lie under a "
+                    "PixlStash Views tree and were not scanned, so their "
+                    "records are kept rather than removed.",
+                    self._folder_path,
+                    len(skipped),
+                )
+                removed_paths -= skipped
 
         # --- Override the ledger on an explicit re-import ---
         # Clear the permanent-deletion ledger rows for the re-imported paths so a
         # subsequent restore no longer treats them as deleted.  Safe by
         # construction: every path_sha here belongs to a file found on disk in
-        # this scan, so the content is present — clearing cannot resurrect gone
+        # this scan, so the content is present - clearing cannot resurrect gone
         # content.
         if override_path_shas:
 
@@ -275,6 +343,140 @@ class ReferenceFolderScanTask(BaseTask):
                 self._folder_path,
                 cleared,
             )
+
+        # --- Follow moved files before anything is deleted ---
+        # A file moved inside the folder is one path in ``removed_paths`` and
+        # another in ``new_paths``, same bytes.  Handled in that order it is a
+        # delete plus a re-add: the row goes and with it everything keyed to the
+        # picture id (tags, smart score, faces, likeness pairs, project/set
+        # membership, stack membership, review state).  The pixels survive and
+        # everything PixlStash added does not, so the only safe way to use a
+        # reference folder was to never reorganize it.  Both halves are already
+        # in this same pass, so match them and move the row instead.
+        #
+        # Runs before the removal block by necessity: the delete is what
+        # destroys the row being rescued.
+        moved_paths = self._match_moved_paths(
+            existing_by_path, new_paths, removed_paths
+        )
+        moved_picture_ids: list[int] = []
+        # The moves this scan attributes to the OWNER, i.e. everything the move
+        # journal did not claim. v1.11 Phase 5 reconciles these into assignment
+        # changes; Phase 4b's job is only to make sure PixlStash's own writes
+        # are never in the list.
+        external_moved_picture_ids: list[int] = []
+        if moved_paths:
+            # The thumbnail is stored under sha256(file_path), so the bitmap
+            # follows the file rather than being abandoned at the old name.
+            # Carrying it beats blanking the dimensions and letting
+            # MissingThumbnailFinder regenerate: nothing is re-rendered, no
+            # unreachable file is left behind in .ref_thumbs (the only cleanup
+            # that exists derives its paths from each row's *current*
+            # file_path, so an orphan there is permanent), and the row never
+            # becomes NULL-width, which is what an in-flight
+            # ThumbnailGenerationTask would otherwise be free to overwrite.
+            carried_thumbnails = {
+                old: self._carry_thumbnail(old, new) for old, new in moved_paths.items()
+            }
+
+            def apply_moves(
+                session: Session, pairs: list[tuple[int, str, bool, str]]
+            ) -> list[int]:
+                # Which of these moves did PixlStash make itself? The layout
+                # engine (v1.11 Phase 4b) journals every file it moves, and a
+                # move that is ours is NOT the owner reorganising their library:
+                # reading it as intent is what makes our write come back as a
+                # change, unfile the picture, and start the two flipping each
+                # other for ever over real files. Claimed here, at the one place
+                # that has both paths and a session.
+                ours = claim_own_moves(
+                    session,
+                    [(old_path, new_path) for _, new_path, _, old_path in pairs],
+                )
+                # The journal's only other reader is ``LayoutMoveTask``, which
+                # runs only when a picture is due a check - so in a library
+                # where the owner only ever renames things, nothing would ever
+                # prune the rows a rename writes. This scan runs on its own
+                # schedule and is the journal's other consumer, so it is where
+                # the retention window is actually enforced.
+                prune_move_journal(session)
+                external: list[int] = []
+                external_moves: list[tuple[int, str, str]] = []
+                for pic_id, new_path, thumbnail_carried, old_path in pairs:
+                    pic = session.get(Picture, pic_id)
+                    if pic is None:
+                        # The row went between the scan's read and this write -
+                        # the purge sweep is the likely author.  The pair has
+                        # already been taken out of removed_paths and new_paths,
+                        # so the file is now neither moved nor imported until the
+                        # next scan; say so rather than losing it silently.
+                        logger.warning(
+                            "Reference folder %s: picture %d vanished before its "
+                            "move to %s could be applied; the file will be "
+                            "re-imported on the next scan.",
+                            self._folder_path,
+                            pic_id,
+                            new_path,
+                        )
+                        continue
+                    pic.file_path = new_path
+                    # The explicit move route (routes/reference_folders.py) sets
+                    # this from the destination basename, and _build_picture
+                    # initialises it from the path.  Leaving it alone would make
+                    # a renamed file download under its old name.
+                    pic.original_file_name = os.path.basename(new_path)
+                    if not thumbnail_carried:
+                        # No bitmap to carry, so point the sweep at it instead of
+                        # at a thumbnail that is not there.
+                        pic.thumbnail_width = None
+                        pic.thumbnail_height = None
+                    session.add(pic)
+                    if (old_path, new_path) not in ours:
+                        external.append(pic_id)
+                        external_moves.append((pic_id, old_path, new_path))
+                if external_moves and self._layout is not None:
+                    # Only a laid-out root has a vocabulary this move could
+                    # contradict (v1.11 Phase 5); see
+                    # move_reconciliation_service.record_pending_reviews.
+                    record_pending_reviews(session, external_moves)
+                session.commit()
+                return external
+
+            move_pairs = sorted(
+                (
+                    existing_by_path[old].id,
+                    new,
+                    carried_thumbnails.get(old, False),
+                    old,
+                )
+                for old, new in moved_paths.items()
+                if existing_by_path[old].id is not None
+            )
+            external_moved_picture_ids = (
+                self._db.run_task(apply_moves, move_pairs, priority=DBPriority.LOW)
+                or []
+            )
+            # A followed move changes file_path (and with it the thumbnail URL
+            # and the download name) on a row an open grid may already be
+            # showing, and nothing else in this task reports it: without this the
+            # grid keeps the old state until the next full reload.
+            moved_picture_ids = [pic_id for pic_id, _, _, _ in move_pairs]
+            logger.info(
+                "Reference folder %s: followed %d moved file(s), %d of them "
+                "moved by PixlStash itself.",
+                self._folder_path,
+                len(moved_paths),
+                len(moved_paths) - len(external_moved_picture_ids),
+            )
+            # A moved file is neither removed nor new.  ``existing_by_path`` is
+            # re-keyed as well as narrowed, because the sidecar pass below walks
+            # it by path and would otherwise reconcile at the old location.
+            for old_path, new_path in moved_paths.items():
+                picture = existing_by_path.pop(old_path)
+                picture.file_path = new_path
+                existing_by_path[new_path] = picture
+            removed_paths -= moved_paths.keys()
+            new_paths -= set(moved_paths.values())
 
         # --- Handle removed files ---
         if removed_paths:
@@ -320,9 +522,9 @@ class ReferenceFolderScanTask(BaseTask):
         # --- Handle sidecar changes (and exports) for existing pictures ---
         # For each picture we reconcile the tags sidecar and the description
         # sidecar independently in both directions:
-        #   read  — an external file that appeared or changed is imported (cheap
+        #   read  - an external file that appeared or changed is imported (cheap
         #           os.stat() gate so content is only read when mtime differs);
-        #   write — when the folder syncs that type and a picture with content
+        #   write - when the folder syncs that type and a picture with content
         #           has no sidecar yet, the file is created on disk (export).
         # An empty sidecar is never created.
         tags_by_pic: dict[int, list[str]] = {}
@@ -367,7 +569,7 @@ class ReferenceFolderScanTask(BaseTask):
             ) -> None:
                 # A sidecar re-sync writes confirmed tags/description onto EXISTING
                 # pictures; a picture frozen by a locked set is read-only, so skip
-                # it (background task — skip-and-log rather than raising 423).
+                # it (background task - skip-and-log rather than raising 423).
                 locked = locked_picture_ids(session, [u["pic_id"] for u in updates])
                 if locked:
                     logger.info(
@@ -391,7 +593,7 @@ class ReferenceFolderScanTask(BaseTask):
                         pic_db.description = u["new_description"]
                     session.add(pic_db)
                     if "new_tags" in u:
-                        # Replace tags — an empty list means all tags were removed.
+                        # Replace tags - an empty list means all tags were removed.
                         session.exec(delete(Tag).where(Tag.picture_id == u["pic_id"]))
                         tags = u["new_tags"]
                         if tags:
@@ -431,6 +633,14 @@ class ReferenceFolderScanTask(BaseTask):
             "caption_updated_count": len(caption_updates),
             "caption_updated_picture_ids": caption_updated_picture_ids,
             "imported_picture_ids": imported_picture_ids,
+            "moved_picture_ids": moved_picture_ids,
+            "external_moved_picture_ids": external_moved_picture_ids,
+            # v1.11 Phase 5: which of those were actually queued for
+            # reconciliation review - empty whenever this root has no layout,
+            # even though external_moved_picture_ids is not.
+            "external_moves_queued_for_review": (
+                external_moved_picture_ids if self._layout is not None else []
+            ),
         }
 
     def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:
@@ -505,6 +715,194 @@ class ReferenceFolderScanTask(BaseTask):
             if new_mtime is not None:
                 update[path_key] = target
                 update[mtime_key] = new_mtime
+
+    def _carry_thumbnail(self, old_path: str, new_path: str) -> bool:
+        """Move a followed picture's thumbnail bitmap to its new path-derived name.
+
+        Thumbnails live at ``sha256(file_path)`` under
+        ``image_root/.pixlstash-thumbnails`` (``ImageUtils.get_thumbnail_path``),
+        so a followed move renames the bitmap rather than re-rendering it.
+        Nothing sweeps that directory by anything but a row's current
+        ``file_path``, so a bitmap left at the old name would never be reachable
+        and never be collected.
+
+        Returns:
+            ``True`` when the new path now has the bitmap, so the caller can keep
+            the stored dimensions.  ``False`` when there was nothing to carry or
+            the rename failed, in which case the caller blanks the dimensions and
+            ``MissingThumbnailFinder`` renders a fresh one.
+        """
+        image_root = self._db.image_root
+        old_thumb = ImageUtils.find_thumbnail(image_root, old_path)
+        new_thumb = ImageUtils.get_thumbnail_path(image_root, new_path)
+        if not old_thumb or not new_thumb or old_thumb == new_thumb:
+            return bool(old_thumb and old_thumb == new_thumb)
+        try:
+            os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
+            os.replace(old_thumb, new_thumb)
+            return True
+        except OSError as exc:
+            # Not fatal: the picture simply regenerates its thumbnail.  Say so,
+            # because a bitmap stranded at the old name is never collected.
+            logger.warning(
+                "Reference folder %s: could not carry the thumbnail for the move "
+                "%s -> %s (%s); it will be regenerated and %s may be left behind.",
+                self._folder_path,
+                old_path,
+                new_path,
+                exc,
+                old_thumb,
+            )
+            return False
+
+    def _match_moved_paths(
+        self,
+        existing_by_path: dict[str, Picture],
+        new_paths: set[str],
+        removed_paths: set[str],
+    ) -> dict[str, str]:
+        """Pair vanished indexed paths with new disk paths holding the same pixels.
+
+        Args:
+            existing_by_path: This folder's indexed pictures, keyed by file path.
+            new_paths: Disk paths not yet indexed, after ledger filtering.
+            removed_paths: Indexed paths no longer present on disk.
+
+        Returns:
+            ``{old_path: new_path}`` for each unambiguous move.  Empty when
+            either side is empty, so the expensive case costs nothing: a first
+            scan of a large folder has no removals and never hashes here, and a
+            folder losing files without gaining any never hashes either.
+
+        Only a 1:1 match on ``(pixel_sha, size_bytes)`` counts as a move, and
+        only when no unchanged file in the folder shares that key either.
+        Scrapheap rows are never the *source* of a move (a hidden soft-deleted
+        row would otherwise swallow an unrelated new file of the same content)
+        but do count as unchanged files blocking one, since their file is still
+        on disk.  A present file whose ``pixel_sha`` has not been backfilled yet
+        makes the whole folder unmatchable rather than merely uncounted.
+        Identical pixels at several paths are genuine copies, and the rows
+        behind them can differ in tags, sets and scores - pairing them by guess
+        would move one picture's work onto another picture's file, which is the
+        loss this exists to prevent.  Ambiguous groups fall through to the
+        delete-and-re-add path, which is no worse than the behaviour before
+        this existed.
+
+        The confirmation stops at the size.  Import de-duplication follows a
+        ``(sampled hash, size)`` candidate match with a full-byte hash of both
+        sides; here one side is a file that no longer exists, so its bytes are
+        unavailable and the stored columns are all there is to compare.
+
+        Scoped to one reference folder, because the scan is: a file moved
+        between two reference folders is a removal in one scan and an addition
+        in another, with no shared pass to match them in.  Since the scan walks
+        the whole tree under the root, moving between subfolders - the case
+        this is for - is within scope.
+        """
+        if not removed_paths or not new_paths:
+            return {}
+
+        # ponytail: os.walk is not atomic, so a file moved mid-walk from an
+        # unvisited directory into a visited one is in neither set and still
+        # reads as a removal.  Deferring deletion by one scan (mark and sweep)
+        # would close it; not worth the state for a race this narrow.
+        # The key is ``(pixel_sha, size_bytes)``, never ``pixel_sha`` alone.
+        # ``calculate_hash_from_file_path`` samples 8 x 8 KiB windows of
+        # anything over 128 KiB and does not mix the size into the digest, so
+        # on its own it is a candidate key and not an identity -- its own
+        # docstring says so, and import de-duplication pairs it with the size
+        # for exactly this reason.  Here a false pair is worse than the bug
+        # being fixed: a lost row is visible, one picture's tags and
+        # memberships silently rebound onto another picture's file are not.
+        # Scrapheap rows are not move candidates.  ``fetch_existing`` loads
+        # ``deleted=True`` pictures on purpose, so without this a hidden
+        # scrapheap row whose file really was deleted would swallow an unrelated
+        # new file of the same content: the arrival is taken out of
+        # ``new_paths`` as "a move", and what the user gets is not a new picture
+        # but a soft-deleted one they cannot see.  Leaving them in
+        # ``removed_paths`` keeps the ordinary cleanup path unchanged.
+        gone_by_key: dict[tuple[str, int | None], list[str]] = {}
+        for path in removed_paths:
+            picture = existing_by_path[path]
+            if picture.pixel_sha and not picture.deleted:
+                key = (picture.pixel_sha, picture.size_bytes)
+                gone_by_key.setdefault(key, []).append(path)
+        if not gone_by_key:
+            return {}
+
+        # An unchanged file sharing the key makes the group ambiguous too, and
+        # the stable rows cost nothing to count: their hash is already loaded.
+        # Without this, deleting A and separately adding an identical C while
+        # an identical B sits untouched in the folder reads as a clean 1:1.
+        #
+        # Scrapheap rows *do* count here, unlike above.  Their file is still on
+        # disk, so it is a real identical file the arrival could be a copy of;
+        # counting it only ever refuses a match, which is the safe direction.
+        stable_counts: dict[tuple[str, int | None], int] = {}
+        unhashed_stable = 0
+        for path, picture in existing_by_path.items():
+            if path in removed_paths:
+                continue
+            if not picture.pixel_sha:
+                unhashed_stable += 1
+                continue
+            key = (picture.pixel_sha, picture.size_bytes)
+            stable_counts[key] = stable_counts.get(key, 0) + 1
+
+        # ``pixel_sha`` is nullable and MissingPixelShaFinder backfills it in the
+        # background, so a present, unchanged file can be invisible to the count
+        # above.  That is exactly the file whose existence would have refused the
+        # match, so a NULL there is not "no collision", it is "unknown".  Refuse
+        # to follow anything until the backfill has caught up; this scan writes
+        # the hash for every file it imports, so the gap is transient, and the
+        # fallback is the delete-and-re-add that ran before this existed.
+        if unhashed_stable:
+            logger.info(
+                "Reference folder %s: %d unchanged file(s) have no pixel hash "
+                "yet, so a move cannot be told from a copy; re-importing until "
+                "the hash backfill catches up.",
+                self._folder_path,
+                unhashed_stable,
+            )
+            return {}
+
+        arrived_by_key: dict[tuple[str, int | None], list[str]] = {}
+        for path in sorted(new_paths):
+            try:
+                size_bytes = os.path.getsize(path)
+                pixel_sha = ImageUtils.calculate_hash_from_file_path(path)
+            except Exception as exc:
+                # Not fatal: an unhashable file simply cannot be matched, and
+                # _build_picture_chunk reports it again when it tries to import.
+                logger.warning(
+                    "Reference folder scan: failed to hash %s while looking for "
+                    "moved files: %s",
+                    path,
+                    exc,
+                )
+                continue
+            if pixel_sha:
+                arrived_by_key.setdefault((pixel_sha, size_bytes), []).append(path)
+
+        moved: dict[str, str] = {}
+        for key, old_paths in gone_by_key.items():
+            candidates = arrived_by_key.get(key, ())
+            if not candidates:
+                continue
+            stable = stable_counts.get(key, 0)
+            if len(old_paths) == 1 and len(candidates) == 1 and stable == 0:
+                moved[old_paths[0]] = candidates[0]
+            else:
+                logger.info(
+                    "Reference folder %s: %d vanished, %d new and %d unchanged "
+                    "file(s) share one pixel hash and size; too ambiguous to "
+                    "call a move, re-importing.",
+                    self._folder_path,
+                    len(old_paths),
+                    len(candidates),
+                    stable,
+                )
+        return moved
 
     def _build_picture_chunk(
         self,
@@ -601,28 +999,33 @@ class ReferenceFolderScanTask(BaseTask):
         # AR-bitmap dims + faceless square crop; faces refine the crop later.
         thumb_cols: dict = {}
 
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                img_format = img.format or "PNG"
-                width, height = img.size
-                rendered = ImageUtils.render_thumbnail(img)
-                if rendered is not None:
-                    thumbnail_bytes, bmp_w, bmp_h, crop = rendered
-                    thumb_cols = {
-                        "thumbnail_width": bmp_w,
-                        "thumbnail_height": bmp_h,
-                        "square_crop_x": crop["x"],
-                        "square_crop_y": crop["y"],
-                        "square_crop_side": crop["side"],
-                    }
-        except Exception:
-            logger.warning(
-                "Failed to process image file %s for reference folder scan.",
-                file_path,
-            )
+        # A video is not PIL's to open; the thumbnail finder renders its frame.
+        if not VideoUtils.is_video_file(file_path):
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    img_format = img.format or "PNG"
+                    width, height = img.size
+                    rendered = ImageUtils.render_thumbnail(img)
+                    if rendered is not None:
+                        thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                        thumb_cols = {
+                            "thumbnail_width": bmp_w,
+                            "thumbnail_height": bmp_h,
+                            "square_crop_x": crop["x"],
+                            "square_crop_y": crop["y"],
+                            "square_crop_side": crop["side"],
+                        }
+            except Exception as exc:
+                logger.warning(
+                    "Reference scan: could not decode %s for a thumbnail (%s: %s); "
+                    "the picture is indexed without one for now.",
+                    file_path,
+                    type(exc).__name__,
+                    exc,
+                )
 
-        # Write thumbnail into image_root/.ref_thumbs/ so it doesn't land
-        # inside the reference folder and get re-indexed on the next scan.
+        # The thumbnail goes to image_root/.pixlstash-thumbnails/, never
+        # inside the reference folder where the next scan would index it.
         if thumbnail_bytes:
             ImageUtils.write_thumbnail_bytes(
                 self._db.image_root, file_path, thumbnail_bytes

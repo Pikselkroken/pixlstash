@@ -43,7 +43,7 @@
 //
 // Before this component the search bar and the selection pill were independent
 // mounts that could both be up at once, and only one of them registered a
-// bottom anchor — so notice cards landed on top of the other. One owner of the
+// bottom anchor - so notice cards landed on top of the other. One owner of the
 // bottom edge is the point of the merge; the two halves are slots so their
 // wiring stays in ImageGrid rather than being drilled through a shell.
 //
@@ -74,7 +74,7 @@ const visible = computed(() => props.searchActive || props.selectionActive);
 
 // Registered under the SAME name the selection pill used, deliberately:
 // ActionReceipt lifts itself by `useAnchorHeight("selection-bar")`, and the
-// height it needs is still this element's. Height is MEASURED, never assumed —
+// height it needs is still this element's. Height is MEASURED, never assumed -
 // the pill grows on coarse pointers and wraps at the narrow floor.
 useBottomAnchor("selection-bar", barEl);
 
@@ -124,7 +124,7 @@ function focusFirstIn(el) {
     candidate.focus();
     // A control the responsive ladder has hidden (`display: none`, e.g. the
     // threshold form that is not the active one) refuses focus. Asking the
-    // browser whether it landed beats any size or visibility heuristic — and
+    // browser whether it landed beats any size or visibility heuristic - and
     // the zero-size menu activators are <div>s without tabindex, so they never
     // match the selector in the first place.
     if (document.activeElement === candidate) return true;
@@ -147,7 +147,7 @@ defineExpose({ visible });
   bottom: var(--space-5);
   left: 50%;
   /* width: max-content so the pill hugs its contents. NOTE: do NOT add
-     container-type here — inline-size containment makes the width ignore the
+     container-type here - inline-size containment makes the width ignore the
      contents, collapsing the pill to ~0 and leaving the controls floating with
      no visible background. The `selbar` container for the @container queries in
      the segments is declared on `.grid-content-area` (ImageGrid.vue), the
@@ -192,7 +192,7 @@ defineExpose({ visible });
    one is a whisper (~1.15:1 on light `surface`) that does not survive a bright
    photo bleeding through the 14% of transparency.
 
-   16px of air each side — 8px here plus the pill's own 8px gap — so the gutter
+   16px of air each side - 8px here plus the pill's own 8px gap - so the gutter
    is 32px across against an 8px internal rhythm. THAT 4x step is what tells the
    two halves apart at a glance; a two-tone fill was rejected for it
    (merged-grid-action-pill.md §2.1 and §11.1). Do not add a second colour. */
@@ -206,7 +206,7 @@ defineExpose({ visible });
 }
 
 /* Entering the screen decelerates, leaving it accelerates and is quicker
-   (visual-language.md §10) — the same pairing the notice stack beside it uses. */
+   (visual-language.md §10) - the same pairing the notice stack beside it uses. */
 .selbar-pop-enter-active {
   transition:
     transform var(--dur-2) var(--ease-decelerate),
@@ -224,7 +224,7 @@ defineExpose({ visible });
 }
 
 /* The expand is GEOMETRY-STABLE: the pill reflows once and the cue rides
-   entirely on compositor properties. Width is deliberately not transitioned —
+   entirely on compositor properties. Width is deliberately not transitioned -
    `max-content` is not interpolable, and because the pill is centred with
    translateX(-50%) an animated width moves its LEFT edge too, dragging the
    search half's controls sideways under a live pointer. Height must never
@@ -242,7 +242,7 @@ defineExpose({ visible });
 }
 
 /* The segment enters from the pill's new outer edge. Same property pair and the
-   same in/out asymmetry as selbar-pop above — one motion vocabulary, three
+   same in/out asymmetry as selbar-pop above - one motion vocabulary, three
    parameters (8px instead of 120%, X instead of Y). */
 .pill-segment-enter-active {
   transition:

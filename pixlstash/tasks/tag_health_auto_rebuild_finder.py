@@ -5,7 +5,7 @@ Closes Spec B's loop (``docs/reviews/tag-review-board-redesign-ux-spec.md``
 hatch; this finder is what makes the board catch up to review activity / new
 pictures / new tagger runs without anyone clicking it. Shape mirrors
 :class:`~pixlstash.tasks.ensure_gfs_snapshot_finder.EnsureGfsSnapshotFinder`'s
-monotonic-clock check-interval gate — the established precedent in this
+monotonic-clock check-interval gate - the established precedent in this
 codebase for "cheap periodic condition check, act at most every N seconds".
 """
 
@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 # Minimum time between staleness checks / auto-rebuild dispatches, seconds.
 # 5 minutes: matches this codebase's other periodic-finder cadences
 # (ReferenceFolderScanFinder._RESCAN_INTERVAL_S, EnsureGfsSnapshotFinder.
-# _CHECK_INTERVAL_S) — frequent enough that the board catches up well within
+# _CHECK_INTERVAL_S) - frequent enough that the board catches up well within
 # a normal review session, infrequent enough that a burst of accept/dismiss
 # clicks can't retrigger a rebuild every few seconds. This is the spec's
 # required debounce; tune here only.
@@ -53,7 +53,7 @@ class TagHealthAutoRebuildFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        # ``None``, NOT 0.0 — ``time.monotonic()``'s reference point is undefined
+        # ``None``, NOT 0.0 - ``time.monotonic()``'s reference point is undefined
         # (on Linux it is seconds since BOOT), so 0.0 is an absolute instant, not
         # a "never checked" sentinel. On a host that booted less than the check
         # interval ago, ``now - 0.0`` falls BELOW the interval and silently
@@ -84,7 +84,7 @@ class TagHealthAutoRebuildFinder(BaseTaskFinder):
         if not tag_health_service.is_stale(self._vault):
             return None
 
-        logger.info("TagHealthAutoRebuildFinder: cache stale — dispatching rebuild")
+        logger.info("TagHealthAutoRebuildFinder: cache stale - dispatching rebuild")
         from pixlstash.tasks.tag_health_auto_rebuild_task import (
             TagHealthAutoRebuildTask,
         )

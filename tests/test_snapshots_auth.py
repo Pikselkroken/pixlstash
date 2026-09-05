@@ -7,11 +7,11 @@ Snapshot routes are owner-only, and two independent layers must hold:
 * The auth middleware fail-closed-rejects a forged ``ALL``+``resource_type``
   token *before* the route runs. ``create_token`` refuses to mint that shape,
   but a malicious / legacy / snapshot-restored row could still carry it, and it
-  would otherwise leave ``token_scope is None`` and read as a full owner — the
+  would otherwise leave ``token_scope is None`` and read as a full owner - the
   F1/F3 footgun.
 
 A regression in either layer would pass every other test in the suite while
-silently exposing the whole vault to share tokens — this file is the dedicated
+silently exposing the whole vault to share tokens - this file is the dedicated
 regression guard.
 """
 
@@ -40,12 +40,13 @@ def _setup_server_with_owner_session():
     server = Server(config_path)
     server.__enter__()
     # The caller's try/finally cannot start until this returns, so anything
-    # that raises past __enter__ would strand a fully started Server — and its
-    # daemon database worker — for the rest of the session.
+    # that raises past __enter__ would strand a fully started Server - and its
+    # daemon database worker - for the rest of the session.
     try:
         client = TestClient(server.api, raise_server_exceptions=True)
         r = client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
     except BaseException:
@@ -53,7 +54,7 @@ def _setup_server_with_owner_session():
         # would otherwise strand exactly the Server this function exists to stop
         # stranding. It re-raises, so nothing is swallowed.
         #
-        # `finally`, so the temp directory goes even when `__exit__` raises —
+        # `finally`, so the temp directory goes even when `__exit__` raises -
         # otherwise a failing teardown leaks the directory as well as whatever
         # `__exit__` failed to close.
         try:
@@ -77,12 +78,12 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
     """Forge an ``ALL``+``resource_type`` token by writing it straight to the DB.
 
     This is the malicious case, deliberately. ``create_token`` now *refuses* to
-    mint this shape (returns 400 — see ``test_read_token_security`` and
+    mint this shape (returns 400 - see ``test_read_token_security`` and
     ``auth.create_token``), so we cannot get one through the API. But the ban at
     the mint is not the only line of defense we care about: a token row carrying
     ``scope="ALL"`` + a ``resource_type`` could still arrive via a hand-crafted
     insert by an attacker with DB access, a token minted before the ban shipped,
-    or a snapshot restore of an old row. Such a token is the F1/F3 footgun — the
+    or a snapshot restore of an old row. Such a token is the F1/F3 footgun - the
     middleware only builds ``request.state.token_scope`` for non-``ALL`` scopes,
     so it would leave ``token_scope is None`` and be treated as a *full owner*
     while wearing a "restricted" label.
@@ -202,7 +203,7 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
     snapshot-restored row could still carry it (see
     ``_inject_picture_scoped_all_token``). The auth middleware's fail-closed
     ``ALL``+``resource_type`` guard rejects it (403) ahead of the route's
-    ``require_unscoped_owner`` — defense in depth against the footgun that would
+    ``require_unscoped_owner`` - defense in depth against the footgun that would
     otherwise let it read as a full owner."""
     tmp, server, client = _setup_server_with_owner_session()
     try:
@@ -227,7 +228,7 @@ def test_picture_scoped_all_token_rejected_on_snapshot_routes():
             f"got {r.status_code}: {r.text}"
         )
         # Prove it was the middleware's malformed-token guard that fired, not the
-        # local-IP gate or the owner check — otherwise a regression that lets the
+        # local-IP gate or the owner check - otherwise a regression that lets the
         # footgun through could still pass on an incidental 403.
         assert "misconfigured" in r.text.lower(), (
             f"Expected the ALL+resource_type middleware guard to fire; got: {r.text}"
@@ -325,7 +326,7 @@ def test_read_token_rejected_on_every_read_route(method, path):
 
 
 def test_any_daily_deletable_including_latest():
-    """Any DAILY snapshot can be deleted, including the most recent one — the
+    """Any DAILY snapshot can be deleted, including the most recent one - the
     GFS scheduler simply creates a fresh snapshot for the period on its next
     pass, so nothing is locked."""
     tmp, server, client = _setup_server_with_owner_session()
@@ -353,7 +354,7 @@ def test_any_daily_deletable_including_latest():
 
 
 def test_manual_and_opportunistic_snapshots_deletable_via_route():
-    """MANUAL and OPPORTUNISTIC snapshots are never GFS-locked — both delete
+    """MANUAL and OPPORTUNISTIC snapshots are never GFS-locked - both delete
     via the route with 204."""
     tmp, server, client = _setup_server_with_owner_session()
     try:

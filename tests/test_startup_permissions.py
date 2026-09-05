@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import stat
@@ -9,16 +8,13 @@ import pytest
 
 import pixlstash.startup_permissions as startup_permissions
 from pixlstash.startup_permissions import (
-    PERMISSION_REPAIR_PREFIX,
     find_startup_permission_issues,
     format_permission_problem,
     mkdir_private,
-    permission_repair_signal,
     repair_permission_issues,
 )
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
-    TrustedSQLiteLocationError,
 )
 
 
@@ -77,15 +73,16 @@ def test_find_and_repair_hub_and_configured_library_permissions(
 
     assert by_path[str(config_dir)].repaired_mode == 0o700
     assert by_path[str(hub)].repaired_mode == 0o600
-    # The default library sits inside PixlStash's private config root.
-    assert by_path[str(library)].repaired_mode == 0o700
-    assert by_path[str(vault)].repaired_mode == 0o600
+    # The library is held to what the vault guard checks: not writable by
+    # others. Living inside the config root does not make it a credential store.
+    assert by_path[str(library)].repaired_mode == 0o755
+    assert by_path[str(vault)].repaired_mode == 0o644
 
     repair_permission_issues(issues)
     assert mode(config_dir) == 0o700
     assert mode(hub) == 0o600
-    assert mode(library) == 0o700
-    assert mode(vault) == 0o600
+    assert mode(library) == 0o755
+    assert mode(vault) == 0o644
     assert not find_startup_permission_issues(
         str(config_dir / "server-config.json"), str(library)
     )
@@ -158,7 +155,7 @@ def test_external_library_preserves_read_access(tmp_path):
     assert issues[0].repaired_mode == 0o755
 
 
-def test_human_and_electron_messages_name_paths_and_modes(tmp_path, app_owned_config):
+def test_message_names_paths_and_modes(tmp_path, app_owned_config):
     config_dir = tmp_path / "config with spaces"
     config_dir.mkdir(mode=0o700)
     app_owned_config.add(os.path.realpath(config_dir))
@@ -168,25 +165,21 @@ def test_human_and_electron_messages_name_paths_and_modes(tmp_path, app_owned_co
     )
 
     message = format_permission_problem(issues)
-    assert "PixlStash will not run" in message
+    assert "PixlStash will start anyway" in message
     assert str(config_dir) in message
     assert "mode 775; needs 700" in message
 
-    signal = permission_repair_signal(issues)
-    assert signal.startswith(PERMISSION_REPAIR_PREFIX)
-    payload = json.loads(signal.removeprefix(PERMISSION_REPAIR_PREFIX))
-    assert payload["version"] == 1
-    assert payload["issues"][0]["path"] == str(config_dir)
 
-
-def test_offers_the_writable_ancestor_the_guard_refuses(tmp_path, app_owned_config):
+def test_offers_the_writable_ancestor_the_guard_warns_about(
+    tmp_path, app_owned_config, caplog
+):
     """The repair offer must cover every directory ``TrustedSQLiteLocation`` walks.
 
     The desktop shape that exposed the gap: the Electron config dir and the
     library root are both private, but the library sits inside a shared folder
-    left at 0777 by an older release. The guard refuses on that ancestor, so an
+    left at 0777 by an older release. The guard warns on that ancestor, so an
     offer that only inspects leaf paths reports "nothing to fix" for a startup
-    that cannot succeed.
+    that will keep warning.
     """
 
     desktop_config = tmp_path / "pixlstash-desktop"
@@ -207,8 +200,11 @@ def test_offers_the_writable_ancestor_the_guard_refuses(tmp_path, app_owned_conf
     # and must never be offered for a chmod.
     os.chmod(tmp_path, 0o1777)
 
-    with pytest.raises(TrustedSQLiteLocationError):
-        TrustedSQLiteLocation.open(str(vault)).close()
+    TrustedSQLiteLocation.open(str(vault)).close()
+    assert any(
+        str(shared) in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    )
 
     issues = find_startup_permission_issues(server_config, str(library))
     assert [issue.path for issue in issues] == [str(shared)]

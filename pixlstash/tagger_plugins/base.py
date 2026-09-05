@@ -111,7 +111,7 @@ class TaggerPlugin(ABC):
             min (float|int): Minimum value for numeric types.
             max (float|int): Maximum value for numeric types.
             step (float|int): Step size for numeric types.
-            options (list[dict]): Required for ``"select"`` — each entry is
+            options (list[dict]): Required for ``"select"`` - each entry is
                 ``{"value": ..., "label": ...}``.
 
         Returns:
@@ -121,6 +121,31 @@ class TaggerPlugin(ABC):
     def default_params(self) -> dict[str, Any]:
         """Return a dict of ``{name: default}`` from ``parameter_schema``."""
         return {field["name"]: field["default"] for field in self.parameter_schema()}
+
+    def model_version(self) -> str:
+        """Return a version string identifying the weights this plugin runs.
+
+        Stored on every :class:`~pixlstash.db_models.tag_prediction.TagPrediction`
+        row this plugin produces, qualified with the plugin name, and it is the
+        **only** thing that marks a stored prediction stale: when the version
+        changes, the host deletes the previous generation's rows and rewrites
+        them. A plugin that always returns the same string therefore keeps its
+        confidences forever, even after its weights change.
+
+        It is also the value the human-label ledger freezes at review time
+        (``TagPrediction.label_model_version``), so that a human accept/reject
+        stays meaningful as training data once the model has moved on.
+
+        Return whatever identifies the weights *and how they are being run* -
+        a repo revision, a file hash, a release tag - and include anything that
+        changes the numbers, such as quantisation or the inference runtime: two
+        builds of the same weights that score differently are two versions.
+
+        Returns:
+            Version string, or ``""`` when the plugin cannot say (the host then
+            records ``unknown``, which never goes stale).
+        """
+        return ""
 
     def plugin_schema(self) -> dict[str, Any]:
         """Return the JSON-serialisable metadata dict for this plugin.
@@ -141,7 +166,7 @@ class TaggerPlugin(ABC):
         ):
             raise TypeError(
                 f"{type(self).__name__}.models must be a list of "
-                "{'name': ..., 'license': ...} dicts — one entry per model, "
+                "{'name': ..., 'license': ...} dicts - one entry per model, "
                 "a list even when there is only one"
             )
         return {
@@ -236,7 +261,21 @@ class TaggerPlugin(ABC):
         """Estimate VRAM (MB) required for *image_count* images.
 
         Used by workflows for sequential VRAM budgeting (max over plugins).
-        Return 0 for CPU-only models.
+        The description workflow asks the active description plugin before it
+        schedules a batch, with *image_count* already capped at
+        :meth:`effective_batch_size`.
+
+        **0 is ambiguous, and the host resolves it against you.** It is both
+        "this model needs no VRAM" and what this default returns for a plugin
+        that never overrode the method, and the two cannot be told apart. On a
+        CUDA engine a 0 is therefore read as *no answer*: the host charges the
+        Florence-2 figure instead, which is not your model's. That is a
+        deliberate over-charge for a CPU-only plugin (harmless - it may delay
+        your batch, never break it) and a serious **under**-charge for a GPU
+        model that returned 0 because it was not resident yet, which is the
+        OOM this budget exists to prevent. So: return a real figure whenever
+        your model will occupy the card, cold start included, and reserve 0
+        for a model that genuinely holds nothing on it.
 
         Args:
             image_count: Number of images to be processed.
@@ -303,6 +342,6 @@ class TaggerPlugin(ABC):
                 inference mid-batch.
 
         Returns:
-            ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            ``{path: caption_str}`` - value is ``None`` on per-image failure.
         """
         raise NotImplementedError(f"{self.name} does not support descriptions")

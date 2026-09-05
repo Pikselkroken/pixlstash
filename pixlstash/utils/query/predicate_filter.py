@@ -3,21 +3,21 @@
 PixlStash selects ``Picture`` rows by the same vocabulary (score range, smart-score
 bucket, resolution bucket, ComfyUI model/LoRA membership, tag include/exclude, hidden
 tags, tag-confidence thresholds, format, deleted/imported flags, face presence, path
-prefix, …) in several independent places.  Historically the WHERE-clause logic — down
-to byte-for-byte copies of raw ``text()`` ``EXISTS`` / ``json_each`` snippets — was
+prefix, …) in several independent places.  Historically the WHERE-clause logic - down
+to byte-for-byte copies of raw ``text()`` ``EXISTS`` / ``json_each`` snippets - was
 duplicated across all of them.
 
 ``PredicateFilter`` is the single source of truth for that logic.  It has three
 consumers:
 
-* **compile** — :meth:`predicates` / :meth:`apply` turn the declarative fields into
+* **compile** - :meth:`predicates` / :meth:`apply` turn the declarative fields into
   SQLAlchemy WHERE clauses (the raw ``text()`` snippets are moved here verbatim, bound
   params intact).
-* **match** — :meth:`matches` narrows the same predicate set to a single picture id.
+* **match** - :meth:`matches` narrows the same predicate set to a single picture id.
   This is exactly the set predicate restricted to one row; there is no separate
   Python-side re-implementation of the SQL semantics.  Staging auto-triage consumes
   this.
-* **parse** — :meth:`from_query_params` builds the filter from request query params
+* **parse** - :meth:`from_query_params` builds the filter from request query params
   (one parser, replacing the per-route copies).
 
 The name is ``PredicateFilter`` (not ``Filter``) because "filter" already means an
@@ -50,6 +50,14 @@ from pixlstash.utils.service.person_tags import (
 _FACE_REQUIRING_LOWER = sorted(FACE_REQUIRING_TAGS)
 _PERSON_LOWER = sorted(PERSON_TAGS)
 _OBJECT_META_LOWER = sorted(OBJECT_META_TAGS)
+
+# "This picture holds a face the extractor actually found", i.e. not the
+# ``face_index == -1`` sentinel it writes when it found none. One spelling,
+# because the stack-leader collapse and the row filter must agree exactly.
+_HAS_REAL_FACE_SQL = (
+    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id "
+    "AND face.face_index != -1)"
+)
 
 # The shared no-real-face test (only sentinel faces, ``face_index == -1``).
 _NO_REAL_FACE_SQL = (
@@ -130,7 +138,7 @@ class PredicateFilter(BaseModel):
 
     All fields are optional / defaulted.  The defaults describe the predicate used by
     a "give me the matching live pictures" query: non-deleted, no other restrictions
-    — which is exactly what single-picture :meth:`matches` wants for auto-triage.
+    - which is exactly what single-picture :meth:`matches` wants for auto-triage.
 
     Each builder site sets the subset of fields it needs and toggles the
     flag fields (``include_deleted`` / ``only_deleted`` / ``apply_deleted_filter`` /
@@ -165,7 +173,7 @@ class PredicateFilter(BaseModel):
     # it is the one value that leaves the ``picture`` table.  An unrecognised value
     # compiles to no predicate (same as ``face_filter``).
     stack_state: Optional[str] = None
-    # "Impossible tags" grid filters — live, computed from the picture's own tags/faces
+    # "Impossible tags" grid filters - live, computed from the picture's own tags/faces
     # (no precomputed queue). Recognised kinds: ``"no_face"`` (no detected face yet a
     # face-requiring tag) and ``"no_humans"`` (no face, tagged "no humans"/"scenery", yet
     # a person-tag). Multiple kinds are OR'd. Only ever narrows a scope-enforced listing.
@@ -218,12 +226,20 @@ class PredicateFilter(BaseModel):
             return [*not_null, area >= 16_000_000]
         return []
 
-    def _file_path_prefix_predicates(self) -> list[ColumnElement]:
+    def file_path_prefix_predicates(self) -> list[ColumnElement]:
+        """The "in this folder" clauses.
+
+        Public because the stack-leader collapse compiles them too: with a
+        folder scope the stack's global position-0 member can live in another
+        folder, so the collapse has to know which members are in scope, and a
+        second spelling of "in this folder" is how it gets that wrong.
+        """
+        target = Picture
         if self.file_path_prefix is None:
             return []
         if not self.file_path_prefix_children_only:
             # Sub-tree match used by the stats sidebar.
-            return [Picture.file_path.startswith(self.file_path_prefix)]
+            return [target.file_path.startswith(self.file_path_prefix)]
         # Normalise to always end with a path separator so that a prefix like
         # "/ref/photos" does not accidentally match "/ref/photos2/a.jpg".  Support
         # both Unix ("/") and Windows ("\") separators.
@@ -233,14 +249,32 @@ class PredicateFilter(BaseModel):
             prefix = self.file_path_prefix + os.sep
         # Escape LIKE special characters in the literal prefix.
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        # Only show direct children — exclude files that have another path separator
+        # Only show direct children - exclude files that have another path separator
         # after the prefix (i.e. files in sub-directories).  Check for both "/" and
         # "\" to handle all platforms.
         return [
-            Picture.file_path.like(escaped + "%", escape="\\"),
-            ~Picture.file_path.like(escaped + "%/%", escape="\\"),
-            ~Picture.file_path.like(escaped + "%\\\\%", escape="\\"),
+            target.file_path.like(escaped + "%", escape="\\"),
+            ~target.file_path.like(escaped + "%/%", escape="\\"),
+            ~target.file_path.like(escaped + "%\\\\%", escape="\\"),
         ]
+
+    def face_predicates(self) -> list[ColumnElement]:
+        """The "has a real face" / "has none" clauses.
+
+        Public and separate from :meth:`predicates` because the stack-leader
+        collapse needs the SAME clause: a face facet can hide a stack's global
+        position-0 member (the cover is often the tidy shot and the face is on a
+        sibling), so the collapse has to know which members are in scope, and a
+        second spelling of "has a face" is how it gets that wrong.
+
+        ``face_index == -1`` is the sentinel row the extractor writes for a
+        picture it found NO face in, so both directions exclude it.
+        """
+        if self.face_filter == "with_face":
+            return [text(_HAS_REAL_FACE_SQL)]
+        if self.face_filter == "without_face":
+            return [text(f"NOT {_HAS_REAL_FACE_SQL}")]
+        return []
 
     def predicates(self) -> list[ColumnElement]:
         """Compile this filter to a list of SQLAlchemy WHERE clauses.
@@ -261,7 +295,7 @@ class PredicateFilter(BaseModel):
         if not self.include_unimported:
             preds.append(Picture.imported_at.is_not(None))
 
-        preds.extend(self._file_path_prefix_predicates())
+        preds.extend(self.file_path_prefix_predicates())
 
         if self.import_source_folder:
             preds.append(Picture.import_source_folder == self.import_source_folder)
@@ -358,7 +392,7 @@ class PredicateFilter(BaseModel):
 
         # ComfyUI membership: AND of one EXISTS per model/LoRA (used by
         # semantic_search / listing-candidate / grouped-misc sites).  ``find()`` does
-        # not set these fields — it applies its own OR + stack-expansion variant.
+        # not set these fields - it applies its own OR + stack-expansion variant.
         if self.comfyui_models_filter:
             for i, m in enumerate(self.comfyui_models_filter):
                 preds.append(
@@ -374,18 +408,7 @@ class PredicateFilter(BaseModel):
                     ).bindparams(**{f"clf_{i}": m})
                 )
 
-        if self.face_filter == "with_face":
-            preds.append(
-                text(
-                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
-        elif self.face_filter == "without_face":
-            preds.append(
-                text(
-                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
-                )
-            )
+        preds.extend(self.face_predicates())
 
         if self.stack_state in ("stacked", "unstacked"):
             # Both halves ask "is this picture in a stack that is still a stack",
@@ -466,7 +489,7 @@ class PredicateFilter(BaseModel):
     def matches(self, session, picture_id: int) -> bool:
         """Return ``True`` if the single picture ``picture_id`` satisfies this filter.
 
-        This is the set predicate narrowed to one id — the hook consumed by staging
+        This is the set predicate narrowed to one id - the hook consumed by staging
         auto-triage.  There is no separate Python-side evaluator; the SQL semantics
         are the same as the set queries.
         """
@@ -481,7 +504,7 @@ class PredicateFilter(BaseModel):
 
         Covers the vocabulary shared by the picture-listing routes.  Membership
         params (``set``/``character``/``project``) and pagination/sort are *not*
-        read here — they are resolved separately by the caller.  Unspecified params
+        read here - they are resolved separately by the caller.  Unspecified params
         simply leave their field at the default, so a route that never sends a given
         param is unaffected.
         """

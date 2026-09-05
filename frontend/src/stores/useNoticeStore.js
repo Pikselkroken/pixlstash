@@ -8,14 +8,14 @@ import { computed, ref } from "vue";
 // The visible host is `components/widgets/NoticeHost.vue`, built to
 // `docs/design/notice-surface.md`. This file implements §9 of that spec:
 //
-//   §9.1 coalescing key   — repeats collapse into one card with a ×N count
-//   §9.2 cap + pending    — only `maxVisible` render; timers start on PROMOTION,
+//   §9.1 coalescing key   - repeats collapse into one card with a ×N count
+//   §9.2 cap + pending    - only `maxVisible` render; timers start on PROMOTION,
 //                           never at push time, so a queued notice can't expire
 //                           unseen (the very bug this store exists to prevent)
-//   §9.3 pause/resume     — WCAG 2.2.1, with remaining-time bookkeeping
-//   §9.4 action contract  — invoking an action dismisses unless it returns
+//   §9.3 pause/resume     - WCAG 2.2.1, with remaining-time bookkeeping
+//   §9.4 action contract  - invoking an action dismisses unless it returns
 //                           false; any notice with an action is sticky
-//   §9.5 empty text       — refused and logged, not rendered as a blank card
+//   §9.5 empty text       - refused and logged, not rendered as a blank card
 //
 // Everything the store deliberately does NOT grow: a title, a second action, or
 // per-notice styling. Those break the spec's one-sentence rule and turn the
@@ -36,7 +36,7 @@ export const DEFAULT_TIMEOUTS = {
 // wall. The host drops it to 2 below 600px via `setMaxVisible`.
 const DEFAULT_MAX_VISIBLE = 3;
 
-// Spec §6 rule 2 — reading-time floor. A 110-character success message does not
+// Spec §6 rule 2 - reading-time floor. A 110-character success message does not
 // get 3 seconds.
 const READ_TIME_BASE_MS = 2000;
 const READ_TIME_PER_CHAR_MS = 60;
@@ -52,7 +52,7 @@ const READ_TIME_CEILING_MS = 12000;
  * @param {boolean} options.hasAction - an action makes a notice sticky by DEFAULT.
  * @param {boolean} options.explicit - `baseTimeout` came from the caller, not from
  *   the level default. An explicit window outranks the action rule and is not
- *   capped by the reading-time ceiling — see below.
+ *   capped by the reading-time ceiling - see below.
  * @returns {number} milliseconds, or 0 for sticky.
  */
 export function resolveTimeout({
@@ -71,7 +71,7 @@ export function resolveTimeout({
   if (hasAction && !explicit) return 0;
   if (!baseTimeout || baseTimeout <= 0) return 0;
   // The ceiling caps the COMPUTED reading time. It must not cap a window the
-  // caller chose on purpose — that is how a deliberate 30s instruction card
+  // caller chose on purpose - that is how a deliberate 30s instruction card
   // silently became 12s.
   const readingTime = Math.min(
     READ_TIME_CEILING_MS,
@@ -92,7 +92,7 @@ export const useNoticeStore = defineStore("notice", () => {
   // Global pause (document.hidden). Applied on top of per-notice pauses.
   const globallyPaused = ref(false);
 
-  /** The notices the host renders — newest last (nearest the bottom edge). */
+  /** The notices the host renders - newest last (nearest the bottom edge). */
   const visible = computed(() => notices.value.slice(0, maxVisible.value));
   /** Notices waiting for a slot. Their timers have not started. */
   const pending = computed(() => notices.value.slice(maxVisible.value));
@@ -114,7 +114,7 @@ export const useNoticeStore = defineStore("notice", () => {
   function startTimer(id) {
     const notice = notices.value.find((n) => n.id === id);
     if (!notice || notice.timeout <= 0) return;
-    if (!isVisible(id)) return; // §9.2 — never run a timer off-screen.
+    if (!isVisible(id)) return; // §9.2 - never run a timer off-screen.
     const entry = timers.get(id) ?? {
       handle: null,
       remaining: notice.timeout,
@@ -188,7 +188,7 @@ export const useNoticeStore = defineStore("notice", () => {
    * The demotion half matters because the cap is not constant: `NoticeHost`
    * drops it from 3 to 2 when the viewport crosses 600px, so a resize or a
    * tablet rotation pushes a visible notice back into the queue. Leaving its
-   * timer running would expire it off-screen — §9.2's bug in the other
+   * timer running would expire it off-screen - §9.2's bug in the other
    * direction. The window is RESET rather than banked because a notice that was
    * pulled off-screen part-way through was never actually read.
    */
@@ -230,7 +230,7 @@ export const useNoticeStore = defineStore("notice", () => {
   /**
    * Spec §5 "errors outrank": an error is never queued behind a success.
    *
-   * Appending the error and freeing a slot does NOT achieve that — `notices`
+   * Appending the error and freeing a slot does NOT achieve that - `notices`
    * holds the pending queue too, so the freed slot goes to the next notice in
    * push order while the error, appended last, stays queued. The error has to be
    * placed INTO the visible window directly.
@@ -238,7 +238,7 @@ export const useNoticeStore = defineStore("notice", () => {
    * The displaced notice is DEMOTED to the front of the pending queue, not
    * dismissed. Spec §5's wording is "the oldest non-error is dismissed
    * immediately to make room", but destroying a message is not what buys the
-   * room here — the insert does. Demotion satisfies the same rule (the error is
+   * room here - the insert does. Demotion satisfies the same rule (the error is
    * visible now) while honouring §5's other half, "overflow waits in the store".
    * Losing a bystander message would be a second, quieter version of exactly the
    * bug this surface exists to fix.
@@ -252,7 +252,7 @@ export const useNoticeStore = defineStore("notice", () => {
       (n, i) => i < cap && n.level !== "error",
     );
     // The visible window is all errors: this one waits its turn behind them,
-    // which §5 permits — the rule is that an error never queues behind a
+    // which §5 permits - the rule is that an error never queues behind a
     // *success*.
     if (idx === -1) return false;
 
@@ -291,7 +291,7 @@ export const useNoticeStore = defineStore("notice", () => {
     const safeLevel = LEVELS.has(level) ? level : "info";
     const message = String(text ?? "").trim();
     if (!message) {
-      // §9.5 — a blank card tells the user nothing and hides the real bug at
+      // §9.5 - a blank card tells the user nothing and hides the real bug at
       // the call site, so refuse it loudly rather than render it.
       console.warn("useNoticeStore.push() refused a notice with empty text.", {
         level: safeLevel,
@@ -310,7 +310,7 @@ export const useNoticeStore = defineStore("notice", () => {
       explicit,
     });
 
-    // §9.1 — coalesce onto a live notice with the same key.
+    // §9.1 - coalesce onto a live notice with the same key.
     if (key != null) {
       const existing = notices.value.find((n) => n.key === key);
       if (existing) {
@@ -325,7 +325,7 @@ export const useNoticeStore = defineStore("notice", () => {
         // The per-notice pause MUST survive this. `clearTimer` drops the whole
         // entry including `paused`, so a repeat arriving while the cursor is on
         // the card used to hand it a fresh countdown and dismiss it out from
-        // under the user — WCAG 2.2.1. Carry the flag across. (The global
+        // under the user - WCAG 2.2.1. Carry the flag across. (The global
         // `document.hidden` pause was never affected: `startTimer` re-checks
         // `globallyPaused` independently.)
         const wasPaused = timers.get(existing.id)?.paused === true;
@@ -365,7 +365,7 @@ export const useNoticeStore = defineStore("notice", () => {
     return id;
   }
 
-  // Level convenience wrappers — the common call shape at adoption sites.
+  // Level convenience wrappers - the common call shape at adoption sites.
   const info = (text, opts = {}) => push({ ...opts, level: "info", text });
   const success = (text, opts = {}) =>
     push({ ...opts, level: "success", text });
@@ -383,7 +383,7 @@ export const useNoticeStore = defineStore("notice", () => {
   }
 
   /**
-   * Dismiss every live notice carrying `key` (§9.6 — scoped notices).
+   * Dismiss every live notice carrying `key` (§9.6 - scoped notices).
    *
    * Coalescing already guarantees at most one live notice per key, but a scope
    * usually owns a small FAMILY of keys (a card and its follow-up), and the
@@ -428,7 +428,7 @@ export const useNoticeStore = defineStore("notice", () => {
     notices.value = [];
   }
 
-  /** Host reports its cap (3, or 2 below 600px — spec §5). */
+  /** Host reports its cap (3, or 2 below 600px - spec §5). */
   function setMaxVisible(value) {
     const next = Number(value);
     if (!Number.isFinite(next) || next < 1) return;

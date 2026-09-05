@@ -108,7 +108,7 @@
 /* `--locked` deliberately has no tint: its icon inherits `on-dark-surface`, the
    same as the shipped `.thumbnail-lock-badge`, so the two lock affordances read
    as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
-   set") carry the difference from `--protected` — no colour needed. */
+   set") carry the difference from `--protected` - no colour needed. */
 
 /* Last-day emphasis. The tint is on the ICON only: status-coloured text at 11px
    on a translucent scrim over an unknown photo cannot be proven to clear the
@@ -153,7 +153,7 @@
   color: rgb(var(--v-theme-accent)) !important;
 }
 
-/* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
+/* Lock badge: styled as a sibling of the problem indicator - no scrim, zero
    padding, same left edge and inset. See the shared
    `.penalised-tag-indicator, .thumbnail-lock-badge` rules
    below, which it joins rather than restating. */
@@ -175,6 +175,11 @@
 
 
 .face-bbox-label {
+  /* Anchor to the top of the box - a <button> would otherwise centre it. */
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 100%;
   font-size: 0.7em;
   background-color: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));
@@ -191,7 +196,7 @@
   --selbar-height: 34px;
   /* Container context for the floating SelectionBar's `@container selbar`
      query. The bar itself is `width: max-content` and cannot host the
-     container (inline-size containment collapses the pill — see the note in
+     container (inline-size containment collapses the pill - see the note in
      SelectionBar.vue), so the query tracks the available grid-content width
      here, on the bar's `position: relative` containing block. */
   container: selbar / inline-size;
@@ -345,7 +350,7 @@
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  /* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue */
+  /* Shared subtle scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue */
   scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
   scrollbar-width: thin;
 }
@@ -421,7 +426,7 @@
    layout. Every card carries an exact inline width/height from the packed
    model (useJustifiedLayout), and the inline column/row gap on the container
    mirrors the packing gap, so flex line breaks land exactly on the packed row
-   boundaries — the invariant the virtual-scroll spacer arithmetic relies on. */
+   boundaries - the invariant the virtual-scroll spacer arithmetic relies on. */
 .image-grid.image-grid--justified {
   display: flex;
   flex-wrap: wrap;
@@ -671,8 +676,8 @@
    toward the page, and a diagonal hatch covers it.
 
    The veil is a `background`, not a scrim: it fades the tile toward the grid
-   canvas in BOTH themes off one token. The hatch is two-tone — `on-background`
-   against `background` at the same alpha — so its stripes contrast with EACH
+   canvas in BOTH themes off one token. The hatch is two-tone - `on-background`
+   against `background` at the same alpha - so its stripes contrast with EACH
    OTHER by a fixed delta whatever photo is underneath; a single-tone hatch
    bottoms out near 2.1:1 on a dark photo in light theme. Both tokens flip with
    the Vuetify theme class, so there is no media query and no theme override.
@@ -681,11 +686,11 @@
    already taken by `.touch-select-mode` (which would make the ghost vanish in
    touch-select mode) and its box overshoots the thumbnail by the card padding
    and the whole info row. This node is exactly the image box in square,
-   justified and cropped modes, and it is otherwise unused — zero new DOM. */
+   justified and cropped modes, and it is otherwise unused - zero new DOM. */
 .image-card--ghost .thumbnail-img,
 .image-card--ghost .thumbnail-placeholder {
   /* The same desaturation the drag source uses: one value, one meaning in this
-     grid — "this tile is on its way somewhere else". The hatch and the
+     grid - "this tile is on its way somewhere else". The hatch and the
      persistence are what tell the two apart. The transition is declared here
      rather than on the shared `.thumbnail-img` rule to keep the diff local; the
      consequence is that an undo snaps the tile back at full strength, which is
@@ -853,7 +858,7 @@
 
 /* The lock badge joins these two so the three read as siblings in the top-left
    column: same flex centring, same `padding: 0` (so their icons share one left
-   edge and inset), and — for the lock and problem indicators — no chrome at all.
+   edge and inset), and - for the lock and problem indicators - no chrome at all.
    Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
    track each other at every column count. */
 .penalised-tag-indicator,
@@ -1113,8 +1118,8 @@
 }
 
 /* ── In-flight rotate ───────────────────────────────────────────────────────
-   A rotate lands as ONE visual change — the packed cell's shape and the bitmap
-   inside it change in the same frame — which means it is deliberately NOT
+   A rotate lands as ONE visual change - the packed cell's shape and the bitmap
+   inside it change in the same frame - which means it is deliberately NOT
    instant: `applyRotatedCards` decodes the new thumbnail before committing
    either. This is what fills that beat, so an unconfirmed, dialog-less gesture
    is visibly heard.

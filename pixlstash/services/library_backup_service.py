@@ -45,7 +45,7 @@ from tqdm import tqdm
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.system_utils import space_shortfall
-from pixlstash.services.library_switch_service import known_vault_revisions
+from pixlstash.hub.bootstrap import known_vault_revisions, newer_library_message
 from pixlstash.services.portable_identity import (
     PortableIdentityScrubError,
     sanitize_historical_snapshots,
@@ -65,7 +65,7 @@ def progress_disabled() -> bool:
     wraps ``file`` in ``DisableOnWriteError`` *before* testing ``isatty``, so
     what it actually does depends on that wrapper forwarding the call. Deciding
     it from ``sys.stderr`` directly is one line, says what it means, and is
-    testable — which matters because the failure mode is silent either way: a
+    testable - which matters because the failure mode is silent either way: a
     bar that never draws, or a cron log full of redrawn ones.
     """
     return not (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
@@ -77,7 +77,7 @@ BACKUP_FILE_MODE = 0o600
 # What a backup is called. zstd rather than gzip: it decompresses several times
 # faster at a better ratio, which is what a restore of a large library feels.
 # `restore` identifies an archive by its magic bytes rather than its name, so a
-# renamed file still works — the suffix is for the person reading the folder.
+# renamed file still works - the suffix is for the person reading the folder.
 ARCHIVE_SUFFIX = ".tar.zst"
 UNCOMPRESSED_SUFFIX = ".tar"
 
@@ -127,7 +127,7 @@ def _open_guarded_source(
 ) -> tuple[sqlite3.Connection, TrustedSQLiteLocation]:
     try:
         # `private=True` means the hub. Its trusted_root is the hub path's own
-        # parent — tautological containment that exists only so a private open
+        # parent - tautological containment that exists only so a private open
         # cannot forget to declare it (see trusted_sqlite's "Windows, and what
         # this cannot check").
         guard = TrustedSQLiteLocation.open(
@@ -176,11 +176,10 @@ def _validate_vault_connection(
         required_tables={"picture", "alembic_version"},
     )
     rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
-    unknown = [row[0] for row in rows if row[0] not in known_vault_revisions()]
+    known = known_vault_revisions()
+    unknown = [row[0] for row in rows if row[0] and row[0] not in known]
     if unknown:
-        raise BackupError(
-            f"{label} has an unsupported schema revision: {', '.join(unknown)}."
-        )
+        raise BackupError(newer_library_message(unknown, library=label))
     if library.vault_uuid is not None:
         try:
             row = conn.execute(
@@ -425,7 +424,7 @@ def create_backup(
             on JPEG and PNG, so a large image set may prefer it off.
         tool_version: Recorded in the manifest.
         confirm: Asked, with a message, when the destination looks too small to
-            hold the archive. ``None`` declines — a scripted caller gets a
+            hold the archive. ``None`` declines - a scripted caller gets a
             refusal rather than a prompt it cannot answer.
 
     Returns:
@@ -572,7 +571,7 @@ def _resolve_destination(library: Library, destination: str, compress: bool) -> 
     explicit filename did not: ``backup lib ~/backups/monday`` wrote a file
     called ``monday`` with nothing to say what it was, and a year later neither
     the user nor ``file`` can tell it from any other blob. The suffix is not
-    decoration here — ``restore`` sniffs the magic bytes, but the *human*
+    decoration here - ``restore`` sniffs the magic bytes, but the *human*
     picking a file out of a folder has only the name.
 
     So the correct suffix is applied rather than assumed: an already-correct one

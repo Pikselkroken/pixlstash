@@ -24,6 +24,7 @@ from pixlstash.stacking import (
     get_or_create_stack_for_picture,
     parse_stack_tags_from_filename,
 )
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.tasks.base_task import BaseTask
 
 
@@ -114,6 +115,12 @@ class WatchFolderImportTask(BaseTask):
                     image_root_path=self._db.image_root,
                     source_file_path=file_path,
                     pixel_sha=pixel_sha,
+                    # Placement on write (v1.11 Phase 4b). A watch folder knows
+                    # nothing about the picture's projects or people, so this is
+                    # the unfiled folder in a laid-out library and nothing at
+                    # all in one without a layout. The picture leaves the moment
+                    # something files it.
+                    subfolder=resolve_placement(self._db),
                 )
                 pic.imported_at = datetime.now()
                 import_source_folder = candidate.get("import_source_folder")

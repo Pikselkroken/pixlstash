@@ -7,7 +7,10 @@ from pixlstash.db_models.tag import (
     TAG_SENTINEL_ESCAPE_CHAR,
     Tag,
 )
-from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.db_models.tag_prediction import (
+    PLUGIN_VERSION_SEPARATOR,
+    TagPrediction,
+)
 
 PENALISED_TAG_SET = {t.strip().lower() for t in DEFAULT_SMART_SCORE_PENALIZED_TAGS}
 
@@ -16,7 +19,7 @@ def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None
     """Recompute and persist ``anomaly_tag_uncertainty`` on a Picture.
 
     The score is computed dynamically from the model's raw confidence scores and
-    the *current* ``Tag`` rows — it does not rely on ``TagPrediction.status`` so
+    the *current* ``Tag`` rows - it does not rely on ``TagPrediction.status`` so
     it stays correct whether tags were changed via the prediction workflow or
     edited directly.
 
@@ -33,9 +36,14 @@ def recompute_anomaly_tag_uncertainty(session: Session, picture_id: int) -> None
     Call this **after** any ``session.flush()`` that modifies ``Tag`` rows, and
     **before** ``session.commit()``, so the read sees the latest state.
     """
+    # Built-in tagger rows only (see
+    # :func:`~pixlstash.db_models.tag_prediction.feeds_anomaly_score`): raw
+    # confidences are not comparable across models, so letting a tagger
+    # plugin's rows in here would move the smart score with no user action.
     predictions = session.exec(
         select(TagPrediction.tag, TagPrediction.confidence).where(
-            TagPrediction.picture_id == picture_id
+            TagPrediction.picture_id == picture_id,
+            ~TagPrediction.model_version.contains(PLUGIN_VERSION_SEPARATOR),
         )
     ).all()
 

@@ -34,6 +34,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.services import import_dedup_service
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
@@ -388,7 +389,7 @@ def graph_has_pixlstash_nodes(workflow: dict) -> bool:
     Every class in the ComfyUI-PixlStash pack is prefixed, so the prefix is the
     rule: a node added to the pack later is covered without editing this.
 
-    Such a graph is a cycle — PixlStash runs ComfyUI, which calls PixlStash —
+    Such a graph is a cycle - PixlStash runs ComfyUI, which calls PixlStash -
     and it carries **frozen ids**: the loaders serialise a choice as
     ``"<name> #<id>"``, so a replayed file re-applies whatever project, set,
     character or picture id was current when it was authored. That is fine for a
@@ -488,7 +489,7 @@ def _extract_pixlstash_picture_ids(
 
     The empty list is meaningful and distinct from None: the node ran but every
     image it uploaded was a duplicate of one already in the vault, so there is
-    nothing new to stack — and nothing to gain from downloading its previews.
+    nothing new to stack - and nothing to gain from downloading its previews.
     """
     ids: list[int] | None = None
     for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
@@ -662,6 +663,13 @@ def _import_comfyui_outputs(
         candidates, fingerprints, server.vault.image_root
     )
 
+    # Placement on write (v1.11 Phase 4b). `None` whenever `output_dir` is set:
+    # an edit written beside its original in a reference folder is already where
+    # the owner's own tree put it. A generation with no project or set yet lands
+    # in the unfiled folder and is filed by the engine one debounce after the
+    # assignment below lands.
+    subfolder = resolve_placement(server.vault.db, output_dir)
+
     new_picture_map = {}
     for (img_bytes, ext), fingerprint in zip(image_entries, fingerprints):
         if fingerprint in existing_map or fingerprint in new_picture_map:
@@ -678,6 +686,7 @@ def _import_comfyui_outputs(
             pixel_sha=sampled_sha,
             output_dir=output_dir,
             reference_folder_id=reference_folder_id,
+            subfolder=subfolder,
         )
     new_pictures = list(new_picture_map.values())
 
@@ -779,8 +788,8 @@ def _copy_set_and_project_assignments(
         return
 
     def copy_task(session):
-        # A locked set's membership cannot change. This is a *propagation* path —
-        # the user asked for a generation, not to edit the set — so a locked
+        # A locked set's membership cannot change. This is a *propagation* path -
+        # the user asked for a generation, not to edit the set - so a locked
         # source set is skipped (and logged) rather than failing the whole
         # generation and discarding images already imported.
         source_set_ids = drop_locked_set_ids(
@@ -973,7 +982,7 @@ def _process_comfyui_outputs(
     byte-for-byte:
 
     - On success with newly imported pictures it emits exactly ONE
-      ``EventType.PICTURE_IMPORTED`` event — never a second event, and none for
+      ``EventType.PICTURE_IMPORTED`` event - never a second event, and none for
       already-existing re-imports (``duplicate_ids`` are intentionally ignored;
       they are already in the grid and need no event).
     - The payload carries ``source: "ui"`` and ``change_kind: "added"``.
@@ -1081,7 +1090,7 @@ def _process_comfyui_outputs(
         )
         if pixlstash_ids:
             # A PixlStash saver node uploaded these itself, so there is nothing
-            # left to import — but everything below (stacking, source lineage,
+            # left to import - but everything below (stacking, source lineage,
             # set/project inheritance, the single import event) still has to
             # run, and it needs the ids the node reported.
             #

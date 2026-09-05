@@ -7,7 +7,7 @@ Covers the two-phase flow end to end:
   on the shared task runner; progress is polled via the staging status endpoint.
 
 Also covers both authz directions on the owner-only mutating routes: a READ
-scoped token is denied (403) and the owner is allowed (200 / works) — over-blocking
+scoped token is denied (403) and the owner is allowed (200 / works) - over-blocking
 the owner would be its own regression.
 """
 
@@ -94,7 +94,8 @@ def owner_server():
         with Server(config_path) as srv:
             client = TestClient(srv.api, raise_server_exceptions=True)
             r = client.post(
-                f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
             )
             assert r.status_code == 200, r.text
             yield srv, client
@@ -229,7 +230,7 @@ def test_staging_status_unknown_session_404(owner_server):
 
 
 # ---------------------------------------------------------------------------
-# Authz — both directions on the owner-only mutating routes
+# Authz - both directions on the owner-only mutating routes
 # ---------------------------------------------------------------------------
 
 
@@ -305,13 +306,13 @@ def test_scrapheap_delete_preview_denied_for_read_token_allowed_for_owner(owner_
         f"got {r.status_code}: {r.text}"
     )
 
-    # The owner is not over-blocked — an empty scrapheap previews as zero counts.
+    # The owner is not over-blocked - an empty scrapheap previews as zero counts.
     r = owner.post(f"{API}/pictures/scrapheap/delete-preview", json={})
     assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------
-# Addition 1 — server-side set / character association
+# Addition 1 - server-side set / character association
 # ---------------------------------------------------------------------------
 
 
@@ -404,7 +405,7 @@ def test_open_with_nonexistent_character_errors(owner_server):
 
 
 # ---------------------------------------------------------------------------
-# Addition 2 — zip archives + .txt caption sidecars
+# Addition 2 - zip archives + .txt caption sidecars
 # ---------------------------------------------------------------------------
 
 
@@ -494,7 +495,7 @@ def test_staging_orphan_sidecar_is_skipped_gracefully(owner_server):
 
 
 # ---------------------------------------------------------------------------
-# Round 3 — project_id fail-fast (H2) and the staging-session reaper (H1)
+# Round 3 - project_id fail-fast (H2) and the staging-session reaper (H1)
 # ---------------------------------------------------------------------------
 
 
@@ -508,7 +509,7 @@ def test_direct_import_with_nonexistent_project_errors(owner_server):
     """The direct multipart endpoint fails fast on a stale project id too.
 
     It used to skip the check the staging path runs, so the id only failed at
-    the membership INSERT — after every file had been imported and committed.
+    the membership INSERT - after every file had been imported and committed.
     The caller (the ComfyUI saver node, which stores the project as
     "<name> #<id>" and so replays whatever id was current when the workflow was
     authored) was told the import failed while the pictures were already in the

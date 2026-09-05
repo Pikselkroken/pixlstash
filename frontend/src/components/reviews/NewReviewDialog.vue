@@ -56,7 +56,7 @@
             type="button"
             :title="
               openTags.has(h.tag)
-                ? 'Already open — jump to the session'
+                ? 'Already open - jump to the session'
                 : undefined
             "
             @click="pickTag(h.tag)"
@@ -89,7 +89,7 @@
              <select>'s <option>s can't render the lock icon a locked set needs.
              Locked sets render greyed, with mdi-lock-outline, and are not
              selectable (their pictures are read-only, so they can't be reviewed
-             — the backend also 423s a locked set_id as a backstop). -->
+             - the backend also 423s a locked set_id as a backstop). -->
         <div class="rs-dialog-scope">
           <span id="rs-set-label" class="rs-dialog-label">Set</span>
           <div
@@ -185,7 +185,7 @@
         </label>
       </div>
       <p class="rs-dialog-frozen">
-        Scope is frozen when the review is created — a different scope is a
+        Scope is frozen when the review is created - a different scope is a
         different review.
       </p>
 
@@ -203,7 +203,7 @@
           <span
             >Include suspects handled in earlier reviews
             <span class="rs-dialog-include-note"
-              >(normally left out — this re-surfaces them)</span
+              >(normally left out - this re-surfaces them)</span
             ></span
           >
         </label>
@@ -237,7 +237,7 @@
 </template>
 
 <script setup>
-// New-review dialog: explicit creation. Open tags stay ENABLED — clicking one
+// New-review dialog: explicit creation. Open tags stay ENABLED - clicking one
 // jumps to the open session instead of dead-ending on a disabled chip.
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -293,7 +293,7 @@ const visible = computed(() => {
 // A custom listbox (rather than a native <select>) so a locked set can render a
 // lock icon and a greyed, non-selectable row. `store.sets` carries `locked`
 // straight from the API (PictureSetResponse.locked via safe_model_dict), so the
-// dialog reads set-level lock state directly — no extra lookup store needed.
+// dialog reads set-level lock state directly - no extra lookup store needed.
 const setMenuOpen = ref(false);
 const activeSetIndex = ref(0);
 const setBoxRef = ref(null);
@@ -317,7 +317,7 @@ const selectedSetLabel = computed(
 // `initialScope` can prefill a locked setId straight into `setId`, bypassing the
 // click-time guard in `selectSet()`. Without this the trigger would show the
 // locked set as an ordinary selection and the user would only discover the block
-// on submit — so the trigger mirrors the locked row's own treatment.
+// on submit - so the trigger mirrors the locked row's own treatment.
 const selectedSetLocked = computed(
   () => setOptions.value.find((o) => o.id === setId.value)?.locked ?? false,
 );
@@ -334,7 +334,7 @@ function wrapIndex(i) {
 
 function openSetMenu() {
   if (setMenuOpen.value) return;
-  // Land on the current selection (even when locked — it can be prefilled from
+  // Land on the current selection (even when locked - it can be prefilled from
   // the launch context), else the first row.
   const sel = setOptions.value.findIndex((o) => o.id === setId.value);
   activeSetIndex.value = sel >= 0 ? sel : 0;
@@ -578,7 +578,7 @@ async function create() {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-/* Set-scope listbox — trigger mirrors the sibling native <select>s so the three
+/* Set-scope listbox - trigger mirrors the sibling native <select>s so the three
    scope controls line up; the menu adds the lock affordance a <select> can't. */
 .rs-listbox {
   position: relative;
@@ -599,7 +599,7 @@ async function create() {
 }
 /* A locked set can be prefilled from the launch context, so the trigger takes
    the SAME greyed treatment as `.rs-listbox-option--locked` (not the lighter
-   informational `.rs-rail-scope-lock` badge) — it is a blocked selection, not a
+   informational `.rs-rail-scope-lock` badge) - it is a blocked selection, not a
    note. */
 .rs-listbox-trigger--locked {
   color: rgba(var(--v-theme-on-dark-surface), 0.38);

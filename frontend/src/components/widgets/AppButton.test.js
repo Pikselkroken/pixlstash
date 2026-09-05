@@ -1,4 +1,4 @@
-// AppButton — the pending (busy) state added for #647.
+// AppButton - the pending (busy) state added for #647.
 //
 // A submit button that stays live while its create request is in flight lets a
 // double-click post twice. `loading` is the shared visual half of the fix
@@ -65,7 +65,7 @@ describe("AppButton loading state", () => {
 });
 
 // A natively-disabled button cannot hold focus, so going pending drops focus to
-// <body>, stranding a keyboard user far from where they were — permanently if
+// <body>, stranding a keyboard user far from where they were - permanently if
 // the request fails and the form stays open.
 describe("AppButton focus continuity", () => {
   it("takes focus back when the request settles", async () => {
@@ -83,7 +83,7 @@ describe("AppButton focus continuity", () => {
 
     // The watcher runs pre-flush, so it records "this button had focus" before
     // the DOM is disabled. jsdom does not drop focus off a disabled element the
-    // way a browser does, so the drop — the whole reason this exists — is
+    // way a browser does, so the drop - the whole reason this exists - is
     // emulated by moving focus away.
     await w.setProps({ loading: true });
     elsewhere.focus();

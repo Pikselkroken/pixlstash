@@ -1,3 +1,58 @@
+# [1.11.0] [Security:High]
+
+- Settings → Libraries: add, rename and stop using libraries without the
+  command line. Adding a folder works out what it is: an existing library, a
+  folder of pictures, or an empty one. Nothing in the folder is moved or copied,
+  and stopping using a library deletes nothing.
+- Two libraries can no longer share a name.
+- Library management is offered on the machine running PixlStash and over your
+  local network or Tailscale, not from further away.
+- The empty-library screen offers three ways to fill it, leading with pointing
+  PixlStash at a folder you already have.
+- Folder layouts: give a library a layout such as Project / Person or Set and
+  new pictures are filed accordingly. Choosing a layout moves nothing that
+  already exists. "Move to match" is offered, counted first, and undoable as one
+  batch. A picture moves only when its folder stops being true, never when a
+  second project or person is added. Folders you made underneath are kept,
+  renames move no files, and a folder that does not match the layout is left
+  alone.
+- Thumbnails no longer sit next to your pictures. They live in a hidden
+  `.pixlstash-thumbnails` folder at the library root; existing ones move there
+  the first time they are needed.
+- The desktop app's first run asks which library to open before anything else.
+  The telemetry question moves there too.
+- Tagger plugins can now produce tag predictions, not only the built-in tagger.
+- Export a selection to a folder on the machine running PixlStash, sidecars
+  included, and the folder opens when it is done. The destination must be
+  empty, so an export never writes over anything you already have there.
+- Writing a tagger or image plugin no longer starts with the git legwork.
+  `pixlstash-cli plugins create` asks what you are building and leaves a
+  checkout with the folder, the template and the branch ready;
+  `pixlstash-cli plugins submit` runs the repository's own checks and opens the pull request.
+- Fixed: sorting by likeness to a person took seconds per page on a large
+  library, and the likeness pill had been missing from the grid since 1.10.0.
+- Fixed: a library last opened by a newer PixlStash is explained in plain words,
+  with a link to the latest release.
+- Fixed: a library database that will not open offers to start over instead of
+  crashing at startup. The old file is renamed, never deleted.
+- Fixed: the desktop GPU overlay could shadow the app's own dependencies on
+  Windows and silently fall back to CPU.
+- Fixed: the Docker image refused to start over folder permissions. Loose
+  permissions now warn instead of refusing to start.
+- Fixed: regenerating descriptions ran the captioner twice per picture, left
+  the task-manager count stuck, blanked the grid, and could leave pictures
+  without a description. The VRAM readout on Windows no longer shows 0.
+- Fixed: the desktop runtime's device choice was written into
+  `server-config.json`, so a boot on the CPU runtime made later launches run
+  on CPU.
+- Fixed: the "View changed externally" pill kept reappearing for as long as a
+  tagging run lasted.
+- Fixed: Collapse all could re-expand stacks while a refresh was in flight.
+- Fixed: the Libraries CLI dialog did not list the backup command.
+- Fixed: the macOS DMG volume size.
+- Dependency updates: transformers 5.12.1 (a high-severity path traversal in a
+  writer that PixlStash does not call), xmldom, humanfs, fast-uri.
+
 # [1.10.2]
 
 - Fix scrolling of plugin list to avoid the whole pane having a horisonstal scrollbar

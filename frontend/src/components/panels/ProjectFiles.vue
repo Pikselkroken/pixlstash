@@ -699,7 +699,7 @@ onMounted(() => {
 
 /* Pending is not disabled: the spinner is the only thing telling the user their
    click landed, so it must not fade with the rest (visual-language.md §11). The
-   spin also survives reduced motion — a frozen mdi-loading is a static broken
+   spin also survives reduced motion - a frozen mdi-loading is a static broken
    ring, and @mdi/font puts the animation on ::before, which is what the global
    reset in design-tokens.css zeroes. */
 .pf-url-save:disabled[aria-busy="true"] {

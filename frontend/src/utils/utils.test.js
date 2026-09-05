@@ -92,7 +92,7 @@ describe('formatUserDay', () => {
 
   it('carries no clock in the locale format either', () => {
     // `locale` delegates to the BROWSER's locale, so there is no string to pin
-    // — and comparing against `Intl.DateTimeFormat` with the same options would
+    // - and comparing against `Intl.DateTimeFormat` with the same options would
     // be comparing the implementation with itself. What is left are two
     // properties, both stated so that no locale can fail them for the wrong
     // reason: `\p{Nd}` rather than `\d`, because `\d` is ASCII-only and would

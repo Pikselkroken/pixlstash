@@ -1,20 +1,20 @@
 """Relocating the InsightFace packs: the setting, the move, and what refuses it.
 
-The packs were listed on the shelf as ``movable='root_only'`` — "relocates as a
-whole" — before anything could actually relocate them (#902, then #906). Two
+The packs were listed on the shelf as ``movable='root_only'`` - "relocates as a
+whole" - before anything could actually relocate them (#902, then #906). Two
 things had to become true for that to stop being a claim:
 
 1. **The root is a setting, and one reader serves every caller.** ``FaceAnalysis``
    loads from ``<root>/models/<pack>``, PixlStash downloads ``auraface`` into the
    same place, and the shelf declares that folder. All three go through
    ``insightface_model_utils.insightface_root()``, so a relocation cannot move
-   the shelf's row while the packs keep loading from the old directory — which is
+   the shelf's row while the packs keep loading from the old directory - which is
    exactly the failure ``builtin_model_dir()``'s docstring rules out for #905's
    folder, where the path is still computed three times independently.
 2. **A pack is a directory**, so the relocation does not go through
    ``ModelMover``: there is no per-file row to repoint and no ``sha256`` to
    verify a copy against. ``move_directory`` keeps the guarantee that matters
-   instead — a *complete* pack survives every interruption, at one end or the
+   instead - a *complete* pack survives every interruption, at one end or the
    other, because the copy lands under ``.pixlstash-partial`` and is renamed into
    place. A half-populated ``buffalo_l/`` would be a face pipeline that starts
    and then fails on a missing model.
@@ -22,7 +22,7 @@ things had to become true for that to stop being a claim:
 The negative half is as load-bearing as the positive one. Widening the relocate
 route from "the managed store only" to "the managed store and the InsightFace
 packs" is the kind of change that quietly opens it to everything, so the folders
-that must still be refused are asserted here beside the one that must now work —
+that must still be refused are asserted here beside the one that must now work -
 the HuggingFace cache in particular, which is ``fixed`` because its location is
 ``HF_HOME``, read at import by a library shared with every other tool on the
 machine.
@@ -62,7 +62,7 @@ class Crash(BaseException):
     ``BaseException`` rather than ``Exception``: ``move_directory``'s cleanup is
     an unconditional ``except BaseException`` re-raise on purpose, and a plain
     ``Exception`` would let an ``except OSError`` somewhere turn the simulated
-    crash into a tidy error — which is not the state a real crash leaves.
+    crash into a tidy error - which is not the state a real crash leaves.
     """
 
 
@@ -83,7 +83,7 @@ def data_dir(tmp_path, monkeypatch):
     ``insightface_model_utils`` resolves its pointer through
     ``builtin_models._pixlstash_data_dir`` rather than rebuilding
     ``user_data_dir("pixlstash")``, so redirecting it here redirects both
-    recorded locations at once — which is the property that keeps a test from
+    recorded locations at once - which is the property that keeps a test from
     writing into the developer's real home.
     """
     from pixlstash.services import builtin_models
@@ -104,7 +104,7 @@ def face_env(tmp_path, data_dir, monkeypatch):
 
     ``DEFAULT_DECLARE_MODEL_ROOTS`` is back **on** for these tests. The suite
     turns it off (``conftest``) so a Server on a temp config dir cannot describe
-    the developer's real home — here the root is a ``tmp_path`` and the pointer
+    the developer's real home - here the root is a ``tmp_path`` and the pointer
     is redirected with it, so the declaration is both safe and the thing under
     test: without it there is no InsightFace folder row to relocate.
     """
@@ -125,7 +125,8 @@ def face_env(tmp_path, data_dir, monkeypatch):
     try:
         owner = TestClient(server.api, raise_server_exceptions=True)
         r = owner.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
         yield _FaceEnv(
@@ -142,7 +143,7 @@ def face_env(tmp_path, data_dir, monkeypatch):
         # `_job` is deliberately NOT cleared here. Set-up already nulls it, and
         # an autouse fixture tears down after this one, so clearing it here
         # would hide a move this module left running from
-        # `no_model_move_outlives_its_test` — in the one module whose route
+        # `no_model_move_outlives_its_test` - in the one module whose route
         # records the InsightFace root.
 
 
@@ -206,7 +207,7 @@ def test_the_root_defaults_to_where_insightface_itself_looks(data_dir):
 
 
 def test_a_recorded_root_survives_the_process_that_wrote_it(data_dir):
-    """The relocation is only real if the next start agrees with it — otherwise
+    """The relocation is only real if the next start agrees with it - otherwise
     every pack is downloaded again into the directory just emptied.
 
     A file beside the download folder's own pointer rather than a key in
@@ -257,7 +258,7 @@ def test_nothing_but_the_record_can_name_the_models_directory(data_dir, monkeypa
     """No second source for this one path, environment included.
 
     `builtin_caches` used to carry `PIXLSTASH_INSIGHTFACE_DIR`, a declaration-only
-    seam that pointed at the *models* directory — one level below the root that is
+    seam that pointed at the *models* directory - one level below the root that is
     now recorded, so the two could disagree. Harmless while nothing could
     relocate; a bug the moment something could, because the shelf would declare
     the override path while downloads and `FaceAnalysis` used the root, and a
@@ -357,14 +358,14 @@ def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
     assert sorted(p.name for p in moved.iterdir()) == sorted(_PACK_FILES)
     assert not face_env.models_dir.exists(), "the vacated directory was tidied"
 
-    # The root, recorded and in force — no restart.
+    # The root, recorded and in force - no restart.
     assert face_env.pointer.read_text() == str(face_env.target)
     assert model_utils.insightface_root() == str(face_env.target)
     assert model_utils._pack_dir("buffalo_l") == str(moved)
     assert builtin_caches.insightface_models_dir() == str(face_env.target / "models")
 
     # The shelf follows. `folder_id` re-resolves through the accessor, so this
-    # is the row the *relocated* folder now has — the shared ending registers
+    # is the row the *relocated* folder now has - the shared ending registers
     # the destination and retires the old row, as it does for the other two.
     relocated_id = face_env.folder_id
     assert face_env.folder_path(relocated_id) == str(face_env.target / "models")
@@ -375,7 +376,7 @@ def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
     )
     assert {row["relpath"]: row["state"] for row in rows} == {
         # Declared and absent is a normal state for a pack nobody has fetched,
-        # which is why it is `not_downloaded` and not `missing` — the shelf draws
+        # which is why it is `not_downloaded` and not `missing` - the shelf draws
         # `missing` as a fault (#926). It carries across rather than being
         # dropped with the old row: it is a tombstone, and the packs moving is
         # not news about whether it came back.
@@ -396,7 +397,7 @@ def test_a_record_that_cannot_be_written_still_tells_the_hub_the_truth(
     """What a completed move leaves when only the *memory* of it fails.
 
     The packs are at the new root and a relocation cannot be undone (the cancel
-    ruling), so the hub is still told where they are — the shelf shows them
+    ruling), so the hub is still told where they are - the shelf shows them
     correctly. What is lost is durability: the next start resolves the default
     root again and would download there, which is why the failure is loud and
     names the repair. Exactly the residue #905 accepts for the download folder's
@@ -448,8 +449,8 @@ def test_the_shelf_reports_the_packs_as_relocatable_before_and_after(face_env):
     ``relocatable``, not ``movable``: the packs, the download folder and the
     HuggingFace cache all read `foreign`, and the first two share `root_only`
     besides, so this boolean is the only thing that tells the client which rows
-    to offer Move on. It has to be true here *before* the relocation — that is
-    what puts the control on the row — and again afterwards, since a folder that
+    to offer Move on. It has to be true here *before* the relocation - that is
+    what puts the control on the row - and again afterwards, since a folder that
     moved once can move again.
     """
 
@@ -512,7 +513,7 @@ def test_a_destination_already_holding_a_pack_is_refused_before_anything_moves(
 
 
 def test_the_huggingface_cache_still_cannot_be_relocated(face_env, tmp_path):
-    """``fixed`` means it cannot move at all — its location is ``HF_HOME``.
+    """``fixed`` means it cannot move at all - its location is ``HF_HOME``.
 
     Asserted against the widened route on purpose: "only the managed store" was
     what refused this before, and that sentence is no longer the rule.

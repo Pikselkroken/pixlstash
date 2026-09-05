@@ -2,9 +2,9 @@
 //
 // Two properties are under test and they pull in opposite directions:
 //
-//   * SPEED — a context-menu flyout must render from cache and revalidate in
+//   * SPEED - a context-menu flyout must render from cache and revalidate in
 //     the background, never block on the network.
-//   * SAFETY — these are `SCOPED_LIST` routes, so the cached CONTENT is an
+//   * SAFETY - these are `SCOPED_LIST` routes, so the cached CONTENT is an
 //     authorization decision. It must never outlive the credential that
 //     produced it, and it must never be written from a WebSocket payload.
 
@@ -182,7 +182,7 @@ describe("useEntityListsStore", () => {
 
   it("still asks for the counts on a ws-driven refetch", async () => {
     // The wrapper fetchers are the ONLY place the param is applied, so every
-    // path into a read has to go through them — including invalidate().
+    // path into a read has to go through them - including invalidate().
     const store = useEntityListsStore();
     await store.invalidate();
     expect(listCharacters).toHaveBeenCalledWith(
@@ -299,7 +299,7 @@ describe("useEntityListsStore", () => {
 
     transitionAuthContext(); // logout / login / share-token entry / vault switch
 
-    // Synchronously empty — not "empty once a refetch comes back".
+    // Synchronously empty - not "empty once a refetch comes back".
     expect(store.characters).toEqual([]);
     expect(store.pictureSets).toEqual([]);
     expect(store.projects).toEqual([]);

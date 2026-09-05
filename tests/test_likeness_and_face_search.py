@@ -140,7 +140,7 @@ def test_score_character_likeness_combine_param():
 
             # A valid combine strategy passes validation. (It may still 503 in
             # an environment without an inference engine, so assert only that it
-            # is not rejected as a bad request — the happy path is covered by
+            # is not rejected as a bad request - the happy path is covered by
             # test_score_character_likeness_basic.)
             resp = client.post(
                 f"{API_PREFIX}/pictures/score_character_likeness",
@@ -312,7 +312,12 @@ def test_character_likeness_stack_scoped_leader_listing_and_count():
                 },
             )
             assert resp.status_code == 200, resp.text
-            listed_ids = [row["id"] for row in resp.json()]
+            rows = resp.json()
+            listed_ids = [row["id"] for row in rows]
+            # The grid's likeness pill reads this field. ``GridPicture`` is the
+            # enforced response model and drops any key it does not declare,
+            # which is how the pill went missing.
+            assert all(isinstance(row.get("character_likeness"), float) for row in rows)
 
             # Stack 1 is represented by exactly its in-scope member b (the
             # stack must not be dropped), stack 2 by its actual leader d, and
@@ -367,6 +372,10 @@ def test_pictures_count_character_likeness_matches_stream():
             stream = resp.json()
             assert stream["done"] is True
             assert len(stream["pictures"]) == likeness_count == 3
+            assert all(
+                isinstance(row.get("character_likeness"), float)
+                for row in stream["pictures"]
+            )
 
             # The normal (sort-less) count the frontend grid uses must agree
             # with the likeness count for the same character view.
@@ -402,7 +411,7 @@ def test_face_search_basic():
             # Exclude sentinel records (face_index == -1), which have no embedding.
             faces = [f for f in all_faces if f.get("face_index", 0) != -1]
             if not faces:
-                # No real faces detected in random noise images — nothing to assert
+                # No real faces detected in random noise images - nothing to assert
                 return
             face_id = faces[0]["id"]
 
@@ -564,7 +573,7 @@ def test_face_search_by_character_ranks_and_excludes_assigned():
 
 def test_face_search_names_the_best_matching_face():
     """The reported face_id is the face that produced the picture's score, not
-    just the picture's first face — a bulk assignment writes to that row."""
+    just the picture's first face - a bulk assignment writes to that row."""
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path=server_config_path) as server:

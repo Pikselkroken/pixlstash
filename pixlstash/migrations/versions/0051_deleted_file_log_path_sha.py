@@ -36,7 +36,7 @@ def upgrade() -> None:
     existing_cols = {c["name"] for c in inspector.get_columns("deleted_file_log")}
 
     # A fresh DB is created from the current model (path_sha already present,
-    # file_path absent) — both branches below no-op in that case.
+    # file_path absent) - both branches below no-op in that case.
     if "path_sha" not in existing_cols:
         op.add_column(
             "deleted_file_log", sa.Column("path_sha", sa.String(), nullable=True)

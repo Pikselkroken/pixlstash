@@ -5,8 +5,6 @@ from pixlstash.worker_config import LIKENESS_PARAMETERS_MAX_INFLIGHT
 
 from .base_task_finder import BaseTaskFinder
 from .likeness_parameters_task import LikenessParametersTask
-from .quality_task import QualityTask
-from .task_type import TaskType
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,29 +25,18 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingLikenessParametersFinder"
 
-    def depends_on(self) -> list[TaskType]:
-        # Quality metrics are used as likeness parameters (brightness, contrast,
-        # etc.).  Wait for all inflight quality tasks to drain before starting
-        # parameter batches so every picture gets its real quality values written
-        # atomically rather than sentinel-filled and needing a reset later.
-        return [TaskType.QUALITY]
-
     def max_inflight_tasks(self) -> int:
         return LIKENESS_PARAMETERS_MAX_INFLIGHT
 
     def find_task(self):
-        # Hard gate: if any quality work remains, wait.  This ensures likeness
-        # parameters are written with final quality values, not sentinels.
-        if self._db.run_immediate_read_task(QualityTask.count_missing_quality) > 0:
-            return None
-
-        if not self._db.run_immediate_read_task(
-            LikenessParameterUtils.has_pending_work
-        ):
-            return None
-
+        # Quality metrics are likeness parameters (brightness, contrast, ...),
+        # and each picture's row is written once, with its real values: the
+        # candidate query only offers a picture whose own Quality row is done
+        # (LikenessParameterUtils.find_next_work), so no stage-wide gate is
+        # needed and a picture flows here the moment its quality is in.
+        #
         # Discover work and pre-fetch all required data inside a single
-        # immediate read session — no write-queue involvement.
+        # immediate read session - no write-queue involvement.
         work = self._db.run_immediate_read_task(
             self._find_and_prefetch,
             self._db.image_root,

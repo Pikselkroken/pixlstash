@@ -11,8 +11,11 @@ const POLL_INTERVAL_IDLE_MS = 5000;
 // A backend worker lingers in the active list for this long after its last
 // observed activity, so brief gaps between batches don't make a row flicker out.
 const WORKER_REMOVE_GRACE_SECONDS = 10;
-// Window used to average a worker's throughput rate for the displayed "/s".
-const RATE_AVERAGE_WINDOW_SECONDS = 20;
+// Window the displayed "/s" is measured over. It has to be long enough to span
+// at least one commit of the coarsest worker, because progress lands in whole
+// batches: descriptions commit 32 pictures at once and a slow captioner takes
+// half a minute over them.
+const RATE_AVERAGE_WINDOW_SECONDS = 60;
 // How much sparkline history to retain per worker.
 const SERIES_WINDOW_SECONDS = 120;
 
@@ -145,7 +148,21 @@ export const useTasksStore = defineStore("tasks", () => {
       .filter(([key, snapshot]) => {
         if (!snapshot) return false;
         if (suppressImportWorker && key === IMPORT_WORKER_KEY) return false;
-        if (typeof snapshot.active === "boolean") return snapshot.active;
+        // `active: true` is decisive. `active: false` is NOT - it only means
+        // nothing is in flight *this instant*, and a worker chewing through a
+        // library is idle between every batch: the planner submits, the batch
+        // runs, inflight drops to 0, and the next batch arrives up to a
+        // backoff later. This used to `return snapshot.active` for either
+        // value, which made the grace window below unreachable - the backend
+        // always sends the field - and the row vanished in every gap. Watching
+        // a face pass grind through twelve thousand pictures, the Tasks tab
+        // read "nothing running" most of the time.
+        if (snapshot.active === true) return true;
+        // The grace below exists for a worker between batches of a pass. A
+        // worker whose whole job is zero rows ("File cleanup 0, 0.00/s") has
+        // no batches to be between - it ran, found nothing, and lingering for
+        // ten seconds only reads as a row that never does anything.
+        if (!(Number(snapshot.total) > 0)) return false;
         const lastActiveAt = Number(lastActiveAtByWorker.get(key) || 0);
         const lastProgressAt = Number(lastProgressAtByWorker.get(key) || 0);
         const latestActivityAt = Math.max(lastActiveAt, lastProgressAt);
@@ -185,22 +202,49 @@ export const useTasksStore = defineStore("tasks", () => {
   const activeCount = computed(() => activeEntries.value.length);
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
+  // The tagger's worker key is its TaskType value. While it is running, a
+  // tag-filtered grid would otherwise be offered a "View changed externally"
+  // pill after every eight-picture batch; readers hold theirs until this
+  // goes false. Same grace window as the Tasks tab row, so a pass idling
+  // between batches still counts as running.
+  const TAGGER_WORKER_KEY = "TagTask";
+  const taggingActive = computed(() =>
+    activeWorkerEntries.value.some((entry) => entry.key === TAGGER_WORKER_KEY),
+  );
+
   // ── Rate helpers (read by the Tasks tab for sparklines / "/s" labels) ──────
+  // Progress made across the window divided by the time it took, which is the
+  // throughput the label claims to show.
+  //
+  // The per-sample `rate` this used to average cannot answer that. A worker
+  // commits a whole batch at once, so `current` sits still for every poll the
+  // batch is running and then jumps: one sample of batch-size-over-poll-
+  // interval, surrounded by zeroes. Averaging only the non-zero samples - the
+  // old behaviour, meant to stop a gap between batches dragging the number
+  // down - threw away exactly the ticks the work happened in and reported
+  // 32 pictures over one 2-second poll no matter how long the batch took.
+  // Moondream2 at one picture a second and JoyCaption at four both read "13/s".
+  //
+  // Counting the flat ticks is the fix: they are the batch running, not a
+  // stall. A worker that has genuinely stopped falls to zero once its last
+  // commit slides out of the window, and the row is dropped by
+  // WORKER_REMOVE_GRACE_SECONDS long before that.
   function getLatestRate(key) {
     const samples = series.value[key] || [];
-    if (!samples.length) return 0;
-    const latest = samples[samples.length - 1];
-    const latestTime = Number(latest?.t || 0);
-    if (!latestTime) return Number(latest?.rate || 0);
-    const cutoff = latestTime - RATE_AVERAGE_WINDOW_SECONDS;
-    const windowSamples = samples.filter((s) => Number(s?.t || 0) >= cutoff);
-    if (!windowSamples.length) return Number(latest?.rate || 0);
-    // Average only non-zero samples so a stall between batches doesn't drag the
-    // displayed rate down; fall back to the full window only when all are zero.
-    const nonZero = windowSamples.filter((s) => Number(s?.rate || 0) > 0);
-    const activeSamples = nonZero.length ? nonZero : windowSamples;
-    const sum = activeSamples.reduce((acc, s) => acc + Number(s?.rate || 0), 0);
-    return sum / activeSamples.length;
+    if (samples.length < 2) return 0;
+    const last = samples[samples.length - 1];
+    const lastTime = Number(last?.t || 0);
+    if (!lastTime) return 0;
+    const cutoff = lastTime - RATE_AVERAGE_WINDOW_SECONDS;
+    const first = samples.find((s) => Number(s?.t || 0) >= cutoff);
+    if (!first || first === last) return 0;
+    const elapsed = lastTime - Number(first.t || 0);
+    const done = Number(last.current || 0) - Number(first.current || 0);
+    // `done` goes negative when pictures are deleted under a running worker,
+    // and the window is briefly shorter than one batch when polling starts
+    // mid-batch; both read as no measurement rather than as a wrong one.
+    if (elapsed <= 0 || done <= 0) return 0;
+    return done / elapsed;
   }
 
   // ── Polling ───────────────────────────────────────────────────────────────
@@ -357,6 +401,7 @@ export const useTasksStore = defineStore("tasks", () => {
     activeWorkerEntries,
     activeCount,
     hasActiveTasks,
+    taggingActive,
     // rate helpers
     getLatestRate,
     // polling lifecycle

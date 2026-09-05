@@ -6,7 +6,7 @@
 // full `droppable` highlight for payloads it would do nothing with. And because
 // all internal payloads shared one MIME key (`application/json`, whose body is
 // unreadable during dragover), the drop handlers could only key off `imageIds`
-// — which a face-bbox payload also carries — so a face drag landed in a set as
+// - which a face-bbox payload also carries - so a face drag landed in a set as
 // if it were a picture drag.
 //
 // Both directions matter. Over-blocking a picture drag is its own regression,
@@ -129,7 +129,7 @@ function transfer(payload) {
     dropEffect: "",
     effectAllowed: "move",
     files: [],
-    // Protected during dragover, readable on drop — the same asymmetry the
+    // Protected during dragover, readable on drop - the same asymmetry the
     // browser enforces, so a handler that cheats fails here.
     getData: (type) => (type === "application/json" ? json : ""),
   };

@@ -9,7 +9,7 @@ The helper materialises the ids into a per-connection TEMP TABLE and filters via
 The proof is build-independent: we lower this connection's
 ``SQLITE_LIMIT_VARIABLE_NUMBER`` to the historical 999 floor with
 ``setlimit``, show a plain ``.in_(large_set)`` raises there, then show the
-helper path succeeds and returns the exact membership — at a scope size (1500)
+helper path succeeds and returns the exact membership - at a scope size (1500)
 that is more than the 999 ceiling but far below any modern default.
 """
 
@@ -44,7 +44,7 @@ def test_scope_id_subquery_beats_the_variable_ceiling():
     SQLModel.metadata.create_all(engine)
     try:
         with Session(engine) as session:
-            # Seed under the default (high) limit — an ORM bulk insert may batch
+            # Seed under the default (high) limit - an ORM bulk insert may batch
             # many parameters, which is fine before we lower the ceiling.
             _seed(session, SCOPE_SIZE)
 
@@ -71,7 +71,7 @@ def test_scope_id_subquery_beats_the_variable_ceiling():
             assert got2 == subset
 
             # 4) Double-bind (the likeness-pairs site binds the scope at BOTH
-            #    endpoints — it would hit the ceiling at half the scope size).
+            #    endpoints - it would hit the ceiling at half the scope size).
             #    One materialised subquery, referenced twice, still runs.
             sub3 = scope_id_subquery(session, big_scope)
             n = len(
@@ -82,7 +82,7 @@ def test_scope_id_subquery_beats_the_variable_ceiling():
             assert n == SCOPE_SIZE
 
             # 5) An empty scope is a valid empty membership test (matches
-            #    nothing), never an error — mirrors ``.in_(set())``.
+            #    nothing), never an error - mirrors ``.in_(set())``.
             sub4 = scope_id_subquery(session, set())
             assert (
                 session.exec(select(_Item.pid).where(_Item.pid.in_(sub4))).all() == []

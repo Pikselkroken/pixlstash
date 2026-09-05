@@ -170,7 +170,8 @@ def _env():
     client = TestClient(server.api)
     assert (
         client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         ).status_code
         == 200
     )

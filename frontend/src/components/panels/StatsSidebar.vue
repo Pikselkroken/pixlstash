@@ -305,7 +305,7 @@ async function fetchConf() {
       };
     confLoaded.value = true;
   } catch {
-    // silently fail — conf stays empty
+    // silently fail - conf stays empty
   }
 }
 
@@ -825,7 +825,7 @@ function clearConfidenceFilters(entries) {
 }
 
 // "Unscored" is not a star, so it maps to its own filter rather than to a score
-// range — the same shape as the smart-score chart's Unscored bucket below.
+// range - the same shape as the smart-score chart's Unscored bucket below.
 function isScoreBarActive(label) {
   if (label === "Unscored") return filterStore.unscoredOnlyFilter;
   const n = parseInt(label);
@@ -1280,7 +1280,7 @@ defineExpose({ focusTasksTab });
                 {{
                   stats.total > 0
                     ? Math.round((stats.tagged / stats.total) * 100) + "%"
-                    : "—"
+                    : " - "
                 }}
               </text>
             </svg>
@@ -1952,8 +1952,8 @@ defineExpose({ focusTasksTab });
 /* The panel is DOCKED at every width and is never taken out of flow. A
    `max-width: 1339px` block used to turn it into a fixed overlay drawer
    (z-index 150, anchored below the 36px header band). That drawer opened
-   directly on top of the toolbar's own stats toggle — the only control that
-   closes it — because the toggle sits in the band *below* that anchor. It also
+   directly on top of the toolbar's own stats toggle - the only control that
+   closes it - because the toggle sits in the band *below* that anchor. It also
    hid the title row, and its close button was never wired up, so on any
    viewport at or under 1339px an opened panel could not be dismissed at all.
    Docking removes the collision by construction: the toolbar ends where the
@@ -2384,6 +2384,13 @@ defineExpose({ focusTasksTab });
   outline: none;
   appearance: none;
 }
+/* The popup list is native chrome: without an explicit fill it paints the
+   OS default (white) under the select's on-surface text in dark mode. */
+.conf-tag-select option,
+.conf-tag-select optgroup {
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+}
 .conf-tag-select:hover {
   border-color: rgba(var(--v-theme-on-surface), 0.3);
 }
@@ -2421,7 +2428,7 @@ defineExpose({ focusTasksTab });
    Composite encoding: HUE is the traffic light (how far the cell sits from
    agreement, fixed by its position in the grid), OPACITY is how many pictures
    are in it. The hue is redundant with position and every populated cell prints
-   its count, so nothing here is carried by colour alone — which is what makes a
+   its count, so nothing here is carried by colour alone - which is what makes a
    red/green pair acceptable for colour-blind readers. Status hues come from the
    theme's own success/warning/error tokens, which are defined per theme, so
    light and dark each get their tuned value. The fill IS the value, so hover

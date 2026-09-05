@@ -1,4 +1,4 @@
-// The model shelf's icon store — /models/{id}/icon, /model-icons/{sha256}.
+// The model shelf's icon store - /models/{id}/icon, /model-icons/{sha256}.
 //
 // An icon is what a model IS: authored, singular, chosen once. It is not a
 // sample, which is what a model produces. The store is content-addressed, so
@@ -26,8 +26,8 @@ export function modelIconUrl(sha256) {
 /**
  * Set a model's icon from image bytes.
  *
- * The single write path for all three ways of choosing one — uploading a file,
- * picking a library picture, promoting a sample — because all three produce the
+ * The single write path for all three ways of choosing one - uploading a file,
+ * picking a library picture, promoting a sample - because all three produce the
  * same thing: bytes in the store and a hash in the column. Picking a picture
  * therefore sends the *pixels*, which is what makes the icon a copy rather than
  * a reference into the vault.

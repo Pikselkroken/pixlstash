@@ -64,7 +64,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "picture" not in inspector.get_table_names():
-        # Fresh install — baseline migration creates the table with no rows.
+        # Fresh install - baseline migration creates the table with no rows.
         return
 
     op.execute(_NORMALIZE_SQL)

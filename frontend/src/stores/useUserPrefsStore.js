@@ -5,7 +5,7 @@ import { patchUserConfig } from "../api/config";
 
 export const useUserPrefsStore = defineStore("userPrefs", () => {
   const dateFormat = ref("locale");
-  const themeMode = ref(isReadOnly.value ? "dark" : "light");
+  const themeMode = ref("dark");
   const showKeyboardHint = ref(true);
   const hiddenTags = ref([]);
   const applyTagFilter = ref(false);

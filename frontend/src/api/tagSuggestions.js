@@ -1,4 +1,4 @@
-// Tag-suggestion decisions resource — /tag_suggestions.
+// Tag-suggestion decisions resource - /tag_suggestions.
 //
 // One suggestion is one card in a review queue. Decisions are written through
 // per card as the user makes them, which is why aborting a review leaves the

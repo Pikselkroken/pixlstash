@@ -22,6 +22,15 @@ class Character(SQLModel, table=True):
     reference_picture_set_id: Optional[int] = Field(
         default=None, foreign_key="pictureset.id"
     )
+    # The reference picture the user pinned as this person's thumbnail, or NULL
+    # for "pick the best one automatically" (the default). Deliberately a plain
+    # column and NOT a foreign key: pictures are hard-deleted on scrapheap purge
+    # and by maintenance, and with PRAGMA foreign_keys=ON a real FK would abort
+    # those deletes for every character that happened to pin the picture. A
+    # dangling id is harmless instead - GET /characters/{id}/thumbnail only
+    # honours the pin when that picture still carries a face of this character,
+    # and otherwise falls back to the automatic choice.
+    thumbnail_picture_id: Optional[int] = Field(default=None)
     project_id: Optional[int] = Field(
         default=None, foreign_key="project.id", index=True
     )

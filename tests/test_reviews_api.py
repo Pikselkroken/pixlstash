@@ -59,7 +59,7 @@ def _disable_conflicting_backfill(server):
     controlled neighbourhood with controlled labels. The backfill sweep owns
     those same columns and races those writes: it picks a picture up while the
     column is still NULL (or simply re-derives the labels), then writes the real
-    value over the synthetic one — the pair stops being a pair, or the suspect
+    value over the synthetic one - the pair stops being a pair, or the suspect
     loses the very tag the review is about, and the scan finds nothing.
 
     The per-test servers this module used to build hid the race. A vault that
@@ -91,7 +91,7 @@ def _tables_to_wipe(server):
 
     Every table the live vault schema has, minus the ones that already hold
     rows on a freshly started server (``library_settings``, ``metadata``,
-    ``snapshot``, …) — those are start-up state, not test state. Deriving the
+    ``snapshot``, …) - those are start-up state, not test state. Deriving the
     list from the schema instead of hand-listing models keeps it complete: a
     table added later is wiped without anyone remembering to add it here, and a
     forgotten table is exactly how a shared environment starts making
@@ -156,7 +156,7 @@ def reset_library(env):
 
     Reviews freeze a receipt on close and their rows carry decided/skipped
     state, and the tests seed pictures, tags, embeddings, sets, stacks and
-    predictions on top — every one of which would silently change what a later
+    predictions on top - every one of which would silently change what a later
     test's assertion means. Wipe the vault, drop any API token a previous test
     minted (with the auth cache that mirrors it), then prove the result.
     """
@@ -176,7 +176,7 @@ def reset_library(env):
     # Tokens live in the hub, not the vault. The owner's cookie session is not
     # backed by a UserToken row, so it survives this and stays logged in.
     server.hub_engine.run_task(_wipe_tokens)
-    # Go through the flush helper so the revocation epoch is bumped too — a
+    # Go through the flush helper so the revocation epoch is bumped too - a
     # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
 
@@ -315,7 +315,7 @@ def test_create_review_receipt_neighbors_and_progress(client, server):
     assert {row["picture_id"], row["twin_picture_id"]} == {a, b}
     assert row["direction"] in ("add", "remove")
     assert row["kind"] == "binary"  # no shared stack, far-apart dhash
-    # Neighbour capture: with two pictures, k clamps to 1 — the one
+    # Neighbour capture: with two pictures, k clamps to 1 - the one
     # neighbour is the other picture, with its has-the-tag flag.
     other = b if row["picture_id"] == a else a
     assert row["neighbors"] == [{"picture_id": other, "has": other == a}]
@@ -391,7 +391,7 @@ def test_refresh_diff_inserts_and_never_resurrects_decided_rows(client, server):
     pending = client.get(f"{API}/reviews/{rid}/suggestions").json()
     assert len(pending) == 1
     assert pending[0]["id"] != sid
-    # Still exactly one row for the decided pair — no duplicates anywhere.
+    # Still exactly one row for the decided pair - no duplicates anywhere.
     all_rows = client.get(
         f"{API}/reviews/{rid}/suggestions", params={"status": ""}
     ).json()
@@ -454,7 +454,7 @@ def test_include_reviewed_reparents_decided_rows(client, server):
     assert r2_body["stats"]["prev_reviewed"] == 1
     assert client.post(f"{API}/reviews/{r2_body['id']}/abort").status_code == 200
 
-    # include_reviewed: the SAME row is re-parented and reopened — not
+    # include_reviewed: the SAME row is re-parented and reopened - not
     # duplicated (UNIQUE(picture_id, tag, source) intact) and not recreated.
     r3_body = client.post(
         f"{API}/reviews", json={"tag": TAG, "include_reviewed": True}
@@ -623,7 +623,7 @@ def test_auto_resolvable_counts_review_scoped_bulk_dry_run(client, server):
 
     body = client.post(f"{API}/reviews", json={"tag": TAG}).json()
     rid = body["id"]
-    # The pair is a 'remove' with both taggers confidently negative — the
+    # The pair is a 'remove' with both taggers confidently negative - the
     # two independent signals agree, so the receipt offers it for bulk.
     assert body["stats"]["auto_resolvable"] == 1
 
@@ -782,13 +782,13 @@ def test_preview_reports_scope_and_prev_reviewed(client, server):
 # ---------------------------------------------------------------------------
 # F4 (SKIPPED adopts, not prev_reviewed) / F9 (freeze-on-close + undo survives
 # re-parent) / F2 (soft-deleted card gone + unacceptable) / F5 (large-scope
-# preview) regression coverage — see the tag-review-rewrite brief.
+# preview) regression coverage - see the tag-review-rewrite brief.
 # ---------------------------------------------------------------------------
 
 
 def test_skipped_row_readopts_without_dragging_decided_rows(client, server):
     # F4: a skipped-then-archived suspect must re-appear (adopted, PENDING) in a
-    # new review and count as `found`, NOT prev_reviewed — while a genuinely
+    # new review and count as `found`, NOT prev_reviewed - while a genuinely
     # decided suspect stays suppressed and counts as prev_reviewed.
     _make_pair(client, server, axis=0)
     _make_pair(client, server, axis=1)
@@ -822,7 +822,7 @@ def test_archived_receipt_is_frozen_against_reparenting_scan(client, server):
     # later include_reviewed scan re-parents those rows into a new review, which
     # would shrink the receipt if it were still live. Freezing on close keeps the
     # archived session's cover sheet immutable. (A dismiss leaves the pair still
-    # disagreeing, so it is re-detectable and thus re-parentable — an accept
+    # disagreeing, so it is re-detectable and thus re-parentable - an accept
     # would RESOLVE the disagreement, so the scan could not re-detect it.)
     _make_pair(client, server)
     r1 = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
@@ -859,7 +859,7 @@ def test_undo_survives_reparent_and_restores_prior_decision(client, server):
     # re-parents the SAME row into B and re-pends it, capturing A's decision in
     # prior_*. Undo peels the re-parent back to A's decision (its ledger entry
     # still standing); a second undo reverses that decision through the normal
-    # flow. (A resolving decision — accept/twin-fix — would remove the
+    # flow. (A resolving decision - accept/twin-fix - would remove the
     # disagreement, so the scan would not re-detect the pair and there would be
     # nothing to re-parent; only a still-disagreeing decision is re-surfaced.)
     _make_pair(client, server)
@@ -897,7 +897,7 @@ def test_undo_survives_reparent_and_restores_prior_decision(client, server):
     # A's decision (its ledger entry) is untouched by the re-parent.
     assert _human_label() == (src, state)
 
-    # Undo #1: peel the re-parent — back to A's prior decided state, prior_*
+    # Undo #1: peel the re-parent - back to A's prior decided state, prior_*
     # cleared, A's decision still standing.
     assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 200
     row = _get_suggestion(server, sid)
@@ -906,7 +906,7 @@ def test_undo_survives_reparent_and_restores_prior_decision(client, server):
     assert row.prior_review_id is None and row.prior_status is None
     assert _human_label() == (src, state)
 
-    # Undo #2 (normal reversal, now re-exposed): A's decision is reversed —
+    # Undo #2 (normal reversal, now re-exposed): A's decision is reversed -
     # the ledger entry it wrote is cleared and the row re-pends under A.
     assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 200
     row = _get_suggestion(server, sid)
@@ -1072,7 +1072,7 @@ def test_full_pair_card_page_survives_sqlite_variable_ceiling(client, server):
 # ---------------------------------------------------------------------------
 # Security: /reviews is an owner-only, vault-wide curation surface. Every
 # write/preview endpoint must reject a resource-scoped READ token (403) while
-# still serving the owner (cookie) session — same policy the read endpoints
+# still serving the owner (cookie) session - same policy the read endpoints
 # already enforce. These use the versioned /api/v1 paths + a Bearer token so
 # the auth middleware sets request.state.token_scope.
 # ---------------------------------------------------------------------------
@@ -1137,7 +1137,7 @@ def test_delete_single_review_detaches_rows_and_preserves_decision(client, serve
     assert client.get(f"{API}/reviews").json() == []
 
     # The suggestion row survived, detached (review_id -> NULL) with its
-    # decision intact — deleting the session resurrected nothing.
+    # decision intact - deleting the session resurrected nothing.
     row = _get_suggestion(server, sid)
     assert row is not None
     assert row.review_id is None
@@ -1224,7 +1224,7 @@ def test_clear_reviews_requires_archived_status(client, server):
     assert open_resp.status_code == 400, open_resp.text
     aborted_resp = client.delete(f"{API}/reviews", params={"status": "ABORTED"})
     assert aborted_resp.status_code == 400, aborted_resp.text
-    # The OPEN review is still there — nothing was deleted.
+    # The OPEN review is still there - nothing was deleted.
     assert client.get(f"{API}/reviews/{rid}").json()["status"] == "OPEN"
 
 
@@ -1265,7 +1265,7 @@ def test_scoped_token_cannot_create_review(client, server, token):
         bearer.post(f"{API}/reviews", json={"tag": TAG}, headers=headers).status_code
         == 403
     )
-    # Owner (cookie) still creates fine — no over-blocking regression.
+    # Owner (cookie) still creates fine - no over-blocking regression.
     assert client.post(f"{API}/reviews", json={"tag": TAG}).status_code == 200
 
 
@@ -1320,7 +1320,7 @@ def test_scoped_token_cannot_abort_review(client, server, token):
 # The write-side scoped-token tests above are the easy half. These three are the
 # data-egress half: /reviews/{id}/suggestions in particular serves twin +
 # up-to-k neighbour picture ids, per-picture tag bits, and (since the locked-set
-# work) picture-set NAMES — all of which routinely fall outside a share token's
+# work) picture-set NAMES - all of which routinely fall outside a share token's
 # grant, which is why the whole surface is owner-only. The gate is correct today
 # but was untested on the reads, i.e. one refactor from being a silent hole.
 # Each test asserts BOTH directions: scoped token 403, owner still 200 with a
@@ -1333,7 +1333,7 @@ def test_scoped_token_cannot_read_reviews(client, server, token):
     headers = {"Authorization": f"Bearer {token}"}
     scoped_resp = bearer.get(f"{API}/reviews", headers=headers)
     assert scoped_resp.status_code == 403, scoped_resp.text
-    # Owner still lists the session — no over-blocking.
+    # Owner still lists the session - no over-blocking.
     owner_resp = client.get(f"{API}/reviews")
     assert owner_resp.status_code == 200, owner_resp.text
     assert len(owner_resp.json()) == 1
@@ -1346,7 +1346,7 @@ def test_scoped_token_cannot_read_review_detail(client, server, token):
     scoped_resp = bearer.get(f"{API}/reviews/{rid}", headers=headers)
     assert scoped_resp.status_code == 403, scoped_resp.text
     # A scoped token must not be able to distinguish "forbidden" from
-    # "missing" either — a 404 here would confirm/deny review ids.
+    # "missing" either - a 404 here would confirm/deny review ids.
     assert bearer.get(f"{API}/reviews/999999", headers=headers).status_code == 403
     owner_resp = client.get(f"{API}/reviews/{rid}")
     assert owner_resp.status_code == 200, owner_resp.text
@@ -1376,7 +1376,7 @@ def test_scoped_token_cannot_read_review_suggestions(client, server, token):
     )
 
     # Owner side: the queue is served in full. These are exactly the fields
-    # the gate exists to withhold — the twin's id and the neighbourhood ids.
+    # the gate exists to withhold - the twin's id and the neighbourhood ids.
     owner_resp = client.get(f"{API}/reviews/{rid}/suggestions")
     assert owner_resp.status_code == 200, owner_resp.text
     cards = owner_resp.json()
@@ -1385,7 +1385,7 @@ def test_scoped_token_cannot_read_review_suggestions(client, server, token):
     assert card["twin_picture_id"] is not None
 
     # Lock a set holding the twin: the owner's card must still NAME it.
-    # (The suspect is deliberately left unlocked — a locked suspect is
+    # (The suspect is deliberately left unlocked - a locked suspect is
     # filtered out of the PENDING queue entirely, so it could not carry a
     # name to assert on.)
     twin_set = client.post(f"{API}/picture_sets", json={"name": "TwinFrozen"}).json()[
@@ -1459,7 +1459,7 @@ def test_locking_a_set_after_the_scan_withdraws_its_cards(client, server):
     assert progress["locked"] == 1
     assert progress["done"] == 0
 
-    # Unlocking restores it — the row was withheld, never destroyed.
+    # Unlocking restores it - the row was withheld, never destroyed.
     _set_locked(client, set_id, False)
     assert len(client.get(f"{API}/reviews/{rid}/suggestions").json()) == 1
     restored = client.get(f"{API}/reviews/{rid}").json()["progress"]
@@ -1547,7 +1547,7 @@ def test_unlocked_picture_in_the_same_scope_is_still_served(client, server):
 
 def test_locking_does_not_hide_already_decided_rows(client, server):
     # Only actionable work is withheld. A row DECIDED before the lock is this
-    # review's audit record — it stays listable and stays counted in done, so
+    # review's audit record - it stays listable and stays counted in done, so
     # the served list and the receipt cannot disagree.
     _make_pair(client, server)
     rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
@@ -1604,7 +1604,7 @@ def test_locked_twin_is_flagged_per_side_and_degrades_card_to_binary(client, ser
     _set_locked(client, set_id, True)
 
     row = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]
-    # The card is still served — the suspect is free and fully reviewable.
+    # The card is still served - the suspect is free and fully reviewable.
     assert row["twin_picture_id"] == twin
     # Per-side: only the twin is frozen, and the set name is carried for the
     # explanation copy without a per-card lookup.
@@ -1655,7 +1655,7 @@ def test_locked_twin_blocks_only_the_pair_corners_and_makes_decisions_one_way(
     client, server
 ):
     # Pins exactly which actions a frozen twin refuses. fix-twin and swap write
-    # the twin, so they 423 — this is why the card degrades to binary. reopen
+    # the twin, so they 423 - this is why the card degrades to binary. reopen
     # also refuses (it guards BOTH sides unconditionally), so a decision on a
     # locked-twin card is currently ONE-WAY: actionable, but not undoable until
     # the set is unlocked.

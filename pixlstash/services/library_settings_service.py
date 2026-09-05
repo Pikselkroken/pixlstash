@@ -170,3 +170,77 @@ def reconcile_settings_fingerprint(vault_db, salt: str, penalised_tags: dict) ->
             "recomputed in the background."
         )
     return changed
+
+
+# ---------------------------------------------------------------------------
+# PixlStash Views (v1.11 Phase 7)
+# ---------------------------------------------------------------------------
+
+
+def get_views_config(vault_db) -> tuple[Optional[str], list[str]]:
+    """Return ``(views_root, kinds)`` for this library.
+
+    Stored per library rather than per user because the folder holds *this*
+    library's people and sets: two libraries publishing into one folder would
+    overwrite each other's tree.
+    """
+
+    def _read(session: Session) -> tuple[Optional[str], list[str]]:
+        row = _row(session)
+        raw = row.views_kinds or ""
+        return row.views_root, [kind for kind in raw.split(",") if kind]
+
+    return vault_db.run_immediate_read_task(_read)
+
+
+def set_views_config(vault_db, root: Optional[str], kinds: list[str]) -> None:
+    """Record where this library publishes views and which kinds it publishes."""
+    serialised = ",".join(kinds)
+
+    def _write(session: Session):
+        row = _row(session)
+        if row.views_root != root or (row.views_kinds or "") != serialised:
+            row.views_root = root
+            row.views_kinds = serialised
+            session.add(row)
+            session.commit()
+
+    vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)
+
+
+# ---------------------------------------------------------------------------
+# The folder layout (v1.11 Phase 4b)
+# ---------------------------------------------------------------------------
+
+
+def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(layout, unfiled)`` for this library's own picture root.
+
+    ``(None, None)`` means the root has no layout, which is every library until
+    its owner picks one - and while it has none, nothing is ever placed by the
+    layout and nothing is ever moved by it.
+
+    Per library rather than per user because it describes this library's own
+    folder tree: the same segments applied to somebody's other library would
+    name folders that are not there.
+    """
+
+    def _read(session: Session) -> tuple[Optional[str], Optional[str]]:
+        row = _row(session)
+        return row.layout, row.layout_unfiled
+
+    return vault_db.run_immediate_read_task(_read)
+
+
+def set_layout(vault_db, layout: Optional[str], unfiled: Optional[str]) -> None:
+    """Record this library's layout. Validated by the caller, not here."""
+
+    def _write(session: Session):
+        row = _row(session)
+        if row.layout != layout or row.layout_unfiled != unfiled:
+            row.layout = layout
+            row.layout_unfiled = unfiled
+            session.add(row)
+            session.commit()
+
+    vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)

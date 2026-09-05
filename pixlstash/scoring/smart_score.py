@@ -26,6 +26,7 @@ from pixlstash.db_models import (
     TagPrediction,
     User,
 )
+from pixlstash.db_models.tag_prediction import feeds_anomaly_score
 from pixlstash.services.tagger_run_service import get_latest_tag_precisions
 from pixlstash.utils.quality.anomaly_penalty import ANOMALY_PENALTY_TAGS
 from pixlstash.utils.quality.smart_score_utils import (
@@ -203,6 +204,7 @@ def fetch_anomaly_confidences(
             TagPrediction.confidence,
             TagPrediction.label_state,
             TagPrediction.label_source,
+            TagPrediction.model_version,
         ).where(
             TagPrediction.picture_id.in_(picture_ids),
             func.lower(TagPrediction.tag).in_(ANOMALY_PENALTY_TAGS),
@@ -211,7 +213,8 @@ def fetch_anomaly_confidences(
 
     below_threshold = 0
     not_applied = 0
-    for picture_id, tag, confidence, label_state, label_source in rows:
+    plugin_sourced = 0
+    for picture_id, tag, confidence, label_state, label_source, model_version in rows:
         if not tag:
             continue
         key = tag.strip().lower()
@@ -221,6 +224,16 @@ def fetch_anomaly_confidences(
         elif label_source == HUMAN and label_state == NEG:
             probs_map[picture_id][key] = 0.0
         else:
+            if not feeds_anomaly_score(model_version):
+                # A tagger plugin's confidence. Raw confidences are not comparable
+                # between models - a plugin's 0.4 is not the built-in tagger's 0.4,
+                # and the penalty thresholds are calibrated against the latter - so
+                # this would move the score with no user action and nothing on
+                # screen to explain it. The human branches above are deliberately
+                # ahead of this one: a person's verdict counts whichever model's
+                # row happens to be carrying it.
+                plugin_sourced += 1
+                continue
             if key not in applied_tags.get(picture_id, ()):
                 not_applied += 1
                 continue
@@ -232,12 +245,14 @@ def fetch_anomaly_confidences(
                     continue
             probs_map[picture_id][key] = value
 
-    if below_threshold or not_applied:
+    if below_threshold or not_applied or plugin_sourced:
         logger.debug(
-            "Anomaly penalty inputs: dropped %d sub-threshold and %d not-applied model "
-            "prediction(s) across %d picture(s); neither is visible in the tag list.",
+            "Anomaly penalty inputs: dropped %d sub-threshold, %d not-applied and %d "
+            "plugin-sourced model prediction(s) across %d picture(s); none of them is "
+            "usable as a penalty input.",
             below_threshold,
             not_applied,
+            plugin_sourced,
             len(picture_ids),
         )
 
@@ -253,7 +268,7 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
     the open vault session found no user row on every call, logged a warning per batch,
     and scored with the shipped seed while the owner's edited table sat in the hub.
 
-    The user's table *replaces* the shipped defaults rather than merging with them — that
+    The user's table *replaces* the shipped defaults rather than merging with them - that
     is the contract of
     :func:`~pixlstash.utils.quality.smart_score_utils.smart_score_penalised_tags`, which
     only returns the fallback when the stored value is absent or unparseable. A tag the
@@ -264,7 +279,7 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
     :func:`get_smart_score_penalised_tags_from_request` cannot serve it, since a
     background task has no request.
 
-    It reads ``auth_service.user`` — the process-local owner cache — rather than issuing
+    It reads ``auth_service.user`` - the process-local owner cache - rather than issuing
     a hub query per batch. That cache is not a start-up snapshot for these fields:
     ``PATCH /users/me/config`` writes it back precisely so background scoring sees an
     edit (``pixlstash/routes/config.py``, "keep the process-local owner cache
@@ -311,7 +326,7 @@ def attach_anomaly_inputs(
         apply_thresholds: Confidence gate per anomaly tag; see
             :func:`fetch_anomaly_confidences`.
         penalised_tag_weights: The owner's ``{tag: weight}`` table, resolved by the
-            caller from the hub (see :func:`resolve_penalised_tag_weights`) — it cannot
+            caller from the hub (see :func:`resolve_penalised_tag_weights`) - it cannot
             be read from *this* session, which is a vault one. ``None`` uses the shipped
             seed; ``{}`` is honoured as "penalise nothing".
 
@@ -319,7 +334,7 @@ def attach_anomaly_inputs(
         Config overrides for
         :meth:`~pixlstash.utils.quality.smart_score_utils.SmartScoreUtils.calculate_smart_score_batch_numpy`:
         ``tag_precisions`` from the latest evaluated :class:`TaggerRun`,
-        ``penalised_tag_weights`` as passed in, and ``tag_thresholds`` — the same gate
+        ``penalised_tag_weights`` as passed in, and ``tag_thresholds`` - the same gate
         applied here, forwarded so the penalty can grade each detection's confidence
         relative to its own acceptance threshold rather than in absolute terms.
     """
@@ -391,7 +406,7 @@ def fetch_smart_score_data(
             .limit(200)
         ).all()
 
-        # Candidates — join to picture-level quality rows.
+        # Candidates - join to picture-level quality rows.
         query = select(Picture, Quality).outerjoin(
             Quality,
             Quality.picture_id == Picture.id,

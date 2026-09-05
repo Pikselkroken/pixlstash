@@ -41,7 +41,7 @@ describe("the exit-resistance tunables", () => {
   // Owner requirement (2026-07-30): reaching fit exited too easily at one
   // notch; leaving must now cost THREE deliberate standard notches. The
   // accumulator semantics (counts only AT the floor, any zoom-in resets it,
-  // a pause restarts it) are pinned on the consumers — useWheelZoom's exit
+  // a pause restarts it) are pinned on the consumers - useWheelZoom's exit
   // policy and the Compare dialog.
   it("prices the exit at three standard 120-delta wheel notches", () => {
     expect(ZOOM_EXIT_RESISTANCE).toBe(3 * 120);
@@ -63,7 +63,7 @@ describe("atFitFloor", () => {
   });
 });
 
-describe("anchorZoomScroll — the point under the cursor stays put", () => {
+describe("anchorZoomScroll - the point under the cursor stays put", () => {
   /** Where the cursor lands in image coordinates for a given state. */
   function imagePointUnderCursor({
     cursor,
@@ -153,7 +153,7 @@ describe("anchorZoomScroll — the point under the cursor stays put", () => {
     expect(after.y).toBeCloseTo(before.y, 6);
   });
 
-  // At the edges the clamp wins over the anchor — the required behaviour:
+  // At the edges the clamp wins over the anchor - the required behaviour:
   // scroll never goes negative or past the content.
   it("clamps to the scrollable range at the edges", () => {
     const next = anchorZoomScroll({
@@ -191,7 +191,7 @@ describe("anchorZoomScroll — the point under the cursor stays put", () => {
   });
 });
 
-describe("anchorZoomOffset — the transform-space twin", () => {
+describe("anchorZoomOffset - the transform-space twin", () => {
   const container = { w: 800, h: 600 };
   const image = { w: 1000, h: 750 };
 
@@ -225,7 +225,7 @@ describe("anchorZoomOffset — the transform-space twin", () => {
     expect(after.y).toBeCloseTo(before.y, 6);
   });
 
-  // The overlay enters at fit — offset zero, image centred. The first in-tick
+  // The overlay enters at fit - offset zero, image centred. The first in-tick
   // must anchor from that centred state without a jump.
   it("holds the invariant zooming out of the centred fit state", () => {
     const fit = 0.8; // 1000×750 fits 800×600 exactly at 0.8

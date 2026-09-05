@@ -1,10 +1,10 @@
-// useActionReceipt.js — the receipt contract, once, for every surface that
+// useActionReceipt.js - the receipt contract, once, for every surface that
 // narrates it.
 //
 // The store (`useOperationStore`) holds at most ONE live receipt and owns its
-// dwell timer. What a receipt *reads as* — which glyph, which sentence, which
+// dwell timer. What a receipt *reads as* - which glyph, which sentence, which
 // verb on the button, which keycaps, how long the hairline drains, when the
-// countdown freezes — is the same on every surface that shows it. Only the
+// countdown freezes - is the same on every surface that shows it. Only the
 // chrome differs: the grid gets a light pill in the selection bar's slot
 // (`ActionReceipt.vue`), the lightbox gets a dark HUD in its own vocabulary
 // (`OverlayActionReceipt.vue`).
@@ -111,7 +111,7 @@ export function useActionReceipt({ announce = true } = {}) {
   // remounts and the drain restarts from full.
   const pillKey = computed(() => receipt.value?.key ?? 0);
 
-  // WCAG 2.2.1 — the countdown freezes on hover and on focus-within, and each
+  // WCAG 2.2.1 - the countdown freezes on hover and on focus-within, and each
   // surface's CSS pauses its hairline on the same two conditions so the two
   // never disagree.
   function pause() {
@@ -163,13 +163,13 @@ export function useActionReceipt({ announce = true } = {}) {
     // would otherwise leave the countdown frozen forever: no mouseleave will
     // ever fire, so the stale receipt survives in the store and resurfaces on
     // whichever surface renders next. Releasing the pause lets the countdown
-    // finish — or dismiss immediately if it had already drained.
+    // finish - or dismiss immediately if it had already drained.
     store.resumeReceipt();
   });
 
   // A receipt raised while the tab is hidden starts with a running countdown
   // (the store arms it unconditionally). Re-apply the hidden-tab pause so it
-  // does not expire unseen — the same hazard `onVisibilityChange` covers for a
+  // does not expire unseen - the same hazard `onVisibilityChange` covers for a
   // receipt that was already up.
   watch(pillKey, () => {
     if (typeof document !== "undefined" && document.hidden) {
@@ -183,7 +183,7 @@ export function useActionReceipt({ announce = true } = {}) {
    * The surface's button is REPLACED (a new node, keyed on the store's raise
    * counter) when undo flips it to "Undone … Redo". Without this, a user who
    * reached Undo with the keyboard has focus dropped to `<body>` and has to tab
-   * from the top of the document to reach the Redo the flip just produced —
+   * from the top of the document to reach the Redo the flip just produced -
    * WCAG 2.4.3.
    *
    * @param {Event} event - the click, so the caller need not track focus.

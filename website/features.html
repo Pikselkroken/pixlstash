@@ -322,6 +322,74 @@
 
       <section class="section">
         <div class="section-header">
+          <h2 class="section-title">The folders you already have</h2>
+          <p class="section-subtitle">
+            Point PixlStash at a folder and it reads it where it sits, turning
+            the folder names you already chose into projects, people and sets —
+            without moving, renaming or copying a file.
+          </p>
+        </div>
+        <div class="feature-grid feature-grid--primary">
+          <div class="feature-card">
+            <h3>Add a library from Settings</h3>
+            <p>
+              One folder picker, and the folder answers. A library you already
+              made is added as it is, with its tags, scores and people. A folder
+              of pictures is counted and offered. An empty folder starts a fresh
+              library. A folder another library already covers is refused, and
+              the refusal names that library.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Read what your folders mean</h3>
+            <p>
+              PixlStash proposes what each folder level is — project, set,
+              person, tag or just a folder — from where the pictures sit, how the
+              names are shaped, when they were taken and whose faces are in them.
+              Take a level from its band or override a single row.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Nothing written until you agree</h3>
+            <p>
+              The review screen names every project, set and person your folders
+              are about to become, and says plainly that no file is copied, moved
+              or renamed. Organise later brings the pictures in and leaves the
+              naming for another day; an interrupted import resumes.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>A folder layout for what comes next</h3>
+            <p>
+              Give a library a layout — Project then Person or Set — and
+              PixlStash writes new pictures where it says. Choosing one moves
+              nothing that is already there, and renaming a project, person or
+              set renames their folder without moving a file.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Move to match, never behind your back</h3>
+            <p>
+              A picture moves only when its folder stops being true, so adding a
+              second project or person moves nothing. Where a picture is filed
+              truthfully but not where the layout would put it today, the move is
+              offered, counted first, and undone as one batch.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Export straight into a folder</h3>
+            <p>
+              Export the pictures you selected into a folder on the machine
+              running PixlStash, which then opens in your file manager. Captions,
+              resolution, sidecars and face crops come out as the zip export
+              produces them, without the round trip through downloads.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
           <h2 class="section-title">Libraries, models and the command line</h2>
           <p class="section-subtitle">
             Keep separate picture libraries in one installation, catalogue the
@@ -799,16 +867,16 @@
             <div class="shot-image-pair">
               <button class="shot-image-btn" type="button">
                 <img
-                  src="assets/ScreenshotTagStatistics.png"
-                  data-full="assets/ScreenshotTagStatistics.png"
+                  src="assets/ScreenshotTagStatistics.jpg"
+                  data-full="assets/ScreenshotTagStatistics.jpg"
                   alt="Tag distribution and statistics sidebar in PixlStash"
                   loading="lazy"
                 />
               </button>
               <button class="shot-image-btn" type="button">
                 <img
-                  src="assets/ScreenshotPictureStatistics.png"
-                  data-full="assets/ScreenshotPictureStatistics.png"
+                  src="assets/ScreenshotPictureStatistics.jpg"
+                  data-full="assets/ScreenshotPictureStatistics.jpg"
                   alt="Picture statistics sidebar in PixlStash"
                   loading="lazy"
                 />
@@ -981,9 +1049,11 @@
           <div class="feature-card">
             <h3>Faster background processing</h3>
             <p>
-              Tagging and face extraction use bulk database operations and
-              smarter scheduling for significantly higher throughput. Watch
-              real-time progress in the statistics sidebar.
+              Each picture moves to the next model as soon as its own rows land
+              rather than waiting for the whole batch, models stay resident for a
+              pass, decoding and resizing happen off the GPU worker, and the VRAM
+              budget follows your card. Watch real-time progress in the
+              statistics sidebar.
             </p>
           </div>
         </div>

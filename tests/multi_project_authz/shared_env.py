@@ -11,7 +11,7 @@ of ``test_multi_project_membership_authz.py``'s module namespace
 fixture's parameters against the module it is *collected* in, so the moment the
 copied ``env`` grew a ``_module_env`` dependency that had not also been copied,
 every test in the borrowing module errored at setup with ``fixture
-'_module_env' not found`` — silently, and only in the borrowing file. Fixtures
+'_module_env' not found`` - silently, and only in the borrowing file. Fixtures
 now come from the package ``conftest.py``, where dependencies resolve
 themselves and nothing has to be re-exported by hand.
 """
@@ -83,14 +83,14 @@ def _good_picture_files():
 # Faces this file seeds by hand all use an index far outside the detector's
 # range (900 / 901, see `_make_face` and `_seed_set_sort_inputs`), which is also
 # what lets the per-test reset delete exactly the seeded rows and leave the real
-# extraction output — the thing `_wait_faces_extracted` waits for — in place.
+# extraction output - the thing `_wait_faces_extracted` waits for - in place.
 _SEEDED_FACE_INDEX_FLOOR = 900
 
 # Finders that rewrite, or delete, the very rows this file seeds by hand. With a
 # per-test Server they were mostly harmless: a cold vault has no models loaded,
 # so the sweeps sat in backoff and never reached the two pictures before the
 # server was torn down again. A module-scoped Server is always warm, so they
-# land *inside* the tests instead — `FaceModelRefreshTask` deletes a seeded face
+# land *inside* the tests instead - `FaceModelRefreshTask` deletes a seeded face
 # whose model_pack it cannot reproduce, `LikenessParametersTask` DELETEs every
 # pair touching a picture, and `ImageEmbeddingTask` owns `image_embedding` and
 # `perceptual_hash`. They are detached once the module fixture has let them
@@ -125,15 +125,15 @@ _PICTURE_BASELINE_COLUMNS = (
 # Probes the oracle tests rely on genuinely *not* existing. Asserted per test as
 # the owner (who is never scope-restricted), because "no such project" and "you
 # may not see that project" are the two answers those tests exist to prove
-# indistinguishable — for a scoped token only.
+# indistinguishable - for a scoped token only.
 _MISSING_PROJECT_PROBES = ("99999999", "NoSuchProjectHere")
 
 
 def _detach_volatile_finders(server):
     """Take `_VOLATILE_TASK_TYPES` out of the running WorkPlanner.
 
-    The planner itself keeps running — the staging-import endpoint refuses while
-    the face worker is down, and three tests here import — so this removes
+    The planner itself keeps running - the staging-import endpoint refuses while
+    the face worker is down, and three tests here import - so this removes
     finders rather than stopping the scheduler. `WorkPlanner.detach_finders`
     edits the planner's three finder structures under the planner's own lock and
     marks each removed finder exhausted, so a finder that `depends_on()` one of
@@ -149,7 +149,7 @@ def _detach_volatile_finders(server):
     for task_type in _VOLATILE_TASK_TYPES:
         assert finders.pop(task_type, None) is not None, (
             f"{task_type} is not registered any more; this module's seeded rows "
-            f"are only stable because it is detached — re-check the new finder set"
+            f"are only stable because it is detached - re-check the new finder set"
         )
     removed = planner.detach_finders(_VOLATILE_TASK_TYPES)
     assert planner.is_running(), (
@@ -178,8 +178,8 @@ def _picture_baseline(server, picture_ids):
 def _reset_domain_state(server, baseline):
     """Put the vault back to "two imported pictures and nothing else".
 
-    Everything this file's tests create — projects, sets, characters, stacks,
-    hand-seeded faces, likeness pairs, tokens — is removed, and the two fixture
+    Everything this file's tests create - projects, sets, characters, stacks,
+    hand-seeded faces, likeness pairs, tokens - is removed, and the two fixture
     pictures are restored column-for-column from *baseline*. The pictures
     themselves are deliberately NOT deleted: they keep their ids, their real
     extracted faces and their real embeddings, so nothing has to be re-imported
@@ -206,7 +206,7 @@ def _reset_domain_state(server, baseline):
     def _do(session):
         # The DELETE goes first on purpose: pysqlite emits BEGIN lazily on the
         # first DML, and `defer_foreign_keys` only holds for the transaction it
-        # is set in — issued before any statement it lands in autocommit and is
+        # is set in - issued before any statement it lands in autocommit and is
         # gone again by the time it is needed. The assertion below proves it is
         # live rather than trusting that.
         session.exec(delete(Face).where(Face.face_index >= _SEEDED_FACE_INDEX_FLOOR))
@@ -307,7 +307,7 @@ def _build_fixture_entities(client, pic_a):
     char_id = r.json()["character"]["id"]
 
     # Single-project control: belongs to P1 only, so a P2 token must be
-    # refused it — proving the widening did not become "any project wins".
+    # refused it - proving the widening did not become "any project wins".
     r = client.post(
         f"{API}/picture_sets",
         json={"name": "P1OnlySet", "project_ids": [projects["P1"]]},
@@ -339,15 +339,15 @@ def _assert_fixture_shape(owner, ids, pic_a, pic_b):
     (``--ci-shard``, tests/conftest.py), so a canary would only ever guard the
     shard it happened to land in.
 
-    Everything below is asserted on **identity** — which projects exist, under
+    Everything below is asserted on **identity** - which projects exist, under
     which names and ids, which entity is a member of which, which picture is in
-    the set — never on a count, because a leaked or missing row is exactly what
+    the set - never on a count, because a leaked or missing row is exactly what
     corrupts a count.
 
     The last two blocks are here for the oracle tests specifically
     (``test_project_path_routes_are_not_an_existence_oracle`` and its project-
     token twin). Those prove a scoped token cannot tell "this project holds the
-    entity" from "this project does not" from "this project does not exist" —
+    entity" from "this project does not" from "this project does not exist" -
     which is only a proof if the three cases are genuinely different to begin
     with. A shared environment that left P3 deleted, or SharedSet detached from
     P1, would collapse all three probes into "missing" and the oracle test would
@@ -384,7 +384,7 @@ def _assert_fixture_shape(owner, ids, pic_a, pic_b):
     for picture_id, expected in expected_membership.items():
         r = owner.get(f"{API}/pictures/{picture_id}/metadata")
         assert r.status_code == 200, (
-            f"fixture picture {picture_id} is gone — a negative assertion below "
+            f"fixture picture {picture_id} is gone - a negative assertion below "
             f"would be refused for the wrong reason: {r.text}"
         )
         assert r.json()["project_id"] == expected, (
@@ -424,7 +424,7 @@ def _assert_fixture_shape(owner, ids, pic_a, pic_b):
 # Generous on purpose, and the number is evidence-led. CI runs the whole suite
 # `--force-cpu` on a shared runner, so this waits on a face pass that has no GPU
 # and may still be fetching its model pack. At 60 s it timed out on two separate
-# PRs whose diffs could not touch face extraction — one of them frontend-only —
+# PRs whose diffs could not touch face extraction - one of them frontend-only -
 # reporting `rows per picture: {}`, i.e. the pass had produced nothing at all
 # rather than being partway through. The same suite takes ~98 s end to end
 # locally WITH a GPU. `test_likeness_and_face_search` already allows 120 s for an

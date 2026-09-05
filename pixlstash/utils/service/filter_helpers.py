@@ -30,7 +30,7 @@ def combine_likeness_scores(scores: np.ndarray, combine: str) -> np.ndarray:
     """Combine per-query similarity scores across multiple query images.
 
     Args:
-        scores: Shape ``(Q, N)`` — Q query images, N candidates.  For a
+        scores: Shape ``(Q, N)`` - Q query images, N candidates.  For a
             single query pass shape ``(1, N)``; the result is still ``(N,)``.
         combine: One of ``"mean"``, ``"max"``, ``"min"``,
             ``"harmonic_mean"``, or ``"geometric_mean"``.
@@ -299,7 +299,7 @@ def fetch_scope_allowed_set_ids(server, request) -> set[int] | None:
 
     Object-level scope authorizes a *picture*; it says nothing about the related
     entities named in that picture's payload. A picture-set-scoped token can
-    legitimately read a picture that also belongs to some other, private set —
+    legitimately read a picture that also belongs to some other, private set -
     and without this helper the response would hand over that set's id and
     user-authored name, which the token cannot obtain from ``GET /picture_sets``.
     Any handler that embeds set identity in a picture-derived payload must filter
@@ -316,7 +316,7 @@ def fetch_scope_allowed_set_ids(server, request) -> set[int] | None:
         request: The current FastAPI request.
 
     Returns:
-        ``None`` when the token is unscoped / owner (no restriction — the caller
+        ``None`` when the token is unscoped / owner (no restriction - the caller
         must not filter). A ``set[int]`` of visible set IDs for a scoped token,
         which may be empty. An empty ``set`` for a ``character``, ``picture``, or
         unrecognised ``resource_type`` (fail-closed: no set is disclosed).
@@ -449,7 +449,7 @@ def visible_project_ids(server, request) -> set[int] | None:
     *membership metadata about other projects*, not part of the object the token
     was granted: a token scoped to one character legitimately reads that
     character, but the complete membership list tells it how many other projects
-    the character is filed under and what their ids are — facts it can obtain
+    the character is filed under and what their ids are - facts it can obtain
     from no endpoint it is allowed to call (``GET /projects/{other_id}`` is
     project-scoped and 403s). Any handler that serialises ``project_ids`` must
     intersect it with this function's result first.
@@ -464,7 +464,7 @@ def visible_project_ids(server, request) -> set[int] | None:
         request: The current FastAPI request.
 
     Returns:
-        ``None`` when the token is unscoped / owner (no restriction — the caller
+        ``None`` when the token is unscoped / owner (no restriction - the caller
         must not filter). ``{project_id}`` for a ``project``-scoped token. An
         empty ``set`` for a ``character``, ``picture_set``, ``picture``, or
         unrecognised ``resource_type`` (fail-closed: no project id is disclosed).
@@ -494,7 +494,7 @@ def filter_visible_project_ids(
 
     Args:
         project_ids: The entity's full project membership, from the join table.
-        visible: The result of :func:`visible_project_ids` — ``None`` for an
+        visible: The result of :func:`visible_project_ids` - ``None`` for an
             owner / unscoped token (no narrowing), otherwise the set of project
             ids the token may learn about.
 
@@ -630,13 +630,13 @@ def narrow_project_assignments(
     ``POST /projects/membership`` answers "which of these pictures belong to
     which project". Every key is a project id, so an unnarrowed mapping tells a
     ``picture_set``- or ``picture``-scoped token which projects exist and which
-    of its pictures are filed under them — the facts
+    of its pictures are filed under them - the facts
     :func:`visible_project_ids` exists to withhold (issue #125 / R1b, #708 F1).
 
     Args:
         assignments: ``project_id -> [picture_id, ...]``, straight from the join
             table.
-        visible: The result of :func:`visible_project_ids` — ``None`` for an
+        visible: The result of :func:`visible_project_ids` - ``None`` for an
             owner / unscoped token (no narrowing).
 
     Returns:
@@ -675,7 +675,7 @@ def _character_scope_picture_ids(session: Session, character_id: str) -> set[int
     """Picture ids matching a character filter (excluding soft-deleted).
 
     ``"UNASSIGNED"`` means a picture that has at least one face whose
-    ``character_id`` is NULL and *no* face assigned to any character — the same
+    ``character_id`` is NULL and *no* face assigned to any character - the same
     EXISTS/NOT-EXISTS clause used by the picture-scoring queries (see
     ``pixlstash.scoring``). A numeric id matches pictures having a Face
     with that ``character_id``.
@@ -727,7 +727,7 @@ def fetch_tag_review_scope_picture_ids(
             and no assigned face.
 
     Returns:
-        ``None`` when no dimension is provided (no scope — caller should not
+        ``None`` when no dimension is provided (no scope - caller should not
         filter). Otherwise the intersection of the provided dimensions' picture
         ids; an empty set is a valid result (e.g. an empty set, an unknown id, or
         dimensions that do not overlap) and means "no in-scope pictures".

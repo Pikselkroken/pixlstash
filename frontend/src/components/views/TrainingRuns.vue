@@ -3,13 +3,13 @@
     <!-- No title, no subtitle, no brand mark. This is the shelf's second view
          and the shelf's toolbar already names it; a second heading here made
          two headers, two type scales for one rank, and put a vendor logo on one
-         of the two views. What is left is the one fact the bar cannot carry —
-         WHICH folder these came from — and the reload. -->
+         of the two views. What is left is the one fact the bar cannot carry -
+         WHICH folder these came from - and the reload. -->
     <div v-if="source" class="tr-meta">
       <span class="tr-path" :title="source.path">{{ source.path }}</span>
       <!-- The view reloads itself whenever the tab is looked at again, which is
            the shape of the real workflow: leave PixlStash, train, come back.
-           This button is for the other one — both windows visible at once, so
+           This button is for the other one - both windows visible at once, so
            focus never changes and nothing fires. No badge on it: the only way
            to know a run had appeared would be to poll the listing, and polling
            every run's checkpoints and samples to light a dot costs more than
@@ -33,7 +33,7 @@
       </AppButton>
     </p>
     <!-- The first read of a folder walks it and parses a `config.yaml` per run,
-         which is not instant on a real output root — and until now that showed
+         which is not instant on a real output root - and until now that showed
          as an empty panel, which reads as "there is nothing here" rather than
          as "working". The shared spinner idiom (`mdi-loading` + `mdi-spin`, the
          one `AppButton` and the overlay panels already use), centred in the
@@ -292,24 +292,24 @@
 </template>
 
 <script setup>
-// The ai-toolkit training runs — the model shelf's second view (shelf plan F6).
+// The ai-toolkit training runs - the model shelf's second view (shelf plan F6).
 //
 // A VIEW and not a dialog, which is the whole reason it can stay current. A
 // dialog is opened, read once and dismissed, so a run that finished while it
 // was open was invisible until it was closed and reopened. The folder this
-// reads is still set in a dialog — that is a setting, and a dialog is the right
+// reads is still set in a dialog - that is a setting, and a dialog is the right
 // place to set what a folder IS. What is inside the folder is not a setting,
 // and it changes without PixlStash doing anything, so it gets a view that
 // reloads: on entry, and whenever the tab is looked at again.
 //
 // It lives INSIDE `ModelShelf.vue` as a tabpanel rather than at its own route,
-// because these are models too — still in ai-toolkit's output folder rather
+// because these are models too - still in ai-toolkit's output folder rather
 // than on the shelf, and importing one is the act of moving it from here to
 // there. The shelf owns the toolbar, the tabs and the count.
 //
 // Built on the promise the listing route makes: describing a run costs nothing
-// and changes nothing, so the whole grid — names, steps, sizes, previews, what
-// the config says it trained against — is drawn before the user commits to any
+// and changes nothing, so the whole grid - names, steps, sizes, previews, what
+// the config says it trained against - is drawn before the user commits to any
 // of it. Nothing here hashes, copies or writes until Import is pressed. That is
 // also what makes reloading free enough to do on every focus.
 
@@ -380,7 +380,7 @@ const chosenRuns = computed(() =>
   runs.value.filter((run) => chosen.value.includes(run.name)),
 );
 
-/** The one chosen run, or null — what gates the per-step picker. */
+/** The one chosen run, or null - what gates the per-step picker. */
 const single = computed(() =>
   chosenRuns.value.length === 1 ? chosenRuns.value[0] : null,
 );
@@ -433,7 +433,7 @@ const confirmLabel = computed(() => {
 
 // An import needs BOTH ends named. The destination has always been stated
 // here; the source root is stated beside it so `submit` cannot reach its loop
-// without one and send a request whose `sourceFolderId` is missing — a
+// without one and send a request whose `sourceFolderId` is missing - a
 // round-trip that can only come back refused, reported per run as if the run
 // were at fault.
 const canSubmit = computed(
@@ -449,7 +449,7 @@ const canSubmit = computed(
  * The run's cover: the FIRST prompt at its highest step.
  *
  * Highest step because that is what the run has learned so far. First prompt,
- * and deliberately not the last one rendered — `index` distinguishes *prompts*
+ * and deliberately not the last one rendered - `index` distinguishes *prompts*
  * within a step, not time, so every sample at the top step is equally "newest"
  * and a tie-break on recency has nothing to break. Choosing index 0 keeps the
  * cover on the same prompt for every run and at every step, which is what makes
@@ -510,7 +510,7 @@ function clearSelection() {
 // Keyed on the run's NAME and not on the computed's identity: `single`
 // recomputes whenever `runs` is replaced, which a reload does on every window
 // focus, and refilling there would silently re-tick a checkpoint the reader had
-// just excluded — the exact "moves the ground under you" failure the reload is
+// just excluded - the exact "moves the ground under you" failure the reload is
 // written to avoid.
 let stepsFilledFor = "";
 watch(single, (run) => {
@@ -549,8 +549,8 @@ function onGridKeydown(event) {
  * that have VANISHED (imported from another window, or deleted) drop out of the
  * selection rather than leaving it pointing at nothing.
  *
- * Reads overlap — mount, a folder change, a visibility change and a window
- * focus all start one, and none of them cancels the last — so every completion
+ * Reads overlap - mount, a folder change, a visibility change and a window
+ * focus all start one, and none of them cancels the last - so every completion
  * is checked against the generation before it writes anything. An older read
  * answering last would otherwise replace the newer one's rows, and the
  * selection reconciled below would be filtering the newer listing's names
@@ -608,7 +608,7 @@ function reload() {
 }
 
 /**
- * Read the runs whenever the output root changes — including from nothing.
+ * Read the runs whenever the output root changes - including from nothing.
  *
  * The load used to hang off `onMounted` alone, which was wrong in the one case
  * that matters most: setting the folder from THIS view's own empty state. The
@@ -625,7 +625,7 @@ function reload() {
  * root's cards on screen under the new root's path for as long as the walk
  * takes, with Import live: a run name means nothing outside the root it was
  * read under, so a tick surviving that window sends the new root's id with the
- * old root's run name — which is issue #1019 whatever the response ordering
+ * old root's run name - which is issue #1019 whatever the response ordering
  * does. Same reason the count is cleared rather than left describing a folder
  * the shelf is no longer pointing at.
  */
@@ -655,8 +655,8 @@ function onVisible() {
 /**
  * Keep a valid destination selected, rather than picking one once at mount.
  *
- * `folders.refresh()` is not awaited — this view must draw before the registry
- * lands — so on a cold start or a direct navigation to `/models/runs` the list
+ * `folders.refresh()` is not awaited - this view must draw before the registry
+ * lands - so on a cold start or a direct navigation to `/models/runs` the list
  * is EMPTY at mount. Deriving the default there left `destinationId` null with
  * nothing to re-derive it, and `canSubmit` requires a destination: the reader
  * could tick runs and find Import disabled with nothing on screen saying why.
@@ -696,7 +696,7 @@ onBeforeUnmount(() => {
  * `POST /model-imports` takes `SHELF_IO_LOCK` with `blocking=False` and answers
  * 409 if anything else holds it, so firing the batch concurrently would fail
  * every request after the first. Each run is caught on its own, so run 5 still
- * gets its turn when run 3 fails, and the receipt names what actually landed —
+ * gets its turn when run 3 fails, and the receipt names what actually landed -
  * stopping at the first failure would leave the user unable to tell which of
  * the five are now on the shelf.
  */
@@ -706,7 +706,7 @@ async function submit() {
   // Captured once, because the batch is sequential and the registry can change
   // between two of its requests. The rows and the tick are dropped the moment
   // the root changes (see the watcher), so what is captured here is the root
-  // the chosen runs were read under — and every request in the batch names it,
+  // the chosen runs were read under - and every request in the batch names it,
   // rather than whichever folder is registered when its turn arrives. Non-null
   // by `canSubmit`, which is checked above.
   const sourceId = source.value.id;
@@ -767,7 +767,7 @@ function batchReceipt(imported, failed) {
 /* The panel sits inside `.shelf`, which owns the toolbar and the positioning
    context the pill docks against. The bottom inset is what keeps the last row
    of cards out from under that pill. */
-/* The inset matches `.shelf-body`, which carries NO horizontal padding at all —
+/* The inset matches `.shelf-body`, which carries NO horizontal padding at all -
    its rows run to the edges and take their own `--space-3` inset from the
    shared row rule. A 16px box around this grid put the two tabs on different
    left edges and wasted a column of grid width at every viewport. `--space-3`
@@ -820,7 +820,7 @@ function batchReceipt(imported, failed) {
   align-content: start;
 }
 
-/* On the canvas with a hairline, exactly like a shelf row — NOT filled with
+/* On the canvas with a hairline, exactly like a shelf row - NOT filled with
    `surface`. On dark, `surface` is 1.12:1 from `background`, so the fill bought
    nothing visually and cost the selected rail its contrast: `primary` measures
    2.72:1 on `surface` (under WCAG 1.4.11's 3:1) and 3.04:1 on `background`,
@@ -847,7 +847,7 @@ function batchReceipt(imported, failed) {
 
 /* The shelf row's own recipe, verbatim: a `--rail-w` rail down the left edge.
    The same object, which is the strongest cue that these are two views of one
-   shelf — and it survives desaturation, which a wash alone does not. */
+   shelf - and it survives desaturation, which a wash alone does not. */
 .tr-card--checked {
   border-color: rgb(var(--v-theme-primary));
   box-shadow: inset var(--rail-w) 0 0 rgb(var(--v-theme-primary));
@@ -877,7 +877,7 @@ function batchReceipt(imported, failed) {
 
 /* Hidden by opacity, never by `v-if` or `visibility`: a target that pops into
    existence under the pointer is a mis-click. It appears on hover, on keyboard
-   focus, and on every card once anything is ticked — so the grid says plainly
+   focus, and on every card once anything is ticked - so the grid says plainly
    that it is in a selecting mode. */
 .tr-card-check {
   position: absolute;
@@ -919,7 +919,7 @@ function batchReceipt(imported, failed) {
 
 /* The wash goes on the metadata strip and NEVER on the preview: the image is
    the evidence the choice is being made on, and tinting it changes the thing
-   being judged. (The photo grid does wash its whole tile — legal there, because
+   being judged. (The photo grid does wash its whole tile - legal there, because
    the user already knows the photo.) */
 .tr-card--checked .tr-card-body {
   background: rgba(var(--v-theme-primary), 0.12);
@@ -969,7 +969,7 @@ function batchReceipt(imported, failed) {
 }
 
 /* The global reduced-motion reset would freeze this into a static broken ring,
-   which reads as a bug rather than as restraint. Slowed, not stopped — the same
+   which reads as a bug rather than as restraint. Slowed, not stopped - the same
    exemption `AppButton` takes for the same glyph. */
 @media (prefers-reduced-motion: reduce) {
   .tr-loading .mdi-spin::before {
@@ -988,7 +988,7 @@ function batchReceipt(imported, failed) {
 }
 
 /* The colour carries the variant; the TEXT stays full strength. The warning hue
-   as a foreground measures 3.09:1 on the light background — under the 4.5:1
+   as a foreground measures 3.09:1 on the light background - under the 4.5:1
    floor, on the one sentence in this view that says runs are about to be
    deleted from disk. Tint and border instead, the recipe `library-chip--warn`
    and `DedupAutoStackDialog` already use. */

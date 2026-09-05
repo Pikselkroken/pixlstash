@@ -4,7 +4,7 @@
 (``run_task``, ``run_immediate_read_task``, ``submit_task``), each taking a
 callable whose first argument is a SQLModel ``Session``. Identity moves from the
 vault to the hub by handing it one of these instead of the vault's
-:class:`~pixlstash.database.VaultDatabase` — 23 call sites keep working
+:class:`~pixlstash.database.VaultDatabase` - 23 call sites keep working
 verbatim, and the hub's ``user`` / ``usertoken`` tables are shaped to match the
 same models (see :mod:`pixlstash.hub.schema`).
 
@@ -13,7 +13,7 @@ one thread because a vault is owned by a single process and its background
 batches are long. The hub is the opposite on both counts: it is opened by the
 server *and* the CLI concurrently, so in-process serialisation would buy nothing
 a second process could not defeat, and its writes are single rows. Concurrency
-is arbitrated where it actually has to be — SQLite WAL plus a busy timeout — and
+is arbitrated where it actually has to be - SQLite WAL plus a busy timeout - and
 tasks run inline on the calling thread. ``submit_task`` therefore returns an
 already-completed :class:`~concurrent.futures.Future`, which keeps the
 ``add_done_callback`` contract callers rely on.

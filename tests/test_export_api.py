@@ -166,4 +166,145 @@ def test_export_status_unknown_task_returns_404():
     finally:
         server.close()
         temp_dir.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Export to folder (#291): writes straight onto the host disk instead of
+# packaging a ZIP to download, then opens the destination in the host file
+# manager.
+# ---------------------------------------------------------------------------
+
+
+def test_pictures_export_folder_writes_files_and_opens_it():
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "destination")
+        os.makedirs(destination, exist_ok=True)
+
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ) as opener:
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            assert resp.status_code == 200, resp.text
+            task_id = resp.json().get("task_id")
+            assert task_id
+
+            status = _wait_for_export(client, task_id)
+            assert status["status"] == "completed"
+            assert status.get("destination") == destination
+            assert status.get("download_url") is None
+            assert status.get("opened") is True
+
+            opener.assert_called_once_with(destination)
+
+        written = [
+            f
+            for f in os.listdir(destination)
+            if os.path.isfile(os.path.join(destination, f))
+        ]
+        assert written, "expected at least one exported file in the destination"
+
+        # A folder export's task is collected on the first "completed" status
+        # read (there is no download step to trigger it) - a second status
+        # poll must 404, not report the same task forever.
+        from tests.utils import API_PREFIX
+
+        resp = client.get(
+            f"{API_PREFIX}/pictures/export/status", params={"task_id": task_id}
+        )
+        assert resp.status_code == 404
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_reports_when_it_could_not_open():
+    """A headless host's file manager spawn failing must not be silently
+    swallowed: the export itself succeeded (files are on disk), but the task
+    must say it could not be opened rather than reporting a plain success."""
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "destination")
+        os.makedirs(destination, exist_ok=True)
+
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=False,
+        ):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            task_id = resp.json().get("task_id")
+
+            status = _wait_for_export(client, task_id)
+            assert status["status"] == "completed"
+            assert status.get("opened") is False
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_rejects_missing_destination():
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        missing = os.path.join(temp_dir.name, "does-not-exist")
+
+        resp = client.post("/pictures/export/folder", params={"destination": missing})
+        assert resp.status_code == 404
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_rejects_non_empty_destination():
+    """A folder export writes plain files and silently overwrites a same-named
+    one already there (unlike a ZIP, which tolerates duplicate members) - a
+    non-empty destination must be refused rather than risk overwriting
+    something that isn't part of this export."""
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "destination")
+        os.makedirs(destination, exist_ok=True)
+        with open(os.path.join(destination, "already-here.txt"), "w") as f:
+            f.write("not part of this export")
+
+        resp = client.post(
+            "/pictures/export/folder", params={"destination": destination}
+        )
+        assert resp.status_code == 409
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_resolves_symlink_before_blocklist_check():
+    """The blocklist must run on the RESOLVED path, not the string the caller
+    sent: a symlink to a restricted directory must not pass just because its
+    own name isn't on the list."""
+    temp_dir, client, server = _setup()
+    try:
+        link_path = os.path.join(temp_dir.name, "sneaky-link")
+        os.symlink("/etc", link_path)
+
+        resp = client.post("/pictures/export/folder", params={"destination": link_path})
+        assert resp.status_code == 400
+        assert "restricted" in resp.json().get("detail", "").lower()
+    finally:
+        server.close()
+        temp_dir.cleanup()
         gc.collect()

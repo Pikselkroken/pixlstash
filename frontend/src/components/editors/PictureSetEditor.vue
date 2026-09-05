@@ -10,12 +10,12 @@
          alternative and were rejected: a field hidden behind a tab is one you
          cannot check before saving, and this form has a single required field
          and a single commit. The columns are a CSS reflow of unchanged source
-         order — name/description left, projects/lock right — so tab order is
+         order - name/description left, projects/lock right - so tab order is
          exactly the sequence it was single-column: name, description, projects,
          locked. Unlike the person editor this column 2 holds writable controls,
          so that sequence now reads down the left column and then down the
          right, which is column-major and is what the eye does with two columns
-         — but it does mean Tab travels bottom-left to top-right once.
+         - but it does mean Tab travels bottom-left to top-right once.
 
          The appearance block does NOT go in a column. Eight 32px icon columns
          plus the scroll gutter, the "or" divider, the thumbnail and the colour
@@ -162,7 +162,7 @@
 
       <!-- Outside the lock wash: the tray is read-only, so a locked set still
            shows what it uses. Keyed on the open count so an adapter attached on
-           the shelf in between still shows up here — without the freshness
+           the shelf in between still shows up here - without the freshness
            resting on the dialog's lazy-mount behaviour, and without the widest
            block in the dialog vanishing from under a leave transition, which is
            what `v-if="props.open"` did. The id comes from the latched local
@@ -257,7 +257,7 @@ const localSet = ref({
 });
 
 // The set's persisted locked state gates the fields. Editing the checkbox does
-// not flip this — a set only becomes editable after an unlock PATCH round-trips
+// not flip this - a set only becomes editable after an unlock PATCH round-trips
 // and the dialog reopens with the fresh set.
 //
 // Written by the watcher below rather than computed off the prop, for the same
@@ -505,7 +505,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 
 /* Dim the whole appearance block while the set is locked. The individual buttons
    already carry their own :disabled state (per the visual-language disabled
-   rule), so this is a lighter wash on top of that — enough to read as inactive
+   rule), so this is a lighter wash on top of that - enough to read as inactive
    without dropping the block below legibility. Pointer events stay on the
    container so its lock-reason title still shows on hover. */
 .appearance-row--locked {

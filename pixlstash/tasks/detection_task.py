@@ -31,7 +31,7 @@ class DetectionTask(BaseTask):
     Mirrors :class:`~pixlstash.tasks.face_extraction_task.FaceExtractionTask`'s
     GPU-queue / high-priority shape, but runs Florence-2 grounding/OD and stores
     labelled boxes in the :class:`~pixlstash.db_models.detection.Detection`
-    table. Unlike face extraction there is **no WorkFinder** — detection only
+    table. Unlike face extraction there is **no WorkFinder** - detection only
     runs when the user asks for it (the Segment action), so it is not part of
     the NULL-column reprocessing pattern.
 
@@ -87,11 +87,15 @@ class DetectionTask(BaseTask):
     def estimated_vram_mb(self) -> int:
         # Detection shares Florence-2 with captioning; reuse the description
         # workflow's VRAM estimate (model weights dominate; detection's extra
-        # output tokens are negligible activation scratch).
+        # output tokens are negligible activation scratch). Named explicitly:
+        # detection always runs Florence-2, whatever plugin is configured to
+        # caption, and that estimate now follows the active plugin.
         try:
             return max(
                 0,
-                self._engine.description_workflow.estimate_vram_mb(len(self._pictures)),
+                self._engine.description_workflow.estimate_vram_mb(
+                    len(self._pictures), plugin_name="florence2"
+                ),
             )
         except Exception as exc:
             logger.debug(

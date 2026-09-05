@@ -7,7 +7,7 @@ from sqlmodel import Field, SQLModel
 
 
 class TagSuggestion(SQLModel, table=True):
-    """A suggested label fix for review — the dataset-refinement queue.
+    """A suggested label fix for review - the dataset-refinement queue.
 
     Distinct from both Tag (user-confirmed ground truth) and TagPrediction (the
     tagger's raw per-tag confidences). A TagSuggestion says "this label is probably
@@ -49,7 +49,7 @@ class TagSuggestion(SQLModel, table=True):
     reason: Optional[str] = Field(default=None)
 
     # The neighbour/example that triggered the suggestion, shown to the reviewer.
-    # Soft reference (set null if that picture is deleted) — informational only.
+    # Soft reference (set null if that picture is deleted) - informational only.
     twin_picture_id: Optional[int] = Field(
         default=None,
         sa_column=Column(
@@ -80,21 +80,21 @@ class TagSuggestion(SQLModel, table=True):
     # JSON list of the suspect's k nearest neighbours captured at scan time:
     # [{"picture_id": int, "has": bool}, ...] ordered by descending similarity,
     # where "has" is the merged-concept "carries the tag" flag used in the vote.
-    # Frozen evidence — never recomputed after the scan that wrote it.
+    # Frozen evidence - never recomputed after the scan that wrote it.
     neighbors: Optional[str] = Field(
         default=None, sa_column=Column(sa.Text(), nullable=True)
     )
 
     # PENDING | ACCEPTED | DISMISSED | TWIN_FIXED | SWAPPED | SKIPPED.
     # SKIPPED = the reviewer could not decide: the row leaves the queue with no
-    # decision made — no Tag write, no ledger write (reopen simply re-pends it).
+    # decision made - no Tag write, no ledger write (reopen simply re-pends it).
     status: str = Field(default="PENDING", index=True)
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
     reviewed_at: Optional[datetime] = Field(default=None)
 
     # Prior-decision snapshot for the include_reviewed re-parent. When a scan
     # re-parents an already-DECIDED row into a new review (reopening it), the
-    # decision being overwritten — its (review_id, status, reviewed_at) — is
+    # decision being overwritten - its (review_id, status, reviewed_at) - is
     # captured here first, so undo can RESTORE that tuple (re-exposing the
     # original decision for a normal reversal) instead of silently erasing it.
     # NULL for rows that were never re-parented over a decision. prior_review_id

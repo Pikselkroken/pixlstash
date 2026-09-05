@@ -42,7 +42,7 @@ const LOCALE_DATETIME_OPTIONS = {
 };
 
 // An `Intl.DateTimeFormat` costs far more to CONSTRUCT than to run, and
-// `toLocaleString` builds one per call — `locale` is the DEFAULT format, so a
+// `toLocaleString` builds one per call - `locale` is the DEFAULT format, so a
 // list of a couple of thousand rows pays for a couple of thousand of them on
 // every render. Two option sets, two formatters, kept.
 const intlFormatters = new Map();
@@ -95,7 +95,7 @@ export function formatUserDate(dateStr, format) {
 /**
  * The same stamp without the clock, for a column rather than a line.
  *
- * A column is scanned, and the clock is what stops it being scannable —
+ * A column is scanned, and the clock is what stops it being scannable -
  * `locale`, the default, spends about a third of its width on a time nobody is
  * comparing rows by. Built from the parts, NEVER by trimming what
  * {@link formatUserDate} returned: `locale` delegates to the browser's own

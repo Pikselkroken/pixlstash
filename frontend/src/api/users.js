@@ -1,4 +1,4 @@
-// Current-user resource — /users/me/*.
+// Current-user resource - /users/me/*.
 //
 // Everything scoped to "whoever this credential is": the owner account, the
 // API/share tokens it has minted, and the watermark stamped onto shared
@@ -49,7 +49,7 @@ export async function listTokens() {
  *
  * A READ token pinned to a `resource_type`/`resource_id` is what backs a share
  * link; an unpinned token is a general API credential. The plaintext token is
- * returned ONCE, in this response — it cannot be read back later.
+ * returned ONCE, in this response - it cannot be read back later.
  *
  * @param {Object} body - `scope`, optional `description`, `resource_type`,
  *   `resource_id`, `expires_at`, `include_attachments`, `watermark`.

@@ -5,7 +5,7 @@ import { libraryDocumentTitle } from "./libraryChrome";
 describe("libraryDocumentTitle", () => {
   it("names the active owner library in browser and Electron titles", () => {
     expect(libraryDocumentTitle("Family Photos")).toBe(
-      "PixlStash — Family Photos",
+      "PixlStash - Family Photos",
     );
   });
 

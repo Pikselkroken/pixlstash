@@ -3,7 +3,7 @@
 // Two rules carry the weight here, and both are about honesty rather than
 // mechanics: the label has to say how much it is about to turn (a bare "Rotate
 // left" over twelve tiles reads as an action on the one under the cursor), and
-// the item stays LIVE over a mixed selection — the parent only greys it when
+// the item stays LIVE over a mixed selection - the parent only greys it when
 // nothing selected can be rotated at all, because refusing the whole selection
 // over one WebP is a worse outcome than doing the work that can be done.
 
@@ -65,7 +65,7 @@ function rotateItems(wrapper) {
   };
 }
 
-describe("ImageGridContextMenu — rotate", () => {
+describe("ImageGridContextMenu - rotate", () => {
   it("names the count over a multi-selection", () => {
     const wrapper = mountMenu();
     const { left, right } = rotateItems(wrapper);

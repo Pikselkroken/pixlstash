@@ -37,7 +37,14 @@ export default defineConfig({
     screenshot: 'off',
     trace: 'off',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Spread the device first: its viewport (1280x720, dSF 1) otherwise wins over
+  // the high-DPI `use` block above, and every capture comes out half size.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2 },
+    },
+  ],
   webServer: {
     command: `npm run build && ${process.env.PIXLSTASH_PYTHON || 'python'} e2e/serve_e2e_backend.py`,
     url: `${BASE_URL}/version`,
@@ -49,6 +56,10 @@ export default defineConfig({
     env: {
       PIXLSTASH_E2E_PORT: PORT,
       PIXLSTASH_E2E_DATA: DEMO_DATA,
+      // Import pixlstash from THIS checkout. A shared venv with an editable
+      // install elsewhere otherwise wins (its finder resolves what cwd cannot),
+      // and the run silently serves another worktree's dist.
+      PYTHONPATH: resolve(process.cwd(), '..'),
       ...(VERSION_OVERRIDE ? { PIXLSTASH_VERSION_OVERRIDE: VERSION_OVERRIDE } : {}),
     },
   },

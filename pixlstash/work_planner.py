@@ -1,4 +1,7 @@
+import sys
 import threading
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
@@ -9,6 +12,17 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class _PassStats:
+    """One finder's burst, from its first submit until the drain fires."""
+
+    started_at: float
+    pictures: int = 0
+    tasks: int = 0
+    gpu_util_sum: float = 0.0
+    gpu_samples: int = 0
 
 
 class _PlannerStopping(Exception):
@@ -84,6 +98,7 @@ class WorkPlanner:
         from pixlstash.tasks.missing_stack_cohesion_finder import (
             MissingStackCohesionFinder,
         )
+        from pixlstash.tasks.layout_move_finder import LayoutMoveFinder
 
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -130,6 +145,10 @@ class WorkPlanner:
             TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
             ),
+            # Re-registered with a hub in `vault.py` when this vault was opened
+            # through a hub registration, so it can also file workflows; without
+            # one it keeps its pre-B3 predicate. Same reason GFS_SNAPSHOT and
+            # CHECKPOINT_HASH are registered there rather than here.
             TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
                 database=database,
                 image_root=image_root or "",
@@ -165,6 +184,10 @@ class WorkPlanner:
             ),
             TaskType.STACK_COHESION: MissingStackCohesionFinder(
                 database=database,
+            ),
+            TaskType.LAYOUT_MOVE: LayoutMoveFinder(
+                database=database,
+                notifier=notifier,
             ),
         }
 
@@ -207,6 +230,15 @@ class WorkPlanner:
         # edge and was missed entirely whenever the last task finished before
         # the finder reported that it had run out of work.
         self._all_done_pending: dict[str, bool] = {}
+        # Per-finder burst accounting for the [PIPELINE_PASS] line, keyed by
+        # finder name; created on the first submit, popped when the drain fires.
+        self._pass_stats: dict[str, _PassStats] = {}
+        # When a GPU finder's queue last ran dry mid-pass, so the refill can say
+        # how long the stall actually was - the warning above only marks its
+        # start, and "may be idle" is not a number anyone can act on.
+        self._stalled_since: dict[str, float] = {}
+        self._gpu_util_unavailable = False
+        self._gpu_util_torch_missing_logged = False
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -289,6 +321,7 @@ class WorkPlanner:
                     continue
                 self._task_finders = [f for f in self._task_finders if f is not finder]
                 self._finder_exhausted[name] = True
+                self._pass_stats.pop(name, None)
                 removed.add(name)
             self._finder_order_idx = 0
         return removed
@@ -316,6 +349,14 @@ class WorkPlanner:
                 new_inflight = max(0, inflight_count - 1)
                 self._inflight_by_finder[finder_name] = new_inflight
                 is_exhausted = self._finder_exhausted.get(finder_name, False)
+                stats = self._pass_stats.get(finder_name)
+                if stats is not None:
+                    stats.tasks += 1
+                    if error is None:
+                        picture_ids = (getattr(task, "params", None) or {}).get(
+                            "picture_ids"
+                        ) or []
+                        stats.pictures += len(picture_ids)
         if finder_name:
             _GPU_FINDERS = {"MissingTagFinder", "MissingFaceExtractionFinder"}
             if new_inflight == 0 and not is_exhausted and finder_name in _GPU_FINDERS:
@@ -324,6 +365,8 @@ class WorkPlanner:
                     "GPU may be idle until next finder cycle.",
                     finder_name,
                 )
+                with self._lock:
+                    self._stalled_since[finder_name] = time.perf_counter()
             with self._lock:
                 finder = self._task_finders_by_name.get(finder_name)
             if finder is not None:
@@ -362,6 +405,7 @@ class WorkPlanner:
                 )
                 submitted = False
 
+            self._sample_gpu_busy()
             if submitted:
                 self._interval_s = self.MIN_INTERVAL_S
             else:
@@ -488,6 +532,18 @@ class WorkPlanner:
                     finder_name, False
                 )
                 self._all_done_pending[finder_name] = True
+                if finder_name not in self._pass_stats:
+                    self._pass_stats[finder_name] = _PassStats(
+                        started_at=time.perf_counter()
+                    )
+                stalled_since = self._stalled_since.pop(finder_name, None)
+            if stalled_since is not None:
+                logger.warning(
+                    "[PIPELINE_STALL] %s refilled after %.2fs",
+                    finder_name,
+                    time.perf_counter() - stalled_since,
+                )
+            with self._lock:
                 if task_id:
                     self._finder_by_task_id[task_id] = finder_name
 
@@ -507,6 +563,8 @@ class WorkPlanner:
                     # never ran. Restoring rather than clearing keeps a burst
                     # that was already legitimately armed by an earlier task.
                     self._all_done_pending[finder_name] = previous_all_done_pending
+                    if not previous_all_done_pending:
+                        self._pass_stats.pop(finder_name, None)
                     if task_id:
                         self._finder_by_task_id.pop(task_id, None)
                 self._release_unsubmitted(
@@ -556,7 +614,79 @@ class WorkPlanner:
             self._all_done_pending[finder_name] = False
             return True
 
+    def _sample_gpu_busy(self) -> None:
+        """Add one GPU-utilisation sample to every burst currently in flight.
+
+        Runs once per planner cycle, so it costs one NVML query while any
+        finder has work out and nothing at all when the planner is idle. torch
+        is looked up in ``sys.modules`` rather than imported: it is kept off
+        the boot path on purpose, and a GPU that no engine has touched yet has
+        nothing worth sampling.
+        """
+        with self._lock:
+            active = list(self._pass_stats.values())
+        if not active or self._gpu_util_unavailable:
+            return
+        torch = sys.modules.get("torch")
+        if torch is None:
+            # Not sticky: torch arrives with the first model load, and a burst
+            # that started before it simply has fewer samples.
+            if not self._gpu_util_torch_missing_logged:
+                self._gpu_util_torch_missing_logged = True
+                logger.info(
+                    "[PIPELINE_PASS] GPU-busy sampling waiting for torch to be "
+                    "imported (no model loaded yet); bursts until then read n/a"
+                )
+            return
+        try:
+            if not torch.cuda.is_available():
+                self._gpu_util_unavailable = True
+                logger.info(
+                    "[PIPELINE_PASS] GPU-busy sampling unavailable, reporting n/a: "
+                    "torch.cuda.is_available() is False in the planner thread"
+                )
+                return
+            utilization = float(torch.cuda.utilization())
+        except Exception as exc:
+            # ModuleNotFoundError when pynvml is not installed, or an NVML
+            # error; either way the fraction is reported as n/a for the run.
+            self._gpu_util_unavailable = True
+            logger.info(
+                "[PIPELINE_PASS] GPU-busy sampling unavailable, reporting n/a: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return
+        with self._lock:
+            for stats in active:
+                stats.gpu_util_sum += utilization
+                stats.gpu_samples += 1
+
+    def _log_pipeline_pass(self, finder_name: str) -> None:
+        with self._lock:
+            stats = self._pass_stats.pop(finder_name, None)
+        if stats is None:
+            return
+        wall_s = time.perf_counter() - stats.started_at
+        gpu_busy = (
+            f"{stats.gpu_util_sum / stats.gpu_samples / 100.0:.2f}"
+            if stats.gpu_samples
+            else "n/a"
+        )
+        logger.info(
+            "[PIPELINE_PASS] finder=%s pictures=%d tasks=%d wall_s=%.1f "
+            "img_per_s=%.1f gpu_busy=%s gpu_samples=%d",
+            finder_name,
+            stats.pictures,
+            stats.tasks,
+            wall_s,
+            stats.pictures / wall_s if wall_s > 0 else 0.0,
+            gpu_busy,
+            stats.gpu_samples,
+        )
+
     def _notify_all_tasks_complete(self, finder, finder_name: str):
+        self._log_pipeline_pass(finder_name)
         try:
             finder.on_all_tasks_complete()
         except Exception as exc:
@@ -616,7 +746,7 @@ class WorkPlanner:
         else:
             logger.debug(
                 "WorkPlanner dropped task id=%s from finder=%s (%s); its claims "
-                "were NOT released — see the warning above.",
+                "were NOT released - see the warning above.",
                 task_id,
                 finder_name,
                 reason,

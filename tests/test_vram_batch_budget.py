@@ -1,4 +1,4 @@
-from pixlstash.inference.vram_budget import VramBudget
+from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
@@ -155,3 +155,30 @@ def test_larger_budget_gives_bigger_batch_than_smaller_budget():
     assert large_batch > small_batch
     assert large_budget.effective_pixlstash_tagger_batch_size() == large_batch
     assert large_budget.suggested_task_size() == large_batch
+
+
+def test_ort_session_options_cap_the_arena_only_when_a_budget_is_set():
+    budgeted = VramBudget.__new__(VramBudget)
+    budgeted._device = "cuda"
+    budgeted._max_vram_usage_mb = 8192
+    options = budgeted.ort_cuda_provider_options(ORT_ARENA_SHARE["wd14"])
+    assert options["gpu_mem_limit"] == int(8192 * 0.40) * 1024**2
+    assert options["arena_extend_strategy"] == "kSameAsRequested"
+    assert options["cudnn_conv_algo_search"] == "HEURISTIC"
+
+    unlimited = VramBudget("cuda")
+    options = unlimited.ort_cuda_provider_options(ORT_ARENA_SHARE["wd14"])
+    assert "gpu_mem_limit" not in options, "no budget, no invented cap"
+    assert options["arena_extend_strategy"] == "kSameAsRequested"
+    assert options["cudnn_conv_algo_search"] == "HEURISTIC"
+
+    # WD14 is the one capped arena; it must leave torch (CLIP, the PixlStash
+    # tagger) and the uncapped InsightFace sessions real headroom.
+    assert ORT_ARENA_SHARE["wd14"] < 0.6
+    assert ORT_ARENA_SHARE["insightface_session"] is None
+
+    uncapped = budgeted.ort_cuda_provider_options(None)
+    assert uncapped == {"cudnn_conv_algo_search": "HEURISTIC"}, (
+        "an uncapped session gets neither a limit nor a strategy that only "
+        "pays off against one"
+    )

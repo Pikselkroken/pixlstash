@@ -36,8 +36,10 @@ class MaintenanceMixin:
             pic_id, file_path = row
             if not file_path:
                 continue
-            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, file_path)
-            if thumb_path and os.path.exists(thumb_path):
+            # find_thumbnail moves a pre-#1164 bitmap into .pixlstash-thumbnails
+            # as a side effect, so this pass is also the library's migration:
+            # nothing is re-rendered for having lived beside its picture.
+            if ImageUtils.find_thumbnail(self.vault.image_root, file_path):
                 continue
             missing.append((pic_id, file_path))
 
@@ -146,16 +148,9 @@ class MaintenanceMixin:
 
         thumbnails_removed = 0
         for rel_path in thumbnail_candidates:
-            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, rel_path)
-            if not thumb_path or not os.path.isfile(thumb_path):
-                continue
-            try:
-                os.remove(thumb_path)
-                thumbnails_removed += 1
-            except Exception as exc:
-                logger.warning(
-                    "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
-                )
+            thumbnails_removed += ImageUtils.remove_thumbnail(
+                self.vault.image_root, rel_path
+            )
 
         logger.info(
             "Startup missing-file cleanup completed: %s records removed, %s orphan thumbnails removed.",

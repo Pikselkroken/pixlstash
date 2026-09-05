@@ -8,7 +8,7 @@ class MissingSmartScoreFinder(SimpleMissingFinder):
 
     Needs a full ``Vault`` (not just ``database``) because :class:`SmartScoreTask`
     resolves the tagger's per-label acceptance thresholds through it, so it is
-    registered in ``vault.py`` rather than ``WorkPlanner.work_finders()`` — the same
+    registered in ``vault.py`` rather than ``WorkPlanner.work_finders()`` - the same
     reason ``GFS_SNAPSHOT`` and ``TAG_HEALTH_AUTO_REBUILD`` are.
 
     Args:

@@ -52,7 +52,7 @@ class TagHealthRowResponse(BaseModel):
     ground_truth: Optional[int] = Field(
         default=None,
         description=(
-            "How many pictures (not tag rows) carry this tag — the tag's confirmed "
+            "How many pictures (not tag rows) carry this tag - the tag's confirmed "
             "examples. Counts DISTINCT non-deleted pictures holding any literal tag "
             "in this tag's DEFAULT_TAG_MERGES equivalence class, so a merge alias "
             "('extra digit') counts toward its parent ('malformed hand') and a "
@@ -61,7 +61,7 @@ class TagHealthRowResponse(BaseModel):
             "to vote against: the scan falls back to model confidence alone, so "
             "ground_truth == 0 together with est_missing == 0 proves a review would "
             "yield no items. **Null** on a cached row that predates this field, "
-            "until the next rebuild — null means 'not measured', which is NOT the "
+            "until the next rebuild - null means 'not measured', which is NOT the "
             "same as 0 and must never be treated as proof of zero yield. A scoped "
             "response is always computed live and so is never null."
         ),
@@ -84,7 +84,7 @@ class TagHealthResponse(BaseModel):
         default=False,
         description=(
             "True when a new picture, a new tagger run, or a reviewed tag "
-            "suggestion has landed since the cache's computed_at — the rows "
+            "suggestion has landed since the cache's computed_at - the rows "
             "are still the last-rebuilt values, but a rebuild is due. "
             "Top-level, not per-row: the cache is vault-wide and one rebuild "
             "covers every row. Always False for a scoped response (computed "
@@ -110,7 +110,7 @@ def create_router(server) -> APIRouter:
 
     def _reject_scoped_tokens(request: Request) -> None:
         # Vault-wide aggregates cannot be narrowed to a share token's scope
-        # without leaking counts about pictures outside it — owner/full only.
+        # without leaking counts about pictures outside it - owner/full only.
         if fetch_scope_allowed_picture_ids(server, request) is not None:
             raise HTTPException(status_code=403, detail="Not available to this token")
 
@@ -122,12 +122,12 @@ def create_router(server) -> APIRouter:
             "(``building`` and tags-processed progress in [0, 1]). "
             "``computed_at`` is null until the first rebuild. ``stale=true`` "
             "means new pictures, tagger runs, or reviewed tag suggestions "
-            "have landed since ``computed_at`` — a background finder rebuilds "
+            "have landed since ``computed_at`` - a background finder rebuilds "
             "automatically within a few minutes of that, or "
             "``POST /tag_health/rebuild`` forces it immediately. When any of "
             "``project_id`` / ``set_id`` / ``character_id`` is given, the rows "
             "are instead computed live for that scope (``scoped=true`` in the "
-            "response) — the same project/set/character semantics as review "
+            "response) - the same project/set/character semantics as review "
             "creation, including ``character_id=UNASSIGNED``."
         ),
         response_model=TagHealthResponse,

@@ -8,7 +8,7 @@
  * two tiers get two treatments, not two numbers:
  *
  *   • Exact: a filled accent chip with the equals glyph. A settled fact, and the
- *              glyph has to say so — an approximately-equals sign here would
+ *              glyph has to say so - an approximately-equals sign here would
  *              hedge the one claim in this queue that is not a measurement.
  *   • Near, measured: the one visual-similarity claim, with a green check.
  *              The check says that this measurement supports stacking; red Xs

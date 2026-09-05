@@ -1,17 +1,22 @@
 :root {
-  /* PixlStash dark theme — mirrors the Vuetify pixlStashDark palette in
+  /* PixlStash dark theme - mirrors the Vuetify pixlStashDark palette in
      frontend/src/main.js: cream text on slate, amber accent, olive primary.
      Every value below is a token from that theme; keep them in sync with the
      web app (they were last synced to the unified amber palette, 2026-07-24). */
   --bg: #1b1f24; /* background */
   --toolbar: #23282f; /* toolbar / sidebar */
-  --panel: #23282f; /* surface — raised cards */
+  --panel: #23282f; /* surface - raised cards */
   --input-bg: #2b3138; /* input-background */
   --fg: #f2e5da; /* on-background */
   --muted: rgba(242, 229, 218, 0.7);
-  --accent: #c47a1e; /* accent — the unified amber */
-  --primary: #567309; /* primary — olive action fill */
-  --on-accent: #f7f1ea; /* on-accent / on-primary — warm near-white label */
+  --accent: #c47a1e; /* accent - the unified amber */
+  --primary: #567309; /* primary - olive action fill */
+  /* The other two members of the action-fill tier, for the startup screen's
+     two answers. Same values as the web app's dark theme; spent as edges,
+     drawings and washes here, never as small text. */
+  --secondary: #bb3566; /* secondary - raspberry */
+  --tertiary: #46707a; /* tertiary - teal */
+  --on-accent: #f7f1ea; /* on-accent / on-primary - warm near-white label */
   --border: #363d45; /* border */
   /* Red as a FOREGROUND on dark chrome, so it comes from the dark-surface-*
      family, not from the theme's `error` fill (#b54538, tuned to carry a warm
@@ -23,6 +28,35 @@
   box-sizing: border-box;
 }
 
+/* The same thin overlay scrollbars as the app (frontend/src/style.css,
+   .is-desktop) instead of Chromium's fat light ones on the dark chrome. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(242, 229, 218, 0.22) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(242, 229, 218, 0.18);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(242, 229, 218, 0.32);
+  background-clip: padding-box;
+}
+
 html,
 body {
   margin: 0;
@@ -32,6 +66,13 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* A flex body so a child's top margin (the setup page's title-bar offset)
+   cannot collapse through it and push the document past the viewport. */
+body {
+  display: flex;
+  flex-direction: column;
 }
 
 .app {
@@ -66,7 +107,7 @@ body {
   padding-left: 78px; /* room for native traffic lights */
 }
 /* Brand wordmark: the Tiny5 pixel face at 16px, "Pixl" in the body colour and
-   "Stash" in the accent — the two-tone split every other brand surface uses
+   "Stash" in the accent - the two-tone split every other brand surface uses
    (DESIGN.md "Wordmark amber", docs/design/visual-language.md §Wordmark). */
 .winbar .wb-brand {
   margin-right: auto;
@@ -178,6 +219,23 @@ body {
 .panel--selected {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+/* The library folder is the one answer setup needs. Edged and tinted like a
+   chosen compute option, with the path at the size of a choice's label, so it
+   does not read as a footnote to the compute radios. */
+.panel--library {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+.panel--library .hw {
+  color: var(--fg);
+}
+
+.panel--library .field input[type="text"] {
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .hw {
@@ -324,24 +382,92 @@ input[type="text"]:focus-visible,
   overflow: hidden;
 }
 
-/* First-run setup wizard */
+/* First-run setup wizard: brand column on the left, the form on the right.
+   Two columns because the window is 1280x860 and a single 560px column of
+   panels (existing-library notice, identity consent, folder, compute with
+   the install location, progress, error) is taller than the window; side by
+   side, the whole worst case fits without a scrollbar. overflow-y stays as a
+   safety net for windows below the default size. */
 .app.setup {
-  justify-content: flex-start;
-  align-items: stretch;
-  gap: 16px;
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 40px 32px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+  height: calc(100% - 34px);
+  margin: 34px 0 0;
+  padding: 16px 32px;
   overflow-y: auto;
 }
 
 .setup-header {
+  flex: 0 0 auto;
+  width: 300px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
   gap: 10px;
-  margin-bottom: 4px;
+}
+
+/* The form column: every step stacked in ONE grid cell, so the tallest step
+   sets the height once and moving between steps moves nothing. Anything that
+   comes and goes inside a step reserves its space with visibility rather than
+   display, for the same reason. */
+.formcol {
+  flex: 0 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.forms {
+  display: grid;
+  min-height: 500px;
+}
+
+.setup-form {
+  grid-area: 1 / 1;
+  align-self: center;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.off {
+  visibility: hidden;
+}
+
+/* Back and Continue live outside the stack, so they hold one place for the
+   whole flow. One button width for "Continue" and "Get started" alike. */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.footer .sub {
+  flex: 1;
+  text-align: center;
+}
+
+.footer button {
+  min-width: 124px;
+  text-align: center;
+}
+
+.footer button.secondary {
+  font-weight: 600;
+}
+
+.ask {
+  margin: 0 0 2px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+}
+
+.setup-form .panel {
+  padding: 16px;
 }
 
 .brand-logo {
@@ -358,10 +484,82 @@ input[type="text"]:focus-visible,
 
 .setup-intro {
   margin: 0;
-  max-width: 420px;
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
+}
+
+/* The rail names every question this launch will ask and, once answered,
+   carries the answer - which is why no later step has to repeat it back.
+   `display: contents` on a row is what lets all rows share one grid, so the
+   answers line up in a column of their own. */
+.steps {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 10px;
+  border-top: 1px solid rgba(242, 229, 218, 0.12);
+  padding-top: 14px;
+  font-size: 13px;
+}
+
+.step {
+  display: contents;
+  color: rgba(242, 229, 218, 0.45);
+}
+
+.step .dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.step[data-state='current'] {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.step[data-state='current'] .dot {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.step[data-state='done'] {
+  color: var(--muted);
+}
+
+.step[data-state='done'] .dot {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+  color: var(--fg);
+}
+
+.step-value {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-value img,
+.step-value svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
 }
 
 .imported {
@@ -454,10 +652,10 @@ input[type="text"]:focus-visible,
   display: flex;
   align-items: flex-start;
   gap: 11px;
-  padding: 13px 15px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   cursor: pointer;
   transition:
     border-color 0.12s ease,
@@ -506,16 +704,38 @@ input[type="text"]:focus-visible,
   text-align: left;
   overflow-wrap: anywhere;
   max-width: 560px;
-  max-height: 280px;
+  /* Six lines; the rest scrolls inside the box so the page itself never does. */
+  max-height: 8.4em;
   overflow-y: auto;
   font-size: 12px;
   line-height: 1.4;
 }
 
-/* Permission-recovery screen (permissions.html) */
+/* Permission-recovery screen (permissions.html).
+
+   It carries `setup` for the shared chrome, and `setup` is a two-column ROW -
+   which this screen is not: it is one centred column of art, title, what will
+   change, and the answer. Left as a row its 600px cap was shared out between
+   the header, the panel and the buttons, so the title ran off the left edge,
+   the paths wrapped a word at a time and "Fix it" was a green sliver. */
 .app.repair {
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  gap: 18px;
   max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.app.repair .setup-header {
+  width: 100%;
+  align-items: center;
+  text-align: center;
+}
+
+.app.repair .panel {
+  max-width: 100%;
 }
 
 /* Folder + open padlock. Strokes only, so it reads as line art at any size and
@@ -595,4 +815,533 @@ input[type="text"]:focus-visible,
 .repair-actions button {
   min-width: 120px;
   padding: 11px 22px;
+}
+
+/* ---- The library step: two illustrated answers, then the folder ---------- */
+
+/* One card, one hue. The hue is spent on the border, the drawing and a wash,
+   never on the body copy, which stays on-background ink: `accent`, `primary`,
+   `secondary` and `tertiary` are icons, borders, rails and washes, not small
+   text (docs/design/visual-language.md §4). Amber is left to selection and
+   focus so a card that is merely offered cannot borrow it. */
+.picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.card {
+  --hue: var(--tertiary);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--hue) 55%, var(--border));
+  background: color-mix(in srgb, var(--hue) 7%, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.card--new {
+  --hue: var(--secondary);
+}
+
+.card:hover {
+  background: color-mix(in srgb, var(--hue) 13%, var(--panel));
+  border-color: color-mix(in srgb, var(--hue) 80%, var(--border));
+}
+
+.card[aria-pressed='true'] {
+  border-color: var(--hue);
+  background: color-mix(in srgb, var(--hue) 18%, var(--panel));
+}
+
+.card-art {
+  width: 100%;
+  height: 128px;
+  display: grid;
+  place-items: center;
+  color: var(--hue);
+}
+
+.card-art svg {
+  width: 152px;
+  height: 106px;
+  display: block;
+}
+
+.card-art .folder {
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.4));
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.card-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.card-tick {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--hue);
+  color: #fff;
+  display: none;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card[aria-pressed='true'] .card-tick {
+  display: grid;
+}
+
+/* The folder panel is always drawn: before a card is picked it waits, so its
+   space is never a hole that appears and pushes the footer down. Its height is
+   pinned for the same reason - no verdict, however long, can move the screen
+   the stack is sized on. */
+.answer {
+  --hue: var(--tertiary);
+}
+
+.answer[data-mode='new'] {
+  --hue: var(--secondary);
+}
+
+.answer .panel {
+  border-color: color-mix(in srgb, var(--hue) 70%, var(--border));
+  background: color-mix(in srgb, var(--hue) 10%, var(--panel));
+  height: 238px;
+}
+
+.answer.waiting .panel {
+  border-color: var(--border);
+  background: var(--panel);
+  opacity: 0.5;
+}
+
+.answer.waiting .verdict {
+  border-left-color: var(--border);
+}
+
+.answer .field input[type='text'] {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* What PixlStash found at the chosen path, said before anything is written. */
+.verdict {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-left: 3px solid var(--hue);
+  padding: 2px 0 2px 12px;
+}
+
+.verdict .vmark {
+  color: var(--hue);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.verdict .vmark img {
+  width: 18px;
+  height: 18px;
+  display: block;
+  margin-top: 1px;
+}
+
+.verdict strong {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+/* Two lines of verdict copy, always, whether the sentence needs them or not. */
+.verdict .sub {
+  margin-top: 2px;
+  min-height: 2.9em;
+}
+
+.verdict[data-tone='warn'] {
+  border-left-color: var(--err);
+}
+
+.verdict[data-tone='warn'] .vmark {
+  color: var(--err);
+}
+
+/* A folder PixlStash made announces itself in PixlStash's own marks. */
+.wm {
+  font-family: 'Tiny5', monospace;
+  font-size: 1.15em;
+  letter-spacing: 0.3px;
+  font-weight: 400;
+}
+
+.wm span {
+  color: var(--accent);
+}
+
+/* One line, always: a wrap here would grow the screen the window is sized on. */
+.stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: nowrap;
+  margin-top: 8px;
+  min-height: 46px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(242, 229, 218, 0.45);
+}
+
+/* ---- The privacy step --------------------------------------------------- */
+
+.tele {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tele.tele--two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.tele-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tele-opt:hover {
+  background: rgba(242, 229, 218, 0.04);
+}
+
+.tele-opt[aria-checked='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tele-mark {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 16px;
+  color: var(--accent);
+}
+
+/* Three bars on every option, so the marks compare: how many are FILLED is how
+   much leaves the machine. An unfilled bar is drawn rather than hidden, in an
+   ink light enough to read against the panel it sits on. Heights are classes
+   because this window refuses inline styles (style-src 'self'), not for want of
+   three numbers in the markup. */
+.tele-mark i {
+  width: 4px;
+  background: rgba(242, 229, 218, 0.28);
+  border-radius: 1px;
+}
+
+.tele-mark i:nth-child(1) {
+  height: 4px;
+}
+
+.tele-mark i:nth-child(2) {
+  height: 10px;
+}
+
+.tele-mark i:nth-child(3) {
+  height: 16px;
+}
+
+.tele-mark--1 i:nth-child(-n + 1),
+.tele-mark--2 i:nth-child(-n + 2),
+.tele-mark--3 i:nth-child(-n + 3) {
+  background: var(--accent);
+}
+
+.tele-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.tele-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.never {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 3px solid var(--primary);
+  padding-left: 12px;
+  margin: 0;
+}
+
+.never strong {
+  color: var(--fg);
+}
+
+/* ---- The install step: one block per activity ---------------------------- */
+
+/* One activity is one block, and the block's SHAPE says what is known.
+   Determinate progress fills from the left and states its number; indeterminate
+   progress has no fill at all, only a hairline travelling the track, so it can
+   never be read as "stuck at 95%" - which is exactly what a 40%-wide amber
+   chunk of the determinate fill's own colour, height and radius said. */
+.phases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* The gap BETWEEN activities is larger than any gap inside one, so a meter
+     groups with the label above it rather than the label below it. */
+  gap: 22px;
+}
+
+.phase {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 8px;
+  align-items: start;
+  font-size: 13.5px;
+  color: var(--fg);
+}
+
+/* The label wraps rather than clipping: "Installing the NVIDIA GPU (CUDA 12.8)
+   runtime" cut off just before its closing bracket, which reads as a rendering
+   fault rather than as a long name. Two lines are reserved so a wrap moves
+   nothing below it. */
+.phase .pname {
+  font-weight: 600;
+  min-width: 0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+
+/* The number the row is actually about, on the label's own line and aligned
+   with every other number in the panel. */
+.phase .pvalue {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 12px;
+}
+
+.phase[data-state='todo'] .pname,
+.phase[data-state='todo'] .pvalue {
+  color: rgba(242, 229, 218, 0.45);
+  font-weight: 500;
+}
+
+.phase[data-state='done'] .pname {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.phase .meter {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(242, 229, 218, 0.12);
+  overflow: hidden;
+}
+
+.phase .meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.phase[data-state='done'] .meter-fill {
+  background: var(--primary);
+}
+
+/* Unknown progress: a hairline, not a fill. Half the height, a quarter of the
+   width, at the opacity of secondary text, travelling the whole track and
+   never resting at either end. */
+.phase .meter--unknown .meter-fill {
+  width: 25%;
+  height: 2px;
+  top: 1px;
+  bottom: 1px;
+  opacity: 0.55;
+  transition: none;
+  animation: meter-unknown 1.6s linear infinite;
+}
+
+@keyframes meter-unknown {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+/* The installer's own line is whatever length pip felt like: a wheel name can
+   run to three lines or fit in one, and a row that grows with it walks
+   everything below it up and down the screen. Three lines are reserved whether
+   they are used or not, and anything longer is clipped. */
+.phase .pnote {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: rgba(242, 229, 218, 0.45);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Two lines of pip, not three: `prettyDownload` cuts a wheel line down to
+   "Downloading torch (820.3 MB)", and the third reserved line was empty in
+   every case this has been watched in. */
+.phase--notes .pnote {
+  min-height: 2.9em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No travelling hairline: a still line across the track, which says "working,
+     amount unknown" without motion. */
+  .phase .meter--unknown .meter-fill {
+    width: 100%;
+    opacity: 0.35;
+    animation: none;
+  }
+}
+
+/* ---- The tour: what the wait is buying ---------------------------------- */
+
+/* The install step fills its cell, so the title sits at the top, the progress
+   at the bottom and every pixel between them belongs to the pictures. */
+#screenInstall {
+  align-self: stretch;
+}
+
+.carousel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.slides {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.slide.is-on {
+  opacity: 1;
+}
+
+/* The files are already cropped to this frame's ratio and to the part of the
+   screen worth showing, so the fit has nothing left to choose. */
+.slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.slide figcaption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 16px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f7f1ea;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0));
+}
+
+.dots {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(242, 229, 218, 0.25);
+}
+
+.dots i.is-on {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide {
+    transition: none;
+  }
 }

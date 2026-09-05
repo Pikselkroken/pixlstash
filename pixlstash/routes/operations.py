@@ -1,8 +1,8 @@
-"""HTTP routes for the operation log — history, undo and redo (DAM 1.2).
+"""HTTP routes for the operation log - history, undo and redo (DAM 1.2).
 
 The log is append-only and vault-wide: it is the undo/redo stack today and the
 audit log / activity feed later (DAM roadmap §4.3). Every route here is declared
-``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` — a resource-scoped share token
+``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` - a resource-scoped share token
 must never enumerate the owner's whole change history, and must never revert a
 change. There is deliberately **no** authorization code in these handlers; the
 authz gate owns it (``docs/backend_architecture.md`` §16.1).
@@ -10,7 +10,7 @@ authz gate owns it (``docs/backend_architecture.md`` §16.1).
 Origin discipline (§15): each mutating route reads ``X-Client-Id`` off the
 request via ``request.state.origin_client_id`` and hands it to the service
 **explicitly**, which carries it in the WebSocket event ``data`` dict. Nothing
-downstream reads the contextvar — it is dead on the DB worker thread and on the
+downstream reads the contextvar - it is dead on the DB worker thread and on the
 broadcaster's loop.
 
 See :mod:`pixlstash.services.operation_log_service` for the semantics.
@@ -78,7 +78,7 @@ class UndoRequest(BaseModel):
     """Optional body for ``POST /operations/undo``."""
 
     # Undo this specific operation instead of the newest reversible one. Its
-    # whole batch goes with it — a bulk action is one undoable unit.
+    # whole batch goes with it - a bulk action is one undoable unit.
     operation_id: Optional[int] = None
 
 
@@ -99,7 +99,7 @@ def create_router(server) -> APIRouter:
             "whether it is still reversible. Filter with ``status`` "
             "(applied | undone | superseded), ``batch_id`` (all operations of "
             "one bulk action) or ``op_type``. The before/after payloads are "
-            "omitted here — fetch a single operation to see them."
+            "omitted here - fetch a single operation to see them."
         ),
         response_model=list[OperationResponse],
     )
@@ -145,7 +145,7 @@ def create_router(server) -> APIRouter:
         summary="Get one operation including its before/after state",
         description=(
             "Returns a single operation with the full recorded ``before`` and "
-            "``after`` metadata state of its targets — the payload undo and redo "
+            "``after`` metadata state of its targets - the payload undo and redo "
             "write back."
         ),
         response_model=OperationResponse,
@@ -161,14 +161,14 @@ def create_router(server) -> APIRouter:
         summary="Undo the newest reversible operation",
         description=(
             "Restores the recorded *before* state of the newest still-applied, "
-            "reversible operation — or of ``operation_id`` when the body names "
+            "reversible operation - or of ``operation_id`` when the body names "
             "one. If the operation belongs to a batch (one bulk action), the "
             "**whole batch** is reverted, so a partially-undone bulk action "
             "cannot exist. 409 when there is nothing to undo or the named "
             "operation is not reversible; 423 when a locked picture set freezes "
             "one of the targets; 410 when undoing a move to the Scrapheap whose "
             "picture has since been permanently purged (retention sweep or Empty "
-            "Scrapheap) — the whole request is refused, the operation stays "
+            "Scrapheap) - the whole request is refused, the operation stays "
             "applied, and nothing is written."
         ),
         response_model=UndoResultResponse,
@@ -190,7 +190,7 @@ def create_router(server) -> APIRouter:
         summary="Undo one whole bulk action by its batch id",
         description=(
             "The single-call revert behind a bulk action's report ('Collapsed "
-            "2,700 groups — Undo'). Reverts every still-applied, reversible "
+            "2,700 groups - Undo'). Reverts every still-applied, reversible "
             "operation carrying this ``batch_id``, newest first. 409 when the "
             "batch has nothing left to undo."
         ),

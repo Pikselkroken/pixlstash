@@ -200,7 +200,7 @@ def create_router(server) -> APIRouter:
                         None,
                     )
                     # Adding a penalised tag records a human POS, which the smart
-                    # score's anomaly penalty reads — drop the cached score if so.
+                    # score's anomaly penalty reads - drop the cached score if so.
                     with invalidate_on_anomaly_change(
                         session,
                         [pic_id],
@@ -328,7 +328,7 @@ def create_router(server) -> APIRouter:
                         status_code=404, detail="Tag not found on picture"
                     )
                 # Removing a penalised tag records a human NEG, which the smart
-                # score's anomaly penalty reads — drop the cached score if so.
+                # score's anomaly penalty reads - drop the cached score if so.
                 with invalidate_on_anomaly_change(
                     session,
                     [pic_id],
@@ -336,7 +336,7 @@ def create_router(server) -> APIRouter:
                     registry=server.vault.interactive_rescore_registry,
                     origin_client_id=origin_client_id,
                 ):
-                    # Manually removing an anomaly tag is a human NEG decision — record it
+                    # Manually removing an anomaly tag is a human NEG decision - record it
                     # before the delete so the reviewed negative survives the lost Tag row.
                     record_human_label_if_relevant(session, pic_id, target.tag, NEG)
                     session.delete(target)
@@ -411,7 +411,7 @@ def create_router(server) -> APIRouter:
                 t.id for t in pic.tags if t.tag == tag_value and t.id is not None
             ]
             # Removing a penalised tag everywhere records a human NEG, which the
-            # smart score's anomaly penalty reads — drop the cached score if so.
+            # smart score's anomaly penalty reads - drop the cached score if so.
             with invalidate_on_anomaly_change(
                 session,
                 [pic_id],

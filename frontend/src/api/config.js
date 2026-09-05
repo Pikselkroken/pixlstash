@@ -1,4 +1,4 @@
-// User config resource — GET/PATCH /users/me/config.
+// User config resource - GET/PATCH /users/me/config.
 //
 // This endpoint is the most duplicated string in the frontend (20+ call sites
 // across settings sections, App.vue, stores, and toolbar panels). Centralising

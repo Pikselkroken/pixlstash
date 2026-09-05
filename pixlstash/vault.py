@@ -13,7 +13,7 @@ from typing import Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_, update
 
 
 from .database import DBPriority, VaultDatabase
@@ -27,6 +27,9 @@ from .db_models import (
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
+    DESCRIPTION_SENTINEL_LIKE_PATTERN,
+    DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+    make_description_sentinel,
 )
 from .pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
@@ -47,8 +50,15 @@ from . import worker_config
 
 from pixlstash.event_types import EventType
 from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
-from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
-from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.tagger_plugins.registry import (
+    get_tagger_plugin_manager,
+    unload_loaded_tagger_plugins,
+)
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_picture_id_subquery,
+)
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
@@ -107,7 +117,7 @@ class Vault:
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
         # Creation only: existing directories keep their modes, whatever they
-        # are — the user may deliberately share their image folder with a media
+        # are - the user may deliberately share their image folder with a media
         # server or sync agent. Not makedirs(mode=0o700): since Python 3.7 that
         # mode reaches only the LEAF, so intermediates of a deep new image_root
         # came out 0775 under Ubuntu's umask 002 and the guarded open then
@@ -153,7 +163,7 @@ class Vault:
         # The restore path needs it: a full restore replaces the database file,
         # which invalidates every piece of authentication state held in memory
         # (see AuthService.reset_after_restore and §18.5). Stays ``None`` for a
-        # Vault built without a Server — tests, the CLI tools — and the restore
+        # Vault built without a Server - tests, the CLI tools - and the restore
         # path treats that as "nothing to reset".
         self.auth_service = None
 
@@ -196,7 +206,7 @@ class Vault:
         self._event_listeners_lock = threading.Lock()
         self._path_mapper = path_mapper
         # Bridges an interactive tag edit that NULLs a smart_score to the immediate,
-        # origin-stamped grid refresh emitted when its background rescore lands — so the
+        # origin-stamped grid refresh emitted when its background rescore lands - so the
         # edited card updates in place instead of waiting for the whole backfill to drain
         # (see _on_task_completed's SmartScoreTask branch). Created before the
         # disable_background_workers early-return because the mutation handlers that
@@ -281,8 +291,8 @@ class Vault:
         # The one finder here that works on the HUB rather than on this vault:
         # a model folder is a fact about the machine, so the checkpoints it
         # registers are shared by every library. Registered only when the vault
-        # was opened through a hub registration (a Vault built without one — the
-        # CLI tools, most tests — has no hub to reach), and harmless in the
+        # was opened through a hub registration (a Vault built without one - the
+        # CLI tools, most tests - has no hub to reach), and harmless in the
         # multi-library case because only one vault is live at a time.
         if registered_hub is not None:
             from pixlstash.tasks.missing_checkpoint_hash_finder import (
@@ -291,6 +301,24 @@ class Vault:
 
             self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
                 MissingCheckpointHashFinder(hub=registered_hub)
+            )
+            # And the workflow library's store is the hub too, so the ComfyUI
+            # extraction can file a picture's graph where it outlives the
+            # picture (§B3). Replaces the hubless finder work_finders() built:
+            # that one still extracts ComfyUI metadata, on the pre-B3
+            # `comfyui_models IS NULL` predicate -- it is only the WORKFLOW scan
+            # it cannot do, because without a hub there is nowhere to file a
+            # graph.
+            from pixlstash.tasks.missing_comfyui_extraction_finder import (
+                MissingComfyUIExtractionFinder,
+            )
+
+            self._planner_work_finders[TaskType.COMFYUI_EXTRACTION] = (
+                MissingComfyUIExtractionFinder(
+                    database=self.db,
+                    image_root=self.image_root,
+                    hub=registered_hub,
+                )
             )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -392,7 +420,7 @@ class Vault:
             vault.notify(Vault.VaultEventType.NEW_PICTURE)
         """
         # Waking the planner means "there may be work to pick up". A VRAM_OOM is
-        # the opposite statement — the GPU is full — and waking on it would send
+        # the opposite statement - the GPU is full - and waking on it would send
         # the planner looking for more GPU work three times per failing task, at
         # the one moment there is no room for any.
         if (
@@ -652,7 +680,7 @@ class Vault:
         """Set the scrapheap auto-purge window at runtime.
 
         Takes effect on the next ScrapheapRetentionPurgeFinder cycle. It never
-        purges anything synchronously — a config save must not destroy files.
+        purges anything synchronously - a config save must not destroy files.
 
         Args:
             retention_days: Days an UNPROTECTED soft-deleted picture stays in
@@ -845,8 +873,6 @@ class Vault:
         Returns:
             ``True`` if the picture was found and updated, ``False`` otherwise.
         """
-        from pixlstash.db_models import make_description_sentinel
-
         sentinel = make_description_sentinel(engine_name)
 
         def _set_sentinel(session: Session) -> bool:
@@ -854,7 +880,7 @@ class Vault:
             if pic is None:
                 return False
             # Resetting the description overwrites frozen label/curation data with
-            # a redescribe sentinel — refuse on a picture in a locked set.
+            # a redescribe sentinel - refuse on a picture in a locked set.
             enforce_pictures_not_locked(
                 session, [picture_id], "reset the description of a locked picture"
             )
@@ -875,6 +901,69 @@ class Vault:
         )
         self.redescribe_picture_interactive(picture_id, engine_name=engine_name)
         return True
+
+    def reset_descriptions(
+        self,
+        picture_ids: list[int],
+        engine_name: str | None = None,
+        origin_client_id: str | None = None,
+    ) -> int:
+        """Queue a fresh description pass for many pictures in one write.
+
+        Writes the ``__description::<engine>`` sentinel on every picture in one
+        transaction and wakes the planner; ``MissingDescriptionFinder`` then
+        captions them in properly sized batches. Unlike
+        :meth:`reset_description_interactive` no per-picture task is submitted:
+        one urgent single-image task per picture ran the captioner N times at
+        batch size 1 while the finder, which cannot tell those sentinels from
+        its own, captioned the same pictures a second time (#1162).
+
+        Args:
+            picture_ids: Primary keys of the pictures to reset.
+            engine_name: Optional plugin name to embed in the sentinel.
+            origin_client_id: Opaque ``X-Client-Id`` of the originating tab.
+
+        Returns:
+            How many pictures were found and reset.
+        """
+        ids = sorted({int(pid) for pid in picture_ids})
+        if not ids:
+            return 0
+        sentinel = make_description_sentinel(engine_name)
+
+        def _set_sentinels(session: Session) -> list[int]:
+            found: list[int] = []
+            # Chunked: "all pictures" can exceed SQLite's bound-parameter cap.
+            for chunk in chunked(ids):
+                enforce_pictures_not_locked(
+                    session, chunk, "reset the description of a locked picture"
+                )
+                present = list(
+                    session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
+                )
+                if not present:
+                    continue
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(present))
+                    .values(description=sentinel)
+                )
+                found.extend(present)
+            session.commit()
+            return found
+
+        reset_ids = self.db.run_task(_set_sentinels)
+        if not reset_ids:
+            return 0
+        self.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": reset_ids,
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+            },
+        )
+        return len(reset_ids)
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -935,6 +1024,18 @@ class Vault:
             if imported_ids:
                 self.notify(EventType.CHANGED_PICTURES, imported_ids)
                 self.notify(EventType.PICTURE_IMPORTED, imported_ids)
+            # A followed move changed file_path on an existing row: the grid has
+            # to refetch it, but nothing was imported, so no PICTURE_IMPORTED.
+            moved_ids = result.get("moved_picture_ids") or []
+            if moved_ids:
+                self.notify(EventType.CHANGED_PICTURES, moved_ids)
+            # v1.11 Phase 5: moves this scan could not attribute to PixlStash
+            # itself, in a root laid out enough to have something to say about
+            # them. The sidebar strip listens for this rather than polling
+            # GET /moves/pending.
+            queued_for_review = result.get("external_moves_queued_for_review") or []
+            if queued_for_review:
+                self.notify(EventType.EXTERNAL_MOVES_PENDING, queued_for_review)
             picture_ids = result.get("caption_updated_picture_ids") or []
             if picture_ids:
                 self._queue_changed_tags_notification(picture_ids)
@@ -961,7 +1062,7 @@ class Vault:
                     )
                 # INTERACTIVE path: rescored ids that a user tag edit invalidated get an
                 # immediate, origin-stamped CHANGED_PICTURES so the initiating tab
-                # reconciles the card in place — independent of the global drain gate
+                # reconciles the card in place - independent of the global drain gate
                 # below. Only *persisted* ids are consulted, so an id the CAS in
                 # _persist_scores skipped (still NULL) is never announced as rescored.
                 # Ids that were never registered (background-only rescores, or interactive
@@ -986,8 +1087,8 @@ class Vault:
                     # Exclude ids already announced origin-stamped above: re-announcing
                     # them origin-less here would raise the "view changed externally" pill
                     # on the very tab that made the edit (a self-pill). Unregistered
-                    # ids — genuine background rescores, or interactive ids demoted when
-                    # the registry was full — still ride this bulk emit so their cards
+                    # ids - genuine background rescores, or interactive ids demoted when
+                    # the registry was full - still ride this bulk emit so their cards
                     # refresh; over-suppressing them would strand real external changes.
                     drain_ids = [
                         pid for pid in picture_ids if int(pid) not in announced_ids
@@ -1433,7 +1534,7 @@ class Vault:
             elif worker_type == TaskType.MODEL_FOLDER_SCAN:
                 # User-triggered (no finder): live counters straight off the
                 # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
-                # in model files, not pictures — the shelf lives in the hub and
+                # in model files, not pictures - the shelf lives in the hub and
                 # the generic library total would be meaningless here.
                 label = "model_folder_scan"
                 active_scan_tasks = (
@@ -1543,11 +1644,22 @@ class Vault:
                 # below it inherited the library's picture count as its own
                 # total and a hardcoded `missing = 0`, so reading tens of
                 # gigabytes off disk for minutes rendered as "N / N, nothing
-                # remaining, 0/s" on a row that still said running — which is
+                # remaining, 0/s" on a row that still said running - which is
                 # what made a healthy long task look like a stuck one.
                 finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "checkpoints_hashed"
+            elif worker_type == TaskType.ORIENTATION:
+                # Without its own count this row fell into `planner_managed`
+                # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
+                # while 6,462 pictures were still NULL and the finder was
+                # working through them 128 at a time; every batch made the
+                # row pop back in, apparently finished.
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_orientations)
+                    or 0
+                )
+                label = "orientations_read"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
                 # the v1.8.0 upgrade this counts the entire library, which is what
@@ -1608,6 +1720,20 @@ class Vault:
             return result[0]
         return result or 0
 
+    @staticmethod
+    def _count_missing_orientations(session: Session) -> int:
+        """Mirrors ``OrientationTask.find_pictures_missing_orientation``."""
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.orientation.is_(None))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.file_path.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
     def _count_missing_thumbnails(self, session: Session) -> int:
         """Pictures awaiting whole-frame thumbnail (re)generation.
 
@@ -1634,10 +1760,23 @@ class Vault:
 
     @staticmethod
     def _count_missing_descriptions(session: Session) -> int:
+        # The same predicate MissingDescriptionFinder selects on: NULL or a
+        # ``__description::`` sentinel, and never a picture frozen by a locked
+        # set. A reset writes the sentinel, not NULL, so counting NULL alone
+        # read "N / N" through an entire regeneration (#1162).
         result = session.exec(
             select(func.count())
             .select_from(Picture)
-            .where(Picture.description.is_(None))
+            .where(
+                or_(
+                    Picture.description.is_(None),
+                    Picture.description.like(
+                        DESCRIPTION_SENTINEL_LIKE_PATTERN,
+                        escape=DESCRIPTION_SENTINEL_ESCAPE_CHAR,
+                    ),
+                ),
+                ~Picture.id.in_(locked_picture_id_subquery()),
+            )
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
@@ -1789,12 +1928,27 @@ class Vault:
                 break
         if any_busy:
             return
+        # The snapshot only sees planner in-flight counts. A task submitted
+        # straight to the runner (an interactive retag or redescribe) is
+        # invisible to it, and unloading the model under a running caption
+        # batch makes the captioner return nothing for every picture in it.
+        # GPU-queue tasks only: a dedup scan or an import holds no model.
+        if self._task_runner is not None and self._task_runner.has_active_gpu_tasks():
+            return
 
         logger.warning("All workers idle; aggressively unloading models.")
         try:
             self._engine.aggressive_unload()
         except Exception as exc:
             logger.warning("Aggressive unload failed for InferenceEngine: %s", exc)
+        # The engine unloads the services it owns by name; a tagger plugin's
+        # model is reachable only through the registry, and until this it was
+        # not reachable at all - a plugin captioner stayed resident for the
+        # life of the process and this setting could not free it (#967).
+        try:
+            unload_loaded_tagger_plugins()
+        except Exception as exc:
+            logger.warning("Aggressive unload failed for tagger plugins: %s", exc)
         try:
             FaceExtractionTask.release_detection_models()
         except Exception as exc:

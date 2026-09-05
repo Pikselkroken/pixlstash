@@ -164,7 +164,7 @@
         </v-menu>
       </div>
       <!--
-        Selection ▾ dropdown — mirrors the right-click context menu for every
+        Selection ▾ dropdown - mirrors the right-click context menu for every
         selection-scoped action, so keyboard ("S") and toolbar users reach the
         same actions as a right-click on the same selection. The context menu
         additionally offers three single-image actions (Share image, Find
@@ -308,7 +308,7 @@
         </button>
         <!-- Separated from Clear selection by its own group gap. Two identical
              40px transparent icon buttons 8px apart, one of them destructive,
-             is the adjacency this pill can least afford — and Delete now also
+             is the adjacency this pill can least afford - and Delete now also
              sits in the same surface as the bulk Assign write. -->
         <button
           class="delete-btn"
@@ -430,7 +430,7 @@ const triggerTitle = computed(() => {
     props.selectedExpandedCount > props.selectedCount
       ? ` (${props.selectedExpandedCount} total including stacks)`
       : "";
-  return `Actions for ${selectionCountLabel.value}${stacks} — press S`;
+  return `Actions for ${selectionCountLabel.value}${stacks} - press S`;
 });
 
 const clearTitle = computed(() =>
@@ -810,7 +810,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 /* Solid `warning` fill, so it is one of the few places `on-warning` is the right
    token. It is now authored (main.js) rather than Vuetify-derived: light
    #23211d on #b8861f = 4.95:1, dark #1b1b1b on #db7900 = 5.53:1. It used to
-   resolve to #fff at 3.25:1 / 3.11:1 — a small white label under the 4.5 floor. */
+   resolve to #fff at 3.25:1 / 3.11:1 - a small white label under the 4.5 floor. */
 .remove-btn {
   background: rgb(var(--v-theme-warning));
   color: rgb(var(--v-theme-on-warning));
@@ -869,7 +869,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   cursor: default;
 }
 
-/* Hidden panel activators — zero-size but remain in DOM for menu positioning */
+/* Hidden panel activators - zero-size but remain in DOM for menu positioning */
 .hidden-panel-activator {
   display: block;
   width: 0;

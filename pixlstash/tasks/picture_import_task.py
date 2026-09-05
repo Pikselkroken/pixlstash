@@ -14,6 +14,7 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import import_dedup_service
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
@@ -134,7 +135,7 @@ class PictureImportTask(BaseTask):
 
     @property
     def priority(self) -> TaskPriority:
-        # User-initiated, latency-sensitive ingest — ahead of the finder-driven
+        # User-initiated, latency-sensitive ingest - ahead of the finder-driven
         # background lanes, mirroring DetectionTask.
         return TaskPriority.HIGH
 
@@ -157,6 +158,22 @@ class PictureImportTask(BaseTask):
         # loop, so two byte-identical staged files would both pass the DB check.
         # Track them here so an intra-batch duplicate is counted, not imported.
         seen_fingerprints: set[tuple[int, str]] = set()
+
+        # Placement on write (v1.11 Phase 4b): where the library's layout says
+        # a picture with these assignments belongs. Resolved once for the whole
+        # batch, because every picture in it gets the same project and set, and
+        # empty for a library with no layout - which is every library until its
+        # owner chooses one.
+        subfolder = resolve_placement(
+            self._db, project_id=self._project_id, set_id=self._set_id
+        )
+        if subfolder:
+            logger.info(
+                "PictureImportTask: the library layout places this import in "
+                "%s/ (staging_id=%s).",
+                subfolder,
+                self._staging_id,
+            )
 
         for index, entry in enumerate(self._staged_files):
             if self._stop_event.is_set():
@@ -265,6 +282,7 @@ class PictureImportTask(BaseTask):
                     image_root_path=self._db.image_root,
                     source_file_path=file_path,
                     pixel_sha=pixel_sha,
+                    subfolder=subfolder,
                 )
                 pic.imported_at = datetime.utcnow()
                 if original_file_name:

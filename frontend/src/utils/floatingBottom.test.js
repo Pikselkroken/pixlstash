@@ -13,7 +13,7 @@ const breadcrumb = (height, visible = true) => ({
   narrowOnly: true,
 });
 
-describe("computeFloatingBottomInset — nothing parked", () => {
+describe("computeFloatingBottomInset - nothing parked", () => {
   it("is 0 when there are no anchors", () => {
     expect(computeFloatingBottomInset()).toBe(0);
     expect(computeFloatingBottomInset({ anchors: [] })).toBe(0);
@@ -21,7 +21,7 @@ describe("computeFloatingBottomInset — nothing parked", () => {
 
   // 0, NOT the gap: with the bottom edge clear the stack must rest at exactly
   // --space-5, per the spec's "pill hidden → 16px".
-  it("is 0 — not the gap — when every anchor is hidden", () => {
+  it("is 0 - not the gap - when every anchor is hidden", () => {
     expect(computeFloatingBottomInset({ anchors: [pill(54, false)] })).toBe(0);
   });
 
@@ -37,7 +37,7 @@ describe("computeFloatingBottomInset — nothing parked", () => {
   });
 });
 
-describe("computeFloatingBottomInset — the selection pill", () => {
+describe("computeFloatingBottomInset - the selection pill", () => {
   // The spec's worked example: 16 (space-5, added by the CSS calc) + 54 + 8.
   it("clears the measured pill plus one --space-3 gap", () => {
     expect(computeFloatingBottomInset({ anchors: [pill(54)] })).toBe(62);
@@ -63,7 +63,7 @@ describe("computeFloatingBottomInset — the selection pill", () => {
   });
 });
 
-describe("computeFloatingBottomInset — narrowOnly anchors", () => {
+describe("computeFloatingBottomInset - narrowOnly anchors", () => {
   // Above 600px the breadcrumb is bottom-LEFT, outside the centred card's
   // footprint, so it must not push the stack up.
   it("excludes a narrowOnly anchor on a wide viewport", () => {

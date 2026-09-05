@@ -188,7 +188,7 @@ def create_router(server) -> APIRouter:
 
         Each row is enriched with manifest resource counts and an
         ``is_compatible`` flag (``false`` when the snapshot schema version is
-        newer than the live DB — restore would require a downgrade, which is
+        newer than the live DB - restore would require a downgrade, which is
         unsupported).
 
         Requires owner-level (full, unscoped) access.
@@ -240,7 +240,7 @@ def create_router(server) -> APIRouter:
         return _serialize_snapshot(cp, manifest, live_schema)
 
     # ------------------------------------------------------------------
-    # PATCH /snapshots/{id}  — rename label
+    # PATCH /snapshots/{id}  - rename label
     # ------------------------------------------------------------------
 
     @router.patch("/snapshots/{snapshot_id}", response_model=SnapshotResponse)
@@ -269,7 +269,7 @@ def create_router(server) -> APIRouter:
         """Delete a snapshot and its snapshot files.
 
         Any snapshot may be deleted, including the most recent DAILY / WEEKLY /
-        MONTHLY one — the GFS scheduler will simply create a fresh snapshot for
+        MONTHLY one - the GFS scheduler will simply create a fresh snapshot for
         the current period on its next pass.
 
         Authentication is required.

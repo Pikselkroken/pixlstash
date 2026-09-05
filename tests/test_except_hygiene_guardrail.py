@@ -3,8 +3,8 @@
 Enforces the CLAUDE.md exception-handling policy across the backend: a *broad*
 exception handler (``except Exception``/``except BaseException``/bare ``except``)
 anywhere in ``pixlstash/`` must NOT silently swallow the error. "Silently swallow"
-means the handler body is *only* control flow — ``return``/``continue``/``break``/
-``pass`` — with no logging call and no re-raise, so an unexpected failure vanishes
+means the handler body is *only* control flow - ``return``/``continue``/``break``/
+``pass`` - with no logging call and no re-raise, so an unexpected failure vanishes
 with no trace.
 
 This runs in AUDIT MODE with a closed allowlist of deliberate best-effort swallows
@@ -21,9 +21,9 @@ The allowlist was seeded across two stages of the B1 triage sweep
   distinct call sites; ``_coerce_metadata_value`` holds 4 sites under one key).
 
 Scope covers all of ``pixlstash/`` EXCEPT two trees:
-- ``authz/`` — security-sensitive; its swallows are reviewed under the separate
+- ``authz/`` - security-sensitive; its swallows are reviewed under the separate
   authz sign-off process, not this ratchet.
-- ``migrations/`` — one-shot Alembic scripts that are immutable once shipped
+- ``migrations/`` - one-shot Alembic scripts that are immutable once shipped
   (CLAUDE.md: a migration on main must never be modified), so a log-only fix is
   not an available remedy and the ratchet would have nothing to enforce.
 """
@@ -37,18 +37,18 @@ PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
 _EXCLUDED_TOP_DIRS = frozenset({"authz", "migrations"})
 
 # Statements that count as pure control flow. A handler whose body is composed
-# ONLY of these does no work and logs nothing — it silently swallows.
+# ONLY of these does no work and logs nothing - it silently swallows.
 _CONTROL_FLOW = (ast.Return, ast.Continue, ast.Break, ast.Pass)
 
 # Allowlist key: (relative_posix_path, enclosing_function_name, exception_name).
 # Chosen to resist line drift (adding/removing lines above a site does not move
 # the function name or exception type). Each surviving swallow lives in a distinct
-# function, so the key is unambiguous — with one deliberate exception:
+# function, so the key is unambiguous - with one deliberate exception:
 # ``_coerce_metadata_value`` holds four identical coercion swallows that share a
 # single key (all four are the same best-effort pattern, so one entry covers them).
 #
 # {key: justification}. deny-by-default: each entry is a decision someone owns.
-# This list may only shrink — log the swallow and delete its entry.
+# This list may only shrink - log the swallow and delete its entry.
 _SILENT_SWALLOW_ALLOWLIST = {
     # --- Stage 1: tasks/ and services/ survivors ---
     (
@@ -157,14 +157,6 @@ _SILENT_SWALLOW_ALLOWLIST = {
         "metadata key IS correct, not an error"
     ),
     (
-        "pixlstash/utils/system_utils.py",
-        "default_max_vram_gb",
-        "Exception",
-    ): (
-        "nvidia-smi absent/failing is normal on CPU-only hosts; the documented 6GB "
-        "default IS the answer, so logging it would be routine noise"
-    ),
-    (
         "pixlstash/utils/vram_utils.py",
         "query_total_vram_mb",
         "Exception",
@@ -188,7 +180,7 @@ def _broad_exception_name(handler: ast.ExceptHandler) -> str | None:
 
     'bare' for a bare ``except:``; 'Exception'/'BaseException' for those catch-all
     types (including a tuple that contains one). Narrow handlers return None and
-    are ignored — a typed ``except ValueError`` return IS a valid reject signal.
+    are ignored - a typed ``except ValueError`` return IS a valid reject signal.
     """
     node_type = handler.type
     if node_type is None:

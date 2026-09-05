@@ -10,10 +10,10 @@ is a human NEG. This writes those to the live DB's tag_prediction ledger with th
 semantics as ``record_human_label`` (upsert, synthetic 'manual' row if missing, snapshot
 the adjudicated model_version/confidence, set status). Anomaly-vocabulary tags only, so
 content tags never pollute the prediction store. Scoped to the PixlTagger project by
-default (``--project``) — edits to pictures outside your tagging project are ignored;
-pass ``--all-projects`` to diff the whole vault. Dry-run by default — pass --apply to write.
+default (``--project``) - edits to pictures outside your tagging project are ignored;
+pass ``--all-projects`` to diff the whole vault. Dry-run by default - pass --apply to write.
 
-CAVEAT — background tagger churn: the tagger re-tags a picture by deleting and re-inserting
+CAVEAT - background tagger churn: the tagger re-tags a picture by deleting and re-inserting
 all its Tag rows, so if it re-ran on a picture *inside the window*, that churn looks like
 human adds/removes. Run with the tagger paused for the cleanest result, eyeball the dry-run
 sample, and/or use --exclude-tagger-touched to drop pairs the tagger demonstrably wrote a
@@ -73,7 +73,7 @@ def _pick_baseline(conn: sqlite3.Connection, days: float, snapshot_id):
     ).fetchall()
     if not rows:
         raise SystemExit(
-            "No snapshots found in this vault — cannot recover. (Snapshots are created "
+            "No snapshots found in this vault - cannot recover. (Snapshots are created "
             "under the GFS retention policy; check GET /snapshots.)"
         )
     for sid, rel, created in rows:
@@ -95,7 +95,7 @@ def _is_anomaly(tag: str) -> bool:
 def _resolve_project_id(conn: sqlite3.Connection, name: str) -> int:
     """Resolve a project NAME to its id in the live DB, or exit with a helpful error.
 
-    We deliberately do NOT silently fall back to the whole vault on a bad name — the
+    We deliberately do NOT silently fall back to the whole vault on a bad name - the
     caller asked to scope to a specific project, so a typo should stop, not widen.
     """
     row = conn.execute("SELECT id FROM project WHERE name = ?", (name,)).fetchone()
@@ -115,7 +115,7 @@ def _diff(conn: sqlite3.Connection, project_id: int | None = None):
     removed = present baseline, absent live, picture still exists    → human NEG
 
     When *project_id* is given, only pictures that are members of that project (the
-    canonical ``pictureprojectmember`` M-M table in the live DB) count — edits to pictures
+    canonical ``pictureprojectmember`` M-M table in the live DB) count - edits to pictures
     outside your tagging project are ignored. ``None`` diffs the whole vault.
     """
     cur = conn.cursor()
@@ -170,7 +170,7 @@ def _tagger_touched(conn: sqlite3.Connection, baseline_at: datetime) -> set:
 
 
 def _record(conn: sqlite3.Connection, picture_id: int, tag: str, state: str) -> None:
-    """Upsert one human label on tag_prediction — mirrors record_human_label()."""
+    """Upsert one human label on tag_prediction - mirrors record_human_label()."""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     status = "CONFIRMED" if state == "POS" else "REJECTED"
     cur = conn.cursor()
@@ -264,7 +264,7 @@ def main() -> None:
         raise SystemExit(f"Database not found: {args.db_path}")
     if ANOMALY_LABELS is None:
         print(
-            "WARNING: could not import pixlstash ANOMALY_LABELS — proceeding WITHOUT the "
+            "WARNING: could not import pixlstash ANOMALY_LABELS - proceeding WITHOUT the "
             "anomaly-vocabulary filter (every changed tag will be recorded)."
         )
 
@@ -279,7 +279,7 @@ def main() -> None:
         else:
             project_id = _resolve_project_id(conn, args.project)
             print(
-                f"Scope: project {args.project!r} (id={project_id}) — pictures outside it "
+                f"Scope: project {args.project!r} (id={project_id}) - pictures outside it "
                 "are ignored."
             )
         if args.snapshot_path:
@@ -321,7 +321,7 @@ def main() -> None:
                 print(f"  … and {len(pairs) - 10} more")
 
         if not args.apply:
-            print("\nDRY RUN — no changes written. Re-run with --apply to commit.")
+            print("\nDRY RUN - no changes written. Re-run with --apply to commit.")
             return
 
         for pid, tag in added:

@@ -9,6 +9,7 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
+import { rememberTheme } from "./utils/themeMemory";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
@@ -20,6 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
+import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
@@ -48,6 +50,7 @@ import { useViewportLayout } from "./composables/useViewportLayout";
 import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
 import { libraryDocumentTitle } from "./utils/libraryChrome";
+import { markEnd, markStart } from "./utils/perfMarks";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -71,6 +74,12 @@ const DuplicateQueue = defineAsyncComponent(
 );
 const ModelShelf = defineAsyncComponent(
   () => import("./components/views/ModelShelf.vue"),
+);
+const LibraryInsights = defineAsyncComponent(
+  () => import("./components/views/LibraryInsights.vue"),
+);
+const MovesReview = defineAsyncComponent(
+  () => import("./components/views/MovesReview.vue"),
 );
 const ReviewSessionsOverlay = defineAsyncComponent(
   () => import("./components/views/ReviewSessionsOverlay.vue"),
@@ -131,6 +140,18 @@ const gridWrapperRef = ref(null);
 const shortcutsDialogOpen = ref(false);
 const telemetryConsentOpen = ref(false);
 const telemetryConsentIsUpgrade = ref(false);
+// Initial setup comes first: the telemetry question waits until the library
+// has been counted and any folder-mapping wizard (a pending mapping, or the
+// first-run offer to import the pictures already in the folder) is closed.
+const librarySettled = ref(false);
+const mappingStore = useFolderMappingStore();
+const telemetryConsentVisible = computed(
+  () =>
+    telemetryConsentOpen.value &&
+    librarySettled.value &&
+    !mappingStore.wizardOpen &&
+    !mappingStore.pending,
+);
 const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
 // Seeded from the marker the server substituted into the document, not from
@@ -152,7 +173,12 @@ const error = ref(null);
 const {
   isDuplicatesView,
   isModelsView,
+  isInsightsView,
+  isMovesView,
   handleSelectModels,
+  handleSelectInsights,
+  handleSelectMoves,
+  handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -194,6 +220,7 @@ const {
   handleImagesMoved,
   handleFacesAssignedToCharacter,
   confirmExportZip,
+  confirmExportFolder,
   handleClearSearch,
   handleResetToAll,
 } = useAppEntityActions({
@@ -263,7 +290,15 @@ let stopOpenSettings = null;
 
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
-    return selectionStore.selectedFolderFilter.label || "Folder";
+    const folder = selectionStore.selectedFolderFilter.label || "Folder";
+    // A folder filter and the unassigned view together are ONE destination:
+    // "About your library" opens its unsorted-pile finding on exactly that
+    // pair. Naming only the folder would head a grid holding 900 of a
+    // folder's 1,000 pictures with the folder's own name, which reads as the
+    // whole of it.
+    return selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID
+      ? `Unassigned in ${folder}`
+      : folder;
   }
   if (selectionStore.selectedSetIds.length > 1) {
     const modeLabel =
@@ -321,12 +356,32 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
+/** The empty library's "Choose a folder…" - a reference folder, read in place.
+ *
+ * Not the add-folder type chooser: its other option is an import folder, which
+ * copies files in, and the button that reaches this promises the opposite.
+ */
+function openAddReferenceFolder() {
+  sidebarRef.value?.openReferenceFolderEditor?.();
+}
+
+/** The library is empty: let the sidebar ask whether its folder is. */
+function offerLoosePictures() {
+  return sidebarRef.value?.offerLoosePictures?.();
+}
+
+/** The first count is in; an empty library gets its import offer first. */
+async function onLibraryLoaded({ empty }) {
+  if (empty) await offerLoosePictures();
+  librarySettled.value = true;
+}
+
 // ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
 // App.vue owns `--floating-bottom-h`: the height of the tallest bottom-anchored
 // floating element currently visible inside the notice column's footprint, plus
 // its gap. The elements themselves register through `useBottomAnchor` (the
 // SelectionBar pill, and the grid breadcrumb below 600px), each reporting a
-// MEASURED height from a ResizeObserver — the pill wraps and grows on coarse
+// MEASURED height from a ResizeObserver - the pill wraps and grows on coarse
 // pointers, so a constant would let a notice overlap it.
 const appViewportEl = ref(null);
 const { inset: floatingBottomInset } = useFloatingBottomInset();
@@ -352,7 +407,17 @@ function openImportDialog() {
 async function handleLocalImport({ files, projectId } = {}) {
   photosDialogOpen.value = false;
   await nextTick();
-  sidebarRef.value?.startLocalImport?.(files, projectId ?? null);
+  // `undefined` means "the caller did not say", and the answer is the project
+  // being looked at - which is what both drop paths pass
+  // (useWindowFileImport.js, useGridDragDrop.js) and what PhotosImportDialog is
+  // handed as its default. Defaulted here rather than at each caller so a
+  // caller that omits it cannot silently land pictures outside the project the
+  // person is standing in. `null` still means "deliberately no project".
+  const target =
+    projectId === undefined
+      ? (sidebarRef.value?.currentProjectId ?? null)
+      : projectId;
+  sidebarRef.value?.startLocalImport?.(files, target);
 }
 
 // undo affordance itself.
@@ -373,7 +438,7 @@ watch(
 );
 
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
-// project picker) must not navigate or change the grid — the route is the
+// project picker) must not navigate or change the grid - the route is the
 // single source of truth. These handlers therefore only mirror the value
 // into the store (used for sidebar scoping); they never push a route.
 // Grid navigation happens via explicit entry clicks (handleViewProject,
@@ -386,12 +451,16 @@ watch(
   () => userPrefsStore.themeMode,
   (value) => {
     theme.global.name.value = resolveThemeName(value);
+    // Remember it for the next launch's first paint, which happens long before
+    // the config that decided this one can be asked for.
+    rememberTheme(value === "dark" ? "dark" : "light");
   },
   { immediate: true },
 );
 
 // --- Lifecycle ---
 onMounted(async () => {
+  markStart("pixlstash:app-mounted-to-interactive");
   // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
   // stats-sidebar light) are live everywhere, not only while the Tasks tab is
   // open. The store self-throttles when idle and pauses on a hidden tab.
@@ -410,11 +479,17 @@ onMounted(async () => {
       }
     })
     .catch(() => {});
-  await fetchConfig();
+  // fetchConfig() (GET /users/me/config) and librariesStore.refresh() (GET
+  // /libraries) are independent reads with no shared state - each already
+  // handles its own errors internally. Awaiting them one after another used
+  // to serialize two network round trips in front of refreshSidebar() and
+  // connectUpdatesSocket() below for no reason; fire them and move on so the
+  // sidebar/grid/WebSocket start immediately instead of queuing behind them.
+  fetchConfig();
   // Snapshots are owner-only (full unscoped access); READ / share sessions
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
-    await librariesStore.refresh();
+    librariesStore.refresh();
     snapshotsStore.fetchSnapshots();
     // Seed the undo stack so the toolbar control is correctly enabled on the
     // first frame. This read establishes the "already seen" watermark, so the
@@ -425,7 +500,7 @@ onMounted(async () => {
   // Select the scoped resource when a share token is active. This normalises
   // what is SELECTED only; what the grid is scoped BY is
   // `useViewStore.scopeProjectToSession`, which runs on every route tick rather
-  // than once here (issue #717 — a share link carries whatever pathname the
+  // than once here (issue #717 - a share link carries whatever pathname the
   // owner minted it from, and a mount-time write loses to the next navigation).
   // The project branch below therefore agrees with that store rather than
   // competing with it, and still covers the routes it parses no view from.
@@ -465,6 +540,11 @@ onMounted(async () => {
       mainAreaResizeObserver.observe(gridWrapperRef.value);
     }
   }
+  // Everything above that the app shell needs to be usable (sidebar refresh,
+  // WebSocket connect, layout measurement) has now been kicked off; the
+  // remaining config/library/undo-history fetches finish in the background
+  // and update reactively when they land.
+  markEnd("pixlstash:app-mounted-to-interactive");
 });
 
 onBeforeUnmount(() => {
@@ -552,6 +632,8 @@ defineExpose({
             @suggest-pictures-for-character="handleSuggestPicturesForCharacter"
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
+            @select-insights="handleSelectInsights"
+            @select-moves="handleSelectMoves"
             @select-duplicates="handleSelectDuplicates"
             @select-models="handleSelectModels"
             @select-set="handleSelectSet"
@@ -577,7 +659,7 @@ defineExpose({
         </Transition>
 
         <TelemetryConsentDialog
-          :open="telemetryConsentOpen"
+          :open="telemetryConsentVisible"
           :is-upgrade="telemetryConsentIsUpgrade"
           :update-checks-enabled="userPrefsStore.checkForUpdates === true"
           :version="appVersion"
@@ -629,6 +711,25 @@ defineExpose({
                 v-else-if="isModelsView"
                 @open-settings="openSettingsDialog"
               />
+              <!-- "About your library" reads the library rather than showing
+                   it, so like the two above it replaces the grid instead of
+                   floating over it. `act` carries one finding's action: the
+                   settings pane is a dialog rather than a route, so that one
+                   kind lands here; every other kind is a navigation and
+                   belongs to useAppNavigation. -->
+              <LibraryInsights
+                v-else-if="isInsightsView"
+                @act="
+                  (action) =>
+                    action.kind === 'settings'
+                      ? openSettingsDialog(action.tab)
+                      : handleInsightAction(action)
+                "
+              />
+              <!-- Moves is a destination for the same reason Insights is: it
+                   reports on the queue rather than showing the library, so it
+                   replaces the grid instead of floating over it. -->
+              <MovesReview v-else-if="isMovesView" />
               <ImageGrid
                 v-else
                 ref="gridContainer"
@@ -661,7 +762,11 @@ defineExpose({
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
+                @choose-folder="openAddReferenceFolder"
+                @library-empty="offerLoosePictures"
+                @library-loaded="onLibraryLoaded"
                 @confirm-export-zip="confirmExportZip"
+                @confirm-export-folder="confirmExportFolder"
               />
             </div>
           </div>
@@ -679,8 +784,8 @@ defineExpose({
       <!-- The notice surface. LAST child of `.app-viewport` on purpose
            (notice-surface.md §8): its buttons then come last in DOM order, so a
            keyboard user reaches them after the page content, not before it. It
-           is global — it renders over the lightbox, the review overlay and
-           Settings — so it must not be nested inside the grid column. -->
+           is global - it renders over the lightbox, the review overlay and
+           Settings - so it must not be nested inside the grid column. -->
       <NoticeHost :on-dark="noticeOnDark" />
     </div>
     <button

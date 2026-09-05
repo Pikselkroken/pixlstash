@@ -1,8 +1,8 @@
-// Overlay (lightbox) context menu — the ImageOverlay right-click menu that
+// Overlay (lightbox) context menu - the ImageOverlay right-click menu that
 // reuses ImageGridContextMenu in `overlay-mode`.
 //
 // ImageGrid.vue (~7k lines) and ImageOverlay.vue (~5k lines) are impractical to
-// mount, so — following the ImageGridLockBadge.test.js precedent — these tests
+// mount, so - following the ImageGridLockBadge.test.js precedent - these tests
 // exercise the exact contracts the feature relies on:
 //
 //   1. ImageGridContextMenu in overlay-mode renders ONLY the restricted overlay
@@ -65,7 +65,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("overlay-mode context menu — action set", () => {
+describe("overlay-mode context menu - action set", () => {
   it("renders the normal-view overlay actions and hides grid-only ones", () => {
     const wrapper = mount(ImageGridContextMenu, {
       props: {
@@ -274,7 +274,7 @@ describe("overlay-mode context menu — action set", () => {
     expect(wrapper.find(`#${reasonId}`).text()).toBe(reason);
   });
 
-  it("Delete emits delete-selected — scoped by the selectedImageIds prop (the overlay picture)", async () => {
+  it("Delete emits delete-selected - scoped by the selectedImageIds prop (the overlay picture)", async () => {
     const wrapper = mount(ImageGridContextMenu, {
       props: {
         ...REQUIRED,
@@ -395,7 +395,7 @@ describe("overlay delete scoping contract", () => {
 
 // ── 4. Overlay search actions must close the lightbox ───────────────────────
 // Both overlay search actions put their results in the GRID, which sits behind
-// the lightbox — and while the overlay is open every grid mutation is deferred
+// the lightbox - and while the overlay is open every grid mutation is deferred
 // (frontend_architecture §9.1). An overlay search handler that does not close
 // the overlay therefore looks like it did nothing at all. That was the
 // find-similar-faces bug: it was wired to the shared GRID handler, which has no
@@ -434,7 +434,7 @@ describe("overlay search actions close the lightbox", () => {
     s.clearSearchEmitted += 1;
   }
 
-  // ImageGrid.handleFindSimilarFaces — the GRID handler, kept for the grid menu.
+  // ImageGrid.handleFindSimilarFaces - the GRID handler, kept for the grid menu.
   // No closeOverlay: there is no overlay open on that path.
   function gridFindSimilarFaces(s, faceId) {
     if (!faceId) return;

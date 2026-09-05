@@ -135,15 +135,34 @@
         <v-icon size="18">mdi-tray-arrow-down</v-icon>
         Export
       </button>
+      <button
+        class="tbm-action tbm-action--outline tbm-action--lg tbm-action--full tb-export-folder-btn"
+        type="button"
+        title="Write straight into a folder on this machine, then open it - no ZIP or download step"
+        @click="folderBrowserOpen = true"
+      >
+        <v-icon size="18">mdi-folder-download-outline</v-icon>
+        Export to Folder…
+      </button>
     </div>
+
+    <FolderBrowser
+      :open="folderBrowserOpen"
+      allow-create-folder
+      @select="onFolderSelected"
+      @close="folderBrowserOpen = false"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useExportStore } from "../../stores/useExportStore";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 
-const emit = defineEmits(["confirm-export"]);
+const emit = defineEmits(["confirm-export", "confirm-export-folder"]);
+
+const folderBrowserOpen = ref(false);
 
 const exportStore = useExportStore();
 
@@ -194,6 +213,12 @@ function onExport() {
   exportStore.exportMenuOpen = false;
   emit("confirm-export");
 }
+
+function onFolderSelected(path) {
+  folderBrowserOpen.value = false;
+  exportStore.exportMenuOpen = false;
+  emit("confirm-export-folder", path);
+}
 </script>
 
 <style scoped>
@@ -208,6 +233,10 @@ function onExport() {
 
 /* Stack the two switches with the section's group gap. */
 .tb-export-panel .v-switch + .v-switch {
+  margin-top: var(--space-2);
+}
+
+.tb-export-folder-btn {
   margin-top: var(--space-2);
 }
 </style>

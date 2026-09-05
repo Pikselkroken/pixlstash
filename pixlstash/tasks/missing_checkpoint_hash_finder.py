@@ -21,7 +21,7 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)`` forbids an unhashed
     adapter, and the scan hashes an ``unknown`` on sight because it is small.
     **``engine`` rows are excluded from both queries.** They are declared by
-    ``services/builtin_models.py`` and carry no ``sha256`` by design — nothing
+    ``services/builtin_models.py`` and carry no ``sha256`` by design - nothing
     hashes PixlStash's own tagger, because we know what it is without one.
     Without the exclusion they match ``sha256 IS NULL`` like any unhashed
     checkpoint, and this finder would hand a 339 MB tagger and a pile of ONNX to
@@ -31,11 +31,11 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     **A folder PixlStash declared is excluded too**, and that is not the same
     exclusion wearing a second hat. A declared root is described by an index
     rather than walked, so its ``relpath`` is whatever the index calls one
-    entry — for the HuggingFace cache that is ``models--org--name``, a
+    entry - for the HuggingFace cache that is ``models--org--name``, a
     DIRECTORY. Now that a repo the owner downloaded themselves is theirs to
     reclassify (``builtin_caches``), any such row they correct to ``checkpoint``
     would match on ``file_kind`` and send the worker to open a directory, fail,
-    and defer it — every start, forever. ``owner`` is the same marker that makes
+    and defer it - every start, forever. ``owner`` is the same marker that makes
     the folder scanner skip these roots.
 
     The query is left as the plain ``sha256 IS NULL`` all the same, so it
@@ -47,7 +47,7 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     tracked as handed out from the moment the task is built and released when
     its result arrives.
 
-    A row the task could not hash — an unreadable file, a path that has moved —
+    A row the task could not hash - an unreadable file, a path that has moved -
     is *deferred* for the life of the process rather than handed out again. The
     planner sweeps continuously, so without that a single broken path would make
     this finder return a task on every cycle forever, keeping the CPU queue and

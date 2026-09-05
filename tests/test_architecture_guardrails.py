@@ -115,7 +115,7 @@ def test_no_new_direct_db_calls_from_routes():
     unlisted_violations = []
     for path in sorted(_iter_python_files(ROUTES_DIR)):
         # as_posix(): the allowlist uses "/" separators, but relative_to()
-        # yields "\" on Windows — str() would never match the allowlist there.
+        # yields "\" on Windows - str() would never match the allowlist there.
         rel = path.relative_to(REPO_ROOT).as_posix()
         if not _DB_CALL_PATTERN.search(path.read_text()):
             continue
@@ -141,11 +141,17 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        # vault-injection pattern; owns the register -> wait-for-scan -> assign
+        # commit lifecycle across separate transactions over time (the
+        # scan-status poll cannot share a session with the later write), so no
+        # single caller-supplied session would fit every stage.
+        "pixlstash/services/folder_structure_commit_service.py",
         "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/keep_cover_only_service.py",  # vault-injection pattern; thin wrappers around the *_in_session keep-cover-only preview and collapse
+        "pixlstash/services/library_insights_service.py",  # vault-injection pattern; read-only wrapper around build_insights_in_session
         "pixlstash/services/mixed_stack_service.py",  # vault-injection pattern; thin wrappers around the *_in_session mixed-stack list, actions and Keep
         "pixlstash/services/model_shelf_service.py",  # vault-injection pattern; the adapter_attachment reads are the vault half of a hub/vault join no session can span
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
@@ -169,6 +175,23 @@ def test_services_no_direct_db_calls():
         # record run in ONE queued task; the wrapper owning that submission is
         # the atomicity guarantee, not transitional debt.
         "pixlstash/services/operation_log_service.py",  # vault-injection pattern; atomic record-with-mutation task
+        # v1.11 Phase 4b. The two vault-taking entry points (picture_layout,
+        # move_to_match) exist so the routes do not, and move_to_match owes the
+        # same atomicity the op-log wrapper above does: plan, move the files,
+        # capture and record inside ONE queued task, or a write landing between
+        # the plan and the record is attributed to this move.
+        "pixlstash/services/layout_move_service.py",  # vault-injection pattern; atomic plan-move-record task
+        # v1.11 Phase 5. pending_moves(vault) is the canonical thin
+        # *_in_session wrapper (pending_summary_in_session); apply_reviews
+        # owes run_recorded_metadata_task the same atomicity layout_move_service
+        # owes it above - capture, mutate and record in ONE queued task.
+        "pixlstash/services/move_reconciliation_service.py",
+        # v1.11 Phase 4c. run_migration_pass owes exactly the atomicity
+        # move_to_match owes above - plan, move the files, capture and record
+        # in ONE queued task - and preview_migration is its read half, which
+        # walks the whole library's paths and must see one consistent snapshot
+        # of them.
+        "pixlstash/services/layout_migration_service.py",
     }
 
     violations = []
@@ -248,7 +271,7 @@ def test_finder_dependencies_resolve_to_registered_finders():
 
     finder_names, depends_on_attrs = _collect_finder_info()
     assert finder_names, (
-        "Expected to find at least one finder_name() — check task file paths"
+        "Expected to find at least one finder_name() - check task file paths"
     )
 
     # Verify all TaskType attrs referenced in depends_on() exist on the enum.
@@ -275,7 +298,7 @@ def test_finder_dependencies_resolve_to_registered_finders():
             )
     except Exception as exc:
         # If we can't instantiate finders (e.g. missing DB), skip the runtime
-        # check — but surface why, so a silently broken setup is visible in the
+        # check - but surface why, so a silently broken setup is visible in the
         # test warning summary rather than passing unnoticed.
         warnings.warn(
             f"Skipped runtime finder-resolution check: {exc!r}",
@@ -310,6 +333,9 @@ def test_event_types_fully_classified():
             # The GPU ran out of memory. A fact about the machine, so it goes to
             # every client regardless of grid filters.
             EventType.VRAM_OOM.name,
+            # Vault-wide reconciliation queue nudge (v1.11 Phase 5), like
+            # VRAM_OOM: not a grid view a client's filters could exclude it from.
+            EventType.EXTERNAL_MOVES_PENDING.name,
         }
     )
 
@@ -360,8 +386,8 @@ def test_event_types_fully_classified():
 # recurring failure mode (CSO audit) is a NEW mutation path reaching a picture
 # with no lock guard. A handler-list test only catches what its author remembered
 # to list; this test is SINK-BASED instead: it enumerates every place the code
-# writes label/curation data — Tag rows, the human-label ledger, the soft-delete
-# flip, and a picture's description/score — and asserts the ENCLOSING function
+# writes label/curation data - Tag rows, the human-label ledger, the soft-delete
+# flip, and a picture's description/score - and asserts the ENCLOSING function
 # either carries a lock-guard token OR is on an explicit, justified exempt list.
 # A guardrail that lists what you remembered cannot catch what you forgot; this
 # one fails the moment an unguarded sink appears in a non-exempt function.
@@ -388,7 +414,7 @@ _NON_PICTURE_ATTR_RE = re.compile(
 )
 
 # {(relative_path, enclosing_function_name): justification}. An exemption is a
-# decision someone owns, per deny-by-default — each entry says why the sink is NOT
+# decision someone owns, per deny-by-default - each entry says why the sink is NOT
 # a locked-set concern. Keep this list tight; a real mutation path belongs guarded.
 _LABEL_SINK_EXEMPT = {
     # --- Internal chokepoints: every caller enforces/skips locked pics first ---
@@ -424,7 +450,7 @@ _LABEL_SINK_EXEMPT = {
         "watch-folder import of NEW pictures"
     ),
     ("pixlstash/tasks/picture_import_task.py", "insert_pictures"): (
-        "async staging import of NEW pictures (#459) — sentinel Tag on freshly "
+        "async staging import of NEW pictures (#459) - sentinel Tag on freshly "
         "created rows that cannot yet be in a locked set"
     ),
     ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
@@ -534,7 +560,7 @@ def test_label_mutation_sinks_are_lock_guarded():
 
     assert not unguarded, (
         "Label/curation sink(s) reach a picture with NO picture-set lock guard and "
-        "no justified exemption (deny-by-default — each is a bug).\n"
+        "no justified exemption (deny-by-default - each is a bug).\n"
         "Add `enforce_pictures_not_locked(session, ids, action)` (or a skip via "
         "`locked_picture_ids`) in the enclosing function, or, if it is genuinely "
         "not a locked-set concern, add a justified entry to _LABEL_SINK_EXEMPT:\n"
@@ -543,7 +569,7 @@ def test_label_mutation_sinks_are_lock_guarded():
 
     # Keep the exempt list honest: a stale entry (sink moved/guarded/removed) must
     # be pruned so the list never silently grows past what it still covers. The
-    # documented non-sinks are exempt from this — they intentionally match no sink.
+    # documented non-sinks are exempt from this - they intentionally match no sink.
     stale = sorted(set(_LABEL_SINK_EXEMPT) - used_exemptions - _DOCUMENTED_NON_SINKS)
     assert not stale, (
         "Stale _LABEL_SINK_EXEMPT entries no longer match any unguarded sink "
@@ -554,7 +580,7 @@ def test_label_mutation_sinks_are_lock_guarded():
 def test_label_sink_guardrail_detects_a_removed_guard():
     """Meta-check: the sink scanner must FAIL a function whose guard is removed.
 
-    Proves the guardrail has teeth — that it would catch a regression, not just
+    Proves the guardrail has teeth - that it would catch a regression, not just
     pass vacuously. We take a known-guarded sink function, strip its guard tokens
     from the scanned source in-memory, and assert it flips to unguarded.
     """
@@ -562,7 +588,7 @@ def test_label_sink_guardrail_detects_a_removed_guard():
         (rel, name) for rel, _ln, name, guarded, _line in _scan_label_sinks() if guarded
     ]
     assert guarded_now, "expected at least one guarded label sink to exist"
-    # Every currently-guarded sink function must rely on a guard token — remove the
+    # Every currently-guarded sink function must rely on a guard token - remove the
     # tokens and it can no longer be considered guarded. Verify the scanner's guard
     # detection is token-driven (not incidental) for a representative sink.
     sample_rel, sample_name = guarded_now[0]
@@ -587,7 +613,7 @@ def test_label_sink_guardrail_detects_a_removed_guard():
 # Internal Tag/ledger chokepoints in tag_suggestion_service. They are exempt from
 # the sink scan above (they carry the actual Tag/ledger writes but are only ever
 # reached from guarded/skipping callers). That exemption is ONLY safe while every
-# caller guards — the test below enforces exactly that, so a suggestion action
+# caller guards - the test below enforces exactly that, so a suggestion action
 # (swap / fix-twin / reopen / bulk-accept / bulk-reopen / accept) that writes via a
 # chokepoint but drops its lock guard fails CI even though it has no direct sink.
 _LOCK_TAG_CHOKEPOINTS = ("_set_tag", "_reverse_review", "_resolve", "_apply_writeback")
@@ -622,7 +648,7 @@ def test_lock_chokepoint_callers_are_guarded():
 
     assert not violations, (
         "Function(s) call a Tag/ledger chokepoint (_set_tag/_reverse_review/"
-        "_resolve/_apply_writeback) but carry no picture-set lock guard — a "
+        "_resolve/_apply_writeback) but carry no picture-set lock guard - a "
         "suggestion action could write frozen label data. Guard the caller "
         "(enforce_pictures_not_locked / locked_picture_ids skip):\n"
         f"  {rel}: " + ", ".join(sorted(violations))
@@ -639,7 +665,7 @@ def test_workers_not_started_at_vault_init():
                 "_task_runner should be created in __init__"
             )
             assert not vault._task_runner.is_running(), (
-                "TaskRunner must NOT be running after Vault.__init__() — "
+                "TaskRunner must NOT be running after Vault.__init__() - "
                 "workers should only start when Vault.start() is called"
             )
             assert not vault._work_planner.is_running(), (
@@ -662,11 +688,11 @@ def test_workers_not_started_at_vault_init():
 # Phase 0 of the backend authorization refactor (see the backend refactor plan
 # §3.4/§6 and docs/backend_architecture.md §16.2). This is the safety net Phase 1
 # builds on: it enumerates every ``(method, path_template)`` HTTP endpoint the
-# built app actually exposes — the ground truth for the coverage matrix — and
+# built app actually exposes - the ground truth for the coverage matrix - and
 # checks it against a declaration set. Today the declaration set is EMPTY (the
 # ``authz`` registry does not exist yet), so this runs in AUDIT MODE with the
 # full current-route allowlist below: it denies nothing and enforces no access
-# policy — it only observes the route inventory. In Phase 1 the registry becomes
+# policy - it only observes the route inventory. In Phase 1 the registry becomes
 # the declaration set and entries burn down out of this allowlist as each route
 # is declared, exactly like the direct-DB-call allowlist above.
 #
@@ -681,7 +707,7 @@ def test_workers_not_started_at_vault_init():
 # (pixlstash/authz/registry.py), so this set has burned down to EMPTY: the
 # registry is now the sole coverage matrix. A newly added data route must be
 # declared in the registry (no longer parked here); the two assertions below then
-# keep the matrix arithmetic — an undeclared route can't merge, and a stale
+# keep the matrix arithmetic - an undeclared route can't merge, and a stale
 # allowlist entry can't rot. Do NOT re-populate this to silence a new route:
 # declare it in the registry instead.
 _CURRENT_ROUTE_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
@@ -689,7 +715,7 @@ _CURRENT_ROUTE_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
 
 # The route modules that must each contribute at least one endpoint. This is the
 # decisive cross-check that a whole router has not silently disappeared behind a
-# FastAPI internal change — it is independent of the endpoint total. (test_hooks
+# FastAPI internal change - it is independent of the endpoint total. (test_hooks
 # is intentionally absent: it is mounted only when enable_test_hooks=True.)
 _EXPECTED_ROUTE_MODULES = frozenset(
     {
@@ -731,7 +757,7 @@ _EXPECTED_ROUTE_MODULES = frozenset(
 )
 
 # WebSocket routes are acknowledged in the coverage matrix but are NOT covered by
-# the HTTP authz gate — their chokepoint is authenticate_websocket (plan §6). The
+# the HTTP authz gate - their chokepoint is authenticate_websocket (plan §6). The
 # included WS route's effective prefix is not resolved by the FastAPI resolver,
 # so its declared (unprefixed) path is recorded. Keyed by handler name so the
 # entry is stable regardless of that prefix-resolution quirk.
@@ -777,7 +803,7 @@ def test_all_routes_declare_access_policy(built_app):
     """AUDIT MODE: every mounted route is inventoried against a declaration set.
 
     Phase 0 has no authz registry, so the declaration set is empty and the full
-    current route set lives in _CURRENT_ROUTE_ALLOWLIST — this test denies
+    current route set lives in _CURRENT_ROUTE_ALLOWLIST - this test denies
     nothing and enforces no access policy. It is the scaffolding Phase 1 grows
     into: when the registry lands, ``declared`` becomes the registry's keys and
     each declared route burns down out of the allowlist. Failing in EITHER
@@ -829,7 +855,7 @@ def test_read_blocked_get_paths_name_declared_owner_class_gets():
     ``ROUTE_POLICIES`` one class wider than the §16.3 locality tier, because the
     set legitimately also covers a few ``OWNER_ONLY`` config GETs.
 
-    The forward direction — every locality-tier GET is *on* the belt — is
+    The forward direction - every locality-tier GET is *on* the belt - is
     ``tests/test_authz_host_capability_16_3.py``
     ``::test_every_untemplated_locality_get_is_on_the_read_blocked_belt``, and it
     is not repeated here: exact matching cannot express a templated path such as
@@ -857,7 +883,7 @@ def test_read_blocked_get_paths_name_declared_owner_class_gets():
     stale = sorted(READ_BLOCKED_GET_PATHS - owner_class_gets)
     assert not stale, (
         "READ_BLOCKED_GET_PATHS entr(y/ies) do not name a GET route declared "
-        "OWNER_ONLY/LOCAL_OWNER_ONLY/LOOPBACK_OWNER_ONLY in the authz registry — "
+        "OWNER_ONLY/LOCAL_OWNER_ONLY/LOOPBACK_OWNER_ONLY in the authz registry - "
         "a typo, a removed route, or a route deliberately loosened. Fix the path "
         "or drop the entry:\n" + "\n".join(f"  {p}" for p in stale)
     )
@@ -1014,7 +1040,7 @@ def test_route_enumeration_is_not_silently_undercounting(built_app):
     COMPLETE. The installed FastAPI resolves lazily-included routers through an
     internal helper; a future upgrade could change that model and make a naive
     walk under-count silently. These two independent tripwires make that loud:
-    an absolute floor on the endpoint count, and — the decisive one — a check
+    an absolute floor on the endpoint count, and - the decisive one - a check
     that every expected route module still contributes at least one endpoint.
     """
     from pixlstash.route_inventory import api_endpoint_set, route_module_names
@@ -1030,7 +1056,7 @@ def test_route_enumeration_is_not_silently_undercounting(built_app):
     live_modules = route_module_names(built_app)
     missing_modules = _EXPECTED_ROUTE_MODULES - live_modules
     assert not missing_modules, (
-        "Route module(s) contribute ZERO endpoints to the inventory — a whole "
+        "Route module(s) contribute ZERO endpoints to the inventory - a whole "
         "router has silently vanished from the enumeration (or was unmounted). "
         "This is exactly the false-coverage failure the inventory must catch:\n"
         + "\n".join(f"  {m}" for m in sorted(missing_modules))
@@ -1040,7 +1066,7 @@ def test_route_enumeration_is_not_silently_undercounting(built_app):
 def test_websocket_routes_are_acknowledged(built_app):
     """WebSocket routes are recorded in the matrix but gated by their own path.
 
-    WS is outside the HTTP authz gate (plan §6 — authenticate_websocket is the
+    WS is outside the HTTP authz gate (plan §6 - authenticate_websocket is the
     chokepoint). Enumerating them explicitly stops the registry from implying a
     false sense of WS coverage. A new WS route must be consciously acknowledged
     here, which prompts confirming its own auth path.
@@ -1051,7 +1077,7 @@ def test_websocket_routes_are_acknowledged(built_app):
     assert live_ws == _KNOWN_WEBSOCKET_ROUTES, (
         "WebSocket route inventory changed. Update _KNOWN_WEBSOCKET_ROUTES and "
         "confirm each WS route authenticates via authenticate_websocket (the WS "
-        "chokepoint — the HTTP authz gate does not cover WebSockets).\n"
+        "chokepoint - the HTTP authz gate does not cover WebSockets).\n"
         f"  added:   {sorted(live_ws - _KNOWN_WEBSOCKET_ROUTES)}\n"
         f"  removed: {sorted(_KNOWN_WEBSOCKET_ROUTES - live_ws)}"
     )
@@ -1065,7 +1091,7 @@ def test_websocket_routes_are_acknowledged(built_app):
 # and refuses a `project_id` filter a scoped token may not name (#708). It reads
 # `request.query_params` and matches against the fixed tuple
 # `PROJECT_FILTER_QUERY_PARAMS`, so a route that spells the parameter any other
-# way is silently uncovered — the omission class §16.2 exists to abolish.
+# way is silently uncovered - the omission class §16.2 exists to abolish.
 #
 # Anything whose *name* mentions a project is treated as a candidate filter, not
 # just the two spellings already listed: the point is to catch a NEW spelling
@@ -1084,14 +1110,14 @@ _NON_PROJECT_FILTER_QUERY_PARAMS: dict[str, str] = {}
 # each body parameter's declared type: it enumerates a *typed* body (a Pydantic
 # request model, a `project_id: int | None = Form(...)`) exactly, and it sees
 # NOTHING inside a body declared `payload: dict = Body(...)`. The opaque half is
-# a real and acknowledged blind spot — see _PROJECT_REFS_IN_OPAQUE_BODY below.
+# a real and acknowledged blind spot - see _PROJECT_REFS_IN_OPAQUE_BODY below.
 # This set is therefore **not** the complete list of routes that take a project
 # in a body; it is the complete list of the ones a machine can find.
 #
 # All of them are outside `enforce_project_filter_scope` (which reads the query
 # string only), and nothing else checks the payload half. Today every one is a
 # write, and a resource-scoped token can only be minted READ, so `auth.py`'s
-# "block non-GET for a READ token" refuses them before the payload is ever read —
+# "block non-GET for a READ token" refuses them before the payload is ever read -
 # unless the path is in `auth.READ_SAFE_POST_PATHS`, which none of these is. That
 # argument is what the READ-reachability assertion below actually tests; the
 # enumeration exists so a NEW typed body field has to be looked at.
@@ -1118,7 +1144,7 @@ _PROJECT_REFS_IN_TYPED_BODY = frozenset(
 #
 # (A source grep for `project_id` over the opaque-bodied handlers was tried as a
 # machine substitute and rejected: on the current tree it returns 8 routes, of
-# which 3 — POST /characters/{id}/faces, POST+PUT /picture_sets/{id}/members —
+# which 3 - POST /characters/{id}/faces, POST+PUT /picture_sets/{id}/members -
 # never read a project from the body at all and only mention the word while
 # reconciling membership they derive themselves. A check with a 38% false-positive
 # rate that still cannot prove absence buys the appearance of coverage, not
@@ -1139,14 +1165,14 @@ _PROJECT_REFS_IN_OPAQUE_BODY = frozenset(
 
 # The one thing about opaque bodies that IS arithmetic: which routes have one,
 # and which of those a READ (resource-scoped) token can actually reach. For a
-# route a READ token cannot reach, "we cannot see inside the body" costs nothing —
+# route a READ token cannot reach, "we cannot see inside the body" costs nothing -
 # the payload is never read. For a route it CAN reach, the blind spot is live, so
 # every such route is hand-vetted here with what its handler actually reads. The
 # intersection is enumerable even though the payloads are not, which is what keeps
 # the blind spot bounded instead of open-ended.
 _READ_REACHABLE_OPAQUE_BODY_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/pictures/thumbnails"): (
-        "reads payload['ids'] only — a picture id list, narrowed by the gate's "
+        "reads payload['ids'] only - a picture id list, narrowed by the gate's "
         "picture-scope policy. Names no project. Hand-checked 2026-08-04."
     ),
 }
@@ -1187,7 +1213,7 @@ def _iter_body_project_refs(app):
     model reachable from the declared annotation so a field on a request schema is
     found under its dotted path. Only the leaf name is matched against
     :data:`_PROJECT_PARAM_RE`, so a model merely *called* ``ProjectFoo`` does not
-    trip it — only a field that names a project.
+    trip it - only a field that names a project.
 
     **What it cannot see.** It reads ``field_info.annotation`` and nothing else, so
     a body declared ``payload: dict = Body(...)`` (or ``Any``, or ``list[dict]``)
@@ -1298,7 +1324,7 @@ def test_project_filter_params_are_declared(built_app):
 
     1. **A wire name that does not say "project".** ``project_id: str =
        Query(None, alias="proj")`` is enumerated as ``proj``, which this regex does
-       not match — and the gate is defeated by the same fact, because it matches
+       not match - and the gate is defeated by the same fact, because it matches
        ``request.query_params`` against ``PROJECT_FILTER_QUERY_PARAMS`` and the
        wire name really is ``proj``. Guardrail and gate fail together, which is
        precisely the case where a guardrail is worth nothing.
@@ -1308,7 +1334,7 @@ def test_project_filter_params_are_declared(built_app):
        _misc.py`` and ``routes/pictures/_listing.py`` already read ``project_id``
        directly off ``request.query_params``, so the pattern is in-tree and
        available to copy. (Those two are covered *by the gate*, which reads the
-       raw query string — but only because they kept the declared spelling.)
+       raw query string - but only because they kept the declared spelling.)
     3. **The nested-``Depends`` capability is not what the anti-vacuity assertion
        protects.** ``iter_api_query_params`` flattens the dependency tree so a
        parameter contributed one level down is enumerated, and §16.6 advertises
@@ -1339,7 +1365,7 @@ def test_project_filter_params_are_declared(built_app):
     # got cleaner.
     assert "project_id" in found, (
         "The query-parameter enumeration found no `project_id` anywhere. That is "
-        "not plausible — pixlstash/route_inventory.py::iter_api_query_params has "
+        "not plausible - pixlstash/route_inventory.py::iter_api_query_params has "
         "stopped seeing route parameters (FastAPI internals moved?), so this "
         "guardrail is proving nothing. Fix the enumeration before trusting it."
     )
@@ -1352,10 +1378,10 @@ def test_project_filter_params_are_declared(built_app):
     assert not undeclared, (
         "Query parameter(s) name a project but are NOT in "
         "authz.membership.PROJECT_FILTER_QUERY_PARAMS, so the authz gate will "
-        "not refuse them for a token with no project visibility — a scoped token "
+        "not refuse them for a token with no project visibility - a scoped token "
         "can use them as a membership oracle (#708, §16.6).\n"
-        "Fix: add the spelling to PROJECT_FILTER_QUERY_PARAMS (preferred), or — "
-        "if it genuinely does not filter over the project space — add it to "
+        "Fix: add the spelling to PROJECT_FILTER_QUERY_PARAMS (preferred), or - "
+        "if it genuinely does not filter over the project space - add it to "
         "_NON_PROJECT_FILTER_QUERY_PARAMS in this file WITH a reason. Do not "
         "narrow the regex.\n"
         + "\n".join(
@@ -1386,7 +1412,7 @@ def test_query_parameter_enumeration_descends_nested_depends():
     It is also the regression test for the flattening itself.
     ``pixlstash.route_inventory.flatten_dependant_fields`` is a local walk over
     ``Dependant``'s own fields precisely because the FastAPI helper it replaced
-    (``get_flat_dependant``) was removed in 0.141 — and a walk that silently
+    (``get_flat_dependant``) was removed in 0.141 - and a walk that silently
     stopped descending would report *fewer* parameters, i.e. false coverage, with
     every other guardrail still green.
     """
@@ -1419,7 +1445,7 @@ def test_query_parameter_enumeration_descends_nested_depends():
         "It must yield the handler's own parameter, one contributed a level down "
         "(under its WIRE name, not the Python name), and one two levels down. "
         f"Got: {sorted(found)}. Fix flatten_dependant_fields in "
-        "pixlstash/route_inventory.py — a partial walk reports false coverage."
+        "pixlstash/route_inventory.py - a partial walk reports false coverage."
     )
 
 
@@ -1439,7 +1465,7 @@ def test_project_references_outside_the_query_chokepoint(built_app):
        ``_iter_body_project_refs`` reads declared annotations, so this half is
        arithmetic over routes whose body has a declared shape, and nothing more.
        A body declared ``payload: dict = Body(...)`` declares no keys and
-       contributes nothing — see assertion 3.
+       contributes nothing - see assertion 3.
     2. **READ-reachability, over typed *and* known-opaque project routes.** This is
        the assertion that carries the actual safety argument: the paths yielded by
        the inventory are the same ``/api/v1/…`` strings ``READ_SAFE_POST_PATHS``
@@ -1489,14 +1515,14 @@ def test_project_references_outside_the_query_chokepoint(built_app):
     }
     unvetted = sorted(opaque_reachable - set(_READ_REACHABLE_OPAQUE_BODY_ROUTES))
     assert not unvetted, (
-        "Route(s) with an OPAQUE body (dict/Any — no declared keys) are reachable "
+        "Route(s) with an OPAQUE body (dict/Any - no declared keys) are reachable "
         "by a READ token. Introspection cannot see what the handler reads out of "
         "such a payload, so the 'it is a write a READ token cannot reach' argument "
         "that covers every other body-borne project reference does not apply here "
         "(§16.6). Read the handler; if it names no project, add it to "
         "_READ_REACHABLE_OPAQUE_BODY_ROUTES in this file WITH what it actually "
         "reads and the date you checked. If it does name a project, it is a "
-        "membership oracle for a resource-scoped token — narrow it against "
+        "membership oracle for a resource-scoped token - narrow it against "
         "visible_project_ids or take the path out of READ_SAFE_POST_PATHS:\n"
         + "\n".join(f"  {method} {path}" for method, path in unvetted)
     )
@@ -1537,6 +1563,12 @@ _PICTURE_METADATA_FIELDS = {
     "import_source_folder",
     "imported_at",
     "is_video",
+    # v1.11 Phase 4b. When the layout engine should next ask whether this
+    # picture's folder is still true, and NULL for every picture nobody has
+    # just reassigned. A scheduling stamp about this one picture, saying
+    # nothing about any other and nothing about its content, so a
+    # picture-scoped token may see it.
+    "layout_check_due_at",
     "metadata_hash",
     "original_file_name",
     # (#950) The picture's own EXIF orientation, 1-8. Carries no membership,
@@ -1565,6 +1597,36 @@ _PICTURE_METADATA_FIELDS = {
     "thumbnail_height",
     "thumbnail_width",
     "width",
+    # (B3) The workflow-library keys. Opaque content-addressed digests plus the
+    # literal rule version ("v1"): no membership, no ownership, no host or path
+    # information.
+    #
+    # `workflow_instance_hash` is the one that needed thinking about, because
+    # the instance tier DOES cover the prompt. It is a digest, so it discloses
+    # no text -- and the same payload already carries
+    # `comfyui_positive_prompt` in the clear, so a holder who can read this can
+    # read the prompt itself and has no use for a confirmable digest of it.
+    # Narrowing the prompt column is the live question (§16.3), not this.
+    #
+    # The recipe they name is prompt-free by construction (library
+    # plan §5 -- bucket P is nulled before hashing), so no prompt or caption is
+    # in there. They are a correlation key -- two pictures sharing one hash
+    # share a workflow -- but only across pictures the token can already see,
+    # which is the same shape as `pixel_sha` and `perceptual_hash` above.
+    #
+    # The residual, stated rather than waved past: a digest is one-way but
+    # *confirmable*, and what it covers includes model filenames, which in this
+    # product are often authored (a character LoRA is named after its subject).
+    # So a holder who can already read these payloads and who GUESSES a
+    # filename can confirm the guess. That is strictly weaker than the same
+    # holder reading `comfyui_models` in the very same payload, which states
+    # those filenames outright, so pinning these three changes nothing about
+    # that exposure -- it is `comfyui_models` that would have to be narrowed,
+    # and §16.3 already has it open as the host-information question.
+    "workflow_hash_version",
+    "workflow_instance_hash",
+    "workflow_structural_hash",
+    "workflow_topology_hash",
 }
 
 
@@ -1587,14 +1649,14 @@ def test_picture_metadata_fields_membership_is_pinned():
     pending a decision, so nothing here should be read as their having been
     reviewed and passed:
 
-    * ``pending_character_id`` — a character FK, while ``GET /characters/{id}``
+    * ``pending_character_id`` - a character FK, while ``GET /characters/{id}``
       is ``CHARACTER_SCOPED`` and 403s the same token. Not transient: the dedup
       verdict and keep-cover-only services set it on pictures whose face
       extraction has already run, so it persists. Narrowing it needs a
       ``visible_character_ids`` ladder, which does not exist yet.
-    * ``source_picture_id`` — points at a picture the token may not be granted
+    * ``source_picture_id`` - points at a picture the token may not be granted
       (verified: that picture's own endpoints 403 the same token).
-    * ``reference_folder_id`` — same shape, and additionally in ``grid_fields()``,
+    * ``reference_folder_id`` - same shape, and additionally in ``grid_fields()``,
       so it rides every listing rather than only these six routes.
 
     ``import_source_folder``, ``pixel_sha``, ``original_file_name`` and the
@@ -1636,7 +1698,7 @@ def test_matched_route_path_is_prefix_stripped(built_app):
     OBSERVATION-ONLY (no authz code). Under the installed FastAPI, the effective
     (prefixed) path from the inventory, e.g. /api/v1/pictures/{id}/metadata, is
     NOT the same string as the underlying route object's own path
-    (/pictures/{id}/metadata) — the one exposed at request time via
+    (/pictures/{id}/metadata) - the one exposed at request time via
     request.scope['route'].path. They differ on the vast majority of routes.
     Phase 1's gate must therefore key on route-object IDENTITY, not on the
     prefixed template string, or it would fail to match (fail-open) every
@@ -1659,7 +1721,7 @@ def test_matched_route_path_is_prefix_stripped(built_app):
     assert checked > 0, "expected to inspect at least one /api/v1 route"
     assert diverging > 0, (
         "Expected the effective (prefixed) path to differ from the route "
-        "object's own path for included routes — if they now match, FastAPI's "
+        "object's own path for included routes - if they now match, FastAPI's "
         "inclusion model changed and the Phase-1 gate-keying assumption "
         "(key by route identity, not prefixed path) must be re-verified."
     )
@@ -1678,16 +1740,16 @@ def test_matched_route_path_is_prefix_stripped(built_app):
 # NOT sufficient for fail-closed; these decoy tests are the load-bearing proof.
 # See the backend refactor plan §3.5 and docs/backend_architecture.md §16.2.
 #
-# Criterion (c) — SCOPED_LIST / body_ids list-and-batch filtering — is Step 4
+# Criterion (c) - SCOPED_LIST / body_ids list-and-batch filtering - is Step 4
 # work and is deliberately absent here; nothing below implies the gate covers it.
 # ---------------------------------------------------------------------------
 
 # The decoy router is mounted under this prefix, so effective paths are stable
 # and the declaring registry can be built statically (no chicken-and-egg with the
-# app build). The route object's OWN path is the unprefixed suffix — proving that
+# app build). The route object's OWN path is the unprefixed suffix - proving that
 # identity keying, not path-string keying, is what matches at request time.
 #
-# NB: the prefix lives under /api/v1 on purpose — tests/conftest.py globally
+# NB: the prefix lives under /api/v1 on purpose - tests/conftest.py globally
 # rewrites any TestClient path that does not already start with /api/v1 (adding
 # the prefix), so a decoy under a different root would 404 before reaching the
 # gate. The route object's OWN path is still the prefix-stripped suffix
@@ -1800,7 +1862,7 @@ def test_authz_gate_report_only_denies_nothing():
 
 def test_authz_gate_keys_by_request_time_route_identity():
     """CSO (a): request-time scope['route'] IS the enumerated route object, so
-    id() keying matches — even though the effective (prefixed) path differs from
+    id() keying matches - even though the effective (prefixed) path differs from
     the route object's own (prefix-stripped) path, which is why string keying
     would fail open. Proven end-to-end: a route declared under its EFFECTIVE path
     is matched at request time via identity and passes the enforcing gate."""
@@ -1813,7 +1875,7 @@ def test_authz_gate_keys_by_request_time_route_identity():
     app = _build_decoy_app(gate)
 
     # The declaration is keyed by the EFFECTIVE (prefixed) path; the route
-    # object's own path is the UNPREFIXED suffix — string keying on scope['route']
+    # object's own path is the UNPREFIXED suffix - string keying on scope['route']
     # .path would miss it, identity keying does not.
     ctxs = {path: route for _method, path, route in iter_api_route_contexts(app)}
     assert _DECOY_DECLARED_PATH in ctxs
@@ -2259,7 +2321,7 @@ _PRIVATE_ADDRESS_RE = re.compile(
 # Named roots, never a repo-root walk: that is what lets every scan in this
 # file work without a node_modules / dist / .venv exclusion list, and a
 # too-greedy exclusion is a silent pass. The list is wide because the scan it
-# mirrors reads the whole diff — a literal in a workflow, an installer script
+# mirrors reads the whole diff - a literal in a workflow, an installer script
 # or the website blocks a push exactly as one in a test does.
 _PRIVATE_ADDRESS_ROOTS = (
     ".github",
@@ -2273,7 +2335,7 @@ _PRIVATE_ADDRESS_ROOTS = (
     "tests",
     "website",
 )
-# Directories whose *immediate* files are read whatever they are called —
+# Directories whose *immediate* files are read whatever they are called -
 # Dockerfiles, docker-entrypoint.sh, .env.example, the frontend's build and
 # Playwright configs. Derived rather than listed on purpose: a hand-kept file
 # list is how three Dockerfiles came to be named here and then filtered
@@ -2310,7 +2372,7 @@ _PRIVATE_ADDRESS_SUFFIXES = frozenset(
 
 
 # A digit extends the last octet; a dot starts another one. End of line is
-# neither, which is why this is a set of characters and not a substring test —
+# neither, which is why this is a set of characters and not a substring test -
 # ``"" in "0123"`` is True in Python, so the string spelling reports every line
 # that happens to end on a sanctioned address.
 _ADDRESS_CONTINUES = frozenset("0123456789.")
@@ -2321,7 +2383,7 @@ def _address_continues_after(line: str, at: int) -> bool:
 
     A digit does, because it extends the last octet. So does a dot, and that
     is the deliberately blunt half: a dot followed by a digit is genuinely a
-    further octet, and a dot followed by a space is the end of a sentence — but
+    further octet, and a dot followed by a space is the end of a sentence - but
     the scan this mirrors treats both the same and reports the second, so a
     rule that quietly permitted it would pass a line the push then blocks. Over
     -strict here costs one reworded sentence; loose costs a blocked push, which
@@ -2408,9 +2470,9 @@ def test_no_unsanctioned_private_address_literal():
         "scanning will stop a push over:\n  "
         + "\n  ".join(sorted(offenders))
         + "\n\nFix: in a test, import the vector from tests/network_vectors.py "
-        "rather than writing a number — inventing a different one just moves "
+        "rather than writing a number - inventing a different one just moves "
         "the problem. In prose, write a placeholder such as <lan-ip>, or name "
-        "the RFC 1918 block itself — with its prefix length, since a bare "
+        "the RFC 1918 block itself - with its prefix length, since a bare "
         "network address is not one of the six exempt strings."
     )
 
@@ -2463,7 +2525,7 @@ def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
     """The selection half, which the regex teeth above cannot reach.
 
     A file reached through ``_PRIVATE_ADDRESS_FLAT_DIRS`` is opened because it
-    was named, not because of its extension — the bug this pins is three
+    was named, not because of its extension - the bug this pins is three
     Dockerfiles that were listed and then filtered back out by the suffix set.
     """
     dockerfile = tmp_path / "Dockerfile.demo"
@@ -2496,7 +2558,7 @@ def test_tests_close_the_server_not_only_its_vault():
         if needle in line
     ]
     assert not offenders, (
-        "close the whole server, not only its vault — server.close() — at "
+        "close the whole server, not only its vault - server.close() - at "
         + ", ".join(offenders)
     )
 
@@ -2544,7 +2606,11 @@ def test_dockerfiles_install_every_runtime_dependency():
             # package name is not an installed package.
             tokens = shlex.split(command, comments=True)
             install_at = next(
-                (i for i in range(len(tokens) - 1) if tokens[i : i + 2] == ["pip", "install"]),
+                (
+                    i
+                    for i in range(len(tokens) - 1)
+                    if tokens[i : i + 2] == ["pip", "install"]
+                ),
                 None,
             )
             if install_at is None:
@@ -2561,7 +2627,9 @@ def test_dockerfiles_install_every_runtime_dependency():
 
     missing = []
     for filename in ("Dockerfile", "Dockerfile.gpu", "Dockerfile.demo"):
-        packages = installed_packages((REPO_ROOT / filename).read_text(encoding="utf-8"))
+        packages = installed_packages(
+            (REPO_ROOT / filename).read_text(encoding="utf-8")
+        )
         missing += [
             f"{filename}: {name}"
             for name in sorted(names)
@@ -2571,4 +2639,39 @@ def test_dockerfiles_install_every_runtime_dependency():
     assert not missing, (
         "these runtime dependencies are never installed in the image, so the "
         "container will fail on import: " + ", ".join(missing)
+    )
+
+
+def test_frontend_import_extensions_match_the_staging_allowlist():
+    """The importer's client-side filter must say exactly what the server takes.
+
+    The frontend used to filter a drop against the lists it uses to *display*
+    pictures, which are far wider than what the staging route accepts. A model
+    file, a `.psd` or a `.wmv` therefore uploaded in full - a gigabyte, in the
+    report that prompted this - before the route skipped it as unsupported and
+    the commit came back "No staged files to import". Two allowlists with
+    nothing holding them together is what made that possible, so this is the
+    thing holding them together.
+    """
+    from pixlstash.routes.pictures._import import STAGING_ALLOWED_MEDIA_EXTS
+
+    media_js = (REPO_ROOT / "frontend" / "src" / "utils" / "media.js").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"export const IMPORT_MEDIA_EXTENSIONS = \[(.*?)\];", media_js, re.DOTALL
+    )
+    assert match, (
+        "IMPORT_MEDIA_EXTENSIONS is gone from frontend/src/utils/media.js - the "
+        "importer is filtering against something else, and this guardrail can no "
+        "longer see what."
+    )
+    frontend_exts = {f".{ext}" for ext in re.findall(r'"([^"]+)"', match.group(1))}
+
+    assert frontend_exts == STAGING_ALLOWED_MEDIA_EXTS, (
+        "the client-side import filter and the staging route disagree: "
+        f"client-only={sorted(frontend_exts - STAGING_ALLOWED_MEDIA_EXTS)}, "
+        f"server-only={sorted(STAGING_ALLOWED_MEDIA_EXTS - frontend_exts)}. "
+        "A client-only extension uploads the whole file and then fails the "
+        "commit; a server-only one is refused before it is ever offered."
     )

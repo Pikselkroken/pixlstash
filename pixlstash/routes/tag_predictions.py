@@ -21,6 +21,20 @@ class ResetTagsRequest(BaseModel):
     model: str | None = None
 
 
+class BulkResetRequest(BaseModel):
+    """Request body for the multi-picture reset_tags / reset_description endpoints."""
+
+    picture_ids: list[int]
+    model: str | None = None
+
+
+class BulkResetResponse(BaseModel):
+    """How many pictures a bulk reset queued."""
+
+    status: str
+    count: int
+
+
 class TagPredictionItemResponse(BaseModel):
     """A single stored tag prediction."""
 
@@ -208,7 +222,7 @@ def create_router(server) -> APIRouter:
             "(a synthetic ``manual`` prediction row is created when the tag was "
             "hand-added and the tagger never predicted it).  Does not modify the "
             "Tag table.  Records an undoable ``pictures.tags.reject`` operation "
-            "summarised as *Removed tag 'x'* — that is what the user did; the "
+            "summarised as *Removed tag 'x'* - that is what the user did; the "
             "ledger is the mechanism.  423 when a locked picture set freezes the "
             "picture (nothing is recorded)."
         ),
@@ -233,7 +247,7 @@ def create_router(server) -> APIRouter:
 
         # Recorded so Ctrl+Z can revert it (§21.2). "Removed tag" is what the user
         # did; the NEG ledger row is the mechanism, and it is captured with the
-        # tags facet so an undo reverses both — a restored tag the tagger still
+        # tags facet so an undo reverses both - a restored tag the tagger still
         # treats as rejected is a half-undo, which is worse than none.
         operation_log_service.run_recorded_metadata_task(
             server.vault,
@@ -290,7 +304,7 @@ def create_router(server) -> APIRouter:
             "Atomically deletes all non-manual TagPrediction rows and all Tag rows "
             "for the picture, then restores the pending-retag sentinel.  This is the "
             "single-round-trip equivalent of calling tag_predictions/delete followed "
-            "by DELETE tags — it avoids the intermediate state where predictions are "
+            "by DELETE tags - it avoids the intermediate state where predictions are "
             "gone but tags still exist, which otherwise tricks the background "
             "MissingTagFinder into running a wasted inference pass."
         ),
@@ -346,6 +360,58 @@ def create_router(server) -> APIRouter:
         if not found:
             raise HTTPException(status_code=404, detail="Picture not found")
         return {"status": "reset"}
+
+    @router.post(
+        "/pictures/reset_tags",
+        summary="Reset tags for many pictures",
+        description=(
+            "The multi-picture form of /pictures/{id}/reset_tags: one transaction "
+            "drops every listed picture's non-manual predictions and tags and "
+            "restores the pending-retag sentinel. The background tagger then "
+            "processes them in batches; no per-picture task is queued."
+        ),
+        response_model=BulkResetResponse,
+    )
+    def reset_pictures_tags(request: Request, payload: BulkResetRequest):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        ids = sorted({int(pid) for pid in payload.picture_ids if int(pid) > 0})
+        if not ids:
+            return {"status": "reset", "count": 0}
+        reset_ids = tag_prediction_service.reset_pictures_tags(
+            server.vault,
+            ids,
+            engine_name=payload.model,
+            origin_client_id=origin_client_id,
+        )
+        if reset_ids:
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": reset_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+        return {"status": "reset", "count": len(reset_ids)}
+
+    @router.post(
+        "/pictures/reset_description",
+        summary="Reset descriptions for many pictures",
+        description=(
+            "The multi-picture form of /pictures/{id}/reset_description: one "
+            "transaction marks every listed picture for re-captioning, and the "
+            "background captioner processes them in batches. Pass 'model' to "
+            "pick the description plugin."
+        ),
+        response_model=BulkResetResponse,
+    )
+    def reset_pictures_descriptions(request: Request, payload: BulkResetRequest):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        ids = [int(pid) for pid in payload.picture_ids if int(pid) > 0]
+        count = server.vault.reset_descriptions(
+            ids, engine_name=payload.model, origin_client_id=origin_client_id
+        )
+        return {"status": "reset", "count": count}
 
     @router.get(
         "/tagger/label-thresholds",

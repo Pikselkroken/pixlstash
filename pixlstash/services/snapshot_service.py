@@ -34,13 +34,13 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# GFS retention constants (v1 — not user-configurable yet)
+# GFS retention constants (v1 - not user-configurable yet)
 # ---------------------------------------------------------------------------
 GFS_KEEP_DAILY: int = 7
 GFS_KEEP_WEEKLY: int = 4  # most-recent Sunday of each of the last 4 weeks
 GFS_KEEP_MONTHLY: int = 12  # first-of-month snapshot for the last 12 months
 # OPPORTUNISTIC snapshots accumulate from safety-snapshot-before-restore and
-# from snapshot_if_due() — without a cap they grow without bound. MANUAL
+# from snapshot_if_due() - without a cap they grow without bound. MANUAL
 # snapshots are intentionally not capped: they are user-curated archives.
 GFS_KEEP_OPPORTUNISTIC: int = 5
 
@@ -104,8 +104,8 @@ class SnapshotService:
         rel_manifest = os.path.join(rel_dir, f"{snapshot_uuid}.manifest.json")
         abs_manifest = os.path.join(vault_root, rel_manifest)
         # The per-picture hash map lives in its own sidecar (not the manifest)
-        # so the snapshot-list endpoint — which parses every manifest for its
-        # small resource counts — never pays to read a multi-MB hash blob.
+        # so the snapshot-list endpoint - which parses every manifest for its
+        # small resource counts - never pays to read a multi-MB hash blob.
         rel_hashes = os.path.join(rel_dir, f"{snapshot_uuid}.hashes.json")
         abs_hashes = os.path.join(vault_root, rel_hashes)
 
@@ -126,7 +126,7 @@ class SnapshotService:
             # VACUUM the live DB into a scratch .sqlite, drop the live
             # pipeline-state tables, then compress the archive to .sqlite.zst.
             # The expensive GPU-regenerated blobs (CLIP image/text embeddings,
-            # InsightFace face features) are deliberately KEPT now — zstd makes
+            # InsightFace face features) are deliberately KEPT now - zstd makes
             # carrying them affordable (~3x smaller) so a restore no longer
             # triggers a full re-embedding / re-detection pass. Only the .zst
             # is retained; the scratch file is always removed.
@@ -153,7 +153,7 @@ class SnapshotService:
                 json.dump(manifest, _fh, indent=2)
 
             # Hash-map sidecar (separate so the list endpoint's manifest reads
-            # stay lean). compact JSON — no indent — to keep it small.
+            # stay lean). compact JSON - no indent - to keep it small.
             with open(abs_hashes, "w", encoding="utf-8") as _fh:
                 json.dump(picture_hashes, _fh, separators=(",", ":"))
 
@@ -235,7 +235,7 @@ class SnapshotService:
         snapshots is currently the way to erase that retained metadata.
 
         Discovery reads only the JSON manifests (which list each snapshot's
-        ``picture_ids``) — no snapshot database is opened or decompressed.
+        ``picture_ids``) - no snapshot database is opened or decompressed.
 
         Args:
             picture_ids: Live picture IDs that were just purged.
@@ -444,7 +444,7 @@ class SnapshotService:
         """Take an opportunistic snapshot if more than OPPORTUNISTIC_MIN_HOURS have passed.
 
         Only automatic snapshots (DAILY, WEEKLY, MONTHLY, OPPORTUNISTIC) are
-        considered when checking timing — MANUAL snapshots are user-curated
+        considered when checking timing - MANUAL snapshots are user-curated
         archives and should not suppress the opportunistic schedule.
 
         Args:
@@ -480,7 +480,7 @@ class SnapshotService:
         """Write a clean copy of the live DB to *abs_snapshot* via ``VACUUM INTO``.
 
         Runs on a dedicated short-lived SQLite connection that is closed in a
-        ``finally`` — NOT the writer session's pooled connection.  SQLite keeps
+        ``finally`` - NOT the writer session's pooled connection.  SQLite keeps
         an OS file handle on the VACUUM INTO *destination* alive on whichever
         connection issued the statement until that connection is closed.  The
         writer session's connection lives in the engine pool for the whole
@@ -519,7 +519,7 @@ class SnapshotService:
     _STRIP_PICTURE_COLUMNS: tuple[str, ...] = ()
 
     # Tables whose entire contents are dropped from a snapshot. These are
-    # all regenerable / pipeline-state tables — keeping the snapshot's
+    # all regenerable / pipeline-state tables - keeping the snapshot's
     # rows would either waste disk on values the workers will recompute
     # (``picturelikeness``) or stomp on the live pipeline's progress
     # tracking when the restore swaps the file in (``picturelikenessqueue``
@@ -540,7 +540,7 @@ class SnapshotService:
         ``picturelikenessfrontier`` tables (live similarity progress that the
         restore path reconstructs from the live DB) and re-VACUUMs to reclaim
         the freed pages. The expensive per-picture blobs (embeddings, face
-        features, scores) are intentionally retained — see
+        features, scores) are intentionally retained - see
         ``_STRIP_PICTURE_COLUMNS``.
 
         Failure is logged and swallowed: an unprepared snapshot is still
@@ -573,7 +573,7 @@ class SnapshotService:
                 conn.execute(f"UPDATE picture SET {set_clause}")
 
             # Drop regenerable / pipeline-state tables. Only those that
-            # actually exist in this snapshot's schema — older snapshots
+            # actually exist in this snapshot's schema - older snapshots
             # may pre-date some of them.
             existing_tables = {
                 row[0]

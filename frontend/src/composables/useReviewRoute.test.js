@@ -223,7 +223,7 @@ describe("resolveReviewView", () => {
 
 // --- useReviewRoute: refresh restore -----------------------------------------
 
-describe("useReviewRoute — refresh restore", () => {
+describe("useReviewRoute - refresh restore", () => {
   let store;
 
   beforeEach(() => {
@@ -266,7 +266,7 @@ describe("useReviewRoute — refresh restore", () => {
       setId: 12,
       characterId: "UNASSIGNED",
     });
-    // Seeded directly — no second /tag_health request via setHealthScope.
+    // Seeded directly - no second /tag_health request via setHealthScope.
     expect(store.setHealthScopeCalls).toBe(0);
     expect(store.overlayOpen).toBe(true);
   });
@@ -318,7 +318,7 @@ describe("useReviewRoute — refresh restore", () => {
 
   it("keeps a scope pointing at a deleted or locked set (the board owns that state)", async () => {
     // A locked set is a legitimate terminal state on the board, and a deleted
-    // set simply yields no rows — neither is a routing error, so the scope is
+    // set simply yields no rows - neither is a routing error, so the scope is
     // restored verbatim and the board decides what to render.
     const { route, router } = makeRouter({ review: "board", review_set: "77" });
     store = makeStore();
@@ -330,7 +330,7 @@ describe("useReviewRoute — refresh restore", () => {
 
 // --- useReviewRoute: store → URL ---------------------------------------------
 
-describe("useReviewRoute — writing the URL", () => {
+describe("useReviewRoute - writing the URL", () => {
   it("writes ?review=board on open and strips it on close", async () => {
     const { route, router } = makeRouter({});
     const store = makeStore();
@@ -401,7 +401,7 @@ describe("useReviewRoute — writing the URL", () => {
 
 // --- useReviewRoute: back / forward -------------------------------------------
 
-describe("useReviewRoute — back and forward", () => {
+describe("useReviewRoute - back and forward", () => {
   it("closes the overlay when back leaves the review URL", async () => {
     const { route, router } = makeRouter({});
     const store = makeStore();
@@ -478,7 +478,7 @@ vi.mock("../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
-describe("useReviewSessionsStore.load — URL restore", () => {
+describe("useReviewSessionsStore.load - URL restore", () => {
   it("resolves, then clears, pendingRestoreViewId", async () => {
     const { setActivePinia, createPinia } = await import("pinia");
     const { apiClient } = await import("../utils/apiClient");

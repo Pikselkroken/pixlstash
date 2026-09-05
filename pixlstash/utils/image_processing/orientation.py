@@ -10,13 +10,13 @@ cheapest correct rotate is to change the tag and leave the bitmap alone.
 **Container surgery, never a re-encode.** Both writers here splice the metadata
 block and copy every other byte through:
 
-* JPEG — ``piexif.insert``, which rewrites the APP1 segment only.
-* PNG — the ``eXIf`` chunk (PNG spec 1.5.0, 2017), inserted before ``IDAT``.
+* JPEG - ``piexif.insert``, which rewrites the APP1 segment only.
+* PNG - the ``eXIf`` chunk (PNG spec 1.5.0, 2017), inserted before ``IDAT``.
 
 That is not merely faster than a Pillow round-trip, it is the only *safe*
 option. A round-trip re-encodes a JPEG (generational loss on every rotate) and
 silently drops PNG text chunks unless every one is threaded back through by
-hand — and those chunks are ``metadata["png"]["workflow"]`` / ``["prompt"]``,
+hand - and those chunks are ``metadata["png"]["workflow"]`` / ``["prompt"]``,
 how this library recovers ComfyUI provenance
 (:mod:`pixlstash.utils.comfyui_utilities`). Surgery cannot lose them because it
 never parses them.
@@ -38,7 +38,7 @@ WebP         ``piexif.insert``   honours        **ignores**    **ignores**
 
 **The PNG row said "honours" on both engines until 2026-08-18, and it was
 wrong.** Nothing checked it, so a rotated PNG shipped showing a turned thumbnail
-beside an unturned full view — and a ComfyUI library is around five-sixths PNG,
+beside an unturned full view - and a ComfyUI library is around five-sixths PNG,
 so that was most of the feature. PNG is kept here anyway, because the answer is
 not to stop turning PNGs but to stop asking the browser to: the media route
 (``routes/pictures/_serving.py``) serves any format outside its
@@ -47,12 +47,12 @@ and invalidated by the source's own mtime. The write below stays a metadata
 splice, so the rotate stays instant, lossless and undoable.
 
 WebP is still excluded, and for a different reason than it used to be. The
-write works perfectly — piexif 1.1.3 handles WebP despite its docstring — and
+write works perfectly - piexif 1.1.3 handles WebP despite its docstring - and
 the serving path above would render it correctly too. It is excluded because
 nothing has re-measured whether Pillow round-trips a WebP faithfully enough to
 be worth it, and because six pictures in this library are WebP. **Re-run the
 measurement rather than the reasoning before moving any row of that table.**
-TIFF is out for the ordinary reason — its orientation lives in its own IFD and
+TIFF is out for the ordinary reason - its orientation lives in its own IFD and
 nothing here writes that.
 
 Anything not listed falls back to producing a rotated *copy*.
@@ -91,7 +91,7 @@ ROTATE_DIRECTIONS = (ROTATE_CW, ROTATE_CCW, ROTATE_180)
 # Composing a 90° clockwise display rotation onto an existing orientation.
 #
 # The eight orientations are the dihedral group of the square, so a rotation
-# permutes them in two 4-cycles — the unmirrored 1→6→3→8 and the mirrored
+# permutes them in two 4-cycles - the unmirrored 1→6→3→8 and the mirrored
 # 2→7→4→5. The table is *derived*, not remembered: the mirrored cycle is easy
 # to get backwards by hand, and getting it backwards would flip mirrored photos
 # the wrong way while every ordinary photo kept working.
@@ -110,7 +110,7 @@ _JPEG_SIGNATURE = b"\xff\xd8"
 # The whole file is read into memory and then copied once more into the spliced
 # output, so peak cost is ~2x the file. That runs on the single DB writer thread
 # inside the rotate's transaction, so an unbounded file does not merely use
-# memory — it stalls every other write in the product for as long as it takes.
+# memory - it stalls every other write in the product for as long as it takes.
 # 512 MiB is far above any photograph and far below the point where that stall
 # is measurable in minutes.
 MAX_IN_PLACE_BYTES = 512 * 1024 * 1024
@@ -121,7 +121,7 @@ def rotate_orientation(current: int, direction: str) -> int:
 
     Args:
         current: The file's existing orientation, 1-8. Anything outside that
-            range — including the ``0`` some cameras write — is treated as
+            range - including the ``0`` some cameras write - is treated as
             :data:`ORIENTATION_NORMAL`, matching what every decoder does with it.
         direction: One of :data:`ROTATE_DIRECTIONS`.
 
@@ -148,7 +148,7 @@ def supports_in_place_rotation(file_path: str) -> bool:
     """Whether *file_path* can be rotated in place: right container, sane size.
 
     The caller uses this to choose between the in-place rotate and producing a
-    rotated copy, so it answers from the *name* wherever it can — the choice has
+    rotated copy, so it answers from the *name* wherever it can - the choice has
     to be made per picture, in bulk, before anything is opened.
 
     The size check is therefore best-effort by design: a path that does not
@@ -169,7 +169,7 @@ def _extension_supported(file_path: str) -> bool:
     """Whether the name alone says this container can carry an orientation.
 
     Kept apart from the size question so each refusal in :func:`write_orientation`
-    can name its actual reason — "this format has no writer" and "this file is too
+    can name its actual reason - "this format has no writer" and "this file is too
     big" are different problems, and reporting the first for the second sends
     whoever reads the log looking at the wrong thing.
     """
@@ -224,7 +224,7 @@ def write_orientation(file_path: str, orientation: int) -> None:
     the user's photo intact rather than truncated.
 
     Args:
-        file_path: A JPEG or PNG — see :func:`supports_in_place_rotation`.
+        file_path: A JPEG or PNG - see :func:`supports_in_place_rotation`.
         orientation: The value to store, 1-8.
 
     Raises:
@@ -262,7 +262,7 @@ def write_orientation(file_path: str, orientation: int) -> None:
     # Trust the bytes, not the name. The extension gate above is what the API and
     # UI consult in bulk, but a file *named* .jpg whose content is something else
     # would otherwise reach piexif, which reads a non-JPEG argument as a FILENAME
-    # and raises `OSError: File name too long: b'<the entire file>'` — putting the
+    # and raises `OSError: File name too long: b'<the entire file>'` - putting the
     # file's contents into the exception, and from there into the application log.
     if not original.startswith((_PNG_SIGNATURE, _JPEG_SIGNATURE)):
         raise ValueError(
@@ -315,7 +315,7 @@ def _carry_file_identity(
     """Give the replacement everything about the original except its mtime.
 
     ``os.replace`` keeps the *replacement's* metadata, and ``mkstemp`` creates a
-    0600 file owned by the server process — so without this a rotate would
+    0600 file owned by the server process - so without this a rotate would
     quietly tighten the photo's permissions, drop its extended attributes (Finder
     tags, `user.*` labels) and, on a multi-user vault, change who owns it. This
     change's whole premise is that a rotate preserves everything but one
@@ -383,8 +383,8 @@ def _exif_payload(orientation: int) -> bytes:
 def _jpeg_with_orientation(data: bytes, orientation: int) -> bytes:
     """Return *data* with its APP1 EXIF segment carrying *orientation*.
 
-    Every other EXIF field the photo already carries is preserved — camera,
-    lens, timestamps, GPS — because the existing block is loaded and edited
+    Every other EXIF field the photo already carries is preserved - camera,
+    lens, timestamps, GPS - because the existing block is loaded and edited
     rather than replaced. That matters beyond politeness:
     ``ImageUtils.extract_created_at_from_metadata`` reads ``DateTimeOriginal``
     out of it to date the picture.
@@ -435,7 +435,7 @@ def _iter_png_chunks(data: bytes):
 def _png_with_orientation(data: bytes, orientation: int) -> bytes:
     """Return *data* with an ``eXIf`` chunk carrying *orientation*.
 
-    The ``IDAT`` chunks — the compressed pixels — are copied through byte for
+    The ``IDAT`` chunks - the compressed pixels - are copied through byte for
     byte, as are ``tEXt``/``iTXt`` (the ComfyUI prompt and workflow), ``iCCP``
     and everything else. Only the ``eXIf`` chunk is replaced, and it is placed
     before the first ``IDAT`` as the spec requires.

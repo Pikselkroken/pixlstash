@@ -1,7 +1,7 @@
 // Platform-correct keycap labels for the undo/redo affordances.
 //
-// The binding itself is the same everywhere — the global handler accepts either
-// Ctrl or Meta — but the HINT has to match the keyboard in front of the user.
+// The binding itself is the same everywhere - the global handler accepts either
+// Ctrl or Meta - but the HINT has to match the keyboard in front of the user.
 // A macOS user shown "Ctrl+Z" learns the wrong habit, and the toolbar tooltip
 // is where the shortcut is taught once the receipt is gone.
 //

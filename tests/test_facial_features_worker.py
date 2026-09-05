@@ -2,17 +2,28 @@ from PIL import Image
 import io
 
 import gc
+import json
 import logging
 import sys
 import time
 import tempfile
 import os
+from types import SimpleNamespace
+
+from pixlstash.inference.vram_budget import VramBudget
+
+import cv2
+import numpy as np
+import pytest
 
 from pixlstash.db_models import Character, Face, Picture
 from sqlmodel import select
 from pixlstash.server import Server
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.task_type import TaskType
+from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
+from pixlstash.utils.insightface_batched import BatchedFaceRunner
 
 
 logger = get_logger(__name__)
@@ -227,3 +238,234 @@ def test_character_thumbnail_endpoint():
             os.makedirs(outdir, exist_ok=True)
             thumb_img.save(os.path.join(outdir, f"character_{char.id}_endpoint.png"))
             crop_img.save(os.path.join(outdir, f"character_{char.id}_dbcrop.png"))
+
+
+def _write_video(path, frames, size=(64, 48)):
+    """Write ``frames`` (BGR arrays or solid ``(b, g, r)`` tuples) as an mp4v clip."""
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 10.0, size)
+    if not writer.isOpened():
+        pytest.skip("no OpenCV video encoder available in this environment")
+    for frame in frames:
+        if isinstance(frame, tuple):
+            frame = np.full((size[1], size[0], 3), frame, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+
+
+def _seek_frames_like_before(path):
+    """The frame selection the batch loop used to do inline, seek by seek."""
+    cap = cv2.VideoCapture(path)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frames = []
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    ret, frame = cap.read()
+    if ret and frame is not None:
+        frames.append((0, frame))
+    step = max(1, frame_count // 3)
+    for frame_index in range(step, frame_count, step):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ret, frame = cap.read()
+        if ret and frame is not None:
+            frames.append((frame_index, frame))
+    cap.release()
+    return frames
+
+
+def test_video_preload_picks_the_frames_the_batch_loop_seeked():
+    """Preloaded video frames are exactly frame 0 and the 1/3-mark frames."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Each clip's blue channel is (index // step) * 60, so a frame's colour
+        # says which third it came from and a wrong index is visible.
+        clips = {}
+        for name, frame_count in (
+            ("a.mp4", 30),
+            ("b.mp4", 31),
+            ("c.mp4", 29),
+            ("d.mp4", 7),
+        ):
+            step = max(1, frame_count // 3)
+            _write_video(
+                os.path.join(temp_dir, name),
+                [((i // step) * 60, 0, 0) for i in range(frame_count)],
+            )
+            clips[name] = (frame_count, step)
+        pictures = [
+            SimpleNamespace(id=i + 1, file_path=name) for i, name in enumerate(clips)
+        ]
+        task = FaceExtractionTask(SimpleNamespace(image_root=temp_dir), None, pictures)
+
+        task._preload_images()
+
+        assert set(task._preloaded_images) == {
+            os.path.join(temp_dir, name) for name in clips
+        }
+        for name, (frame_count, step) in clips.items():
+            path = os.path.join(temp_dir, name)
+            frames, inv_scale = task._preloaded_images[path]
+            assert inv_scale == 1.0
+            expected_indices = [0] + list(range(step, frame_count, step))
+            assert [i for i, _ in frames] == expected_indices, name
+            for (index, frame), (ref_index, ref_frame) in zip(
+                frames, _seek_frames_like_before(path)
+            ):
+                assert index == ref_index
+                assert np.array_equal(frame, ref_frame), (name, index)
+                # The colour proves the decoder handed back frame ``index``.
+                assert abs(float(frame[..., 0].mean()) - (index // step) * 60) < 8, (
+                    name,
+                    index,
+                )
+
+
+def test_video_face_rows_identical_with_and_without_preload():
+    """A preloaded batch writes the same Face rows as the synchronous path.
+
+    One clip has a face at frame 0 and a different face at frame 20 with a
+    blank third in between; the other is blank throughout and must get exactly
+    one sentinel row on both paths.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        # No planner: it would run its own FaceExtractionTask over these rows and
+        # flip ``_has_faces`` under the second run.
+        with open(server_config_path, "w") as fh:
+            fh.write(json.dumps({"port": 8000, "disable_background_workers": True}))
+        engine = SimpleNamespace(
+            insightface_model_pack=DEFAULT_MODEL_PACK,
+            force_cpu=bool(Server.DEFAULT_FORCE_CPU),
+            keep_models_in_memory=True,
+            # The InsightFace init bounds each ORT arena from the engine's
+            # budget; a real engine always has one.
+            vram_budget=VramBudget("cuda" if not Server.DEFAULT_FORCE_CPU else "cpu"),
+        )
+        with Server(server_config_path) as server:
+            image_root = server.vault.image_root
+            os.makedirs(image_root, exist_ok=True)
+            src_dir = os.path.join(os.path.dirname(__file__), "..", "pictures")
+            size = (576, 448)
+            face_a = cv2.resize(
+                cv2.imread(os.path.join(src_dir, "TaggerTest.png")), size
+            )
+            face_b = cv2.resize(
+                cv2.imread(os.path.join(src_dir, "TaggerTest3.png")), size
+            )
+            blank = (128, 128, 128)
+            _write_video(
+                os.path.join(image_root, "faces.mp4"),
+                [face_a] * 10 + [blank] * 10 + [face_b] * 10,
+                size,
+            )
+            _write_video(os.path.join(image_root, "blank.mp4"), [blank] * 30, size)
+            # A clip wider than INFERENCE_MAX_SIDE with the face pasted at a
+            # known place, so the source-space bbox can be checked.
+            big_size = (1280, 720)
+            region = (800, 300, 1056, 500)  # x0, y0, x1, y1 in source pixels
+            big = np.full((big_size[1], big_size[0], 3), blank, dtype=np.uint8)
+            big[region[1] : region[3], region[0] : region[2]] = cv2.resize(
+                face_a, (region[2] - region[0], region[3] - region[1])
+            )
+            _write_video(os.path.join(image_root, "big.mp4"), [big] * 30, big_size)
+
+            def add_pictures(session):
+                pics = [
+                    Picture(file_path="faces.mp4"),
+                    Picture(file_path="blank.mp4"),
+                    Picture(file_path="big.mp4"),
+                ]
+                for pic in pics:
+                    session.add(pic)
+                session.commit()
+                for pic in pics:
+                    session.refresh(pic)
+                return pics
+
+            pictures = server.vault.db.run_task(add_pictures)
+            faces_id, blank_id, big_id = (p.id for p in pictures)
+
+            def rows(task):
+                _updates, bulk_faces, _crops = task._extract_features(pictures)
+                return sorted(
+                    (
+                        (
+                            f.picture_id,
+                            f.frame_index,
+                            f.face_index,
+                            None if f.bbox is None else [round(v, 1) for v in f.bbox],
+                            None
+                            if f.features is None
+                            else np.frombuffer(f.features, dtype="float32"),
+                        )
+                        for f in bulk_faces
+                    ),
+                    key=lambda r: (r[0], r[1], r[2]),
+                )
+
+            preloaded_task = FaceExtractionTask(server.vault.db, engine, pictures)
+            preloaded_task.on_queued()
+            preloaded_task._wait_for_preload()
+            assert set(preloaded_task._preloaded_images) == {
+                os.path.join(image_root, "faces.mp4"),
+                os.path.join(image_root, "blank.mp4"),
+                os.path.join(image_root, "big.mp4"),
+            }
+            big_frames, big_inv_scale = preloaded_task._preloaded_images[
+                os.path.join(image_root, "big.mp4")
+            ]
+            assert big_inv_scale == 1280 / FaceExtractionTask.INFERENCE_MAX_SIDE
+            assert all(
+                max(f.shape[:2]) <= FaceExtractionTask.INFERENCE_MAX_SIDE
+                for _, f in big_frames
+            )
+            preloaded_rows = rows(preloaded_task)
+
+            sync_task = FaceExtractionTask(server.vault.db, engine, pictures)
+            assert sync_task._preloaded_images == {}
+            sync_rows = rows(sync_task)
+
+            assert [r[:4] for r in preloaded_rows] == [r[:4] for r in sync_rows]
+            for pre, sync in zip(preloaded_rows, sync_rows):
+                if pre[4] is None:
+                    assert sync[4] is None
+                else:
+                    assert np.allclose(pre[4], sync[4], atol=1e-4)
+
+            # Identity: one face at frame 0, one at frame 20, nothing at 10.
+            assert [r[:2] for r in preloaded_rows if r[0] == faces_id] == [
+                (faces_id, 0),
+                (faces_id, 20),
+            ]
+            # The blank clip gets exactly the sentinel row.
+            assert [r[1:4] for r in preloaded_rows if r[0] == blank_id] == [
+                (0, -1, None)
+            ]
+
+            # The big clip's bboxes are written in SOURCE pixels: one face per
+            # sampled frame, centred on the pasted region, expanded by 1.25.
+            big_rows = [r for r in preloaded_rows if r[0] == big_id]
+            assert [r[1] for r in big_rows] == [0, 10, 20]
+            for _pid, _frame, _idx, bbox, _emb in big_rows:
+                cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+                assert region[0] < cx < region[2] and region[1] < cy < region[3], bbox
+                assert bbox[2] - bbox[0] < 1.3 * (region[2] - region[0]) + 8, bbox
+                assert bbox[3] - bbox[1] < 1.3 * (region[3] - region[1]) + 8, bbox
+
+            # And each frame's faces match the old one-frame-at-a-time call. The
+            # clip's frames now share one recogniser call, so the embedding is
+            # batch-dependent at float-noise level (~1e-3 on CUDA); compare by
+            # cosine, which is how embeddings are consumed.
+            runner = BatchedFaceRunner(sync_task._insightface_app)
+            frames, _ = preloaded_task._preloaded_images[
+                os.path.join(image_root, "faces.mp4")
+            ]
+            for index, frame in frames:
+                per_frame = runner.run_batch([frame])[0]
+                stored = [
+                    r for r in preloaded_rows if r[0] == faces_id and r[1] == index
+                ]
+                assert len(per_frame) == len(stored), index
+                for face, row in zip(per_frame, stored):
+                    cosine = float(np.dot(face.embedding, row[4])) / (
+                        np.linalg.norm(face.embedding) * np.linalg.norm(row[4])
+                    )
+                    assert cosine > 0.999, (index, cosine)
+    gc.collect()

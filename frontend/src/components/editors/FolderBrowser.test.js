@@ -2,8 +2,8 @@
 //
 // The directory mode is exercised through the dialogs that use it; what needed
 // its own suite is the mode that changes what a click MEANS. A click on a file
-// selects it and never confirms — a single click that started a copy would be
-// one slip of the pointer away from writing a file nobody chose — and the flag
+// selects it and never confirms - a single click that started a copy would be
+// one slip of the pointer away from writing a file nobody chose - and the flag
 // is opt-in on both sides, so every other picker keeps a directory-only list.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -54,7 +54,7 @@ const LISTING = {
 };
 
 /**
- * Mount closed, then open it — the dialog listens for the *transition*, which
+ * Mount closed, then open it - the dialog listens for the *transition*, which
  * is also how every caller uses it: the component lives in the parent's
  * template and `open` flips.
  */

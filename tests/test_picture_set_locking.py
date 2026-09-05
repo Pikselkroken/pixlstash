@@ -4,7 +4,7 @@ A locked set is a hard, whole-set freeze: neither the set's own fields/membershi
 nor the label data of any member picture may change until it is unlocked. These
 tests assert the full rejection matrix (423), the cross-set and stack-expansion
 rules, bulk-delete skipping, the locked-members / metadata surfaces, and the
-review backstops — with a real Server + TestClient in the style of
+review backstops - with a real Server + TestClient in the style of
 tests/test_picture_sets.py.
 """
 
@@ -52,7 +52,7 @@ def _setup():
     # enforcement, and every task they exercise (scan_tag, TagTask, DescriptionTask,
     # the metadata-import route) is invoked directly. Without this, the background
     # reference-folder scan reads a sidecar and rewrites a pic's tags between the
-    # seed and the assertion — an intermittent flake in a blocking-gate suite.
+    # seed and the assertion - an intermittent flake in a blocking-gate suite.
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 8000, "disable_background_workers": True}))
     server = Server(server_config_path)
@@ -80,7 +80,7 @@ def _first_n_pictures(server, n):
     and assert on seeded tag/description state, so a real upload (which needs the
     face worker and kicks off the tagger / description / reference-folder-scan
     finders) would let a background pipeline clobber the seeded slate between the
-    seed and the assertion — the intermittent flake this replaces. A direct insert
+    seed and the assertion - the intermittent flake this replaces. A direct insert
     creates no work for any finder, so the slate is stable and the tests are fast.
     """
 
@@ -285,7 +285,7 @@ def test_locked_set_rejects_field_edits_and_delete():
         _set_locked(client, set_id, True)
 
         # Read the current icon/color so the edit payloads below are a genuine
-        # change (a PATCH that echoes the CURRENT value is a no-op and allowed —
+        # change (a PATCH that echoes the CURRENT value is a no-op and allowed -
         # sets are auto-assigned an icon/color on creation).
         current = client.get(f"/picture_sets/{set_id}?info=true").json()
         new_icon = "mdi-heart" if current.get("set_icon") != "mdi-heart" else "mdi-star"
@@ -546,7 +546,7 @@ def test_metadata_hides_locked_set_names_from_out_of_scope_token():
     ``enforce_picture_scope`` authorizes the *picture*; it says nothing about the
     related entities named in its payload. A set-scoped READ token can hold a
     picture that is also a member of some other, locked set it cannot enumerate
-    via ``GET /picture_sets`` — and set names are user-authored and routinely
+    via ``GET /picture_sets`` - and set names are user-authored and routinely
     carry client / project / subject identifiers.
 
     Both directions: the out-of-scope name is withheld (while ``locked`` still
@@ -589,7 +589,7 @@ def test_metadata_hides_locked_set_names_from_out_of_scope_token():
         visible = bearer.get("/picture_sets", headers=headers).json()
         assert [s["name"] for s in visible] == ["Shared"]
 
-        # Owner is unaffected — the name is still served (no over-blocking).
+        # Owner is unaffected - the name is still served (no over-blocking).
         owner_body = client.get(f"/pictures/{pic}/metadata").json()
         assert owner_body["locked"] is True
         assert owner_body["locked_by_sets"] == [
@@ -712,7 +712,7 @@ def test_scan_excludes_locked_pictures_from_suspects_only():
     Driven through the confidence-fallback path (no ground truth for the tag) so
     the assertion is deterministic without running CLIP: both pictures carry a
     high-confidence prediction for the tag and no Tag row, so both would be "add"
-    suspects — but the locked one is dropped from the suspect list while remaining
+    suspects - but the locked one is dropped from the suspect list while remaining
     counted in ``scanned`` (proof it stayed in the pool).
     """
     from pixlstash.services import tag_scan_service
@@ -778,7 +778,7 @@ def test_scan_excludes_locked_pictures_from_suspects_only():
 
 def test_reset_tags_and_description_blocked_on_locked_pic():
     """reset_tags wipes all confirmed tags; reset_description clears the frozen
-    caption — both refuse on a picture in a locked set."""
+    caption - both refuse on a picture in a locked set."""
     temp_dir, client, server = _setup()
     try:
         (pic,) = _first_n_pictures(server, 1)
@@ -789,6 +789,9 @@ def test_reset_tags_and_description_blocked_on_locked_pic():
 
         assert client.post(f"/pictures/{pic}/reset_tags").status_code == 423
         assert client.post(f"/pictures/{pic}/reset_description").status_code == 423
+        bulk = {"picture_ids": [pic]}
+        assert client.post("/pictures/reset_tags", json=bulk).status_code == 423
+        assert client.post("/pictures/reset_description", json=bulk).status_code == 423
 
         # The confirmed tag survived the refused reset.
         tags = client.get(f"/pictures/{pic}/tags").json()["tags"]
@@ -829,7 +832,7 @@ def test_fix_twin_blocked_when_twin_locked():
 
 
 def test_swap_blocked_when_suspect_locked():
-    """swap writes Tag + ledger on both suspect and twin — refuse when either is
+    """swap writes Tag + ledger on both suspect and twin - refuse when either is
     locked (here the suspect)."""
     temp_dir, client, server = _setup()
     try:
@@ -850,7 +853,7 @@ def test_swap_blocked_when_suspect_locked():
 
 
 def test_reopen_blocked_on_locked_suspect():
-    """Reopening a decision re-adds/deletes Tag rows on the suspect/twin — refuse
+    """Reopening a decision re-adds/deletes Tag rows on the suspect/twin - refuse
     when the suspect is locked."""
     temp_dir, client, server = _setup()
     try:
@@ -1032,7 +1035,7 @@ def test_tagger_preserves_locked_confirmed_tags():
 
 def test_character_reassignment_preserves_locked_pic_description():
     """Reassigning/renaming a character invalidates its pictures' embeddings, but a
-    locked picture's description (rule 3) must survive — the reassignment itself
+    locked picture's description (rule 3) must survive - the reassignment itself
     (rule 4) still succeeds."""
     temp_dir, client, server = _setup()
     try:
@@ -1072,7 +1075,7 @@ def test_character_reassignment_preserves_locked_pic_description():
 
 def test_description_regeneration_skips_locked_pic():
     """The description finder never re-queues a locked pic, and the description
-    task never persists a machine caption onto one — while a free pic regenerates."""
+    task never persists a machine caption onto one - while a free pic regenerates."""
     import types
 
     from pixlstash.tasks.description_task import DescriptionTask
@@ -1111,7 +1114,7 @@ def test_description_regeneration_skips_locked_pic():
             def generate_batch(self, pictures, engine_override=None, stop_event=None):
                 return {p.id: "regenerated-caption" for p in pictures}
 
-            def estimate_vram_mb(self, n):
+            def estimate_vram_mb(self, n, plugin_name=None):
                 return 0
 
         pics = [
@@ -1138,7 +1141,7 @@ def test_description_regeneration_skips_locked_pic():
 def test_legacy_suggestion_queue_withholds_locked_pending_rows():
     """The legacy GET /tag_suggestions list withholds still-PENDING suspects
     frozen by a locked set (every action on them 423s), but keeps already-decided
-    rows listed as the audit record — same rule as the review queue."""
+    rows listed as the audit record - same rule as the review queue."""
     temp_dir, client, server = _setup()
     try:
         locked_pic, free_pic = _first_n_pictures(server, 2)
@@ -1183,7 +1186,7 @@ def _seed_stack_directly(server, picture_ids):
 
     Deliberately bypasses ``POST /stacks``: that route now reconciles set
     membership across the stack (and refuses to grow a locked set), so it cannot
-    produce the state under test here — a picture that *shares a stack with* a
+    produce the state under test here - a picture that *shares a stack with* a
     locked-set member without being a member itself. That state exists in any
     database written before the lock guards landed, and is still reachable
     through the restore path, so the finders must handle it.
@@ -1211,7 +1214,7 @@ def test_finders_exclude_stack_sibling_of_locked_member():
     no stack arm, while their write guards (``locked_picture_ids``) expand to the
     whole stack. A picture sharing a stack with a locked-set member was therefore
     selected, ran full tagging/captioning inference, had its write skipped, kept
-    its sentinel, and was selected again on the next sweep — forever.
+    its sentinel, and was selected again on the next sweep - forever.
 
     Asserts both directions: the stack sibling is NOT selected, and an unrelated
     unlocked picture still IS (over-blocking would be its own regression).
@@ -1229,10 +1232,12 @@ def test_finders_exclude_stack_sibling_of_locked_member():
         _add_member_directly(server, set_id, member_pic)
         _set_locked(client, set_id, True)
 
-        # Every picture carries pending work for both finders.
+        # Every picture carries pending work for both finders, and the face
+        # stage the tag finder now waits for per picture has already run.
         def seed_work(session):
             for pid in (member_pic, sibling_pic, free_pic):
                 session.add(Tag(picture_id=pid, tag=make_tag_sentinel()))
+                session.add(Face(picture_id=pid, face_index=-1))
                 pic = session.get(Picture, pid)
                 pic.description = None
                 session.add(pic)
@@ -1286,7 +1291,7 @@ def _set_member_ids(server, set_id):
 def test_stacking_refused_when_it_would_grow_a_locked_set():
     """Stacks are set-membership-atomic, so stacking a loose picture onto a
     locked-set member would add it to the locked set. That is a direct user
-    request, so it fails loudly with 423 — and the locked set is unchanged."""
+    request, so it fails loudly with 423 - and the locked set is unchanged."""
     temp_dir, client, server = _setup()
     try:
         member_pic, loose_pic = _first_n_pictures(server, 2)
@@ -1350,7 +1355,7 @@ def test_stacking_still_works_when_no_locked_set_would_grow():
 
 def test_comfyui_output_propagation_skips_locked_set():
     """A ComfyUI generation from a source picture in a locked set must not add
-    its outputs to that set — but must still propagate the unlocked ones."""
+    its outputs to that set - but must still propagate the unlocked ones."""
     from pixlstash.routes.comfyui import _copy_set_and_project_assignments
 
     temp_dir, client, server = _setup()

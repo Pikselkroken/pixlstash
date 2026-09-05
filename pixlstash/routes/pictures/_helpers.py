@@ -18,6 +18,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import import_dedup_service, scrapheap_service
+from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     normalize_hidden_tags,
@@ -159,6 +160,11 @@ def _create_picture_imports(
         candidates, fingerprints, server.vault.image_root
     )
 
+    # Placement on write (v1.11 Phase 4b). Resolved once for the batch: every
+    # file in it goes to the same folder, and `None` means this library has no
+    # layout - or the caller is writing somewhere that is not its root.
+    subfolder = resolve_placement(server.vault.db, dest_folder)
+
     new_picture_map = {}
     for file_entry, fingerprint in zip(uploaded_files, fingerprints):
         if (
@@ -178,6 +184,7 @@ def _create_picture_imports(
                 picture_uuid=pic_uuid,
                 pixel_sha=sampled_sha,
                 original_file_name=original_name,
+                subfolder=subfolder,
             )
             if progress_callback is not None:
                 progress_callback()
@@ -390,5 +397,5 @@ def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
 
 
 # enforce_picture_scope and its private _picture_id_in_scoped_* helpers live in
-# pixlstash/authz/membership.py — the single home for object-membership checks.
+# pixlstash/authz/membership.py - the single home for object-membership checks.
 # The centralised authz gate calls them; handlers no longer do (Step 5).

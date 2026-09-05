@@ -1,4 +1,4 @@
-"""Known base models — the folding table behind base-model tab-completion.
+"""Known base models - the folding table behind base-model tab-completion.
 
 ``model.base_model`` is **free text** and stays that way (see ``hub/schema.py``:
 an enum would reject every model that ships after this release). This module
@@ -23,7 +23,7 @@ that is still open work. Do not read this docstring as a description of the
 whole shelf.
 
 An unrecognised string is not an error. It is stored verbatim, displayed
-verbatim, and — the moment it lands on a ``model`` row — becomes a completion
+verbatim, and - the moment it lands on a ``model`` row - becomes a completion
 target like any other. That is why there is no user-base-model table: the user's
 own list is ``SELECT DISTINCT base_model FROM model``, which is already written
 by the time it matters. Callers pass it to :func:`completions` as *extra*.
@@ -62,7 +62,7 @@ from typing import Iterable, Optional
 # Canonical label -> {family, modality, aliases}.
 #
 # Aliases are matched normalised (see _norm), so DO NOT add spacing or casing
-# variants — only strings that differ in their letters and digits.
+# variants - only strings that differ in their letters and digits.
 KNOWN_BASE_MODELS: dict[str, dict] = {
     # --- Stable Diffusion line ---------------------------------------------
     "SD 1.5": {
@@ -354,8 +354,8 @@ def _norm(value: str) -> str:
 def _build_index() -> dict[str, str]:
     """normalised alias -> canonical label.
 
-    A collision is the one way this module can silently corrupt the shelf — two
-    entries claiming one alias would make folding depend on dict order — so it
+    A collision is the one way this module can silently corrupt the shelf - two
+    entries claiming one alias would make folding depend on dict order - so it
     raises at import rather than picking a winner.
     """
     index: dict[str, str] = {}
@@ -391,7 +391,7 @@ def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
 
     Containment first (``sdxl`` inside ``mymodel_sdxl_v3``), longest alias
     winning so ``flux2`` beats ``flux``, then a ``difflib`` pass for typos.
-    Returns ``[]`` when :func:`fold` already had an exact answer — there is
+    Returns ``[]`` when :func:`fold` already had an exact answer - there is
     nothing to ask about.
     """
     if not raw:
@@ -420,7 +420,7 @@ def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
 def completions(prefix: str = "", extra: Iterable[str] = ()) -> list[str]:
     """Tab-completion targets for the base-model field.
 
-    *extra* is the user's own vocabulary — pass ``SELECT DISTINCT base_model
+    *extra* is the user's own vocabulary - pass ``SELECT DISTINCT base_model
     FROM model``. Values that fold to something we already know are dropped
     rather than shown twice, so a user who typed ``sdxl`` sees ``SDXL 1.0``
     once; anything that folds to nothing is theirs and is offered verbatim from

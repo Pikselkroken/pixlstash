@@ -4,10 +4,12 @@ import gc
 import json
 import os
 import tempfile
+import types
 
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
+from pixlstash.services import config_service
 from pixlstash.tasks.dedup_scan_task import DedupScanTask
 from pixlstash.tasks.task_type import TaskType
 
@@ -103,7 +105,7 @@ def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
         # The sentinel proves the branch ran: a picture-scoped worker shows it.
         assert workers[TaskType.QUALITY.value]["total"] == 4242
         # No hub registration in this fixture, so there is no shelf to count and
-        # the honest answer is zero — never the picture library's total.
+        # the honest answer is zero - never the picture library's total.
         assert snapshot["total"] == 0
         assert snapshot["current"] == 0
     finally:
@@ -123,3 +125,41 @@ def test_version_endpoint_returns_200():
         server.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_vram_falls_back_to_torch_when_nvml_reports_no_process_figure(monkeypatch):
+    """Windows (WDDM) NVML lists the process but its ``usedGpuMemory`` is not
+    available, which rendered "0 / 31.8 GB" during CUDA inference (#1162). With
+    no per-process figure the monitor must leave the reading to torch."""
+    entry = types.SimpleNamespace(pid=os.getpid(), usedGpuMemory=None)
+    handle = object()
+    fake_nvml = types.SimpleNamespace(
+        nvmlInit=lambda: None,
+        nvmlShutdown=lambda: None,
+        nvmlDeviceGetCount=lambda: 1,
+        nvmlDeviceGetHandleByIndex=lambda index: handle,
+        nvmlDeviceGetMemoryInfo=lambda h: types.SimpleNamespace(total=32 * 1024**3),
+        nvmlDeviceGetComputeRunningProcesses=lambda h: [entry],
+        nvmlDeviceGetGraphicsRunningProcesses=lambda h: [],
+        NVML_VALUE_NOT_AVAILABLE=-1,
+    )
+    monkeypatch.setattr(config_service, "pynvml", fake_nvml)
+
+    def torch_reading(payload):
+        payload["vram_used_gb"] = 4.5
+        payload["vram_total_gb"] = 32.0
+        payload["vram_percent"] = 14.1
+        return True
+
+    monkeypatch.setattr(config_service, "collect_vram_from_torch", torch_reading)
+    monitor = config_service.HardwareMonitor()
+    usage = monitor.get_usage()
+    assert usage["vram_used_gb"] == 4.5
+
+    # With a real per-process figure NVML still wins.
+    entry.usedGpuMemory = 2 * 1024**3
+    assert config_service.HardwareMonitor().get_usage()["vram_used_gb"] == 2.0
+
+    # A process NVML does not list holds nothing: that zero stands, no torch.
+    fake_nvml.nvmlDeviceGetComputeRunningProcesses = lambda h: []
+    assert config_service.HardwareMonitor().get_usage()["vram_used_gb"] == 0.0

@@ -1,6 +1,6 @@
 // ComputeSection unified runtime list (compute view):
 //   - the built-in runtime is a permanent first row and every GPU overlay is a
-//     sibling row — no separate "active backend" summary row, so an active
+//     sibling row - no separate "active backend" summary row, so an active
 //     overlay is never listed twice;
 //   - exactly one row reads "· active" at any time (each row derives it from
 //     its own `active` flag);
@@ -135,7 +135,7 @@ describe("ComputeSection unified runtime list", () => {
     const { wrapper, desktop } = await mountCompute(bundledActiveState());
     const all = rows(wrapper);
 
-    // Same row order as the GPU-active state — nothing moved.
+    // Same row order as the GPU-active state - nothing moved.
     expect(rowLabel(all[0])).toBe("Built-in (CPU)");
     expect(rowSub(all[0])).toBe("Built-in runtime · active");
     expect(rowButtons(all[0])).toEqual([]);
@@ -177,7 +177,7 @@ describe("ComputeSection unified runtime list", () => {
 });
 
 // The desktop CLI shim toggle. Its whole job is to be absent where there is
-// nothing to install (an unpackaged dev run) — the main process signals that by
+// nothing to install (an unpackaged dev run) - the main process signals that by
 // reporting shellCommand as null rather than a boolean, and a switch that
 // silently does nothing is worse than no switch.
 describe("Desktop › Shell command", () => {

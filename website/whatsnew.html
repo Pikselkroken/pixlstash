@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.10</title>
+    <title>What's New in PixlStash 1.11</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.10: several picture libraries in one installation, a model shelf for your checkpoints and LoRAs, ai-toolkit training run import, a pixlstash-cli command line for backups and plugins, and a start-up check on folder permissions."
+      content="What's new in PixlStash 1.11: import libraries in the GUI, create libraries from existing image folders and export to a folder."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -138,6 +138,23 @@
         object-fit: contain;
       }
 
+      /* Two screenshots sharing the hero: the column follows the copy's
+         height and each image takes half of it, cropped from the top. */
+      .release-hero-media--stack {
+        height: auto;
+        min-height: 300px;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      .release-hero-media--stack img {
+        min-height: 0;
+      }
+
+      .release-hero-media--stack img + img {
+        border-top: 1px solid var(--border);
+      }
+
       .section-grid {
         margin-top: 28px;
         display: grid;
@@ -251,6 +268,96 @@
         object-fit: cover;
         display: block;
         cursor: zoom-in;
+      }
+
+      /* Carousel: same component as api.html, plus a one-line caption per
+         slide so a whole feature can be one card instead of six. */
+      .carousel {
+        position: relative;
+        overflow: hidden;
+        background: #000;
+      }
+
+      .carousel-slide img {
+        max-height: none;
+      }
+
+      .carousel-slides {
+        display: flex;
+        transition: transform 0.4s ease;
+      }
+
+      .carousel-slide {
+        position: relative;
+        flex: 0 0 100%;
+        min-width: 0;
+      }
+
+      .carousel-caption {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 10px 16px;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.72), transparent);
+        color: #fff;
+        font-size: 0.92rem;
+        font-weight: 600;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      }
+
+      .carousel-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 0;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+        z-index: 2;
+        transition: background 0.18s ease;
+      }
+
+      .carousel-arrow:hover {
+        background: rgba(0, 0, 0, 0.82);
+      }
+
+      .carousel-arrow.prev {
+        left: 10px;
+      }
+
+      .carousel-arrow.next {
+        right: 10px;
+      }
+
+      .carousel-dots {
+        position: absolute;
+        bottom: 44px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 7px;
+        z-index: 2;
+      }
+
+      .carousel-dots .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 0;
+        background: rgba(255, 255, 255, 0.45);
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.18s ease;
+      }
+
+      .carousel-dots .dot.active {
+        background: #fff;
       }
 
       .lightbox {
@@ -571,6 +678,14 @@
           max-height: 320px;
         }
 
+        .release-hero-media--stack {
+          max-height: none;
+        }
+
+        .release-hero-media--stack img {
+          height: auto;
+        }
+
         .section-grid--stats {
           grid-template-columns: 1fr;
         }
@@ -634,54 +749,55 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.10 ─────────────────────────────────────────── -->
+      <!-- PixlStash 1.11 -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.10</span>
-            <h1>One PixlStash, several libraries</h1>
+            <span class="release-kicker">PixlStash 1.11</span>
+            <h1>Point it at the folders you already have</h1>
             <p>
-              PixlStash 1.10 can hold <strong>more than one picture library</strong>
-              and keeps one open at a time. Pictures, tags, scores and snapshots
-              stay with their library, while your account and preferences stay
-              with the installation. The release also adds a model shelf for the
-              checkpoints and LoRAs on your disks, and a command line so backups
-              and plugin installs can run from a script.
+              PixlStash 1.11 is about getting started quickly with the pictures
+              you already have, organised the way they already are.
+              <strong>Load up a folder and it reads it as is.</strong>
+              Your projects, people and sets are created from the existing
+              folder names and nothing is moved, renamed or copied. Adding a
+              library now happens in Settings instead of the terminal.
             </p>
             <ul class="release-bullets">
               <li>
-                Several picture libraries in one installation, switched from
-                Settings → Libraries. Each keeps its own pictures, tags, scores
-                and snapshots
+                Your folders are read and PixlStash suggests from its content
+                whether it is a project, picture set or a gallery of a person.
+                You make the final decision.
               </li>
               <li>
-                API tokens and share links belong to the library that created
-                them, and Settings warns you before you switch away from live
-                share links
+                Every library row has a menu to open, rename or stop using it.
+                The latter does not delete anything.
               </li>
               <li>
-                A model shelf for the checkpoints and LoRAs in the folders you
-                register, grouped by kind, base model or folder
+                A library can be given a folder layout, and new pictures are
+                written where the layout says
               </li>
               <li>
-                Training runs from ai-toolkit are described where they lie, then
-                imported with their sample images
+                A picture is only moved when its folder no longer describes it,
+                and <strong>Move to match</strong> is offered, not done for you
               </li>
               <li>
-                A <code>pixlstash-cli</code> command line for libraries, backups,
-                restores and plugins, so a backup can run from cron
+                Export straight into a folder on the machine running PixlStash,
+                with no zip in between
               </li>
-              <li>
-                The desktop app checks your library folder's permissions at
-                start-up and offers to tighten them
-              </li>
+              <li>A first pass over a big folder is noticeably quicker</li>
             </ul>
           </div>
-          <div class="release-hero-media">
+          <div class="release-hero-media release-hero-media--stack">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotLibraries.jpg"
-              alt="PixlStash Settings with two registered picture libraries and the active one marked"
+              src="assets/ScreenshotWizard.jpg"
+              alt="The Add a library wizard, reading a folder of pictures and proposing what each folder level means"
+            />
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotMapTree.jpg"
+              alt="PixlStash reading a folder of pictures, with each folder level labelled as a project, a person or a set"
             />
           </div>
         </div>
@@ -689,187 +805,110 @@
 
       <section class="section-grid">
         <article class="update-card">
-          <div class="update-card-body">
-            <h2>Switching, and what stays behind</h2>
-            <p>
-              A library is a folder holding your pictures and their database.
-              PixlStash keeps one open at a time and switches from Settings →
-              Libraries. Your owner account, your preferences and the model shelf
-              belong to the installation and follow you between libraries. API
-              tokens and share links do not: they are pinned to the library that
-              created them, stop working while another library is open, and work
-              again when you switch back. Create a token in each library your
-              scripts use, and expect Settings to tell you before you switch away
-              from a library with live share links.
-            </p>
+          <div class="carousel" data-carousel>
+            <div class="carousel-slides">
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotAddLibrary.jpg"
+                  alt="The Add a library dialog with a folder picked, PixlStash reporting what that folder is and what adding it would mean"
+                  loading="lazy"
+                />
+                <span class="carousel-caption">One dialog for every case</span>
+              </div>
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotMapTree.jpg"
+                  alt="The folder mapping screen with three levels, each assigned to a project, person or set, and per-row overrides"
+                  loading="lazy"
+                />
+                <span class="carousel-caption"
+                  >Your folders already say what they are</span
+                >
+              </div>
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotMapPreview.jpg"
+                  alt="The review screen listing the projects, sets and people the folders will become, above a summary of what pressing the button does"
+                  loading="lazy"
+                />
+                <span class="carousel-caption"
+                  >Nothing is written until you say so</span
+                >
+              </div>
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotLibrariesManage.jpg"
+                  alt="Settings with several libraries listed and one row's menu open, offering switch, rename and stop using"
+                  loading="lazy"
+                />
+                <span class="carousel-caption"
+                  >Rename it, switch to it, or stop using it</span
+                >
+              </div>
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotEmptyLibrary.jpg"
+                  alt="The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI"
+                  loading="lazy"
+                />
+                <span class="carousel-caption"
+                  >Three ways to fill a new library</span
+                >
+              </div>
+              <div class="carousel-slide">
+                <img
+                  class="zoomable-image"
+                  src="assets/ScreenshotExportFolder.jpg"
+                  alt="The export panel offering Export to Folder alongside the zip download"
+                  loading="lazy"
+                />
+                <span class="carousel-caption"
+                  >Export straight into a folder</span
+                >
+              </div>
+            </div>
+            <button class="carousel-arrow prev" aria-label="Previous slide">
+              ‹
+            </button>
+            <button class="carousel-arrow next" aria-label="Next slide">
+              ›
+            </button>
+            <div class="carousel-dots">
+              <button class="dot" aria-label="Slide 1"></button>
+              <button class="dot" aria-label="Slide 2"></button>
+              <button class="dot" aria-label="Slide 3"></button>
+              <button class="dot" aria-label="Slide 4"></button>
+              <button class="dot" aria-label="Slide 5"></button>
+              <button class="dot" aria-label="Slide 6"></button>
+            </div>
           </div>
-        </article>
-
-        <article class="update-card update-card--wide">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotModelShelf.jpg"
-            alt="The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns"
-            loading="lazy"
-          />
           <div class="update-card-body">
-            <h2>A shelf for the models you already have</h2>
+            <h2>Getting a library in, screen by screen</h2>
             <p>
-              Register the folders where you keep checkpoints and LoRAs and
-              PixlStash catalogues what is in them: the kind of file, the base
-              model it was trained against, its size, and every folder a copy
-              sits in. Group the shelf by kind, base model, folder or feature,
-              sort it, and narrow it down to what you are looking for. Files are
-              read where they are rather than copied into the library. A drive
-              that is not plugged in says so instead of quietly showing nothing.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid">
-        <article class="update-card update-card--wide">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotAiToolkitImport.jpg"
-            alt="The PixlStash Training runs view with three discovered ai-toolkit runs selected for import"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Training runs, described where they lie</h2>
-            <p>
-              PixlStash reads an ai-toolkit training run from the folder it was
-              written to and describes it without touching a file: the
-              checkpoints it produced, the base model, the rank, and the step
-              each one stopped at. Import the runs you want and their sample
-              images come with them. Versions of one subject group behind a
-              single row, so a character you have trained four times is one entry
-              with its history under it.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card update-card--wide">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotCli.jpg"
-            alt="pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>One command line for the installation</h2>
-            <p>
-              <code>pixlstash-cli</code> covers the jobs that point PixlStash at
-              folders on your machine: adding and removing libraries, writing and
-              reading back backups, and installing plugins. Every command
-              documents itself, including the exit codes a script needs. Settings
-              → Libraries shows the exact form for your installation with a copy
-              button, and the desktop app can run it too, so
-              <code>PixlStash.AppImage cli libraries list</code> works whether or
-              not the app is open. Settings → Backend → Desktop → Shell command
-              adds a <code>pixlstash</code> command in
-              <code>~/.local/bin</code> for any terminal.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid">
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotDeleteLora.jpg"
-            alt="The PixlStash model shelf's right-click menu with Move to Trash highlighted and a tooltip explaining Shift deletes permanently"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Delete a model from the shelf</h2>
-            <p>
-              Remove a model from the selection pill, the row's right-click menu
-              or the <code>Delete</code> key. Files go to your Trash, or are
-              deleted for good with Shift held. Only your own model folders and
-              PixlStash's own store are touched: a shared cache, or a drive that
-              is not currently plugged in, is refused.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotPermissionRepair.jpg"
-            alt="The PixlStash start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>A start-up check on folder permissions</h2>
-            <p>
-              If another account on the same computer can write to your library
-              folder, that account could replace your pictures database or read
-              your credentials. The desktop app notices at start-up, lists the
-              folders it wants to change, and offers to fix them. Nothing is
-              moved, renamed or deleted, and your own access is unchanged.
+              Adding a library is one dialog, a folder tree PixlStash already
+              read as projects, people and sets, and a review screen you can
+              cancel out of — nothing is copied, moved or renamed until you
+              confirm it. The same Settings row lets you rename, switch or stop
+              using a library, and export works the same way in reverse:
+              straight back out to a folder.
             </p>
           </div>
         </article>
       </section>
-
-      <section class="section-grid">
-        <article class="update-card update-card--wide">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotCliLibraries.jpg"
-            alt="pixlstash-cli libraries --help listing list, create, attach, detach, relocate, backup, restore, prepare-legacy-identity and rename"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Backups you can put in cron</h2>
-            <p>
-              <code>libraries backup</code> writes one library and its hub to a
-              single archive you can read yourself, your password and API tokens
-              included. <code>libraries restore</code> reads it back into a new
-              folder and makes it the library that opens. Restore needs PixlStash
-              stopped and never overwrites: your current config and hub are moved
-              into a dated <code>pre-restore-</code> folder, and it prints the
-              launch command for both the restored library and the one you had.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card update-card--wide">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotCliPlugins.jpg"
-            alt="pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Find a plugin by name, and check the one you are writing</h2>
-            <p>
-              <code>plugins available</code> lists what the plugin repository
-              publishes: name, title, summary, and where they are declared the
-              author and licence, with a star against anything you already have.
-              Add a word to search. Until now the only way to learn a plugin's
-              name was to guess one wrong and read the error.
-              <code>plugins test</code> loads a captioning plugin the way the
-              server does and checks its parameter schema is one the settings
-              screen can draw, so a typo no longer costs a server restart. It
-              imports your file, so that code runs with your permissions: it is a
-              development aid and not a security scanner.
-            </p>
-          </div>
-        </article>
-      </section>
-
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Upgrading to 1.10</h2>
+          <h2>Upgrading to 1.11</h2>
           <p>
-            The library upgrade is not backwards compatible: once a library has
-            been opened by 1.10, an older version cannot open it again. Back it
-            up first by copying the library folder somewhere safe while
-            PixlStash is stopped. See the
+            Opening a library with 1.11 adds columns to its database. Back up
+            the library folder first by copying it somewhere safe while
+            PixlStash is stopped, as with every upgrade. API tokens and share
+            links are left alone. See the
             <a href="upgrade.html">upgrade guide</a> for the steps for your
             install type.
           </p>
@@ -878,7 +917,7 @@
 
       <section class="release-cta">
         <div>
-          <h3>Get PixlStash 1.10</h3>
+          <h3>Get PixlStash 1.11</h3>
           <p>
             Download the desktop app for Windows, macOS, or Linux. Or keep using
             pip, Docker, or the source build, and read the upgrade guide first.
@@ -894,6 +933,279 @@
         </div>
       </section>
 
+      <!-- ── PixlStash 1.10 (previous release) ───────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release: PixlStash 1.10</span>
+
+        <!-- ── PixlStash 1.10 ─────────────────────────────────────────── -->
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.10</span>
+              <h1>One PixlStash, several libraries</h1>
+              <p>
+                PixlStash 1.10 can hold
+                <strong>more than one picture library</strong>
+                and keeps one open at a time. Pictures, tags, scores and
+                snapshots stay with their library, while your account and
+                preferences stay with the installation. The release also adds a
+                model shelf for the checkpoints and LoRAs on your disks, and a
+                command line so backups and plugin installs can run from a
+                script.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  Several picture libraries in one installation, switched from
+                  Settings → Libraries. Each keeps its own pictures, tags,
+                  scores and snapshots
+                </li>
+                <li>
+                  API tokens and share links belong to the library that created
+                  them, and Settings warns you before you switch away from live
+                  share links
+                </li>
+                <li>
+                  A model shelf for the checkpoints and LoRAs in the folders you
+                  register, grouped by kind, base model or folder
+                </li>
+                <li>
+                  Training runs from ai-toolkit are described where they lie,
+                  then imported with their sample images
+                </li>
+                <li>
+                  A <code>pixlstash-cli</code> command line for libraries,
+                  backups, restores and plugins, so a backup can run from cron
+                </li>
+                <li>
+                  The desktop app checks your library folder's permissions at
+                  start-up and offers to tighten them
+                </li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotLibraries.jpg"
+                alt="PixlStash Settings with two registered picture libraries and the active one marked"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Switching, and what stays behind</h2>
+              <p>
+                A library is a folder holding your pictures and their database.
+                PixlStash keeps one open at a time and switches from Settings →
+                Libraries. Your owner account, your preferences and the model
+                shelf belong to the installation and follow you between
+                libraries. API tokens and share links do not: they are pinned to
+                the library that created them, stop working while another
+                library is open, and work again when you switch back. Create a
+                token in each library your scripts use, and expect Settings to
+                tell you before you switch away from a library with live share
+                links.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card update-card--wide">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotModelShelf.jpg"
+              alt="The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>A shelf for the models you already have</h2>
+              <p>
+                Register the folders where you keep checkpoints and LoRAs and
+                PixlStash catalogues what is in them: the kind of file, the base
+                model it was trained against, its size, and every folder a copy
+                sits in. Group the shelf by kind, base model, folder or feature,
+                sort it, and narrow it down to what you are looking for. Files
+                are read where they are rather than copied into the library. A
+                drive that is not plugged in says so instead of quietly showing
+                nothing.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--wide">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotAiToolkitImport.jpg"
+              alt="The PixlStash Training runs view with three discovered ai-toolkit runs selected for import"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Training runs, described where they lie</h2>
+              <p>
+                PixlStash reads an ai-toolkit training run from the folder it
+                was written to and describes it without touching a file: the
+                checkpoints it produced, the base model, the rank, and the step
+                each one stopped at. Import the runs you want and their sample
+                images come with them. Versions of one subject group behind a
+                single row, so a character you have trained four times is one
+                entry with its history under it.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card update-card--wide">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotCli.jpg"
+              alt="pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>One command line for the installation</h2>
+              <p>
+                <code>pixlstash-cli</code> covers the jobs that point PixlStash
+                at folders on your machine: adding and removing libraries,
+                writing and reading back backups, and installing plugins. Every
+                command documents itself, including the exit codes a script
+                needs. Settings → Libraries shows the exact form for your
+                installation with a copy button, and the desktop app can run it
+                too, so <code>PixlStash.AppImage cli libraries list</code> works
+                whether or not the app is open. Settings → Backend → Desktop →
+                Shell command adds a <code>pixlstash</code> command in
+                <code>~/.local/bin</code> for any terminal.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotDeleteLora.jpg"
+              alt="The PixlStash model shelf's right-click menu with Move to Trash highlighted and a tooltip explaining Shift deletes permanently"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Delete a model from the shelf</h2>
+              <p>
+                Remove a model from the selection pill, the row's right-click
+                menu or the <code>Delete</code> key. Files go to your Trash, or
+                are deleted for good with Shift held. Only your own model
+                folders and PixlStash's own store are touched: a shared cache,
+                or a drive that is not currently plugged in, is refused.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotPermissionRepair.jpg"
+              alt="The PixlStash start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>A start-up check on folder permissions</h2>
+              <p>
+                If another account on the same computer can write to your
+                library folder, that account could replace your pictures
+                database or read your credentials. The desktop app notices at
+                start-up, lists the folders it wants to change, and offers to
+                fix them. Nothing is moved, renamed or deleted, and your own
+                access is unchanged.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--wide">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotCliLibraries.jpg"
+              alt="pixlstash-cli libraries --help listing list, create, attach, detach, relocate, backup, restore, prepare-legacy-identity and rename"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Backups you can put in cron</h2>
+              <p>
+                <code>libraries backup</code> writes one library and its hub to
+                a single archive you can read yourself, your password and API
+                tokens included. <code>libraries restore</code> reads it back
+                into a new folder and makes it the library that opens. Restore
+                needs PixlStash stopped and never overwrites: your current
+                config and hub are moved into a dated
+                <code>pre-restore-</code> folder, and it prints the launch
+                command for both the restored library and the one you had.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card update-card--wide">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotCliPlugins.jpg"
+              alt="pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Find a plugin by name, and check the one you are writing</h2>
+              <p>
+                <code>plugins available</code> lists what the plugin repository
+                publishes: name, title, summary, and where they are declared the
+                author and licence, with a star against anything you already
+                have. Add a word to search. Until now the only way to learn a
+                plugin's name was to guess one wrong and read the error.
+                <code>plugins test</code> loads a captioning plugin the way the
+                server does and checks its parameter schema is one the settings
+                screen can draw, so a typo no longer costs a server restart. It
+                imports your file, so that code runs with your permissions: it
+                is a development aid and not a security scanner.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Upgrading to 1.10</h2>
+            <p>
+              The library upgrade is not backwards compatible: once a library
+              has been opened by 1.10, an older version cannot open it again.
+              Back it up first by copying the library folder somewhere safe
+              while PixlStash is stopped. See the
+              <a href="upgrade.html">upgrade guide</a> for the steps for your
+              install type.
+            </p>
+          </div>
+        </article>
+
+        <section class="release-cta">
+          <div>
+            <h3>Get PixlStash 1.10</h3>
+            <p>
+              Download the desktop app for Windows, macOS, or Linux. Or keep
+              using pip, Docker, or the source build, and read the upgrade guide
+              first.
+            </p>
+          </div>
+          <div class="release-cta-actions">
+            <a class="release-btn release-btn-primary" href="install.html"
+              >Download</a
+            >
+            <a class="release-btn release-btn-secondary" href="upgrade.html"
+              >Upgrade guide</a
+            >
+          </div>
+        </section>
+
+        <!-- ── PixlStash 1.9 (previous release) ───────────────────────── -->
+      </div>
+
       <div class="prev-release">
         <span class="prev-release-label">Previous release: PixlStash 1.9</span>
 
@@ -907,18 +1219,19 @@
                 PixlStash 1.9 brings <strong>full undo and redo</strong> across
                 the app. Soft-deletion, tags, descriptions, assignments, moves,
                 and duplicate decisions all join one shared history. Step back
-                through one change or several, then redo them when you change your
-                mind again. Work quickly without making every decision final.
+                through one change or several, then redo them when you change
+                your mind again. Work quickly without making every decision
+                final.
               </p>
               <ul class="release-bullets">
                 <li>
                   Full undo and redo, including a history menu for stepping back
-                  through more than one change. It is database backed and survives
-                  server restarts
+                  through more than one change. It is database backed and
+                  survives server restarts
                 </li>
                 <li>
-                  A dedicated Duplicates view for reviewing, comparing, stacking,
-                  or keeping likely copies separate
+                  A dedicated Duplicates view for reviewing, comparing,
+                  stacking, or keeping likely copies separate
                 </li>
                 <li>
                   Stack filters and <strong>Keep cover only</strong> for moving
@@ -933,8 +1246,8 @@
                   only the ones you select
                 </li>
                 <li>
-                  A new Privacy pane with two independent, off-by-default options:
-                  update checks and an anonymous install ID
+                  A new Privacy pane with two independent, off-by-default
+                  options: update checks and an anonymous install ID
                 </li>
               </ul>
             </div>
@@ -963,12 +1276,12 @@
               <h2>Undo reaches whole workflows</h2>
               <p>
                 Use the toolbar, Ctrl+Z and Ctrl+Y on Windows and Linux, or the
-                standard shortcuts on macOS. Soft-deleting pictures, changing tags
-                or descriptions, assigning and moving images, and duplicate
+                standard shortcuts on macOS. Soft-deleting pictures, changing
+                tags or descriptions, assigning and moving images, and duplicate
                 decisions all join the same history. Open the history menu when
-                you want to inspect recent work or undo several steps at once. The
-                safety net reaches whole workflows, not just simple field edits,
-                including stacking duplicates or keeping them separate.
+                you want to inspect recent work or undo several steps at once.
+                The safety net reaches whole workflows, not just simple field
+                edits, including stacking duplicates or keeping them separate.
               </p>
             </div>
           </article>
@@ -979,14 +1292,15 @@
             <div class="update-card-body">
               <h2>A queue for duplicate decisions</h2>
               <p>
-                Duplicates has a permanent place in the sidebar and scans the view
-                you are working in. Each group keeps its candidates together,
-                explains why they match, and lets you compare them full-screen
-                before you stack them or keep them separate. Exact copies are the
-                starting point; optional near-duplicate tiers and a similarity
-                threshold let you decide how far the scan should reach. Decided
-                groups stay available, and Mixed stacks flags existing stacks
-                whose pictures no longer hang together at the chosen threshold.
+                Duplicates has a permanent place in the sidebar and scans the
+                view you are working in. Each group keeps its candidates
+                together, explains why they match, and lets you compare them
+                full-screen before you stack them or keep them separate. Exact
+                copies are the starting point; optional near-duplicate tiers and
+                a similarity threshold let you decide how far the scan should
+                reach. Decided groups stay available, and Mixed stacks flags
+                existing stacks whose pictures no longer hang together at the
+                chosen threshold.
               </p>
             </div>
             <div class="update-card-media">
@@ -1019,11 +1333,11 @@
             <div class="update-card-body">
               <h2>Clean up stacks without deleting originals</h2>
               <p>
-                Filter any grid to stacked or unstacked pictures. When a stack is
-                settled, Keep cover only previews exactly what will happen, keeps
-                the cover, and moves every other picture in the stack to the
-                Scrapheap. No original is deleted from disk by the action, and you
-                can undo it or restore a picture from the Scrapheap.
+                Filter any grid to stacked or unstacked pictures. When a stack
+                is settled, Keep cover only previews exactly what will happen,
+                keeps the cover, and moves every other picture in the stack to
+                the Scrapheap. No original is deleted from disk by the action,
+                and you can undo it or restore a picture from the Scrapheap.
               </p>
             </div>
           </article>
@@ -1062,10 +1376,10 @@
             <div class="update-card-body">
               <h2>Suggest more pictures of a person</h2>
               <p>
-                Open a person's context menu and ask PixlStash to rank the library
-                by face likeness. Review the result in the grid, adjust the match
-                if needed, then assign every result or just your current selection
-                to that person in one action.
+                Open a person's context menu and ask PixlStash to rank the
+                library by face likeness. Review the result in the grid, adjust
+                the match if needed, then assign every result or just your
+                current selection to that person in one action.
               </p>
             </div>
           </article>
@@ -1080,14 +1394,15 @@
             <div class="update-card-body">
               <h2>Optional, limited telemetry</h2>
               <p>
-                The new Privacy pane can send a random anonymous install ID once a
-                day, together with your install type and whether this was a new
-                install. It never includes your images, tags, captions, filenames,
-                searches, or file paths, and the ID can be replaced whenever you
-                like. It is off by default, stays off when you upgrade, and can be
-                turned off again at any time. If you are comfortable enabling it,
-                we hope you will: it gives us a much clearer picture of whether
-                PixlStash remains useful after the download. The
+                The new Privacy pane can send a random anonymous install ID once
+                a day, together with your install type and whether this was a
+                new install. It never includes your images, tags, captions,
+                filenames, searches, or file paths, and the ID can be replaced
+                whenever you like. It is off by default, stays off when you
+                upgrade, and can be turned off again at any time. If you are
+                comfortable enabling it, we hope you will: it gives us a much
+                clearer picture of whether PixlStash remains useful after the
+                download. The
                 <a class="whatsnew-link" href="privacy.html">privacy policy</a>
                 shows the exact message and retention details.
               </p>
@@ -1130,9 +1445,10 @@
             <div class="update-card-body">
               <h2>Review stacks that no longer fit</h2>
               <p>
-                Mixed stacks finds existing stacks whose pictures fall below your
-                chosen similarity threshold. Compare the members, keep the stack
-                when it is intentional, or separate pictures that do not belong.
+                Mixed stacks finds existing stacks whose pictures fall below
+                your chosen similarity threshold. Compare the members, keep the
+                stack when it is intentional, or separate pictures that do not
+                belong.
               </p>
             </div>
           </article>
@@ -1160,9 +1476,9 @@
             <p>
               PixlStash clears every API token as part of the security change
               released in 1.8.1. Create replacement tokens in Settings, recreate
-              any share links, and enter your public URL and ComfyUI URL again. If
-              you already upgraded to 1.8.1 or later, this has already happened
-              and your current tokens are left alone.
+              any share links, and enter your public URL and ComfyUI URL again.
+              If you already upgraded to 1.8.1 or later, this has already
+              happened and your current tokens are left alone.
             </p>
           </div>
         </article>
@@ -1171,8 +1487,8 @@
           <div>
             <h3>Get PixlStash 1.9</h3>
             <p>
-              Download the desktop app for Windows, macOS, or Linux. Or keep using
-              pip, Docker, or the source build.
+              Download the desktop app for Windows, macOS, or Linux. Or keep
+              using pip, Docker, or the source build.
             </p>
           </div>
           <div class="release-cta-actions">
@@ -2338,7 +2654,7 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
             <div class="stats-card-media">
               <img
                 class="zoomable-image"
-                src="assets/ScreenshotTagStatistics.png"
+                src="assets/ScreenshotTagStatistics.jpg"
                 alt="Tag distribution and confidence statistics sidebar in PixlStash"
               />
             </div>
@@ -2356,7 +2672,7 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
             <div class="stats-card-media">
               <img
                 class="zoomable-image"
-                src="assets/ScreenshotPictureStatistics.png"
+                src="assets/ScreenshotPictureStatistics.jpg"
                 alt="Picture statistics including image size and score distribution"
               />
             </div>
@@ -2468,6 +2784,40 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
         if (event.key === "Escape" && lightbox.classList.contains("open")) {
           closeLightbox();
         }
+      });
+
+      // Tiny vanilla carousel driver, same as api.html: wires arrows + dots
+      // on any [data-carousel] block and adds left/right arrow-key navigation.
+      document.querySelectorAll("[data-carousel]").forEach((root) => {
+        const track = root.querySelector(".carousel-slides");
+        if (!track) return;
+        const slides = track.children;
+        const dots = root.querySelectorAll(".carousel-dots .dot");
+        const count = slides.length;
+        let i = 0;
+        function go(n) {
+          i = ((n % count) + count) % count;
+          track.style.transform = `translateX(-${i * 100}%)`;
+          dots.forEach((d, k) => d.classList.toggle("active", k === i));
+        }
+        root
+          .querySelector(".carousel-arrow.prev")
+          ?.addEventListener("click", () => go(i - 1));
+        root
+          .querySelector(".carousel-arrow.next")
+          ?.addEventListener("click", () => go(i + 1));
+        dots.forEach((d, k) => d.addEventListener("click", () => go(k)));
+        root.tabIndex = 0;
+        root.addEventListener("keydown", (e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            go(i - 1);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            go(i + 1);
+          }
+        });
+        go(0);
       });
     </script>
   </body>

@@ -63,7 +63,7 @@ def _reset_face_globals():
 
 
 # --------------------------------------------------------------------------- #
-# §2 — get_or_init_insightface passes the configured name on both paths
+# §2 - get_or_init_insightface passes the configured name on both paths
 # --------------------------------------------------------------------------- #
 
 
@@ -80,7 +80,7 @@ def test_get_or_init_passes_model_pack_name(pack, cpu_spillover):
             "pixlstash.tasks.face_extraction_task.ensure_model_pack_available"
         ) as ensure_in_task,
         # FaceAnalysis is imported inside get_or_init_insightface (the ML libs
-        # are function-local so the server does not pay for them at import —
+        # are function-local so the server does not pay for them at import -
         # backend_architecture §3), so the source module is the patch target.
         mock.patch(
             "insightface.app.FaceAnalysis",
@@ -100,6 +100,80 @@ def test_get_or_init_passes_model_pack_name(pack, cpu_spillover):
     # `~/.insightface` default, which is what makes it relocatable at all.
     assert kwargs.get("root") == model_utils.insightface_root()
     _reset_face_globals()
+
+
+def test_get_or_init_bounds_every_cuda_session_by_the_budget():
+    """Five ORT sessions, one options dict each: the CUDA one carries the
+    budget-derived arena cap so the pack can stay resident for a pass."""
+    from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
+
+    _reset_face_globals()
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = 8192
+    engine = _make_engine("buffalo_l", force_cpu=False)
+    engine.vram_budget = budget
+    with (
+        mock.patch("pixlstash.tasks.face_extraction_task.ensure_model_pack_available"),
+        mock.patch("insightface.app.FaceAnalysis") as fa,
+        mock.patch("torch.cuda.is_available", return_value=True),
+    ):
+        FaceExtractionTask.get_or_init_insightface(engine)
+    kwargs = fa.call_args.kwargs
+    assert kwargs["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    cuda_options, cpu_options = kwargs["provider_options"]
+    assert cuda_options == budget.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["insightface_session"]
+    )
+    # Never capped: a capped detector failed in the field the evening it
+    # shipped. HEURISTIC stays - det_size never changes, EXHAUSTIVE only cost
+    # seconds per reload.
+    assert "gpu_mem_limit" not in cuda_options
+    assert "arena_extend_strategy" not in cuda_options
+    assert cuda_options["cudnn_conv_algo_search"] == "HEURISTIC"
+    assert cpu_options == {}
+    _reset_face_globals()
+
+
+def test_the_recogniser_is_called_in_chunks_that_fit_its_arena_cap():
+    """One call for every face in a hundred stills is unbounded; a face-dense
+    batch would push the capped recognition session over its limit."""
+    from pixlstash.utils.insightface_batched import (
+        RECOGNITION_CHUNK,
+        BatchedFaceRunner,
+    )
+
+    calls = []
+
+    class _Rec:
+        input_size = (112, 112)
+
+        def get_feat(self, crops):
+            calls.append(len(crops))
+            return np.tile(np.arange(len(crops), dtype="float32")[:, None], (1, 512))
+
+    class _Det:
+        def detect(self, img):
+            n = int(img[0, 0, 0])
+            return np.zeros((n, 5), "float32"), np.zeros((n, 5, 2), "float32")
+
+    app = types.SimpleNamespace(det_model=_Det(), models={"recognition": _Rec()})
+    faces_per_image = [RECOGNITION_CHUNK, 1, RECOGNITION_CHUNK + 2]
+    images = [np.full((8, 8, 3), n, "uint8") for n in faces_per_image]
+    with mock.patch(
+        "insightface.utils.face_align.norm_crop",
+        side_effect=lambda img, landmark, image_size: img,
+    ):
+        results = BatchedFaceRunner(app).run_batch(images)
+
+    total = sum(faces_per_image)
+    assert calls == [RECOGNITION_CHUNK] * (total // RECOGNITION_CHUNK) + [
+        total % RECOGNITION_CHUNK
+    ]
+    assert [len(r) for r in results] == faces_per_image
+    # Every face got its own row, in order, across the chunk boundaries.
+    got = [f.embedding[0] for r in results for f in r]
+    assert got == [i % RECOGNITION_CHUNK for i in range(total)]
 
 
 @pytest.mark.parametrize("cpu_spillover", [False, True])
@@ -139,7 +213,7 @@ def test_get_or_init_loads_from_the_recorded_root(tmp_path, monkeypatch, cpu_spi
 
 
 # --------------------------------------------------------------------------- #
-# §2 — unknown pack fails closed
+# §2 - unknown pack fails closed
 # --------------------------------------------------------------------------- #
 
 
@@ -164,7 +238,7 @@ def test_get_or_init_unknown_pack_raises():
 
 
 # --------------------------------------------------------------------------- #
-# §3 — auto-download behaviour
+# §3 - auto-download behaviour
 # --------------------------------------------------------------------------- #
 
 
@@ -284,7 +358,7 @@ def test_auraface_download_backoff_expires_then_retries(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# §4 — migration backfill (helper SQL on a temp SQLite DB)
+# §4 - migration backfill (helper SQL on a temp SQLite DB)
 # --------------------------------------------------------------------------- #
 
 
@@ -335,7 +409,7 @@ def test_migration_backfill_sets_buffalo_l(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# §4 — model_pack recorded on newly-written faces (incl. sentinel)
+# §4 - model_pack recorded on newly-written faces (incl. sentinel)
 # --------------------------------------------------------------------------- #
 
 
@@ -453,7 +527,7 @@ def test_model_pack_set_on_written_faces_including_sentinel(tmp_path, monkeypatc
 
 
 # --------------------------------------------------------------------------- #
-# §6 — stale-pack finder selection
+# §6 - stale-pack finder selection
 # --------------------------------------------------------------------------- #
 
 
@@ -500,7 +574,7 @@ def test_finder_yields_to_face_extraction():
 
 
 # --------------------------------------------------------------------------- #
-# §5 — in-place refresh preserves character_id
+# §5 - in-place refresh preserves character_id
 # --------------------------------------------------------------------------- #
 
 
@@ -617,7 +691,7 @@ def test_refresh_handles_new_detection_and_removal(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# §5b — manually-drawn faces (no embedding) survive the refresh sweep
+# §5b - manually-drawn faces (no embedding) survive the refresh sweep
 # --------------------------------------------------------------------------- #
 
 
@@ -838,13 +912,13 @@ def test_bbox_iou_basics():
 
 
 # --------------------------------------------------------------------------- #
-# §7 — claim-vs-commit timing and commit-failure handling (B2)
+# §7 - claim-vs-commit timing and commit-failure handling (B2)
 # --------------------------------------------------------------------------- #
 #
 # The synchronous _FakeDB above masks the async behaviour that caused B2: it
 # commits inside submit_task before the call even returns. _AsyncFakeDB runs the
 # write on a real background thread (with a deliberate delay) and returns a real
-# Future, so a fire-and-forget _run_task would return BEFORE the commit landed —
+# Future, so a fire-and-forget _run_task would return BEFORE the commit landed -
 # exactly the bug. _run_task must block on the write futures.
 
 
@@ -965,7 +1039,7 @@ def test_commit_failure_surfaces_and_excludes_picture(tmp_path, monkeypatch):
     so the failure was invisible and the row stayed stale forever with no signal.
     Now _commit re-raises, the failure surfaces on the future, and _run_task
     excludes the picture from changed_ids (the row stays stale, so the finder
-    re-selects it — a genuine retry, not silent masking).
+    re-selects it - a genuine retry, not silent masking).
     """
     engine = _make_sqlite(tmp_path)
     img_root = tmp_path / "imgs"

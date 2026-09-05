@@ -96,7 +96,7 @@ def upgrade() -> None:
 
     tables = inspector.get_table_names()
     if "user" not in tables:
-        # Fresh install — baseline migration creates the table via
+        # Fresh install - baseline migration creates the table via
         # SQLModel.metadata.create_all() using the current model, which
         # already has tagger_settings and lacks the four legacy columns.
         return
@@ -115,7 +115,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     legacy_present = _LEGACY_COLS & existing_cols
     if legacy_present and "tagger_settings" not in existing_cols:
-        # Re-fetch after the batch_alter above — some backends may report stale state.
+        # Re-fetch after the batch_alter above - some backends may report stale state.
         pass
 
     conn = bind
@@ -151,7 +151,7 @@ def upgrade() -> None:
         row_dict = dict(row._mapping)
         existing_settings = row_dict.get("tagger_settings")
         if existing_settings:
-            # Already migrated — skip.
+            # Already migrated - skip.
             continue
 
         wd14_en = bool(row_dict.get("wd14_tagger_enabled", False))

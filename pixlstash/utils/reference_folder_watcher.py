@@ -79,7 +79,7 @@ class ReferenceFolderWatcher:
         """
         if not os.path.isdir(resolved_path):
             logger.debug(
-                "ReferenceFolderWatcher: skipping watch for folder %d — "
+                "ReferenceFolderWatcher: skipping watch for folder %d - "
                 "path is not a directory: %s",
                 folder_id,
                 resolved_path,
@@ -88,14 +88,36 @@ class ReferenceFolderWatcher:
         with self._lock:
             if folder_id in self._watches:
                 return
-            handler = _ChangeHandler(folder_id, self._schedule_rescan)
+            # Reserve the id so a concurrent caller cannot schedule it twice.
+            self._watches[folder_id] = None
+        handler = _ChangeHandler(folder_id, self._schedule_rescan)
+        # Never call into the observer while holding `self._lock`: watchdog
+        # dispatches events to handlers while holding ITS lock, and
+        # `_schedule_rescan` takes ours from inside that dispatch, so scheduling
+        # a watch under our lock deadlocked against a file event landing at the
+        # same moment (seen as a hung library switch, `_start_existing_folder_
+        # watches` waiting forever).
+        try:
             watch = self._observer.schedule(handler, resolved_path, recursive=True)
-            self._watches[folder_id] = watch
-            logger.debug(
-                "ReferenceFolderWatcher: watching folder %d at %s",
-                folder_id,
-                resolved_path,
-            )
+        except Exception:
+            with self._lock:
+                self._watches.pop(folder_id, None)
+            raise
+        with self._lock:
+            if folder_id not in self._watches:
+                # Unwatched while the watch was being scheduled.
+                stale = watch
+            else:
+                self._watches[folder_id] = watch
+                stale = None
+        if stale is not None:
+            self._observer.unschedule(stale)
+            return
+        logger.debug(
+            "ReferenceFolderWatcher: watching folder %d at %s",
+            folder_id,
+            resolved_path,
+        )
 
     def unwatch_folder(self, folder_id: int) -> None:
         """Stop watching the directory for *folder_id*.
@@ -105,11 +127,12 @@ class ReferenceFolderWatcher:
         """
         with self._lock:
             watch = self._watches.pop(folder_id, None)
-            if watch:
-                self._observer.unschedule(watch)
             timer = self._timers.pop(folder_id, None)
             if timer:
                 timer.cancel()
+        # Outside our lock, for the reason given in `watch_folder`.
+        if watch:
+            self._observer.unschedule(watch)
 
     def _schedule_rescan(self, folder_id: int) -> None:
         """Debounce a rescan notification for *folder_id*."""
@@ -129,7 +152,7 @@ class ReferenceFolderWatcher:
         with self._lock:
             self._timers.pop(folder_id, None)
         logger.debug(
-            "ReferenceFolderWatcher: change detected — triggering rescan for folder %d",
+            "ReferenceFolderWatcher: change detected - triggering rescan for folder %d",
             folder_id,
         )
         try:

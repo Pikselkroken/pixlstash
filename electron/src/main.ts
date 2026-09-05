@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  net,
   clipboard,
   ipcMain,
   Menu,
@@ -11,7 +12,7 @@ import {
   Tray,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -23,13 +24,18 @@ import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './bac
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { isAllowedNavigation, redactUrl } from './urlPolicy';
-import { ServerProcess, devInterpreter } from './backend/ServerProcess';
+import { ServerProcess, StartupRecovery, devInterpreter } from './backend/ServerProcess';
 import {
   isPermissionRepairRequired,
   mkdirPrivateIfMissing,
   permissionRepairDialogDetail,
   PermissionRepairRequiredError,
 } from './backend/StartupPermissions';
+import {
+  isVaultUnusable,
+  vaultRecoveryDialogDetail,
+  VaultUnusableError,
+} from './backend/VaultRecovery';
 import {
   Accel,
   ACCEL_LABELS,
@@ -47,6 +53,9 @@ import {
   serverLogPath,
   setBackendsRoot,
 } from './config';
+import { inspectFolder } from './setup/InspectFolder';
+import { readLibraryFolder } from './setup/ReadLibraryFolder';
+import { runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -66,10 +75,10 @@ const execFileP = promisify(execFile);
  * places it next to the renderer) rather than the non-square brand Logo.png:
  * Linux alt-tab/taskbar switchers expect a square icon and ignore odd ratios.
  * Loaded as a NativeImage and applied via both the constructor option AND an
- * explicit setIcon() — the constructor `icon` alone is unreliable on Linux. */
+ * explicit setIcon() - the constructor `icon` alone is unreliable on Linux. */
 const APP_ICON_PATH = join(__dirname, 'renderer', 'icon.png');
 
-/** The packaged renderer directory — the ONLY `file://` location we ever load
+/** The packaged renderer directory - the ONLY `file://` location we ever load
  * (splash index.html, first-run setup.html, their bundled assets). Used by the
  * navigation guard to pin allowed local navigation to our own files instead of
  * trusting any `file://` URL. Resolved (symlinks/`..` collapsed) and suffixed
@@ -91,7 +100,7 @@ const APP_ICON = loadAppIcon();
 
 // Keep the desktop app's data dir distinct from a standalone pip/Docker server's
 // (~/.config/pixlstash). Electron's default name ('PixlStash') differs from it
-// only by case — fine on Linux, but a COLLISION on case-insensitive filesystems
+// only by case - fine on Linux, but a COLLISION on case-insensitive filesystems
 // (Windows, default macOS). Pin it to 'pixlstash-desktop'. Must run before
 // anything reads userData (config paths, the single-instance lock).
 app.setPath('userData', join(app.getPath('appData'), 'pixlstash-desktop'));
@@ -112,7 +121,7 @@ let teardownComplete = false;
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
 // Desktop-shell preference: when true, a `pixlstash` shim is kept pointing at
-// this install so the CLI is reachable from a plain shell — `~/.local/bin` on
+// this install so the CLI is reachable from a plain shell - `~/.local/bin` on
 // Linux and macOS, `%LOCALAPPDATA%\PixlStash\bin` plus a user PATH entry on
 // Windows. Opt-in: it writes outside the app's own storage.
 let shellCommand = false;
@@ -131,6 +140,13 @@ const pendingMediaSaves = new Map<
 // only to name the consent choice; setup:commit sends a boolean and can never
 // substitute a different vault for the privileged preparer invocation.
 let detectedLegacyIdentitySource: string | null = null;
+// Steps the RUNNING app asked the startup framework to put in front of it (an
+// upgrade's new privacy question today). Empty on a first run, which builds its
+// own list in `setup:probe`.
+let requestedStartupSteps: string[] = [];
+// The backend this launch started: its loopback URL and the pre-authenticated
+// session cookie. Setup uses it to read the library folder during the download.
+let runningServer: { url: string; sessionToken: string } | null = null;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -139,7 +155,7 @@ let runtime: RuntimeInfo | null = null;
 // Debug/CI override: fake the GPU hardware probe so the backend-download/overlay
 // flow can be exercised on a machine without the matching GPU. Validated against
 // the Accel enum (invalid values are ignored with a warning); it only flips which
-// accelerator detectHardware() reports — it never feeds the install index, which
+// accelerator detectHardware() reports - it never feeds the install index, which
 // stays pinned to the hardcoded TORCH_INDEX map. Parsed once at startup.
 const forcedBackend: Accel | null = parseForcedBackend();
 if (forcedBackend) {
@@ -165,7 +181,7 @@ function isAllowedTarget(target: string): boolean {
  * privilege-escalation vector: `file:`, `smb:`, and custom-handler schemes
  * (`vscode:`, `ms-msdt:`, …) can launch local programs or mount remote shares.
  * Outbound links from app content should only ever be plain web/email links, so
- * we allow `https:` and `mailto:` and block (and log) everything else —
+ * we allow `https:` and `mailto:` and block (and log) everything else -
  * deny-by-default. Plain `http:` is intentionally excluded for outbound opens:
  * the only legitimate http target here is the loopback backend, which is handled
  * in-app (setWindowOpenHandler 'allow' / isAllowedTarget), never opened
@@ -236,7 +252,7 @@ function createMainWindow(): void {
   });
   // Open external links in the user's browser, not inside the app window. A
   // child window is only allowed for content we load ourselves, decided by the
-  // same parsed-origin policy as in-window navigation — a string prefix test
+  // same parsed-origin policy as in-window navigation - a string prefix test
   // would classify http://127.0.0.1.example.com/ as loopback (#1020).
   const openHandler = ({ url }: { url: string }): { action: 'allow' | 'deny' } => {
     if (isAllowedTarget(url)) return { action: 'allow' };
@@ -255,7 +271,7 @@ function createMainWindow(): void {
     event.preventDefault();
     console.warn(`[nav] blocked in-window navigation to off-origin URL: ${redactUrl(url)}`);
     // Hand a real external link to the OS browser, but only through the scheme
-    // allowlist (https/mailto) — never a raw file:/smb:/custom-handler URL.
+    // allowlist (https/mailto) - never a raw file:/smb:/custom-handler URL.
     openExternalSafely(url);
   };
   mainWindow.webContents.on('will-navigate', guardNavigation);
@@ -292,8 +308,8 @@ function showWindow(): void {
 }
 
 /**
- * Create the system-tray icon so the app can keep running — and keep serving the
- * optional remote server — after the window is closed. Returns false when the
+ * Create the system-tray icon so the app can keep running - and keep serving the
+ * optional remote server - after the window is closed. Returns false when the
  * platform has no usable tray (macOS uses the dock; a GNOME session without
  * AppIndicator support can't show one), in which case the caller keeps the
  * default quit-on-close behavior so the app is never left unreachable.
@@ -402,9 +418,95 @@ function saveDesktopPrefs(): void {
 }
 
 /**
+ * Where the startup screen's privacy answer waits for the app.
+ *
+ * The answer belongs to the library owner's record in the database, which does
+ * not exist until the backend has started and the app has authenticated. So the
+ * startup framework parks it here and the app applies it on its first config
+ * load, which is also what stops the in-app dialog asking the same question a
+ * second time.
+ */
+function pendingTelemetryPath(): string {
+  return join(app.getPath('userData'), 'pending-telemetry.json');
+}
+
+/** Park a startup answer for the app, or clear a stale one when there is none. */
+function writePendingTelemetry(patch: Record<string, boolean> | null): void {
+  try {
+    if (!patch) {
+      if (existsSync(pendingTelemetryPath())) rmSync(pendingTelemetryPath());
+      return;
+    }
+    mkdirSync(dirname(pendingTelemetryPath()), { recursive: true });
+    writeFileSync(pendingTelemetryPath(), JSON.stringify(patch, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the privacy answer:', e);
+  }
+}
+
+/**
+ * Hand the parked answer to the app exactly once. Read-and-delete rather than
+ * read: a patch left behind would re-apply on every launch and quietly undo a
+ * later change made in Settings.
+ */
+function takePendingTelemetry(): Record<string, boolean> | null {
+  try {
+    if (!existsSync(pendingTelemetryPath())) return null;
+    const patch = readJsonFile(pendingTelemetryPath());
+    rmSync(pendingTelemetryPath());
+    return (patch as Record<string, boolean>) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked privacy answer:', e);
+    return null;
+  }
+}
+
+/** Where the folder read setup finished waits for the app to pick it up. */
+function pendingMappingPath(): string {
+  return join(app.getPath('userData'), 'pending-mapping.json');
+}
+
+/**
+ * Park a finished folder read for the app.
+ *
+ * The READ'S RESULT, not its task id. The task lives in the server process's
+ * memory, and the backend restarts onto the GPU runtime before the app loads,
+ * so a parked id resolved to "Task not found" and left the wizard spinning on
+ * work that had already been done. With the result in hand the wizard opens on
+ * its questions and asks the server nothing.
+ */
+function writePendingMapping(
+  entry: { path: string; result: Record<string, unknown> } | null,
+): void {
+  try {
+    if (!entry) {
+      if (existsSync(pendingMappingPath())) rmSync(pendingMappingPath());
+      return;
+    }
+    mkdirSync(dirname(pendingMappingPath()), { recursive: true });
+    writeFileSync(pendingMappingPath(), JSON.stringify(entry, null, 2));
+  } catch (e) {
+    console.warn('[startup] could not park the folder read:', e);
+  }
+}
+
+/** Hand the parked read to the app exactly once. */
+function takePendingMapping(): { path: string; result: Record<string, unknown> } | null {
+  try {
+    if (!existsSync(pendingMappingPath())) return null;
+    const entry = readJsonFile(pendingMappingPath());
+    rmSync(pendingMappingPath());
+    return (entry as { path: string; result: Record<string, unknown> }) ?? null;
+  } catch (e) {
+    console.warn('[startup] could not read the parked folder read:', e);
+    return null;
+  }
+}
+
+/**
  * Whether a shell shim is worth offering here: an unpackaged dev run has no
  * durable launcher to point a shim at. Every packaged install does, Windows
- * included since #1060 — it gets a `.cmd` and a PATH entry of its own rather
+ * included since #1060 - it gets a `.cmd` and a PATH entry of its own rather
  * than the per-user bin directory it does not have.
  */
 function shimSupported(): boolean {
@@ -412,8 +514,8 @@ function shimSupported(): boolean {
 }
 
 /**
- * What the shim forwards to. Windows cannot use the app's own launcher — it is
- * a GUI-subsystem binary no shell waits for (#1058) — so its shim calls the
+ * What the shim forwards to. Windows cannot use the app's own launcher - it is
+ * a GUI-subsystem binary no shell waits for (#1058) - so its shim calls the
  * bundled console-subsystem interpreter against this deployment's hub, exactly
  * as {@link runCli} does.
  */
@@ -439,7 +541,7 @@ function declaredCliCommand(): string | undefined {
   // our own launcher there prints a command no shell waits for: PixlStash.exe is
   // linked for the GUI subsystem, so the prompt comes back before the CLI has
   // written a byte and its output then lands on top of it. The backend runs on
-  // the bundled python.exe — a console-subsystem binary at a durable path — and
+  // the bundled python.exe - a console-subsystem binary at a durable path - and
   // can compose that command from itself, so leaving the variable unset gets a
   // *better* answer than we can give. See `desktop_windows_command` in
   // pixlstash/hub/cli_hint.py. With the shim on PATH (#1060) there is finally
@@ -546,10 +648,10 @@ interface PortCheck {
 /**
  * Probe whether `port` can be bound for the external listener. Tries a throwaway
  * bind on 0.0.0.0 (the host the external server uses) and immediately closes it.
- * `available: false` with `code` is returned when the OS refuses the bind — the
+ * `available: false` with `code` is returned when the OS refuses the bind - the
  * port is taken (EADDRINUSE) or privileged (EACCES). Used by Settings to warn
  * before the user enables the server on a port that won't come up. Note: if our
- * own external listener is already running on `port`, this reports EADDRINUSE —
+ * own external listener is already running on `port`, this reports EADDRINUSE -
  * the caller is responsible for ignoring that self-conflict.
  */
 function checkPortAvailable(port: number): Promise<PortCheck> {
@@ -573,7 +675,7 @@ function checkPortAvailable(port: number): Promise<PortCheck> {
 /**
  * Persist the external-listener settings into the desktop's own server-config
  * and relaunch the backend so the change takes effect. The loopback the window
- * uses is unaffected — run() always serves it on a fresh ephemeral HTTP port —
+ * uses is unaffected - run() always serves it on a fresh ephemeral HTTP port -
  * so the window simply reloads onto the new loopback URL, exactly like switching
  * the compute runtime.
  */
@@ -596,7 +698,7 @@ async function writeServerSettings(settings: ServerSettings): Promise<void> {
 
 function buildMenu(): void {
   // The web app's own toolbar + Settings dialog are the entire UI, so there's no
-  // in-window menu bar — it was just chrome (compute backends, library folder
+  // in-window menu bar - it was just chrome (compute backends, library folder
   // and logs now live in the desktop section of the web app's Settings dialog).
   // macOS still needs a menu for Cmd+Q, clipboard shortcuts and About, and it
   // lives in the global bar (no window-space cost), so keep a standard minimal
@@ -623,7 +725,7 @@ function overlayFor(accel: Accel | null): string | null {
 
 /**
  * Move a directory tree, falling back to copy-then-delete when `rename` can't
- * cross filesystems (EXDEV) — the common case here, since the whole point is
+ * cross filesystems (EXDEV) - the common case here, since the whole point is
  * letting a user move the multi-GB overlay onto a *different* drive. A missing
  * source is a no-op; a stale destination is cleared first so the move is clean.
  */
@@ -637,7 +739,7 @@ async function moveDir(from: string, to: string): Promise<void> {
     if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
     // Cross-filesystem move: copy then delete the source. If the copy fails
     // partway (e.g. the target drive fills up), clear the partial copy so we
-    // don't leave multiple GB of orphaned junk behind, then rethrow — the
+    // don't leave multiple GB of orphaned junk behind, then rethrow - the
     // source is still intact for a retry.
     try {
       await cp(from, to, { recursive: true });
@@ -656,7 +758,7 @@ async function moveDir(from: string, to: string): Promise<void> {
  * is *active* the live Python process holds its files open, so we stop the backend
  * before moving and relaunch it on the new path afterwards; an inactive overlay
  * (or none) needs no restart. The chosen location is persisted, except when it
- * equals the per-platform default — then we clear the override so it keeps
+ * equals the per-platform default - then we clear the override so it keeps
  * tracking the install dir across updates.
  */
 async function changeBackendsLocation(rawDir: string): Promise<void> {
@@ -685,7 +787,7 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
   // Whether the move succeeded or threw, relaunch the backend if we stopped it.
   // On success it comes up on the new path; on failure backendsRoot() is still
   // the old root (setBackendsRoot wasn't reached), so it uses the original
-  // overlay — the user gets the error without losing a running app. A relaunch
+  // overlay - the user gets the error without losing a running app. A relaunch
   // failure must not mask the original move error, so only surface it when the
   // move itself succeeded.
   if (active) {
@@ -709,8 +811,20 @@ function deviceFor(accel: Accel | null): string | undefined {
   return 'cpu';
 }
 
-/** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
+/**
+ * Spawn the backend (bundled env + optional GPU overlay), inject the loopback
+ * session, load the UI.
+ *
+ * `navigate: false` starts the server and leaves the window where it is. That
+ * is what lets first-run setup read the library while a GPU runtime downloads:
+ * the reading is disk and CPU work with nothing to wait for, the download is
+ * network, and the window stays on the setup screen until both are done.
+ */
+async function startAndLoad(
+  accel: Accel | null,
+  recovery: StartupRecovery = {},
+  navigate = true,
+): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -723,11 +837,10 @@ async function startAndLoad(accel: Accel | null, repairPermissions = false): Pro
       );
     }
   });
-  const running = await serverProcess.start(
-    overlayFor(accel),
-    deviceFor(accel),
-    repairPermissions,
-  );
+  const running = await serverProcess.start(overlayFor(accel), deviceFor(accel), recovery);
+  // Setup talks to this server while the GPU runtime downloads, so where it is
+  // and how to authenticate to it outlive this function.
+  runningServer = { url: running.url, sessionToken: running.sessionToken };
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -740,8 +853,9 @@ async function startAndLoad(accel: Accel | null, repairPermissions = false): Pro
     sameSite: 'lax',
   });
 
-  sendPhase({ phase: 'ready', url: running.url });
   currentUrl = running.url;
+  if (!navigate) return;
+  sendPhase({ phase: 'ready', url: running.url });
   await mainWindow?.loadURL(running.url);
 }
 
@@ -758,7 +872,7 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  * CPU/Metal env when startup fails while a GPU overlay is active: deactivate the
  * overlay (dir kept on disk for reinstall/inspection), show the fallback dialog,
  * retry once on CPU (see {@link launchWithOverlayFallback}). EVERY launch site
- * that can start with a non-null overlay must go through this wrapper — a broken
+ * that can start with a non-null overlay must go through this wrapper - a broken
  * overlay must never leave the app dead, and because the fallback ends with the
  * active-accel state cleared, a state read AFTER the launch can never report a
  * phantom-active GPU with no backend running (the accel:use zombie, 2026-07-20).
@@ -766,16 +880,97 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  */
 async function startWithOverlayFallback(
   accel: Accel | null,
-  repairPermissions = false,
+  recovery: StartupRecovery = {},
+  navigate = true,
 ): Promise<void> {
+  // An app update replaces the bundled site-packages wholesale, leaving an
+  // overlay's copies of shared dependencies shadowing versions they were never
+  // resolved against - which kills the backend on import without anyone having
+  // touched the overlay. Re-prune against the current bundle first; it is a
+  // no-op once the marker matches this app version, and it never throws.
+  //
+  // Here rather than in activeOverlayAccel() because this is the chokepoint
+  // EVERY overlay launch passes through, including `accel:use` - which is the
+  // path a user takes to re-enable an accelerator the fallback just turned off,
+  // i.e. precisely the overlay most likely to need repairing.
+  if (accel) await manager.repairIfStale(accel, app.getVersion());
   await launchWithOverlayFallback(accel, {
-    start: (candidate) => startAndLoad(candidate, repairPermissions),
+    start: (candidate) => startAndLoad(candidate, recovery, navigate),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
-    // Permission failures are unrelated to an accelerator. Preserve the active
-    // overlay and let boot() offer the dedicated recovery dialog.
-    shouldFallback: (error) => !isPermissionRepairRequired(error),
+    // Permission failures and an unopenable library database are unrelated to
+    // an accelerator: retrying on the CPU env fails identically and throws the
+    // typed error away. Preserve the active overlay and let the caller offer
+    // the dedicated recovery dialog.
+    shouldFallback: (error) => !isPermissionRepairRequired(error) && !isVaultUnusable(error),
   });
+}
+
+/**
+ * Start the backend from first-run setup, offering the permission repair the
+ * way `boot()` does.
+ *
+ * Setup starts the backend itself, so without this a library folder the backend
+ * refuses (a group-writable one, mode 775) came back to the setup screen as a
+ * bare rejection: the repair the app knows how to offer was never offered, and
+ * the reason never reached the person choosing the folder. Declining puts the
+ * setup screen back rather than quitting - the answer to "I will not use that
+ * folder" is to choose another one.
+ */
+async function startFromSetup(accel: Accel | null, navigate: boolean): Promise<void> {
+  try {
+    await startWithOverlayFallback(accel, {}, navigate);
+  } catch (caught) {
+    // A folder holding a database we cannot open is a folder choice, so the
+    // refusal returns to the picker rather than quitting: "choose another
+    // folder" is the answer, and here it is one click away.
+    if (isVaultUnusable(caught)) {
+      if (!(await offerVaultRecreation(caught, 'Choose Another Folder'))) {
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+        throw new Error(
+          'PixlStash could not open the library database in that folder. Choose another folder, or let PixlStash start a new one there.',
+        );
+      }
+      await startWithOverlayFallback(accel, { recreateVault: true }, navigate);
+      return;
+    }
+    if (!isPermissionRepairRequired(caught)) throw caught;
+    if (!(await offerPermissionRepair(caught))) {
+      await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+      throw new Error(
+        'PixlStash will not open a library with those permissions. Choose another folder, or allow the repair.',
+      );
+    }
+    // Exactly one user-authorised retry, as boot() does. Python rechecks
+    // ownership, type and inode before changing any recorded path.
+    await startWithOverlayFallback(accel, { repairPermissions: true }, navigate);
+  }
+}
+
+/**
+ * Ask whether the library database that will not open may be set aside.
+ *
+ * A native box rather than a styled screen: unlike the permission repair this
+ * is one file, one sentence of consequence and one decision, and it can appear
+ * over the setup window the user is already looking at. The backend does the
+ * renaming - and only when the relaunch carries the flag this returning true
+ * sets - so a dismissed dialog changes nothing on disk.
+ */
+async function offerVaultRecreation(
+  error: VaultUnusableError,
+  declineLabel: string,
+): Promise<boolean> {
+  const result = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'PixlStash',
+    message: 'PixlStash could not open the library database',
+    detail: vaultRecoveryDialogDetail(error.report),
+    buttons: ['Start a New Library Database', declineLabel],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  return result.response === 0;
 }
 
 /**
@@ -878,11 +1073,7 @@ async function boot(): Promise<void> {
       try {
         // Exactly one user-authorised retry. Python rechecks ownership, type,
         // and inode before changing any recorded path.
-        if (isDevBackend()) {
-          await startAndLoad(null, true);
-        } else {
-          await startWithOverlayFallback(await activeOverlayAccel(), true);
-        }
+        await retryLaunch({ repairPermissions: true });
         return;
       } catch (retryError) {
         error = retryError;
@@ -891,9 +1082,32 @@ async function boot(): Promise<void> {
         // failed repair leaves the offer on screen with nothing happening.
         await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
       }
+    } else if (isVaultUnusable(error)) {
+      // Not first-run: there is no folder picker to send them back to, so the
+      // choice is starting over or quitting. Either way it is a question, not
+      // a traceback on the splash screen.
+      if (!(await offerVaultRecreation(error, 'Quit'))) {
+        app.quit();
+        return;
+      }
+      try {
+        await retryLaunch({ recreateVault: true });
+        return;
+      } catch (retryError) {
+        error = retryError;
+      }
     }
     sendPhase({ phase: 'error', message: (error as Error).message });
   }
+}
+
+/** The one authorised relaunch a recovery dialog buys, dev passthrough included. */
+async function retryLaunch(recovery: StartupRecovery): Promise<void> {
+  if (isDevBackend()) {
+    await startAndLoad(null, recovery);
+    return;
+  }
+  await startWithOverlayFallback(await activeOverlayAccel(), recovery);
 }
 
 /**
@@ -1014,9 +1228,25 @@ function registerIpc(): void {
   // registered only while that screen is actually waiting for an answer.
   ipcMain.handle('permissions:request', () => pendingPermissionRepair);
 
-  // ---- First-run setup wizard ----
+  // ---- The startup framework ----
+  //
+  // One screen, a list of steps, and main decides the list. First run asks all
+  // of them; a launch that owes the user only the new privacy question asks
+  // only that. Anything else that has to be settled before the app loads gets
+  // a step id here rather than a dialog over a half-loaded library.
 
   ipcMain.handle('setup:probe', async () => {
+    // A question the running app asked us to put in front of it: exactly that
+    // question, no library or compute step, and no config is rewritten when it
+    // is answered.
+    if (requestedStartupSteps.length) {
+      return {
+        steps: [...requestedStartupSteps, 'install'],
+        privacyVariant: 'upgrade',
+        defaults: {},
+        gpu: { available: false },
+      };
+    }
     const stdPath = await standaloneConfigPath();
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
@@ -1027,11 +1257,26 @@ function registerIpc(): void {
         ? resolvedImportedRoot
         : null;
     const gpu = gpuUpgrade();
+    const steps = ['library'];
+    // The compute question only exists on a machine that has something to
+    // choose between; the rail must not show a step that never comes.
+    if (gpu) steps.push('compute');
+    steps.push('privacy');
+    steps.push('install');
     return {
+      steps,
+      privacyVariant: 'fresh',
       importedFrom: imported ? stdPath : null,
       legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
-        imageRoot: importedImageRoot || defaultLibraryDir(),
+        // Two different answers need two different defaults. "Start empty" may
+        // name a folder that does not exist yet - that is the point of it. The
+        // "pictures I already have" answer must not: prefilling a path with
+        // nothing at it invites someone to accept it and open an empty
+        // library, so it is offered only when something is actually there.
+        existingRoot:
+          importedImageRoot && existsSync(importedImageRoot) ? importedImageRoot : null,
+        newRoot: defaultLibraryDir(),
         useGpu: Boolean(gpu),
         // Where the GPU runtime would install (only relevant when a GPU is
         // offered). On Windows this is inside the chosen install folder.
@@ -1042,6 +1287,13 @@ function registerIpc(): void {
         : { available: false },
     };
   });
+
+  // What is in the folder someone picked, for the verdict under the field: a
+  // library PixlStash made before, a folder of pictures, or nothing yet. Read
+  // only, and bounded - see InspectFolder.
+  ipcMain.handle('setup:inspect', async (_e, path?: string) =>
+    inspectFolder(path || '', bundledInterpreter()),
+  );
 
   ipcMain.handle('setup:pickFolder', async (_e, current?: string) => {
     const res = await dialog.showOpenDialog({
@@ -1061,76 +1313,94 @@ function registerIpc(): void {
         useGpu: boolean;
         installLocation?: string;
         importLegacyIdentity?: boolean;
+        telemetry?: Record<string, boolean> | null;
       },
     ) => {
-      if (!runtime) throw new Error('No bundled runtime available');
-      const imageRoot = (choices?.imageRoot || '').trim();
-      if (!imageRoot) throw new Error('Please choose a library folder.');
-
-      // Record where the GPU runtime should install (clearing the override when
-      // it matches the default, so it keeps tracking the install dir). Done
-      // before the overlay install below so the download lands in the right place.
-      const installLocation = (choices?.installLocation || '').trim();
-      if (installLocation) {
-        setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
+      // Answering a question the app asked for changes nothing about the
+      // install: park the answer and hand the window back.
+      if (requestedStartupSteps.length) {
+        writePendingTelemetry(choices?.telemetry ?? null);
+        requestedStartupSteps = [];
+        if (currentUrl) await mainWindow?.loadURL(currentUrl);
+        return;
       }
+
+      if (!runtime) throw new Error('No bundled runtime available');
 
       const configDir = dirname(serverConfigPath());
       // New credential directories are private even under umask 0002. Existing
       // ones are left to the explicit recovery dialog, never silently changed.
       mkdirPrivateIfMissing(configDir);
 
-      if (choices?.importLegacyIdentity) {
-        if (!detectedLegacyIdentitySource) {
-          throw new Error('No existing standalone PixlStash library was detected.');
-        }
-        if (resolve(imageRoot) !== detectedLegacyIdentitySource) {
-          throw new Error(
-            'To import its login and share links, keep the detected existing library selected.',
-          );
-        }
-        // Fail closed before a live desktop config exists. A nonzero CLI exit
-        // leaves the vault untouched and this exception keeps the setup screen
-        // open instead of booting a server that looks migrated but is not.
-        await prepareLegacyIdentity(
-          bundledInterpreter(),
-          hubPath(),
-          detectedLegacyIdentitySource,
-        );
-      }
-
-      // Write the desktop's own config only after any requested preparation
-      // succeeds. Declining consent writes no provenance marker and therefore
-      // imports zero legacy identity. Loopback HTTP; the active runtime drives
-      // the device (default_device left as auto).
-      writeFileSync(
-        serverConfigPath(),
-        JSON.stringify(
-          {
-            host: '127.0.0.1',
-            require_ssl: false,
-            image_root: imageRoot,
-            default_device: 'auto',
-          },
-          null,
-          2,
-        ),
-      );
-
-      // The GPU choice maps onto the existing on-demand wheel-overlay system.
-      const gpu = gpuUpgrade();
-      if (choices?.useGpu && gpu) {
-        await manager.installOverlay(gpu, runtime, (p) =>
-          mainWindow?.webContents.send('install:progress', p),
-        );
-        await manager.setActiveAccel(gpu);
-      } else {
-        await manager.setActiveAccel(null);
-      }
-
-      await startWithOverlayFallback(await activeOverlayAccel());
+      // The order of everything below is `runFirstRunSetup`; this is the wiring
+      // that gives it the real collaborators.
+      await runFirstRunSetup(choices, {
+        gpu: gpuUpgrade() ?? null,
+        legacyIdentitySource: detectedLegacyIdentitySource,
+        resolvePath: (path) => resolve(path),
+        setBackendsRoot: (location) =>
+          setBackendsRoot(normalizeBackendsRoot(location, defaultBackendsRoot())),
+        prepareLegacyIdentity: (source) =>
+          prepareLegacyIdentity(bundledInterpreter(), hubPath(), source),
+        // Loopback HTTP; the active runtime drives the device (default_device
+        // left as auto).
+        writeConfig: (imageRoot) =>
+          writeFileSync(
+            serverConfigPath(),
+            JSON.stringify(
+              {
+                host: '127.0.0.1',
+                require_ssl: false,
+                image_root: imageRoot,
+                default_device: 'auto',
+              },
+              null,
+              2,
+            ),
+          ),
+        parkTelemetry: writePendingTelemetry,
+        parkMapping: writePendingMapping,
+        setActiveAccel: (accel) => manager.setActiveAccel(accel),
+        activeOverlayAccel,
+        startBackend: startFromSetup,
+        installOverlay: (accel) =>
+          manager.installOverlay(
+            accel,
+            runtime as RuntimeInfo,
+            (p) => mainWindow?.webContents.send('install:progress', p),
+            app.getVersion(),
+          ),
+        readFolder: async (imageRoot) =>
+          runningServer
+            ? readLibraryFolder(
+                (url, init) => net.fetch(url, init),
+                runningServer.url,
+                runningServer.sessionToken,
+                imageRoot,
+                (progress) => sendPhase({ phase: 'reading', ...progress }),
+              )
+            : null,
+        announceReading: () => sendPhase({ phase: 'reading' }),
+      });
     },
   );
+
+  ipcMain.handle('startup:takePendingTelemetry', () => takePendingTelemetry());
+
+  ipcMain.handle('startup:takePendingMapping', () => takePendingMapping());
+
+  // The app asking for a question it cannot answer itself. It hands the window
+  // back to the startup framework rather than opening a dialog over a library
+  // that is already on screen; `setup:commit` brings the window back.
+  ipcMain.handle('startup:askQuestion', async (_e, step?: string) => {
+    if (step !== 'privacy') {
+      console.warn(`[startup] refusing an unknown startup step: ${step}`);
+      return false;
+    }
+    requestedStartupSteps = [step];
+    await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+    return true;
+  });
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
@@ -1201,10 +1471,10 @@ function registerIpc(): void {
   // shellCommand reports whether the command is *actually there*, not what the
   // preference says, and is null where there is nothing to install (an
   // unpackaged dev run has no durable launcher to point at) so Settings leaves
-  // the row out entirely. Enabling can be refused — by a `pixlstash` the user
-  // wrote themselves, or an unwritable home — and a switch stuck on over a
+  // the row out entirely. Enabling can be refused - by a `pixlstash` the user
+  // wrote themselves, or an unwritable home - and a switch stuck on over a
   // command that does not exist would be worse than one that snaps back with a
-  // reason — and on Windows the PATH edit can fail on its own, so the switch
+  // reason - and on Windows the PATH edit can fail on its own, so the switch
   // tracks whether the command is *reachable*, not merely written.
   // shellCommandDir is sent so the row can name where the command goes; the home
   // directory is abbreviated because the full path wraps the settings panel,
@@ -1258,7 +1528,7 @@ function registerIpc(): void {
   );
 
   // External server (remote access) settings. The loopback the window uses is
-  // never affected by these — only the optional second listener.
+  // never affected by these - only the optional second listener.
   ipcMain.handle('server:getSettings', () => readServerSettings());
   ipcMain.handle('server:setSettings', async (_e, settings: ServerSettings) => {
     await writeServerSettings(settings);
@@ -1299,10 +1569,20 @@ function registerIpc(): void {
 
   ipcMain.handle('accel:install', async (_e, accel: Accel) => {
     if (!runtime) throw new Error('No bundled runtime available');
-    await manager.installOverlay(accel, runtime, (p) =>
-      mainWindow?.webContents.send('install:progress', p),
+    // installOverlay wipes the target directory first, and a backend running on
+    // this overlay holds its DLLs open - on Windows that wipe fails outright.
+    // Await teardown for the same reason changeBackendsLocation does.
+    if ((await manager.getActiveAccel()) === accel) {
+      await serverProcess?.stop();
+      serverProcess = null;
+    }
+    await manager.installOverlay(
+      accel,
+      runtime,
+      (p) => mainWindow?.webContents.send('install:progress', p),
+      app.getVersion(),
     );
-    // If the freshly-installed overlay fails to start, fall back to CPU — the
+    // If the freshly-installed overlay fails to start, fall back to CPU - the
     // just-downloaded dir is kept (only the active state is cleared), and the
     // state returned below is computed AFTER, so it reflects the real outcome.
     await startWithOverlayFallback(accel);
@@ -1312,7 +1592,7 @@ function registerIpc(): void {
   ipcMain.handle('accel:use', async (_e, accel: Accel | null) => {
     // setActiveAccel BEFORE the start is fine only because the fallback wrapper
     // guarantees a failed overlay start ends with the active state cleared
-    // (deactivateOverlay) and a CPU backend running — and acceleratorState() is
+    // (deactivateOverlay) and a CPU backend running - and acceleratorState() is
     // computed AFTER, so the UI can never show a phantom-active GPU over a dead
     // backend (the 2026-07-20 zombie: active-accel.json said cu128, no server).
     await manager.setActiveAccel(accel);
@@ -1352,7 +1632,7 @@ function runCli(args: string[]): void {
   app.disableHardwareAcceleration();
   // Same reason, macOS side: drop the regular-app activation policy so this run
   // leaves no dock tile behind. Typed `Dock | undefined`, so the optional call
-  // is the platform check — unlike app.setActivationPolicy, which the typings
+  // is the platform check - unlike app.setActivationPolicy, which the typings
   // declare unconditionally but which does not exist off macOS.
   app.dock?.hide();
   const declared = declaredCliCommand();
@@ -1423,7 +1703,7 @@ if (cliArgs !== null) {
     tray = null;
     // Confirm the backend's process tree is gone BEFORE Electron exits. On
     // Windows the bundled python isn't reaped when we die, so a fire-and-forget
-    // stop can orphan it holding resources\python locked — which then wedges the
+    // stop can orphan it holding resources\python locked - which then wedges the
     // next over-the-top update at "Installing" (issue #486). Defer the quit once
     // while we tear down, then let it through.
     if (teardownComplete || !serverProcess) return;
@@ -1439,7 +1719,7 @@ if (cliArgs !== null) {
   app.on('window-all-closed', () => {
     // With hide-to-tray active the window only hides (never destroyed), so this
     // normally won't fire. It does fire when the tray is unavailable OR the user
-    // turned hide-to-tray off — in both cases closing the window should quit
+    // turned hide-to-tray off - in both cases closing the window should quit
     // (macOS keeps its usual dock behavior).
     if (process.platform !== 'darwin' && !(tray && hideToTrayOnClose)) app.quit();
   });

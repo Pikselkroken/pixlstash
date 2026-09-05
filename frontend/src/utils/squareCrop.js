@@ -17,7 +17,7 @@
  * Normalise the stored square-crop rectangle for a grid image.
  *
  * Returns null (→ caller falls back to object-fit:cover centring) when the AR
- * bitmap dims or the crop origin are missing — i.e. a picture that is still
+ * bitmap dims or the crop origin are missing - i.e. a picture that is still
  * being (re)processed during the one-time thumbnail-v2 upgrade regen.
  *
  * @param {Object} img - Grid image object.
@@ -25,7 +25,7 @@
  */
 export function squareCropParams(img) {
   if (!img) return null;
-  // Nullable while unprocessed. Reject null/undefined explicitly — Number(null)
+  // Nullable while unprocessed. Reject null/undefined explicitly - Number(null)
   // is 0 (would masquerade as a valid crop origin), so a bare Number() check is
   // not enough to trigger the fallback.
   if (img.square_crop_x == null || img.square_crop_y == null) return null;
@@ -73,7 +73,7 @@ export function squareCropImgStyle(img) {
     left: `${(-cx / side) * 100}%`,
     top: `${(-cy / side) * 100}%`,
     // Both dims are explicit and match the bitmap AR, so aspect-ratio must not
-    // fight them and object-fit is a no-op — set them defensively.
+    // fight them and object-fit is a no-op - set them defensively.
     aspectRatio: "auto",
     objectFit: "fill",
     // Rounded corners frame the cell (container), not this oversized img.

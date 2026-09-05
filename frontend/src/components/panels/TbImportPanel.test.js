@@ -14,6 +14,7 @@ vi.mock("../../api/projects", () => ({
 
 import { listProjects } from "../../api/projects";
 import TbImportPanel from "./TbImportPanel.vue";
+import { IMPORT_FILE_ACCEPT } from "../../utils/media.js";
 
 function mountPanel() {
   return mount(TbImportPanel, {
@@ -34,6 +35,21 @@ afterEach(() => {
 });
 
 describe("TbImportPanel hardening", () => {
+  it("offers the picker the shared import accept, not an undefined binding", async () => {
+    // A `:accept` bound to a name the <script setup> never imported renders no
+    // `accept` attribute at all - the picker then offers every file on the
+    // disk, and nothing about the markup looks wrong. This asserts the rendered
+    // attribute rather than the binding, because that is the difference.
+    const wrapper = mountPanel();
+    await flushPromises();
+
+    expect(wrapper.get(".tb-import-file-input").attributes("accept")).toBe(
+      IMPORT_FILE_ACCEPT,
+    );
+
+    wrapper.unmount();
+  });
+
   it("labels the project selector and exposes complete tab relationships", async () => {
     const wrapper = mountPanel();
     await flushPromises();

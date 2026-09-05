@@ -1,15 +1,15 @@
 """Fixtures for the suites that share one multi-project authz environment.
 
-Two files assert against the same world — the three projects, the shared set and
+Two files assert against the same world - the three projects, the shared set and
 the shared character, and the scoped tokens the #719/#721 leaks were reproduced
-with — so they live in one package and take the environment from this
+with - so they live in one package and take the environment from this
 ``conftest.py``.
 
 They used to share it by module-namespace copy instead
 (``env = _multi_project.env`` in the borrowing file), which is what a package
 conftest exists to replace: pytest resolves a fixture's parameters against the
 module it was collected in, so a copied fixture keeps working right up until it
-grows a dependency the copy never mentioned — then every test in the borrowing
+grows a dependency the copy never mentioned - then every test in the borrowing
 module errors at setup and nothing about the exporting module changes colour.
 Here ``env`` can take whatever it needs and both modules keep resolving it.
 
@@ -50,7 +50,7 @@ def _module_env():
 
     Booting a Server (migrations, vault start-up, route registration), importing
     two real pictures through the pipeline and tearing the lot down again is the
-    entire cost of this file — the assertions themselves are HTTP calls costing
+    entire cost of this file - the assertions themselves are HTTP calls costing
     milliseconds. It is paid once here; per-test isolation comes from the
     autouse ``env`` fixture below, which rebuilds the domain state and re-mints
     every credential.
@@ -65,7 +65,8 @@ def _module_env():
         client = TestClient(server.api, raise_server_exceptions=True)
         anon = TestClient(server.api, raise_server_exceptions=True)
         r = client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert r.status_code == 200, r.text
 
@@ -85,7 +86,7 @@ def _module_env():
 
         # Let the background pipeline finish with the two uploads ONCE, then
         # detach the finders that would keep rewriting what the tests seed. The
-        # alternative — waiting for quiescence before each seed — is the slower
+        # alternative - waiting for quiescence before each seed - is the slower
         # of the two by a wide margin, and it does not stop a sweep landing
         # halfway through the assertions that follow it.
         _wait_faces_extracted(server, [pic_a, pic_b])
@@ -112,14 +113,14 @@ def env(_module_env, request):
 
     Autouse rather than opt-in: a test added later that forgets to request
     ``env`` would otherwise inherit whatever the previous one left behind. That
-    holds for a test added to *either* suite in this package, and — because a
-    package conftest is scoped to its own directory — for nothing outside it.
+    holds for a test added to *either* suite in this package, and - because a
+    package conftest is scoped to its own directory - for nothing outside it.
 
     ``no_spa_fallback`` is pulled in explicitly below, and that is not
     decoration: pytest sets autouse fixtures up *before* the
     ``usefixtures``-requested ones of the same scope, so making this fixture
-    autouse moved its own ~25 HTTP calls — including the bare
-    ``status_code == 200`` positive control at the end — out from under the
+    autouse moved its own ~25 HTTP calls - including the bare
+    ``status_code == 200`` positive control at the end - out from under the
     anti-vacuity guard, where the SPA catch-all could have satisfied them
     (tests/authz_guard.py). Requesting it here puts them back under it.
 
@@ -134,8 +135,8 @@ def env(_module_env, request):
       Every one of those would leave a later test proving nothing.
     * **The credentials.** Every token row is deleted and re-minted per test, so
       a revoked or stale token can never masquerade as a scope refusal. Note
-      that the ids themselves recycle — SQLite hands project 1 straight back
-      after a whole-table delete — so a surviving token from a previous test
+      that the ids themselves recycle - SQLite hands project 1 straight back
+      after a whole-table delete - so a surviving token from a previous test
       would still *authenticate*, and against whatever now occupies its id.
       Deleting the rows is therefore the only thing standing between this suite
       and an isolation guarantee resting on rowid reuse. It also keeps token
@@ -150,10 +151,10 @@ def env(_module_env, request):
     _reset_domain_state(server, m.baseline)
 
     r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        f"{API}/login", json={"username": "owner", "password": "example-owner-password"}
     )
     assert r.status_code == 200, (
-        f"owner re-login failed — the shared environment is dirty: {r.text}"
+        f"owner re-login failed - the shared environment is dirty: {r.text}"
     )
 
     ids = _build_fixture_entities(client, m.pic_a)
@@ -185,7 +186,7 @@ def env(_module_env, request):
             )
             assert probe.status_code == 200, (
                 f"the fresh {label} token cannot read its own project "
-                f"({probe.status_code}: {probe.text[:200]}) — every 403 asserted "
+                f"({probe.status_code}: {probe.text[:200]}) - every 403 asserted "
                 f"in this test would prove nothing"
             )
 

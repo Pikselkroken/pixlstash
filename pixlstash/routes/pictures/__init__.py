@@ -5,6 +5,9 @@ from pixlstash.utils.service.picture_stats import clear_stats_cache  # noqa: F40
 from ._faces import FaceListResponse  # noqa: F401
 from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
+from pixlstash.routes.library_layout import (
+    register_picture_routes as register_layout_picture_routes,
+)
 from . import (
     _anomaly,
     _character_likeness,
@@ -39,6 +42,12 @@ def create_router(server) -> APIRouter:
     # /pictures/{id}/{field} catch-all registered in _crud.
     _anomaly.register_routes(router, server)
     _character_likeness.register_routes(router, server)
+    # Same reason, and the reason it lives outside this package: the v1.11
+    # layout routes are one feature with the library-level settings beside them
+    # (routes/library_layout.py), but GET /pictures/{id}/layout is the
+    # {id}/{field} shape and would be answered by the catch-all if it were
+    # registered after _crud.
+    register_layout_picture_routes(router, server)
     _crud.register_routes(router, server)
     _listing.register_routes(router, server)
     return router

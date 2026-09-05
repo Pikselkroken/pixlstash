@@ -7,6 +7,28 @@ from pixlstash.utils.vram_utils import query_total_vram_mb, vram_limited_batch_c
 
 logger = get_logger(__name__)
 
+# Share of the configured budget each ORT CUDA session may hold in its arena.
+# A cap, not a reservation: an arena only grows to what a run needs, so the
+# caps may sum past 1.0 as long as the arenas that actually fill do not.
+# Starting points, to be re-measured (plan §9.1) before moving any of these.
+# WD14 at 448 px is the one that balloons. ``FaceAnalysis`` hands one dict to
+# all five InsightFace sessions, so the share is sized for the largest:
+# recognition (w600k_r50, 112 px) measured ~650 MB at 16 faces and ~1.0 GB
+# at 32 (kSameAsRequested, HEURISTIC); detection at 256 px, batch 1, is
+# ~70-90 MB and the landmark/attribute sessions are smaller still. The
+# PixlStash tagger (~20 %) and CLIP allocate through torch, not ORT, and take
+# what these leave.
+ORT_ARENA_SHARE = {
+    "wd14": 0.40,
+    # None: uncapped. InsightFace was capped at 0.15 for one evening and it
+    # failed in the field within the hour - "Available memory of 43939328 is
+    # smaller than requested bytes of 102908160": five sessions sharing one
+    # limit, and `kSameAsRequested` fragmenting the detector's arena until a
+    # 98 MB request found 42 MB free. Its arena never ballooned (recognition
+    # is chunked, detection is per image); WD14's did, and WD14 keeps its cap.
+    "insightface_session": None,
+}
+
 
 class VramBudget:
     """Stateful VRAM budget for GPU-memory-aware batch sizing.
@@ -91,6 +113,36 @@ class VramBudget:
             free_str,
             self._max_vram_usage_mb / 1024.0,
         )
+
+    def ort_cuda_provider_options(self, share: float | None) -> dict[str, object]:
+        """CUDAExecutionProvider options for one ONNX Runtime session.
+
+        ORT's default arena doubles on every growth (``kNextPowerOfTwo``) and
+        never shrinks, which is where the "20+ GB" arenas came from and why
+        the finders used to tear sessions down on every drain.
+        ``kSameAsRequested`` grows by what was asked for, and ``HEURISTIC``
+        skips the EXHAUSTIVE cudnn search that cost seconds per reload for an
+        input size that never changes. The limit is ``share`` of the budget
+        and is left unset when there is none: a cap nobody configured is an
+        OOM nobody asked for.
+
+        Args:
+            share: Fraction of the configured budget, from
+                :data:`ORT_ARENA_SHARE`; ``None`` for a session that must never
+                be capped (only the cudnn search setting applies).
+
+        Returns:
+            Options dict for ``provider_options`` / a ``providers`` tuple.
+        """
+        options: dict[str, object] = {"cudnn_conv_algo_search": "HEURISTIC"}
+        if share is None:
+            # Uncapped, and ORT's own arena strategy with it: kSameAsRequested
+            # only pays off against a limit, and fragments without one.
+            return options
+        options["arena_extend_strategy"] = "kSameAsRequested"
+        if self._max_vram_usage_mb is not None:
+            options["gpu_mem_limit"] = int(self._max_vram_usage_mb * share) * 1024**2
+        return options
 
     def limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
         """Return the maximum batch size that fits within the configured budget.

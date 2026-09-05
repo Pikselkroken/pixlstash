@@ -155,7 +155,7 @@ beforeEach(() => {
   });
 });
 
-describe("useDedupStore — the policy", () => {
+describe("useDedupStore - the policy", () => {
   // Every bound the UI renders comes from here. A threshold stated in the
   // client as well would be the same number in two places that can drift.
   it("loads the bounds and adopts the server's default threshold", async () => {
@@ -186,7 +186,7 @@ describe("useDedupStore — the policy", () => {
   });
 });
 
-describe("useDedupStore — loading the queue", () => {
+describe("useDedupStore - loading the queue", () => {
   it("loads the first page and focuses the first group", async () => {
     servePage([group("g1"), group("g2")], { total: 2 });
     const store = useDedupStore();
@@ -269,7 +269,7 @@ describe("useDedupStore — loading the queue", () => {
   });
 });
 
-describe("useDedupStore — paging", () => {
+describe("useDedupStore - paging", () => {
   it("appends the next page at the next offset", async () => {
     listGroups.mockResolvedValueOnce({
       groups: [group("g1")],
@@ -529,7 +529,7 @@ describe("useDedupStore — paging", () => {
   });
 });
 
-describe("useDedupStore — the focus", () => {
+describe("useDedupStore - the focus", () => {
   it("clamps the focus to the list", async () => {
     servePage([group("g1"), group("g2")], { total: 2 });
     const store = useDedupStore();
@@ -552,7 +552,7 @@ describe("useDedupStore — the focus", () => {
   });
 });
 
-describe("useDedupStore — jumping to the true end (focusEnd)", () => {
+describe("useDedupStore - jumping to the true end (focusEnd)", () => {
   // The regression this pins: End focused the last LOADED row, so on a paging
   // queue it had to be pressed once per page to actually reach the end. The
   // total is known a priori, so one gesture must land on the real last group.
@@ -693,7 +693,7 @@ describe("useDedupStore — jumping to the true end (focusEnd)", () => {
   });
 
   // The user's words: "we know how far down we have to go so we should know
-  // which cards we have to fetch". Over a large gap End is random access —
+  // which cards we have to fetch". Over a large gap End is random access -
   // ONE offset request for the last page, no walk through the middle.
   it("End over a large gap fetches the tail page directly and rebases", async () => {
     servePage(
@@ -866,7 +866,7 @@ describe("useDedupStore — jumping to the true end (focusEnd)", () => {
   });
 });
 
-describe("useDedupStore — cover and exclusion", () => {
+describe("useDedupStore - cover and exclusion", () => {
   // The server runs the same formula and ships its answer on the group.
   it("takes the server's cover preselection", async () => {
     servePage([group("g1", 3, { cover_picture_id: 102 })], { total: 1 });
@@ -950,7 +950,7 @@ describe("useDedupStore — cover and exclusion", () => {
   });
 });
 
-describe("useDedupStore — verdicts and auto-advance", () => {
+describe("useDedupStore - verdicts and auto-advance", () => {
   it("stacks with the cover and the exclusions in force", async () => {
     servePage([group("g1", 3), group("g2")], { total: 2 });
     stackGroup.mockResolvedValue({ stack_id: 7, batch_id: "b1" });
@@ -1122,7 +1122,7 @@ describe("useDedupStore — verdicts and auto-advance", () => {
   });
 });
 
-describe("useDedupStore — the verdict receipt", () => {
+describe("useDedupStore - the verdict receipt", () => {
   // The regression this pins: the dedup verdict service emits no WebSocket
   // event, so the echo-driven receipt pipeline never fired and a stack
   // verdict produced no undo pill. The verdict RESPONSE now triggers the
@@ -1140,7 +1140,7 @@ describe("useDedupStore — the verdict receipt", () => {
     });
   });
 
-  it("narrates a bulk stack once — one gesture, one receipt", async () => {
+  it("narrates a bulk stack once - one gesture, one receipt", async () => {
     servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
     applyVerdictBatch.mockResolvedValue({
       batch_id: "cli-1",
@@ -1177,7 +1177,7 @@ describe("useDedupStore — the verdict receipt", () => {
   });
 
   // A backend that has made keep-separate undoable mirrors the stack
-  // response, batch_id included — and gets the same receipt.
+  // response, batch_id included - and gets the same receipt.
   it("narrates a keep-separate the backend recorded", async () => {
     servePage([group("g1")], { total: 1 });
     keepGroupSeparate.mockResolvedValue({
@@ -1199,7 +1199,7 @@ describe("useDedupStore — the verdict receipt", () => {
   });
 });
 
-describe("useDedupStore — reopen", () => {
+describe("useDedupStore - reopen", () => {
   it("reopens a decided group and reloads the queue", async () => {
     servePage([], { total: 0 });
     reopenGroup.mockResolvedValue({
@@ -1256,7 +1256,7 @@ describe("useDedupStore — reopen", () => {
   });
 });
 
-describe("useDedupStore — the tier gate", () => {
+describe("useDedupStore - the tier gate", () => {
   it("enabling tier 3 pulls tier 2 in with it", async () => {
     servePage([]);
     const store = useDedupStore();
@@ -1304,7 +1304,7 @@ describe("useDedupStore — the tier gate", () => {
   });
 });
 
-describe("useDedupStore — the decided page's verdict gate", () => {
+describe("useDedupStore - the decided page's verdict gate", () => {
   /** A store on the Decided page with the policy loaded. */
   async function decidedStore(over = {}) {
     servePage([], { by_verdict: { stacked: 7, keep_separate: 3 }, ...over });
@@ -1371,7 +1371,7 @@ describe("useDedupStore — the decided page's verdict gate", () => {
   });
 
   // The counts are the MENU's, so they must survive the filter that hides
-  // their rows — otherwise a hidden verdict reads as "there are none".
+  // their rows - otherwise a hidden verdict reads as "there are none".
   it("keeps the unfiltered counts while a verdict is hidden", async () => {
     const store = await decidedStore();
     await store.setVerdictEnabled("keep_separate", false);
@@ -1401,7 +1401,7 @@ describe("useDedupStore — the decided page's verdict gate", () => {
     expect(listGroups).not.toHaveBeenCalled();
   });
 
-  // The decided page is a place the user visits, not a lens they set — and
+  // The decided page is a place the user visits, not a lens they set - and
   // neither is its gate, so arriving starts from every decision.
   it("clears the gate when the queue is opened", async () => {
     const store = await decidedStore();
@@ -1428,7 +1428,7 @@ describe("useDedupStore — the decided page's verdict gate", () => {
   });
 });
 
-describe("useDedupStore — the threshold", () => {
+describe("useDedupStore - the threshold", () => {
   // Below the floor is a 400 by design, so the client must not send one.
   it("clamps to the server's published bounds", async () => {
     servePage([]);
@@ -1462,7 +1462,7 @@ describe("useDedupStore — the threshold", () => {
   });
 });
 
-describe("useDedupStore — scope", () => {
+describe("useDedupStore - scope", () => {
   it("opens a scoped queue and remembers the pill", async () => {
     servePage([group("g1")], { total: 1 });
     const store = useDedupStore();
@@ -1503,7 +1503,7 @@ describe("useDedupStore — scope", () => {
   });
 });
 
-describe("useDedupStore — counts", () => {
+describe("useDedupStore - counts", () => {
   it("reads the badge, the tier split and the scan in one call", async () => {
     getCounts.mockResolvedValue({
       unresolved_groups: 143,
@@ -1620,7 +1620,7 @@ describe("useDedupStore — counts", () => {
   });
 });
 
-describe("useDedupStore — multi-select", () => {
+describe("useDedupStore - multi-select", () => {
   async function openWith(groups) {
     servePage(groups);
     const store = useDedupStore();
@@ -1855,7 +1855,7 @@ describe("useDedupStore — multi-select", () => {
   });
 });
 
-describe("useDedupStore — remembered filters", () => {
+describe("useDedupStore - remembered filters", () => {
   // The tier gate and threshold are a lens the user sets; a full page
   // refresh (or the next session) must reopen the queue through it rather
   // than on the server defaults. Same persistence tier as the queue's
@@ -1910,10 +1910,10 @@ describe("useDedupStore — remembered filters", () => {
   });
 });
 
-describe("useDedupStore — the Decided flip vs the scan poll", () => {
+describe("useDedupStore - the Decided flip vs the scan poll", () => {
   // The user's report, verbatim sequence: open the queue mid-scan ("Still
   // scanning…" streaming, cache still empty), flip to Decided, decided rows
-  // land — and then the scan poll's OWN reload, fired while the list was
+  // land - and then the scan poll's OWN reload, fired while the list was
   // empty and still on the wire from before the flip, lands last and writes
   // the open queue's empty page over the decided rows. "…which then promptly
   // disappears and I get nothing."
@@ -1967,7 +1967,7 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
       expect(store.showingDecided).toBe(true);
       expect(store.groups.map((g) => g.signature)).toEqual(["g9"]);
 
-      // ...and the stale open-queue response (empty — the scan was still
+      // ...and the stale open-queue response (empty - the scan was still
       // streaming when it was requested) lands LAST. It must be discarded,
       // never written.
       resolvePollReload({
@@ -1989,7 +1989,7 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
   });
 });
 
-describe("useDedupStore — scans and bulk auto-stack", () => {
+describe("useDedupStore - scans and bulk auto-stack", () => {
   it("reloads a populated queue once when a scan becomes terminal", async () => {
     vi.useFakeTimers();
     try {
@@ -2395,7 +2395,7 @@ describe("useDedupStore — scans and bulk auto-stack", () => {
   });
 });
 
-describe("useDedupStore — the thumbnail size", () => {
+describe("useDedupStore - the thumbnail size", () => {
   // The size is remembered in localStorage, so each case starts from a browser
   // that has never been told one.
   beforeEach(() => {
@@ -2439,7 +2439,7 @@ describe("useDedupStore — the thumbnail size", () => {
   });
 });
 
-describe("useDedupStore — Ctrl+A", () => {
+describe("useDedupStore - Ctrl+A", () => {
   // The bug this replaces: select-all took whatever pages had been fetched, so
   // the gesture meant "40 groups" or "300" depending on how far the user had
   // scrolled, and nothing said which.

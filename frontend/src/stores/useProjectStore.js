@@ -1,4 +1,4 @@
-// useProjectStore.js — which project the app is scoped to, and the entity →
+// useProjectStore.js - which project the app is scoped to, and the entity →
 // project mappings the grid uses to resolve that scope.
 //
 // ── Security (issue #655, found by the store matrix rather than the issue's
@@ -35,7 +35,7 @@ export const useProjectStore = defineStore("project", () => {
   }
 
   // Written by the sidebar, never fetched here, so there is no in-flight
-  // response to guard — only the accumulated maps and the active scope.
+  // response to guard - only the accumulated maps and the active scope.
   const unsubscribeSessionReset = onSessionReset(reset);
   onScopeDispose(() => unsubscribeSessionReset());
 

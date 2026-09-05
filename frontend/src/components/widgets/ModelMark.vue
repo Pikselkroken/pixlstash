@@ -4,8 +4,8 @@
        image's corners (`overflow: hidden`) and draw something outside its own
        edge, which is what a detached ring is.
 
-       `aria-hidden` on the picture — the row's own name already says which
-       model this is — but NOT on the ring's label, which is the only thing on
+       `aria-hidden` on the picture - the row's own name already says which
+       model this is - but NOT on the ring's label, which is the only thing on
        the row that says what the model is assigned to now that the column is
        gone (#904). -->
   <span class="mmark" :class="ringClass" :title="ring?.label || undefined">
@@ -17,8 +17,8 @@
            even requested. Keyed, the element that failed keeps its own `src`
            for as long as it exists, so a late error from it re-reports the
            failure already recorded and `dropFace` swallows it as a duplicate.
-           (The listener does NOT die with the replaced node — Vue leaves it
-           attached — which is exactly why the frozen `src` is what matters.) -->
+           (The listener does NOT die with the replaced node - Vue leaves it
+           attached - which is exactly why the frozen `src` is what matters.) -->
       <img
         v-if="faceUrl"
         :key="faceUrl"
@@ -53,8 +53,8 @@
 // The shelf's identity slot (shelf plan, the sixth verb), wearing the
 // assignment ring the resolved design puts on it (#904).
 //
-// **Unset is never blank.** PixlStash generates no sample for a checkpoint — it
-// registers one in place, possibly at 24 GB — and 37% of real adapters carry no
+// **Unset is never blank.** PixlStash generates no sample for a checkpoint - it
+// registers one in place, possibly at 24 GB - and 37% of real adapters carry no
 // title, base model or trigger either, so an empty slot is the common case
 // rather than the edge one. A row with no icon draws a generated mark computed
 // at render from the row itself.
@@ -102,7 +102,7 @@ const iconUrl = computed(() =>
 
 // The candidates that 404ed, not a single "it failed" flag: the chain below
 // has two steps, and a flag set by the first one would take the second down
-// with it — a model whose icon file is missing would draw nothing rather than
+// with it - a model whose icon file is missing would draw nothing rather than
 // falling through to the face of whoever it is assigned to.
 const failed = ref([]);
 
@@ -125,7 +125,7 @@ function dropFace(event) {
 // shelf's `v-for` (ModelShelf.vue), so every parent render hands this component
 // a new-but-identical ring object; a getter returning an array or the object
 // itself compares unequal each time, and the reset would fire on every keystroke
-// in the filter box — putting the mark back on the URL that just 404ed.
+// in the filter box - putting the mark back on the URL that just 404ed.
 watch(
   () =>
     `${iconUrl.value}|${props.ring?.type}|${props.ring?.id}|${props.ring?.icon}`,
@@ -138,7 +138,7 @@ watch(
  * The face inside the ring, in priority order.
  *
  * 1. The model's OWN icon, always: somebody chose that picture for this file.
- * 2. The icon of whoever it is assigned to, if it carries one — a picture set's
+ * 2. The icon of whoever it is assigned to, if it carries one - a picture set's
  *    `set_icon` is what its thumbnail was replaced BY, and the sidebar already
  *    draws the set that way, in the same colour or the same theme ink.
  *    Deliberately not fallible: an icon is a name in a font rather than a
@@ -146,7 +146,7 @@ watch(
  *    once a set carries one.
  * 3. The face of whoever it is assigned to. A LoRA of Sarah with no icon of
  *    its own is far better identified by Sarah's reference face than by the
- *    letters `SA` — and the ring around it is already that person's colour, so
+ *    letters `SA` - and the ring around it is already that person's colour, so
  *    the two halves say one thing.
  * 4. The generated mark. A character with no reference face and a set with no
  *    pictures both 404 their thumbnail, and an empty square would read as a
@@ -157,7 +157,7 @@ watch(
  * assigned face, and then to the mark, rather than sitting on a broken image.
  *
  * Addressed by URL rather than fetched as a blob, so the browser caches one
- * response however many rows borrow the same face — which is the common case,
+ * response however many rows borrow the same face - which is the common case,
  * a cast of characters across 1,800 adapters.
  */
 const faceUrl = computed(() => {
@@ -220,7 +220,7 @@ const ringClass = computed(() =>
 /* The initials carry their own colour derived from the frozen 48, so the
    contrast pair is fixed rather than themed: a mark that inverted with the
    theme would be a different mark for the same model. Both halves are bound
-   inline because `generatedMark` hands them out together — the tile is
+   inline because `generatedMark` hands them out together - the tile is
    renormalised to a pinned lightness precisely so the ink can stay constant,
    and splitting the pair across inline style and a stylesheet is what would
    let one of them change without the other. */
@@ -242,7 +242,7 @@ const ringClass = computed(() =>
 
    The 2px GAP is what makes it legible. A ring drawn directly against an
    arbitrary thumbnail is not one contrast problem but one per image; detached,
-   its inner edge sits on the row background — a known colour in both themes —
+   its inner edge sits on the row background - a known colour in both themes -
    so it becomes the same solved problem as an opaque chip while the picture
    stays. The hue is bound inline because it is per-entity data; everything that
    is a decision rather than a datum is here. */

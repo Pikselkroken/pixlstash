@@ -1,7 +1,7 @@
 """User-supplied tagger plugin discovery.
 
 Deliberately constructed with ``first_party=[]`` so no heavy first-party
-plugin (and therefore no torch) is ever imported — that keeps this file cheap
+plugin (and therefore no torch) is ever imported - that keeps this file cheap
 enough to block the gate.
 """
 
@@ -172,7 +172,7 @@ def test_imported_subclass_is_not_registered(tmp_path):
     mgr = _manager(tmp_path)
 
     # "defines.py" sorts first, so its module is importable by the time
-    # "imports.py" runs — but the imported class must not be registered twice.
+    # "imports.py" runs - but the imported class must not be registered twice.
     assert mgr.plugin_names() == ["defined_captioner"]
     assert [e["name"] for e in mgr.list_errors()] == ["imports"]
 
@@ -196,7 +196,7 @@ def test_plugin_raising_in_parameter_schema_is_rejected_not_registered(tmp_path)
 
     ``plugin_schema()`` is called unguarded by the route *and* by
     ``fill_defaults()`` on library open, so a plugin that survives
-    registration and blows up there takes the whole screen — and the boot —
+    registration and blows up there takes the whole screen - and the boot -
     down with it.
     """
     body = _PLUGIN_BODY.format(cls="Late", name="late_captioner").replace(
@@ -253,7 +253,7 @@ def test_plugin_querying_the_manager_at_import_does_not_deadlock(tmp_path):
     registry._manager = TaggerPluginManager(user_dir=str(tmp_path), first_party=[])
     try:
         # Reloaded on a worker so a regression here fails red in seconds
-        # instead of hanging — and burning — the whole CI shard.
+        # instead of hanging - and burning - the whole CI shard.
         worker = threading.Thread(target=registry._manager.reload, daemon=True)
         worker.start()
         worker.join(timeout=30)

@@ -25,7 +25,7 @@ export function isEditableElement(el) {
  *
  * Checks the event target AND `document.activeElement`, because a keydown can
  * be delivered to an ancestor (or to `body`) while focus genuinely sits in a
- * field — a handler that only inspected the target would steal those keys.
+ * field - a handler that only inspected the target would steal those keys.
  *
  * Two call sites deliberately do NOT use this and keep their own predicate:
  * `useDedupQueueKeyboard` also treats a Vuetify slider/spinner thumb as owning

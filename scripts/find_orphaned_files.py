@@ -5,18 +5,18 @@ This is the disk→DB direction. The complementary ``MissingFilePurgeTask``
 handles DB→disk (picture rows whose file is gone). Orphaned files typically
 accumulate from:
 
-  * restoring an older snapshot — pictures imported *after* that snapshot keep
+  * restoring an older snapshot - pictures imported *after* that snapshot keep
     their files on disk but lose their DB row;
   * crashes between writing a file and committing its row;
   * manual edits to the image folder.
 
 What counts as "not orphaned" (kept):
   * every managed picture file (``Picture.file_path`` joined to image_root);
-  * its thumbnail ``{stem}_thumb.webp``;
+  * its pre-#1164 sibling thumbnail ``{stem}_thumb.webp``;
   * its sidecar caption ``{stem}.txt`` / ``{stem}.caption``;
   * system content under image_root: ``vault.db`` (+ ``-wal``/``-shm``/
-    ``-journal``), and the ``snapshots/``, ``.ref_thumbs/``, ``tmp/`` and
-    ``.orphan_trash/`` directories.
+    ``-journal``), and the ``snapshots/``, ``.pixlstash-thumbnails/``,
+    ``.ref_thumbs/``, ``tmp/`` and ``.orphan_trash/`` directories.
 
 Reference-folder pictures have absolute ``file_path`` (outside image_root), so
 they are never scanned.
@@ -45,7 +45,13 @@ _SIDECAR_EXTENSIONS = (".txt", ".caption")
 
 # Top-level directories under image_root that hold system / derived content
 # and must never be treated as orphans. Pruned from the walk entirely.
-_EXCLUDED_DIRS = {"snapshots", ".ref_thumbs", "tmp", ".orphan_trash"}
+_EXCLUDED_DIRS = {
+    "snapshots",
+    ".pixlstash-thumbnails",
+    ".ref_thumbs",
+    "tmp",
+    ".orphan_trash",
+}
 
 # System files that legitimately live at the image_root top level.
 _EXCLUDED_FILES = {
@@ -137,7 +143,7 @@ def _trash_target(image_root: str, orphan: str) -> str:
 
 def main() -> None:
     # Windows consoles (and piped stdout) default to cp1252, which can't
-    # encode the ✓/… glyphs this script prints — emitting one raises
+    # encode the ✓/… glyphs this script prints - emitting one raises
     # UnicodeEncodeError. Force UTF-8 so output is identical on every platform.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):

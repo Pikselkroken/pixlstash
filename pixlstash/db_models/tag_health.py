@@ -30,12 +30,12 @@ class TagHealth(SQLModel, table=True):
             the tag (never a live O(N²) sweep).
         verified_pct: share of the tag's prediction rows with a non-UNKNOWN
             ledger ``label_state`` ("somebody looked").
-        boundary_pct: share of predictions in the ambiguous middle band —
+        boundary_pct: share of predictions in the ambiguous middle band -
             flags fuzzy tag *definitions*.
         overturn_rate: ACCEPTED / (ACCEPTED + DISMISSED) over the tag's
             reviewed suggestions; NULL when the tag has no reviewed history.
         model_disputes: human-frozen labels the current prediction strongly
-            contradicts (surfaced, never auto-requeued — human outranks model).
+            contradicts (surfaced, never auto-requeued - human outranks model).
         has_model: the tag has prediction rows for the current model version;
             tags with no predictions at all still get a row with
             ``has_model=False`` (the board shows "no model signal").
@@ -45,7 +45,7 @@ class TagHealth(SQLModel, table=True):
             the equivalence set ``tag_scan_service.scan_tag`` votes against.
             ``0`` means a review would fall back to the confidence-only
             bootstrap path. ``None`` means the row predates this field and has
-            not been rebuilt yet — *not* zero.
+            not been rebuilt yet - *not* zero.
     """
 
     __tablename__ = "tag_health"
@@ -70,7 +70,7 @@ class TagHealth(SQLModel, table=True):
     # Count of distinct non-deleted pictures carrying the folded tag (see class
     # docstring). Zero is load-bearing: it is what lets the board tell the user a
     # review would find nothing before they start one. Nullable precisely so a
-    # measured 0 stays distinguishable from "this row predates the field" — a
+    # measured 0 stays distinguishable from "this row predates the field" - a
     # backfilled 0 would make the board claim zero yield for every stale row.
     # Every rebuild writes a real int; NULL only ever appears pre-rebuild.
     ground_truth: Optional[int] = Field(default=None)

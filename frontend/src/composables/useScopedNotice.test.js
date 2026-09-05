@@ -1,4 +1,4 @@
-// useScopedNotice — a notice family dies with the context it describes.
+// useScopedNotice - a notice family dies with the context it describes.
 //
 // The case that matters is the ordering one: the operation that pushes these
 // notices (the bulk delete) mutates the selection they are scoped to, and an

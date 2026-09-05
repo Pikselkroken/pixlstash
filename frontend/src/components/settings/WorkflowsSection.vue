@@ -111,7 +111,7 @@ async function saveComfyuiUrl() {
   comfyuiUrlSuccess.value = "";
   const host = String(comfyuiEditHost.value || "").trim();
   const port = String(comfyuiEditPort.value || "").trim();
-  // Empty host is treated as "not configured" — save null.
+  // Empty host is treated as "not configured" - save null.
   if (!host) {
     try {
       await patchUserConfig({ comfyui_url: null });
@@ -684,7 +684,7 @@ watch(
           </div>
           <div class="wf-host-pair">
             <span class="wf-host-key">Port</span>
-            <span class="wf-host-value">{{ comfyuiPort || "—" }}</span>
+            <span class="wf-host-value">{{ comfyuiPort || " - " }}</span>
           </div>
         </div>
         <AppButton
@@ -900,7 +900,7 @@ watch(
 </template>
 
 <style scoped>
-/* ── Action rows — readout/description on the left, a fixed-width action button
+/* ── Action rows - readout/description on the left, a fixed-width action button
    pinned right so the two section buttons line up vertically. ─────────────── */
 .wf-action-row {
   display: flex;
@@ -915,7 +915,7 @@ watch(
   justify-content: flex-start;
 }
 
-/* ── ComfyUI Host readout — mono host/port pairs, design-system tokens ─────── */
+/* ── ComfyUI Host readout - mono host/port pairs, design-system tokens ─────── */
 .wf-host-readout {
   display: flex;
   align-items: center;
@@ -958,7 +958,7 @@ watch(
   margin-top: var(--space-2);
 }
 
-/* ── Built-in workflow chip (no remove control) — matches SettingsChip look ── */
+/* ── Built-in workflow chip (no remove control) - matches SettingsChip look ── */
 .wf-chip {
   display: flex;
   align-items: center;

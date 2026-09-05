@@ -14,7 +14,7 @@ const sidebarStore = useSidebarStore();
 
 const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
-  themeMode: { type: String, default: "light" },
+  themeMode: { type: String, default: "dark" },
   dateFormat: { type: String, default: "locale" },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },
@@ -103,17 +103,17 @@ const dateFormatModel = computed({
 });
 
 const themeModeModel = computed({
-  get: () => props.themeMode ?? "light",
+  get: () => props.themeMode ?? "dark",
   set: (value) => {
-    const nextValue = value ?? "light";
-    if (nextValue === (props.themeMode ?? "light")) return;
+    const nextValue = value ?? "dark";
+    if (nextValue === (props.themeMode ?? "dark")) return;
     emit("update:theme-mode", nextValue);
   },
 });
 
 // Bound straight to the sidebar store (like the Sidebar Width toggle above);
 // App.vue watches sidebarStore.sidebarPinned and persists the change. The switch
-// is phrased as "Auto hide sidebar" (the inverse of pinned) — the underlying
+// is phrased as "Auto hide sidebar" (the inverse of pinned) - the underlying
 // store/persistence key stays `sidebarPinned`, so this is a label inversion only.
 const sidebarAutoHideModel = computed({
   get: () => !sidebarStore.sidebarPinned,
@@ -341,7 +341,7 @@ async function clearGuestSession() {
 }
 
 /* Two switches side by side (auto-hide + keyboard hint), mirroring the
-   Theme / Date Format two-column row above — one row instead of two sections. */
+   Theme / Date Format two-column row above - one row instead of two sections. */
 .appearance-switch-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -1,4 +1,4 @@
-"""Tests for RestoreService — full and per-resource restore."""
+"""Tests for RestoreService - full and per-resource restore."""
 
 import asyncio
 import json
@@ -69,8 +69,8 @@ def clean_db(server):
             Snapshot,
             # Likeness pipeline rows are populated by restore_full (via
             # ensure_all), so they accumulate across tests. Without an
-            # explicit wipe — FKs are OFF for the wipe, so CASCADE doesn't
-            # fire — they orphan and collide with the next test's replay.
+            # explicit wipe - FKs are OFF for the wipe, so CASCADE doesn't
+            # fire - they orphan and collide with the next test's replay.
             PictureLikeness,
             PictureLikenessQueue,
             PictureLikenessFrontier,
@@ -170,7 +170,7 @@ def _add_deleted_log(
 ):
     """Record a deletion in deleted_file_log (path stored hashed).
 
-    ``file_removed=True`` (default) is a genuine permanent deletion — the file
+    ``file_removed=True`` (default) is a genuine permanent deletion - the file
     was removed from disk and restore must never resurrect it. ``file_removed=
     False`` records a picture removed from the library whose file was KEPT on
     disk (a protected reference-folder picture): restore must NOT treat it as a
@@ -243,7 +243,7 @@ def test_the_location_guard_is_released_before_the_restore_swap(server, monkeypa
     split-brain fix) must be released inside the swap's exclusive section,
     strictly after ``engine.dispose()``. Linux performs that replace happily
     with the fd open, which is exactly why this regression reached CI: no
-    Linux test could fail on it. This pins the invariant Linux CAN see —
+    Linux test could fail on it. This pins the invariant Linux CAN see -
     at the moment of the replace, the guard is gone.
     """
     _create_file(server, "guarded.jpg")
@@ -252,7 +252,7 @@ def test_the_location_guard_is_released_before_the_restore_swap(server, monkeypa
 
     live_db = server.vault.db._db_path
     # This fixture's vault takes the unregistered branch (vault.py, no
-    # hub-registered library), which carries NO guard — leaving the test
+    # hub-registered library), which carries NO guard - leaving the test
     # vacuously green with or without the release (the revert-check caught
     # that). Arm the guard exactly as a registered-library open does, so the
     # invariant is exercised against the state the corruption fix created.
@@ -288,7 +288,7 @@ def test_full_restore_leaves_live_db_owner_only_under_group_umask(server):
 
     ``VACUUM INTO`` creates the snapshot at 0644 & ~umask and ``copy2``
     preserves that mode, so under the Debian/Ubuntu umask 002 the swapped-in
-    ``vault.db`` used to come out group-writable — and the trusted-location
+    ``vault.db`` used to come out group-writable - and the trusted-location
     check then refused it at the next startup, bricking the library.
     """
     _create_file(server, "perm.jpg")
@@ -533,7 +533,7 @@ def test_restore_resource_picture_replaces_dependents(server):
     assert live_psm_set_ids == [set_a_id], (
         f"expected membership in [{set_a_id}], got {live_psm_set_ids}"
     )
-    # Unrelated picture's face survives — restore is scoped to valid_picture_ids.
+    # Unrelated picture's face survives - restore is scoped to valid_picture_ids.
     assert len(other_faces) == 1, (
         "Face on unrelated picture must survive a picture-scoped restore"
     )
@@ -1114,7 +1114,7 @@ def test_compare_hashes_detects_mutation(server):
 
 def test_preview_is_compatible_false_when_snapshot_newer_than_live(server):
     """``is_compatible`` must be ``false`` when the snapshot's
-    ``schema_version`` sorts strictly above the live alembic head — a
+    ``schema_version`` sorts strictly above the live alembic head - a
     snapshot from a future schema cannot be downgraded.
     """
     from pixlstash.routes.snapshots import _serialize_snapshot
@@ -1230,7 +1230,7 @@ def test_restore_resource_picture_with_missing_character_raises_without_confirm(
 def test_restore_resource_picture_confirm_restores_missing_character(server):
     """With ``confirm_restore_dependencies=True``, the service first re-inserts
     the missing character from the snapshot and then upserts the picture's
-    faces — both end up in the live DB."""
+    faces - both end up in the live DB."""
     _create_file(server, "with_char2.jpg")
     pic = _add_picture(server, filename="with_char2.jpg")
 
@@ -1338,7 +1338,7 @@ def test_restore_batch_unions_missing_dependencies_across_items(server):
 
 def test_restore_batch_confirm_restores_all_missing_parents_once(server):
     """With confirm=True, the batch path restores the union of missing
-    parents in one pre-pass, then upserts each item — no per-item retries."""
+    parents in one pre-pass, then upserts each item - no per-item retries."""
     _create_file(server, "batch_c.jpg")
     _create_file(server, "batch_d.jpg")
     pc = _add_picture(server, filename="batch_c.jpg")
@@ -1403,7 +1403,7 @@ def test_restore_batch_confirm_restores_all_missing_parents_once(server):
 def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
     """The snapshot strip drops the likeness queue + frontier (they're LIVE
     pipeline progress, not user data). Full restore must capture the live
-    state BEFORE the swap and replay it AFTER — for pictures that survive
+    state BEFORE the swap and replay it AFTER - for pictures that survive
     the restore. Pictures dropped by the restore must lose their queue/
     frontier rows; pictures new in the snapshot must gain frontier rows
     via ensure_all.
@@ -1429,7 +1429,7 @@ def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
 
     # Mutate the live likeness pipeline state: survivor + future are
     # both in the queue and have frontier rows. soon_added (in snapshot)
-    # has no live progress yet — it should still get a frontier row
+    # has no live progress yet - it should still get a frontier row
     # post-restore via ensure_all.
     def _seed_live_state(session):
         a, b = sorted([survivor.id, future.id])
@@ -1493,12 +1493,12 @@ def test_full_restore_preserves_live_likeness_queue_and_frontier(server):
         f"future picture's frontier row must be cleared; got {post_frontier}"
     )
     # soon_added gained a frontier row via ensure_all (initialised to its
-    # own id — see PictureLikenessFrontier.ensure_all).
+    # own id - see PictureLikenessFrontier.ensure_all).
     assert post_frontier.get(soon_added.id) == soon_added.id, (
         f"soon_added must gain a frontier row via ensure_all; got {post_frontier}"
     )
     # The snapshot's picturelikeness was stripped, so post-restore has zero
-    # likeness rows — the pipeline will recompute.
+    # likeness rows - the pipeline will recompute.
     assert post_likeness == [], (
         f"likeness rows must be empty after restore; got {post_likeness}"
     )
@@ -1514,7 +1514,7 @@ def test_full_restore_preserves_newer_snapshots_in_index(server):
 
     The ``Snapshot`` table lives inside the live DB, so the file swap would
     roll the snapshot index back to whatever snapshots existed when the
-    target was taken — and because ``VACUUM INTO`` copies the live DB *before*
+    target was taken - and because ``VACUUM INTO`` copies the live DB *before*
     a snapshot records its own row, an old snapshot's file doesn't even list
     itself. Without the post-swap reconciliation the whole list would
     disappear, stranding the user with no way to roll forward. The fix
@@ -1523,7 +1523,7 @@ def test_full_restore_preserves_newer_snapshots_in_index(server):
     _create_file(server, "rollfwd.jpg")
     pic = _add_picture(server, filename="rollfwd.jpg", description="state_a")
 
-    # Snapshot A — the older restore point.
+    # Snapshot A - the older restore point.
     cp_a = server.vault.snapshot_service.create_snapshot("MANUAL", label="A")
 
     # Diverge, then take the newer snapshot C.
@@ -1567,7 +1567,7 @@ def test_full_restore_preserves_newer_snapshots_in_index(server):
 
 
 # ---------------------------------------------------------------------------
-# Missing-dependency restore — picture_set and project parents (issue #1)
+# Missing-dependency restore - picture_set and project parents (issue #1)
 # ---------------------------------------------------------------------------
 
 
@@ -1620,7 +1620,7 @@ def test_restore_resource_picture_with_missing_picture_set_raises_without_confir
 
 def test_restore_resource_picture_confirm_restores_missing_picture_set(server):
     """With confirm=True, the deleted PictureSet is re-inserted from the
-    snapshot before the membership is upserted — both land in live."""
+    snapshot before the membership is upserted - both land in live."""
     _create_file(server, "in_set2.jpg")
     pic = _add_picture(server, filename="in_set2.jpg")
 
@@ -1777,7 +1777,7 @@ def test_full_restore_refuses_when_most_files_missing(server):
         f"Refusal must explain the mount-failure heuristic; got: {exc_info.value}"
     )
 
-    # Live DB untouched — all 10 rows still present (no swap happened).
+    # Live DB untouched - all 10 rows still present (no swap happened).
     count_after = server.vault.db.run_immediate_read_task(
         lambda s: len(s.exec(select(Picture)).all())
     )
@@ -1788,7 +1788,7 @@ def test_full_restore_refuses_when_most_files_missing(server):
 
 def test_full_restore_allows_high_missing_ratio_with_override(server):
     """The same >50% scenario proceeds when the caller explicitly opts in via
-    allow_without_safety — the missing-file rows are then dropped."""
+    allow_without_safety - the missing-file rows are then dropped."""
     for i in range(10):
         name = f"ovr_{i}.jpg"
         if i < 3:
@@ -2070,7 +2070,7 @@ def test_preview_full_classifies_recreate_and_delete(server):
     p_gone = _add_picture(server, filename="gone.jpg", description="gone")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    # Add p_new BEFORE deleting p_gone so p_new gets a fresh max id — deleting
+    # Add p_new BEFORE deleting p_gone so p_new gets a fresh max id - deleting
     # first would let SQLite reuse p_gone's rowid for p_new and collapse the
     # two distinct cases into one "id present in both".
     _create_file(server, "new.jpg")
@@ -2098,7 +2098,7 @@ def test_preview_full_classifies_recreate_and_delete(server):
 
 def test_preview_full_detects_set_membership_change(server):
     """A picture whose only post-snapshot change is set membership must still
-    surface as changed — membership is folded into metadata_hash, so the
+    surface as changed - membership is folded into metadata_hash, so the
     preview no longer reports it as unchanged."""
     _create_file(server, "memb.jpg")
     pic = _add_picture(server, filename="memb.jpg", description="same")
@@ -2128,7 +2128,7 @@ def test_preview_full_detects_set_membership_change(server):
 
 def test_full_restore_skips_permanently_deleted_picture(server):
     """A snapshot picture whose file is in deleted_file_log must not be
-    resurrected — even though its file still exists on disk, so the
+    resurrected - even though its file still exists on disk, so the
     missing-file pass would NOT drop it. The ledger entry must also survive
     the DB swap (it was recorded after the snapshot was taken)."""
     _create_file(server, "purged.jpg")
@@ -2147,7 +2147,7 @@ def test_full_restore_skips_permanently_deleted_picture(server):
 
     report = server.vault.restore_service.restore_full(cp.id)
 
-    assert report.missing_files_count == 0, "File is on disk — not missing."
+    assert report.missing_files_count == 0, "File is on disk - not missing."
     assert report.permanently_deleted_count == 1, report.permanently_deleted_count
     assert _get_picture(server, pic.id) is None, (
         "Permanently-deleted picture must not be resurrected by restore."
@@ -2175,7 +2175,7 @@ def test_full_restore_keeps_live_reference_picture_in_ledger(server):
     )
 
     with tempfile.TemporaryDirectory() as ref_dir:
-        # File lives OUTSIDE image_root, referenced by its absolute path — the
+        # File lives OUTSIDE image_root, referenced by its absolute path - the
         # real reference-folder shape.
         abs_path = os.path.join(ref_dir, "reference.png")
         open(abs_path, "wb").close()
@@ -2212,7 +2212,7 @@ def test_full_restore_keeps_live_reference_picture_in_ledger(server):
 
         report = server.vault.restore_service.restore_full(cp.id)
 
-        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.missing_files_count == 0, "File is on disk - not missing."
         assert report.permanently_deleted_count == 0, (
             "A live, actively-used reference picture must not be counted as "
             f"permanently deleted: {report.permanently_deleted_count}"
@@ -2231,7 +2231,7 @@ def test_full_restore_keeps_live_reference_picture_in_ledger(server):
 def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
     """The live-active cross-check must distinguish a genuinely purged path
     (still dropped) from one re-indexed and alive again (kept), even when both
-    share the ledger — guarding the rescue from over-keeping (the ledger's
+    share the ledger - guarding the rescue from over-keeping (the ledger's
     'never resurrect' guarantee must still hold for content the user really
     deleted)."""
     from pixlstash.db_models.reference_folder import (
@@ -2279,7 +2279,7 @@ def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
         cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
         # Both paths are logged; the "purged" one is ALSO removed from the live
-        # DB (a genuine permanent deletion — file lingers because protected).
+        # DB (a genuine permanent deletion - file lingers because protected).
         _add_deleted_log(server, alive_path)
         _add_deleted_log(server, purged_path)
 
@@ -2306,7 +2306,7 @@ def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
 def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
     """Root-cause test: a ledger entry with ``file_removed=False`` (file kept on
     disk) must NEVER count as a permanent deletion, even for a snapshot picture
-    that is NOT present in the live DB — so the content-aware live-active rescue
+    that is NOT present in the live DB - so the content-aware live-active rescue
     net (which only saves pictures alive in the live DB) does not apply.
 
     This isolates the ``_load_deleted_file_index`` ``file_removed`` filter from
@@ -2314,7 +2314,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
     file kept (protected reference folder), a snapshot captured it ALIVE, and on
     rollback restore must bring it back because its content is not gone. With the
     old ledger (path-only, no ``file_removed``) this row would be dropped as a
-    permanent deletion — the ~139-picture data-loss class."""
+    permanent deletion - the ~139-picture data-loss class."""
     from pixlstash.db_models.reference_folder import (
         ReferenceFolder,
         ReferenceFolderStatus,
@@ -2352,7 +2352,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
 
         # Now it is removed from the LIVE library (protected purge: file kept,
         # logged with file_removed=False). It is NOT in the live DB anymore, so
-        # the live-active rescue net cannot save it — only the ledger filter can.
+        # the live-active rescue net cannot save it - only the ledger filter can.
         def _drop(session):
             session.delete(session.get(Picture, pic_id))
             session.commit()
@@ -2362,7 +2362,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
 
         report = server.vault.restore_service.restore_full(cp.id)
 
-        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.missing_files_count == 0, "File is on disk - not missing."
         assert report.permanently_deleted_count == 0, (
             "A file_removed=False ledger entry must never count as a permanent "
             f"deletion: {report.permanently_deleted_count}"
@@ -2370,7 +2370,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
         restored = _get_picture(server, pic_id)
         assert restored is not None, (
             "Reference picture whose file was KEPT must be restored from the "
-            "snapshot that captured it alive — its content is not gone."
+            "snapshot that captured it alive - its content is not gone."
         )
         assert restored.reference_folder_id == folder_id
         assert not restored.deleted
@@ -2379,7 +2379,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
 
 def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
     """The other direction: a ``file_removed=True`` ledger entry (genuine purge,
-    file gone) must STILL be dropped on restore and never resurrected — the
+    file gone) must STILL be dropped on restore and never resurrected - the
     never-resurrect guarantee holds after the meaning split."""
     _create_file(server, "gone.jpg")
     pic = _add_picture(server, filename="gone.jpg", description="doomed")
@@ -2397,7 +2397,7 @@ def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
 
     report = server.vault.restore_service.restore_full(cp.id)
 
-    assert report.missing_files_count == 0, "File is on disk — not missing."
+    assert report.missing_files_count == 0, "File is on disk - not missing."
     assert report.permanently_deleted_count == 1, report.permanently_deleted_count
     assert _get_picture(server, pic.id) is None, (
         "A genuinely purged (file_removed=True) picture must not be resurrected."
@@ -2417,7 +2417,7 @@ def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
     from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 
     with tempfile.TemporaryDirectory() as ref_dir:
-        # This path is never created on disk — the content is genuinely gone.
+        # This path is never created on disk - the content is genuinely gone.
         gone_path = os.path.join(ref_dir, "gone.png")
 
         pic = _add_picture(server, filename=gone_path, pixel_sha="sha_gone")
@@ -2432,7 +2432,7 @@ def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
         server.vault.db.run_task(_drop)
         _add_deleted_log(server, gone_path, pixel_sha="sha_gone", file_removed=True)
 
-        # Explicit re-add of the folder (pending_reimport=True — the strongest
+        # Explicit re-add of the folder (pending_reimport=True - the strongest
         # override signal). Because the gone file is absent from disk it is never
         # in disk_paths, so even the explicit override cannot touch its ledger
         # entry.
@@ -2591,7 +2591,7 @@ def test_reference_folder_explicit_reimport_overrides_ledger(server):
 
 def test_reference_folder_reimport_flag_is_one_shot(server):
     """Once a scan consumes pending_reimport, a subsequent scan is a routine scan
-    and does NOT override the ledger — the override cannot recur without a fresh
+    and does NOT override the ledger - the override cannot recur without a fresh
     deliberate add."""
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -2606,7 +2606,7 @@ def test_reference_folder_reimport_flag_is_one_shot(server):
 
         # A new removed-but-kept ledger entry appears for that path (e.g. the
         # picture is scrapheaped-and-purged while protected). A second, routine
-        # scan must NOT resurface it — the flag is already spent.
+        # scan must NOT resurface it - the flag is already spent.
         server.vault.db.run_task(
             lambda s: s.exec(delete(Picture).where(Picture.file_path == abs_path))
         )
@@ -2668,7 +2668,7 @@ def test_reference_folder_emptied_then_last_scanned_reset_no_override(server):
         kept_sha = ImageUtils.calculate_hash_from_file_path(kept_path)
         _add_deleted_log(server, kept_path, pixel_sha=kept_sha, file_removed=False)
 
-        # Zero indexed pictures AND last_scanned reset to None — the exact shape
+        # Zero indexed pictures AND last_scanned reset to None - the exact shape
         # that the removed heuristic misread as a fresh re-add.
         folder_id = _add_ref_folder(
             server, ref_dir, pending_reimport=False, last_scanned=None
@@ -2679,7 +2679,7 @@ def test_reference_folder_emptied_then_last_scanned_reset_no_override(server):
             f"An emptied folder with reset last_scanned must not re-import: {result}"
         )
         assert _ref_ledger_flags(server, kept_path) == [False], (
-            "The ledger entry must be retained — this is not an explicit re-import."
+            "The ledger entry must be retained - this is not an explicit re-import."
         )
         assert (
             server.vault.db.run_task(
@@ -2715,7 +2715,7 @@ def test_full_restore_ledger_rescue_drops_when_content_differs(server):
 
     assert _get_picture(server, c1.id) is None, (
         "stale purged content (C1) must NOT be resurrected when different live "
-        "content (C2) sits at the same path — this is the purge-evasion vector"
+        "content (C2) sits at the same path - this is the purge-evasion vector"
     )
     assert report.permanently_deleted_count == 1, (
         f"C1 must still count as permanently deleted: {report.permanently_deleted_count}"
@@ -2747,7 +2747,7 @@ def test_full_restore_ledger_rescue_keeps_when_live_sha_null(server):
     """NULL fallback: a ledger-matched row must be rescued when the live-active
     picture at its path is not yet hashed (pixel_sha=NULL).
 
-    This is the not-yet-hashed reference-folder picture — the maintainer's
+    This is the not-yet-hashed reference-folder picture - the maintainer's
     explicit non-strict choice: unconfirmable content must be kept, never
     re-dropped.
     """
@@ -2765,7 +2765,7 @@ def test_full_restore_ledger_rescue_keeps_when_live_sha_null(server):
 
     assert _get_picture(server, snap_pic.id) is not None, (
         "a ledger-matched row must be rescued when the live picture is not yet "
-        "hashed (NULL pixel_sha) — the non-strict NULL fallback"
+        "hashed (NULL pixel_sha) - the non-strict NULL fallback"
     )
     assert report.permanently_deleted_count == 0, (
         f"unconfirmable content must not count as purged: {report.permanently_deleted_count}"
@@ -2779,7 +2779,7 @@ def test_restore_resource_refuses_permanently_deleted_picture(server):
     pic = _add_picture(server, filename="gone.jpg", description="original")
 
     # Give the picture a content hash, then record that hash as deleted under
-    # a different path — exercises the pixel_sha matching branch.
+    # a different path - exercises the pixel_sha matching branch.
     def _set_sha(session):
         p = session.get(Picture, pic.id)
         p.pixel_sha = "sha-deadbeef"
@@ -2918,7 +2918,7 @@ def _downgrade_snapshot_to_intermediate_schema(abs_snapshot: str):
 
     Drops the caption-sidecar columns added by 0057, back-dates
     ``alembic_version`` to 0057's parent, and NULLs ``metadata_hash`` so the
-    read path is forced through the full-entity hash computation — the exact
+    read path is forced through the full-entity hash computation - the exact
     combination that produced ``no such column: picture.tags_file``.
     """
     import sqlite3
@@ -2956,7 +2956,7 @@ def test_compare_hashes_upgrades_intermediate_schema_snapshot(server):
 
     The old code probed for ``metadata_hash`` alone, concluded the file was
     current, and then blew up with ``no such column: picture.tags_file`` on the
-    ORM entity load — swallowing the error and reporting every picture as
+    ORM entity load - swallowing the error and reporting every picture as
     changed. An unmodified picture must come back as *identical*.
     """
     _create_file(server, "intermediate.jpg")
@@ -3465,7 +3465,8 @@ def _empty_scrapheap_via_http(server):
 
     client = TestClient(server.api, raise_server_exceptions=True)
     login = client.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     # The destructive endpoint refuses without the single-use confirm_token the
@@ -3536,7 +3537,7 @@ def test_full_restore_does_not_hard_delete_file_readded_after_snapshot(server):
     )
     # The live file must not have been recorded as permanently deleted.
     assert _count_deleted_log(server, "shared.jpg") == 0, (
-        "the added-after file was logged in deleted_file_log — it was purged"
+        "the added-after file was logged in deleted_file_log - it was purged"
     )
 
 
@@ -3577,7 +3578,7 @@ def test_full_restore_ghost_path_drift_does_not_delete_live_file(
     """Ghost/live path-string drift must not defeat the guard.
 
     The scrapheap deleter removes ``resolve_picture_path(image_root, file_path)``,
-    so the guard must match on the RESOLVED path too — otherwise a ghost whose
+    so the guard must match on the RESOLVED path too - otherwise a ghost whose
     stored path differs as a STRING but resolves to the same on-disk file (the
     reference-folder ABSOLUTE vs imported RELATIVE collision, plus ``./`` /
     ``//`` drift) survives restore and is hard-deleted on the next empty of the
@@ -3655,7 +3656,7 @@ def test_full_restore_rearms_the_scrapheap_retention_clock(server):
     The snapshot DB carries each scrapheap row's ORIGINAL ``deleted_at``. For any
     snapshot older than the window that deadline is already expired, so the first
     sweep after the restore would permanently destroy the very scrapheap the user
-    just restored — and write ``file_removed=True``, so a second restore could
+    just restored - and write ``file_removed=True``, so a second restore could
     not bring it back. Same failure family as the logged restore data-loss
     incident.
     """
@@ -3747,18 +3748,18 @@ def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
 
 
 def test_restore_can_resurrect_a_picture_whose_file_removal_failed(server):
-    """F5 — a ledger corrected to file_removed=False must NOT block restore.
+    """F5 - a ledger corrected to file_removed=False must NOT block restore.
 
     ``file_removed=True`` is written before the file is touched, so a failed
     ``os.remove`` would otherwise leave the ledger permanently asserting a
-    deletion that never happened — and restore, which trusts the ledger, would
+    deletion that never happened - and restore, which trusts the ledger, would
     drop the picture forever even though its file is sitting right there.
     """
     _create_file(server, "kept_by_accident.jpg")
     pic = _add_picture(server, filename="kept_by_accident.jpg")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    # The purge ran, the row went away, but the file removal failed — so the
+    # The purge ran, the row went away, but the file removal failed - so the
     # ledger was corrected to "removed from library, file kept".
     def _simulate_failed_purge(session):
         session.add(
@@ -3819,7 +3820,7 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
     Reviewer's variant 2: picture A's content was genuinely destroyed at path P
     and logged file_removed=True. Different content is later written at P and
     purged with a failing os.remove. If that second purge were allowed to
-    downgrade A's row to False, restore would resurrect A — bound to the WRONG
+    downgrade A's row to False, restore would resurrect A - bound to the WRONG
     file. The purge now only corrects rows it wrote, so A's row stays True and
     restore keeps refusing.
     """
@@ -4157,7 +4158,8 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     token_response = owner.post(
@@ -4246,7 +4248,8 @@ def test_share_link_is_unavailable_while_restore_admission_is_closed(server):
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _pic, created = _create_picture_share(owner, server, "share-gate.jpg")
@@ -4278,7 +4281,8 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _pic, created = _create_picture_share(owner, server, "share-drain.jpg")
@@ -4399,7 +4403,8 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkey
     blocked_client = TestClient(server.api, raise_server_exceptions=True)
     for client in (restore_client, blocked_client):
         login = client.post(
-            "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+            "/api/v1/login",
+            json={"username": "owner", "password": "example-owner-password"},
         )
         assert login.status_code == 200, login.text
 
@@ -4524,7 +4529,8 @@ def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
 
     owner = TestClient(server.api, raise_server_exceptions=True)
     login = owner.post(
-        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
     _create_file(server, "restore-auth-reset-failure.jpg")

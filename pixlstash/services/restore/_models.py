@@ -13,7 +13,7 @@ class RestoreInProgressError(RuntimeError):
     """Raised when a restore is requested while another one is still running.
 
     Two concurrent restores would both stop the planner, take safety snapshots
-    and enqueue swap + cleanup tasks on the writer queue — the cleanups would
+    and enqueue swap + cleanup tasks on the writer queue - the cleanups would
     then run against each other's swapped DB file with stale ``missing_ids``
     sets, corrupting the live database. Restore is intentionally serialised
     instead of being made concurrent; callers should retry after the running
@@ -65,7 +65,7 @@ class MissingDependenciesError(RuntimeError):
 # Project's graph spans ``ProjectAttachment`` (CASCADE FK), ``Character.project_id``,
 # ``PictureSet.project_id``, and ``PictureProjectMember`` rows. The current
 # per-resource path only touches Project + pictures-via-PPM, and the PPM
-# bulk-delete is keyed by ``picture_id`` rather than by ``project_id`` — which
+# bulk-delete is keyed by ``picture_id`` rather than by ``project_id`` - which
 # would over-delete PPMs to *other* projects for any picture also in the
 # restored project. Use the full restore for project-level recovery until the
 # proper graph-replace is implemented + tested.
@@ -76,7 +76,7 @@ _SUPPORTED_RESOURCE_TYPES: tuple[str, ...] = ("picture", "picture_set", "charact
 # pictures appear to be missing on disk. A partial network-mount failure
 # would otherwise be silently treated as "the user deleted these files" and
 # wipe their metadata. The check only kicks in once the snapshot contains
-# more than ``_MIN_PICTURES_FOR_MISSING_RATIO_CHECK`` rows — at small scale
+# more than ``_MIN_PICTURES_FOR_MISSING_RATIO_CHECK`` rows - at small scale
 # "100% missing" is a legitimate one-picture deletion, not a mount blip.
 _MAX_MISSING_RATIO_FOR_CLEANUP: float = 0.5
 _MIN_PICTURES_FOR_MISSING_RATIO_CHECK: int = 10

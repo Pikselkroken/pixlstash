@@ -1,11 +1,11 @@
 """In-memory registry of pictures whose image file cannot be decoded.
 
 GitHub issue #585 ("Invalid Images break tasks"): the background pipeline is
-data-driven — every ``Missing*Finder`` re-selects any picture whose target
+data-driven - every ``Missing*Finder`` re-selects any picture whose target
 column is still unset. When a picture points at a corrupt/undecodable file the
 task can never produce a value, nothing durably marks the row as done (the
-image-embedding task even writes an *empty* blob that ``fetch_work`` still treats
-as missing), so the same picture is picked up on every sweep forever.
+image-embedding task leaves the embedding NULL on failure, which ``fetch_work``
+treats as missing), so the same picture is picked up on every sweep forever.
 
 The reporter explicitly accepts that such a file may be "ignored for the
 remaining duration of the server process lifetime, or until it is modified". This
@@ -15,7 +15,7 @@ failure. A finder consults :meth:`is_suppressed` to skip the picture; when the
 file is rewritten (the "still being written" / repaired case) its signature moves
 and suppression lifts automatically, so the picture is retried.
 
-Nothing here is persisted — a server restart clears the registry, at which point
+Nothing here is persisted - a server restart clears the registry, at which point
 each such picture is retried exactly once more (re-decoded, fails, re-marked),
 which is the accepted behaviour above. Keeping it in memory is deliberate: it
 needs no schema change and no migration.
@@ -76,7 +76,7 @@ class UnprocessableImageRegistry:
 
         A picture already marked for the *same* file version is a no-op (and is not
         re-logged), so repeated sweeps of the same corrupt file do not spam the log.
-        A picture whose file can no longer be stat'd is left unmarked — there is
+        A picture whose file can no longer be stat'd is left unmarked - there is
         nothing to pin the suppression to, and the missing-file purge finder owns
         that case.
 
@@ -94,7 +94,7 @@ class UnprocessableImageRegistry:
         signature = self._stat_signature(file_path)
         if signature is None:
             logger.debug(
-                "UnprocessableImageRegistry: not marking picture id=%s — file %s "
+                "UnprocessableImageRegistry: not marking picture id=%s - file %s "
                 "cannot be stat'd (leaving it to the missing-file purge).",
                 pid,
                 file_path,
@@ -108,7 +108,7 @@ class UnprocessableImageRegistry:
             if existing is None and len(self._entries) >= self._max_entries:
                 logger.warning(
                     "UnprocessableImageRegistry: cap (%d) reached; NOT suppressing "
-                    "picture id=%s path=%s — it will keep being retried until an "
+                    "picture id=%s path=%s - it will keep being retried until an "
                     "existing entry is released or the server restarts.",
                     self._max_entries,
                     pid,
@@ -150,7 +150,7 @@ class UnprocessableImageRegistry:
             signature = self._stat_signature(path)
             if signature is not None and signature == (mtime_ns, size):
                 return True
-            # File vanished or was rewritten since we marked it — retry it.
+            # File vanished or was rewritten since we marked it - retry it.
             self._entries.pop(pid, None)
             return False
 
@@ -158,7 +158,7 @@ class UnprocessableImageRegistry:
         """Return the set of currently-suppressed picture ids, pruning stale entries.
 
         Re-validates every stored file signature; entries whose file changed or
-        disappeared are dropped. Cheap in practice — the map only holds genuinely
+        disappeared are dropped. Cheap in practice - the map only holds genuinely
         undecodable files, which are rare.
         """
         active: set[int] = set()

@@ -22,9 +22,10 @@ from pixlstash.services import (
     config_service,
     library_settings_service,
     scrapheap_service,
+    views_service,
 )
 from pixlstash.telemetry import mark_install_established
-from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
     changed_penalised_tags,
@@ -134,7 +135,7 @@ def create_router(server) -> APIRouter:
                 "Grid thumbnail shape preference: 'square' renders a square cell "
                 "cropped to the stored face-weighted rectangle; 'justified' lays "
                 "out the full aspect-ratio-preserving thumbnail. This is a "
-                "DISPLAY-ONLY preference — the frontend applies it instantly from "
+                "DISPLAY-ONLY preference - the frontend applies it instantly from "
                 "the single stored bitmap; the backend never regenerates "
                 "thumbnails when it changes."
             ),
@@ -360,7 +361,7 @@ def create_router(server) -> APIRouter:
             default=None,
             description=(
                 "Days an UNPROTECTED (managed) picture stays in the scrapheap "
-                "before it is permanently purged. `null` means Never — "
+                "before it is permanently purged. `null` means Never - "
                 "auto-purge is disabled entirely, and that is the **default**: "
                 "a server on which nobody has saved a window reports `null` and "
                 "never deletes anything on a timer. Protected reference-folder "
@@ -423,7 +424,7 @@ def create_router(server) -> APIRouter:
                 "originals and locked-set members, which the sweep never "
                 "destroys. `0` when the candidate window is not a REDUCTION "
                 "(raising it, setting it for the first time, or re-saving the "
-                "same value destroys nothing new) — show no confirmation then."
+                "same value destroys nothing new) - show no confirmation then."
             ),
             examples=[412],
         )
@@ -985,7 +986,7 @@ def create_router(server) -> APIRouter:
         server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
-            write_json_atomic(config_path, server._server_config)
+            persist_server_config(config_path, server._server_config)
         return {"status": "success", "daily_snapshots": body.daily_snapshots}
 
     def _scrapheap_retention_payload() -> dict:
@@ -1030,7 +1031,7 @@ def create_router(server) -> APIRouter:
         scrapheap_retention_days: Optional[int] = Field(
             default=None,
             description=(
-                "New retention window in days — one of 30, 60, 90, 120 — or "
+                "New retention window in days - one of 30, 60, 90, 120 - or "
                 "`null` for Never (disables auto-purge). Any other value is a "
                 "422. Saving NEVER purges anything: the change takes effect on "
                 "the next scheduled sweep."
@@ -1048,11 +1049,11 @@ def create_router(server) -> APIRouter:
             "the only thing that ever enables the auto-purge**: until it is "
             "called with a finite window the server stays on the Never default "
             "and the timer deletes nothing. Saving does NOT purge anything "
-            "synchronously — the background retention task is the only thing "
+            "synchronously - the background retention task is the only thing "
             "that ever deletes, and it never touches protected reference-folder "
             "originals. Lowering the window, INCLUDING turning it on "
             "(Never -> 30), stamps `scrapheap_retention_reduced_at`, which puts "
-            "a floor of one grace day under EVERY picture's deadline — so even "
+            "a floor of one grace day under EVERY picture's deadline - so even "
             "a 400-day-old scrapheap item survives at least a day after the "
             "change. Raising it, switching to Never, or saving the same value "
             "leaves that stamp untouched."
@@ -1088,7 +1089,7 @@ def create_router(server) -> APIRouter:
         server.vault.set_scrapheap_retention(effective_days, reduced_at)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
-            write_json_atomic(config_path, server._server_config)
+            persist_server_config(config_path, server._server_config)
         return _scrapheap_retention_payload()
 
     @router.get(
@@ -1108,8 +1109,8 @@ def create_router(server) -> APIRouter:
             "itself uses, so it cannot drift from reality, and excludes the "
             "pictures the sweep never touches (protected reference-folder "
             "originals and locked-set members). It is evaluated at "
-            "`first_purge_at` — the instant the reduction's grace floor "
-            "elapses — rather than at now, so pictures that expire during the "
+            "`first_purge_at` - the instant the reduction's grace floor "
+            "elapses - rather than at now, so pictures that expire during the "
             "grace day are counted rather than omitted.\n\n"
             "Returns `{would_purge_count: 0, first_purge_at: null}` when `days` "
             "is not lower than the current window."
@@ -1123,7 +1124,7 @@ def create_router(server) -> APIRouter:
         days: int = Query(
             ...,
             description=(
-                "Candidate retention window in days — one of 30, 60, 90, 120. "
+                "Candidate retention window in days - one of 30, 60, 90, 120. "
                 "Any other value is a 422. ('Never' is never a reduction, so "
                 "there is nothing to preview for it.)"
             ),
@@ -1145,6 +1146,185 @@ def create_router(server) -> APIRouter:
             int(days),
             scrapheap_service.read_retention_days(server._server_config),
         )
+
+    class ViewsConfigPatch(BaseModel):
+        model_config = ConfigDict(
+            json_schema_extra={
+                "example": {
+                    "views_root": "/home/me/Pictures/_PixlStash Views",
+                    "kinds": ["people", "sets"],
+                }
+            }
+        )
+
+        views_root: Optional[str] = Field(
+            default=None,
+            description=(
+                "Absolute host path the views tree is published to, or `null` "
+                "to turn views off and remove the tree PixlStash published."
+            ),
+        )
+        kinds: list[str] = Field(
+            default_factory=list,
+            description=(
+                "Which kinds to publish: any subset of `people`, `sets`, "
+                "`projects`. An empty list publishes an empty tree."
+            ),
+        )
+
+    def _views_payload(report: Optional[views_service.PublishReport] = None) -> dict:
+        root, kinds = library_settings_service.get_views_config(server.vault.db)
+        payload = {
+            "status": "success",
+            "views_root": root,
+            "kinds": kinds,
+            "available_kinds": list(views_service.KIND_FOLDERS),
+        }
+        if report is not None:
+            payload["last_publish"] = report.as_dict()
+        return payload
+
+    @router.get(
+        "/server-config/views",
+        summary="Get the PixlStash Views configuration",
+        description=(
+            "Returns where this library publishes its Views tree - sets, people "
+            "and projects as folders of LINKS to the real files - and which "
+            "kinds it publishes. `views_root` is `null` when views are off, "
+            "which is the default: nothing is written until a folder is named."
+        ),
+    )
+    def get_views_config(request: Request):
+        _ensure_secure_when_required(request)
+        return _views_payload()
+
+    @router.patch(
+        "/server-config/views",
+        summary="Set the PixlStash Views configuration and rebuild the tree",
+        description=(
+            "Records the views folder and the published kinds, then rebuilds "
+            "the tree. Sending the current values is how the UI's *Rebuild now* "
+            "works: the rebuild is a full re-derive and costs a fraction of a "
+            "second even for a large library, so there is no incremental path "
+            "and no separate verb.\n\n"
+            "**Nothing is copied and no original moves.** Each file in the tree "
+            "is a link; deleting the whole folder loses no picture. Views are "
+            "*additional* to the folders the owner already keeps.\n\n"
+            "A folder that cannot hold the tree is refused with 400 and the "
+            "reason, rather than half-written: inside the library (backups "
+            "refuse a symlinked payload), inside a reference folder (the scan "
+            "would index every link as a second copy), in a cloud-sync folder "
+            "(the client uploads the file the link points at), or on a "
+            "filesystem with no links at all - exFAT and FAT have neither, and "
+            "on Windows symbolic links need administrator rights or Developer "
+            "Mode. Sending `views_root: null` removes the published tree and "
+            "leaves the folder itself alone."
+        ),
+        responses={
+            400: {"description": "The views folder cannot hold the tree."},
+            403: {
+                "description": (
+                    "The views folder is outside every configured "
+                    "`filesystem_roots` entry."
+                )
+            },
+        },
+    )
+    def patch_views_config(request: Request, body: ViewsConfigPatch):
+        _ensure_secure_when_required(request)
+        kinds = [kind for kind in views_service.KIND_FOLDERS if kind in set(body.kinds)]
+        previous_root, _ = library_settings_service.get_views_config(server.vault.db)
+
+        # `null` turns views off; ANY other value goes through the location
+        # checks. An empty or whitespace string is not "off" - treating it as
+        # off made a malformed body remove the published tree without a single
+        # check having run, which is the one shape of this route that can
+        # destroy a tree by accident.
+        if body.views_root is None:
+            if previous_root:
+                views_service.remove(previous_root)
+            library_settings_service.set_views_config(server.vault.db, None, [])
+            return _views_payload()
+
+        # An operator who confined the folder picker to a set of roots did not
+        # mean "except for the route that creates a tree of links". Honoured
+        # here rather than in `check_views_root`, which is a pure path rule and
+        # has no server config to read.
+        roots = [
+            os.path.realpath(root)
+            for root in (server._server_config.get("filesystem_roots") or [])
+            if isinstance(root, str) and root
+        ]
+        # Only a path the sink would itself accept is compared. `~` is NOT
+        # expanded and a relative value is skipped rather than resolved:
+        # `os.path.realpath("")` is the server's working directory, which could
+        # sit inside a configured root and pass a check it was never meant to.
+        # Both shapes are refused downstream by `check_views_root`, which is the
+        # one place that decides what a views root may be.
+        candidate = body.views_root.strip()
+        if roots and os.path.isabs(candidate):
+            resolved_views_root = os.path.realpath(candidate)
+            if not any(
+                resolved_views_root == root
+                or resolved_views_root.startswith(root + os.sep)
+                for root in roots
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Path is not within any configured filesystem root.",
+                )
+
+        if previous_root and views_service.roots_overlap(
+            previous_root, body.views_root
+        ):
+            # Publishing under the previous root would write the whole tree and
+            # then have the removal below walk that same root and delete it
+            # again, while the response still reported the links it had made.
+            # Refused before anything is written, because afterwards there is
+            # nothing left to refuse.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The views folder cannot be inside the one it replaces, or "
+                    "contain it. Removing the old tree would delete the new "
+                    "one. Pick a folder outside "
+                    f"{previous_root}, or turn views off first."
+                ),
+            )
+
+        collected = server.vault.db.run_immediate_read_task(
+            lambda session: views_service.collect_in_session(session, kinds)
+        )
+        # The hub knows every registered library; this vault knows only itself.
+        # Since v1.11 the owner can register several from Settings, and a views
+        # tree inside a dormant one breaks that library's backups exactly as it
+        # would this one's.
+        other_library_roots = [
+            library.path
+            for library in server.library_registry.list_libraries()
+            if library.path
+        ]
+        try:
+            report = views_service.publish(
+                server.vault,
+                body.views_root,
+                kinds,
+                collected,
+                other_library_roots,
+            )
+        except views_service.ViewsError as exc:
+            # The settings are left untouched, so a refused folder never becomes
+            # the recorded one and the next rebuild does not retry it.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if previous_root and not views_service.same_root(
+            previous_root, body.views_root
+        ):
+            views_service.remove(previous_root)
+        library_settings_service.set_views_config(
+            server.vault.db, body.views_root, kinds
+        )
+        return _views_payload(report)
 
     @router.post(
         "/server-config/open",

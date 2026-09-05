@@ -37,14 +37,14 @@ class ReferenceFolder(SQLModel, table=True):
             module default and legacy detection.
         tags_suffix: Filename suffix for tags sidecars (e.g. ``_tags.txt``).
             NULL means "not explicitly configured".
-        status: Lifecycle state — pending_mount, active, or mount_error.
+        status: Lifecycle state - pending_mount, active, or mount_error.
         last_scanned: Unix timestamp of the last completed scan pass.
         pending_reimport: One-shot flag marking a *deliberate* folder (re-)add.
             Set to True only by the reference-folder create endpoint; the next
-            scan that completes treats this folder as an explicit re-import —
+            scan that completes treats this folder as an explicit re-import -
             overriding the permanent-deletion ledger for files found on disk and
             clearing their ``deleted_file_log`` rows so restore can resurface
-            them — then clears the flag. No routine path (sync-toggle, rename,
+            them - then clears the flag. No routine path (sync-toggle, rename,
             relocate, mount-recovery, watcher, periodic re-scan) ever sets it, so
             a routine scan can never trigger the ledger override. Defaults to
             False, so every pre-existing folder is inert.
@@ -75,5 +75,8 @@ class ReferenceFolder(SQLModel, table=True):
             server_default="0",
         ),
     )
+
+    layout: Optional[str] = Field(default=None)
+    layout_unfiled: Optional[str] = Field(default=None)
 
     pictures: List["Picture"] = Relationship(back_populates="reference_folder")

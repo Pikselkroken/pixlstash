@@ -1,4 +1,4 @@
-// The toolbar history control — the persistent half of undo/redo.
+// The toolbar history control - the persistent half of undo/redo.
 //
 // These tests pin what the CONTROL owns: enablement and its labels, that the
 // buttons stay reachable when there is nothing to do (the design's "always
@@ -124,7 +124,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe("UndoControl — enablement", () => {
+describe("UndoControl - enablement", () => {
   it("marks both buttons unavailable when there is no history", () => {
     useOperationStore();
     const wrapper = mount(UndoControl, globalOpts);
@@ -198,10 +198,10 @@ describe("UndoControl — enablement", () => {
 
 // A share-token session keeps the control visible and inert rather than
 // unmounting it: the read-only demo has to show that undo exists. Nothing is
-// softened by an empty stack here — /operations* is owner-only, so the store
+// softened by an empty stack here - /operations* is owner-only, so the store
 // never read one, and the affordances must say that instead of implying the
 // library has no history.
-describe("UndoControl — a read-only session", () => {
+describe("UndoControl - a read-only session", () => {
   beforeEach(() => {
     readOnlyRef.value = true;
   });
@@ -254,7 +254,7 @@ describe("UndoControl — a read-only session", () => {
   });
 });
 
-describe("UndoControl — the History popover", () => {
+describe("UndoControl - the History popover", () => {
   it("anchors its viewport-clamped panel and caret to the History button", async () => {
     const { wrapper } = await mountOpen([op({ id: 13 })]);
     const menu = wrapper.find(".v-menu-stub");
@@ -305,7 +305,7 @@ describe("UndoControl — the History popover", () => {
   });
 });
 
-describe("UndoControl — the hover preview", () => {
+describe("UndoControl - the hover preview", () => {
   it("highlights every step that would be undone, not only the hovered one", async () => {
     const { wrapper } = await mountOpen([
       op({ id: 13 }),
@@ -361,9 +361,9 @@ describe("UndoControl — the hover preview", () => {
   });
 });
 
-describe("UndoControl — the History popover stays reachable without its chevron", () => {
+describe("UndoControl - the History popover stays reachable without its chevron", () => {
   // The shared toolbar collapse hides the chevron at the ≤480 container step
-  // (jsdom does not evaluate container queries — the CSS being shared with
+  // (jsdom does not evaluate container queries - the CSS being shared with
   // both bars is the coverage for the step itself). What must hold here is
   // the CONTRACT that replaces the chevron: the exposed openHistory() opens
   // the same popover, and the aria state on the (hidden) activator follows,
@@ -385,7 +385,7 @@ describe("UndoControl — the History popover stays reachable without its chevro
   });
 });
 
-describe("UndoControl — undo to a step", () => {
+describe("UndoControl - undo to a step", () => {
   it("undoes back to the clicked step and closes the popover", async () => {
     const { store, wrapper } = await mountOpen([
       op({ id: 13 }),
@@ -413,7 +413,7 @@ describe("UndoControl — undo to a step", () => {
   });
 });
 
-describe("UndoControl — keyboard reachability", () => {
+describe("UndoControl - keyboard reachability", () => {
   it("renders every control as a real button in the natural tab order", async () => {
     const { wrapper } = await mountOpen([op({ id: 13 }), op({ id: 12 })]);
     const buttons = wrapper.findAll("button");

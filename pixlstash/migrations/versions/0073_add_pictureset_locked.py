@@ -32,7 +32,7 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
 
     if "pictureset" not in inspector.get_table_names():
-        # Fresh install — the baseline migration creates the table with all
+        # Fresh install - the baseline migration creates the table with all
         # current columns via SQLModel.metadata.create_all(); nothing to do.
         return
 

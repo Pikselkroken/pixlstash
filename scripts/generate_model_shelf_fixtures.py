@@ -13,16 +13,16 @@ generated rather than committed, and three things keep that honest:
   header and one block behind it.
   :func:`_check_sparse_support` refuses to run where the holes would be
   allocated for real, rather than filling the user's disk.
-* **Distinct bytes.** Real adapters cluster hard on shape — one measured folder
+* **Distinct bytes.** Real adapters cluster hard on shape - one measured folder
   of 91 files held 28 distinct name+shape signatures, rank 32 alone being two
-  thirds of them — and they stay distinct because their *weights* differ. A hole
+  thirds of them - and they stay distinct because their *weights* differ. A hole
   is all zeroes, so shape-identical files would hash identically and 1,800 rows
   would collapse to a few hundred. :func:`_payload_slug` therefore writes
   :data:`_PAYLOAD_SLUG_BYTES` of seeded noise at the head of each payload: one
   filesystem block per file, which is what the header already cost.
 
 **The two files in the manual-import stack are byte-identical on purpose** and
-must stay that way — they share a payload seed. "The same file copied into two
+must stay that way - they share a payload seed. "The same file copied into two
 registered folders" and "an interrupted move left two paths" are states the shelf
 has to recognise, so the fixture set owes it one real duplicate pair. It is the
 only one; everything in ``adapters/`` is distinct.
@@ -396,8 +396,8 @@ def write_safetensors(
 ) -> int:
     """Write one adapter: a real header, a slug of payload, then a hole.
 
-    The header is genuine and self-consistent — offsets follow the declared
-    shapes — so the file reads back through
+    The header is genuine and self-consistent - offsets follow the declared
+    shapes - so the file reads back through
     :func:`pixlstash.utils.adapter_header.describe_adapter` unchanged. Most of
     the payload after it is a hole, so the file reports its true size without
     occupying it.
@@ -478,8 +478,8 @@ def _clean_generated_adapters(root: Path) -> None:
     otherwise leave the longer run's tail behind and the folder would hold two
     generations at once.
 
-    But ``root`` is a caller-supplied path — the CLI takes it positionally with
-    no default — and a bare ``glob("*.safetensors")`` + ``unlink()`` is one
+    But ``root`` is a caller-supplied path - the CLI takes it positionally with
+    no default - and a bare ``glob("*.safetensors")`` + ``unlink()`` is one
     mistyped argument away from deleting a real model library. So a folder is
     only ever cleaned if this generator created it, proven by the marker file
     it drops. An unmarked folder that already holds ``.safetensors`` is somebody
@@ -518,8 +518,8 @@ def iter_adapters(count: int = 1800) -> Iterator[AdapterPlan]:
 
     This is the single description of that folder:
     :func:`generate_adapter_folder` writes exactly what it yields, so a caller
-    that only wants to know what the files *are* — whether any two of them would
-    be identical, say — can run :func:`plan_bytes` over this and touch no disk.
+    that only wants to know what the files *are* - whether any two of them would
+    be identical, say - can run :func:`plan_bytes` over this and touch no disk.
 
     Args:
         count: How many adapters to describe.
@@ -684,7 +684,7 @@ def generate_manual_stack(root: Path) -> Path:
     ``config.yaml``. The shelf has to stack these on name alone and fall back
     to a placeholder cover.
 
-    **The two files are byte-identical, deliberately** — one shared payload seed.
+    **The two files are byte-identical, deliberately** - one shared payload seed.
     This is the fixture set's one duplicate pair: a copy that landed twice, or a
     move interrupted between the write and the unlink. Everything in
     ``adapters/`` is distinct, so a deduplicating shelf that finds nothing here
