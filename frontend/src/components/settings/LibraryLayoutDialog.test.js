@@ -206,34 +206,70 @@ describe("LibraryLayoutDialog", () => {
     }
   });
 
-  it("refuses to clear the last level, because a layout with none moves nothing", async () => {
+  it("clearing the last level turns the layout off, sending layout: null", async () => {
+    // Turning a layout OFF has to be reachable. `LibrarySettings.layout` being
+    // non-NULL is the gate on the whole layout tracker
+    // (`database.py::_library_has_layout`), so a library that can never send
+    // `layout: null` can never stop LayoutMoveTask renaming its files. This
+    // used to be refused outright.
+    vi.useFakeTimers();
+    // The real PATCH answers with the settings as stored, so the builder is
+    // re-applied from the response. A fixed mock would snap the cleared level
+    // back and the second clear would never reach an empty layout.
+    setLayoutSettings.mockImplementation((patch) =>
+      Promise.resolve({
+        layout: patch.layout ?? null,
+        layout_unfiled: "Unassigned",
+      }),
+    );
     const wrapper = mountDialog();
     await flushPromises();
     setLayoutSettings.mockClear();
 
     // Two levels: clearing one is fine, the other becomes level 1.
     editLevel(wrapper, 1, []);
+    await vi.advanceTimersByTimeAsync(600);
     await flushPromises();
     expect(
       wrapper.findAllComponents({ name: "v-select" })[0].props("modelValue"),
     ).toEqual(["project"]);
 
-    // Now clear the only one left: refused, and the select keeps its value.
+    // Now clear the only one left: saved as `null`, not refused.
     setLayoutSettings.mockClear();
     editLevel(wrapper, 0, []);
+    await vi.advanceTimersByTimeAsync(600);
     await flushPromises();
-    expect(setLayoutSettings).not.toHaveBeenCalled();
-    expect(
-      wrapper.findAllComponents({ name: "v-select" })[0].props("modelValue"),
-    ).toEqual(["project"]);
-    expect(wrapper.text()).toContain("Keep at least one level");
+    expect(setLayoutSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ layout: null }),
+    );
   });
 
-  it("opens a library with no layout on Project, one level, not two", async () => {
-    // The builder grows one level at a time, so an unset library is proposed
-    // the first level rather than the two-level DEFAULT_LAYOUT. It is written
-    // through the normal save path, which is what puts folders in the tree
-    // instead of an empty state; a layout on its own moves no existing file.
+  it("opening a library with no layout writes NOTHING", async () => {
+    // The regression this file exists to pin. Opening the dialog used to seed
+    // `[["project"]]` through the normal save path, PATCHing a layout onto the
+    // library as a side effect of looking at the screen. Because
+    // `LibrarySettings.layout` being non-NULL arms the layout tracker, that
+    // turned a browse into a standing decision to move the owner's files.
+    getLayoutSettings.mockResolvedValue({
+      layout: null,
+      layout_unfiled: "Unassigned",
+      default_layout: "project/person,set",
+    });
+    vi.useFakeTimers();
+    const wrapper = mountDialog();
+    await flushPromises();
+    // Well past SAVE_DEBOUNCE_MS: a debounced write would have fired by now.
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushPromises();
+
+    expect(setLayoutSettings).not.toHaveBeenCalled();
+    // One empty slot to grow into, nothing chosen.
+    const selects = wrapper.findAllComponents({ name: "v-select" });
+    expect(selects).toHaveLength(1);
+    expect(selects[0].props("modelValue")).toEqual([]);
+  });
+
+  it("a library with no layout only writes once the owner picks a level", async () => {
     getLayoutSettings.mockResolvedValue({
       layout: null,
       layout_unfiled: "Unassigned",
@@ -243,18 +279,14 @@ describe("LibraryLayoutDialog", () => {
     vi.useFakeTimers();
     const wrapper = mountDialog();
     await flushPromises();
+    expect(setLayoutSettings).not.toHaveBeenCalled();
+
+    editLevel(wrapper, 0, ["project"]);
     await vi.advanceTimersByTimeAsync(600);
     await flushPromises();
-
     expect(setLayoutSettings).toHaveBeenCalledWith(
       expect.objectContaining({ layout: "project" }),
     );
-    const selects = wrapper.findAllComponents({ name: "v-select" });
-    // One filled level plus the single empty slot to grow into: two boxes, one
-    // chosen facet. Seeding the two-level default would show two filled.
-    expect(selects).toHaveLength(2);
-    expect(selects[0].props("modelValue")).toEqual(["project"]);
-    expect(selects[1].props("modelValue")).toEqual([]);
   });
 
   it("leaves a library that already has a layout alone", async () => {
