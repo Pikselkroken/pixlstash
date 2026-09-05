@@ -27,8 +27,8 @@
   empty, so an export never writes over anything you already have there.
 - Writing a tagger or image plugin no longer starts with the git legwork.
   `pixlstash-cli plugins create` asks what you are building and leaves a
-  checkout with the folder, the template and the branch ready; `plugins submit`
-  runs the repository's own checks and opens the pull request.
+  checkout with the folder, the template and the branch ready;
+  `pixlstash-cli plugins submit` runs the repository's own checks and opens the pull request.
 - Fixed: sorting by likeness to a person took seconds per page on a large
   library, and the likeness pill had been missing from the grid since 1.10.0.
 - Fixed: a library last opened by a newer PixlStash is explained in plain words,
