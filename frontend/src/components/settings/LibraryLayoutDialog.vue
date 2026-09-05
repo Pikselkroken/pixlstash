@@ -80,9 +80,6 @@ import { errorDetail } from "../../utils/apiError";
  */
 const MAX_LEVELS = LAYOUT_FACETS.length;
 
-/** What a library with no layout of its own is proposed when the dialog opens. */
-const DEFAULT_FACET = "project";
-
 const props = defineProps({
   open: { type: Boolean, default: false },
 });
@@ -121,8 +118,6 @@ const blocked = computed(
 );
 const unavailable = computed(() => blocked.value || refused.value);
 const isOn = computed(() => segments.value.length > 0);
-/** Set when an edit that would leave no level at all was refused. */
-const atLeastOneLevel = ref(false);
 const layoutText = computed(() =>
   segments.value.map((segment) => describeSegment(segment)).join(" / "),
 );
@@ -168,20 +163,16 @@ async function load() {
   try {
     applySettings(await getLayoutSettings());
     loaded.value = true;
-    if (segments.value.length === 0) {
-      // A library with no layout opens on Project rather than an empty slot.
-      // One level, not the two-level DEFAULT_LAYOUT: levels are added one at a
-      // time, so the builder proposes the first and the owner decides whether
-      // there is a second. Routed through `scheduleSave` so seeding is an edit
-      // like any other - it writes the layout and re-reads the preview, which
-      // is what puts folders in the tree instead of an empty state.
-      //
-      // Writing on open is safe in the way that matters: a layout decides where
-      // the NEXT picture is written and never moves a file that is already
-      // here. Moving those is the button below, and a separate yes.
-      scheduleSave([[DEFAULT_FACET]]);
-      return;
-    }
+    // A library with no layout opens on an empty slot, and the dialog writes
+    // NOTHING until the owner picks a level.
+    //
+    // This used to seed `[["project"]]` through `scheduleSave`, which PATCHed
+    // a layout onto the library as a side effect of opening the dialog. That
+    // is not a safe default: `LibrarySettings.layout` being non-NULL is the
+    // gate on the whole layout tracker (`database.py::_library_has_layout`),
+    // so the seed armed `LayoutMoveTask` for every later reassignment - the
+    // dialog decided, on the owner's behalf, that their files may be moved.
+    // Opening a settings screen to read it must never be a decision.
     await refreshPreview();
   } catch (err) {
     refused.value = err?.response?.status === 403;
@@ -285,15 +276,13 @@ function setLevel(index, facets) {
   // removed, not an empty folder to draw: dropping it is what the grammar does
   // anyway, and keeping it would send a layout with a hole in it.
   const kept = next.filter((segment) => segment.length > 0);
-  if (kept.length === 0) {
-    // Every level cleared is a layout that names no folder at all, which makes
-    // the tree, the count and the move below it meaningless. Refused rather
-    // than saved: `segments` is unchanged, so the select snaps back on its own.
-    // The hint is what stops that reading as a broken dropdown.
-    atLeastOneLevel.value = true;
-    return;
-  }
-  atLeastOneLevel.value = false;
+  // Clearing the last level is how the owner turns the layout OFF, and it must
+  // stay reachable: `formatLayout([])` is `null`, the PATCH the backend takes
+  // to mean "no layout", which is what un-gates `_library_has_layout` and stops
+  // LayoutMoveTask touching files again. This used to be refused, so a library
+  // that had a layout could never be put back to not having one from the UI.
+  // `refreshPreview` clears the count and the move bar on its own once `isOn`
+  // goes false.
   scheduleSave(kept);
 }
 
@@ -645,11 +634,6 @@ function netDelta(row) {
         </template>
       </div>
 
-      <p v-if="atLeastOneLevel" class="layout-level__hint" role="status">
-        Keep at least one level. A layout with none names no folder, so there is
-        nothing to draw and nothing to move.
-      </p>
-
       <!-- The unfiled folder is where a picture with nothing to file it by is
            written, sweep or no sweep; the sweep is only whether the ones
            already here are moved there too. -->
@@ -878,15 +862,6 @@ function netDelta(row) {
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   margin: 0 0 var(--space-5);
-}
-
-/* Only ever on screen after an edit was refused, so it sits in the gap the
-   builder already leaves rather than reserving height of its own. */
-.layout-level__hint {
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  color: rgb(var(--v-theme-warning));
-  margin: calc(-1 * var(--space-3)) 0 var(--space-4);
 }
 
 .layout-dlg__error {

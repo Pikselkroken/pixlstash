@@ -9,11 +9,6 @@
   local network or Tailscale, not from further away.
 - The empty-library screen offers three ways to fill it, leading with pointing
   PixlStash at a folder you already have.
-- PixlStash Views: publish sets, people and projects as folders of links, from
-  Settings → Libraries. Links, not copies: deleting a view folder loses no
-  picture. A destination Views cannot use (inside the library, a reference
-  folder, a cloud-synced folder, or a drive without link support) is refused
-  with the reason.
 - Folder layouts: give a library a layout such as Project / Person or Set and
   new pictures are filed accordingly. Choosing a layout moves nothing that
   already exists. "Move to match" is offered, counted first, and undoable as one
@@ -27,6 +22,13 @@
 - The desktop app's first run asks which library to open before anything else.
   The telemetry question moves there too.
 - Tagger plugins can now produce tag predictions, not only the built-in tagger.
+- Export a selection to a folder on the machine running PixlStash, sidecars
+  included, and the folder opens when it is done. The destination must be
+  empty, so an export never writes over anything you already have there.
+- Writing a tagger or image plugin no longer starts with the git legwork.
+  `pixlstash-cli plugins create` asks what you are building and leaves a
+  checkout with the folder, the template and the branch ready; `plugins submit`
+  runs the repository's own checks and opens the pull request.
 - Fixed: sorting by likeness to a person took seconds per page on a large
   library, and the likeness pill had been missing from the grid since 1.10.0.
 - Fixed: a library last opened by a newer PixlStash is explained in plain words,
