@@ -273,21 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
             "so it cannot hang on a question."
         ),
     )
-    orphans = backup_parser.add_mutually_exclusive_group()
-    orphans.add_argument(
-        "--include-orphans",
-        dest="include_orphans",
-        action="store_true",
-        default=None,
-        help=(
-            "Include picture files in the library folder that have no PixlStash "
-            "record, without asking. This is what a restore then puts back."
-        ),
-    )
     orphans.add_argument(
         "--skip-orphans",
         dest="include_orphans",
         action="store_false",
+        default=None,
         help="Leave those files out of the archive, without asking.",
     )
     backup_parser.set_defaults(handler=_cmd_backup)
