@@ -652,7 +652,7 @@ function netDelta(row) {
       <div class="layout-unfiled">
         <v-checkbox
           v-model="sweepUnfiled"
-          label="Also move pictures nothing files into"
+          label="Move unassigned pictures into"
           density="compact"
           hide-details
           :disabled="migrating"
@@ -663,7 +663,7 @@ function netDelta(row) {
           variant="outlined"
           hide-details
           class="layout-unfiled__name"
-          aria-label="Folder for pictures nothing files"
+          aria-label="Folder for unassigned pictures"
           title="Where a picture with no project, person, set or tag is written"
           :disabled="migrating"
           @update:model-value="setUnfiled"
