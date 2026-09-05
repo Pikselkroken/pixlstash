@@ -57,6 +57,9 @@ import {
   vramOomNotice,
 } from "./useUpdatesSocket";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { useWsStore } from "../stores/useWsStore";
+import { useTasksStore } from "../stores/useTasksStore";
+import { useGridStore } from "../stores/useGridStore";
 import { API_BASE_URL } from "../utils/apiClient";
 
 describe("updates socket close lifecycle", () => {
@@ -406,7 +409,6 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
   });
 });
 
-
 describe("vramOomNotice names the process holding the card", () => {
   it("names the largest other process when the backend could see it", () => {
     const notice = vramOomNotice({
@@ -431,6 +433,61 @@ describe("vramOomNotice names the process holding the card", () => {
       recovered: false,
       other_processes: [],
     });
-    expect(notice.text).toContain("another program is probably holding the card");
+    expect(notice.text).toContain(
+      "another program is probably holding the card",
+    );
+  });
+});
+
+describe("the view-changed pill while the tagger runs", () => {
+  /** Mount the composable and hand back its API plus the stores it drives. */
+  function mountApi() {
+    let api = null;
+    host = mount({
+      setup() {
+        api = useUpdatesSocket({
+          gridContainer: ref(null),
+          refreshSidebar: vi.fn(),
+          refreshSidebarPicturesDebounced: vi.fn(),
+        });
+        return () => null;
+      },
+    });
+    return { api, wsStore: useWsStore(), tasksStore: useTasksStore() };
+  }
+
+  it("holds the ids while tagging runs and raises one pill when it ends", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 800 } };
+    await host.vm.$nextTick();
+    expect(tasksStore.taggingActive).toBe(true);
+
+    api.onFlagSortChanged([1, 2]);
+    api.onFlagSortChanged([2, 3]);
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
+
+    tasksStore.workerSnapshots = { TagTask: { active: false, total: 800 } };
+    await host.vm.$nextTick();
+    expect(tasksStore.taggingActive).toBe(false);
+    expect([...wsStore.sortChangedExternalIds].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("raises the pill at once when nothing is tagging", () => {
+    const { api, wsStore } = mountApi();
+    api.onFlagSortChanged([7]);
+    expect(wsStore.sortChangedExternalIds).toEqual([7]);
+  });
+
+  it("drops held ids when the grid rebuilds", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 8 } };
+    await host.vm.$nextTick();
+    api.onFlagSortChanged([5]);
+
+    useGridStore().gridVersion += 1;
+    await host.vm.$nextTick();
+    tasksStore.workerSnapshots = {};
+    await host.vm.$nextTick();
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
   });
 });
