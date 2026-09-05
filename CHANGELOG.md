@@ -1,3 +1,10 @@
+# [1.11.1]
+
+- `libraries backup` now counts picture files in the library folder that have
+  no PixlStash record and asks whether to include them. Enter keeps them, so a
+  restore puts back exactly what was there; `--skip-orphans` and
+  `--include-orphans` answer without asking, and `--yes` includes them.
+
 # [1.11.0] [Security:High]
 
 - Several dependabot updates: transformers, xmldom, humanfs, fast-uri
