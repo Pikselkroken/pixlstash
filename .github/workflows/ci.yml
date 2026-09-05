@@ -587,6 +587,7 @@ jobs:
           tests/test_tag_worker.py
           tests/test_tagger_user_plugins.py
           tests/test_thumbnail_cache_headers.py
+          tests/test_thumbnail_location.py
           tests/test_token_identity.py
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py

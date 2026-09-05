@@ -139,8 +139,8 @@ def register_routes(router, server):
         )
 
         # Reference-folder pictures are the user's own files in the user's own
-        # folders; this library does not write beside them (the same rule that
-        # puts their thumbnails under `.ref_thumbs`). They render per request.
+        # folders; this library does not write beside them. They render per
+        # request.
         cacheable = not (pic.file_path and os.path.isabs(pic.file_path))
         if not is_heic and cacheable and (apply_wm or needs_transpose):
             file_stem, file_ext = os.path.splitext(file_path)

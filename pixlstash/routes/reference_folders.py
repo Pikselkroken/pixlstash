@@ -1646,15 +1646,7 @@ def create_router(server) -> APIRouter:
         if image_root:
             removed_thumbs = 0
             for rel_path in file_paths:
-                thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
-                if thumb_path and os.path.isfile(thumb_path):
-                    try:
-                        os.remove(thumb_path)
-                        removed_thumbs += 1
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
-                        )
+                removed_thumbs += ImageUtils.remove_thumbnail(image_root, rel_path)
             if removed_thumbs:
                 logger.info(
                     "Removed %d orphan thumbnails for reference folder: %s",
