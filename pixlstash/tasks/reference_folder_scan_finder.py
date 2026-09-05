@@ -1,5 +1,13 @@
-"""Finder that queues scan tasks for active and pending-mount reference folders."""
+"""Finder that queues scan tasks for reference folders and the library root.
 
+The library's own picture root is scanned by the same task under the folder id
+``None``: since v1.11 a layout turns the root into a human-readable folder tree
+the owner reorganises by hand, and a rename nobody follows is a row the purge
+sweep deletes an hour later, tags and all. The root has no ``ReferenceFolder``
+row, so its schedule lives on this finder rather than in a column.
+"""
+
+import os
 import time
 
 from sqlmodel import Session, select
@@ -40,7 +48,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
     paths before Phase-2 validation (isdir / readable check).
     """
 
-    def __init__(self, database, path_mapper) -> None:
+    def __init__(self, database, path_mapper, image_root=None) -> None:
         """Initialize the finder.
 
         Args:
@@ -48,10 +56,34 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             path_mapper: A :class:`~pixlstash.utils.path_mapper.PathMapper`
                 instance used to translate host paths to container paths
                 in Docker deployments.
+            image_root: The library's own picture root, scanned like a
+                reference folder under the id ``None``. ``None`` disables the
+                root scan (tests that build the finder without a root).
         """
         super().__init__()
         self._db = database
         self._path_mapper = path_mapper
+        self._image_root = os.path.abspath(image_root) if image_root else None
+        # None means "due now": the first scan after boot follows whatever the
+        # owner renamed while the app was closed.
+        self._root_last_scanned: float | None = None
+        self._root_scanned_once = False
+
+    def mark_root_due(self) -> None:
+        """Ask for the library root to be rescanned on the next planning cycle."""
+        self._root_last_scanned = None
+
+    def root_scan_complete(self) -> bool:
+        """Whether the library root has been scanned at least once since boot.
+
+        ``MissingFilePurgeFinder`` waits on this: until the first root scan has
+        matched renamed files with their rows, a vanished path is not yet known
+        to be a deletion. Always ``True`` when there is no root to scan.
+        """
+        return self._image_root is None or self._root_scanned_once
+
+    def _note_root_scanned(self) -> None:
+        self._root_scanned_once = True
 
     def finder_name(self) -> str:
         return "ReferenceFolderScanFinder"
@@ -70,8 +102,6 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             return list(session.exec(select(ReferenceFolder)).all())
 
         folders: list[ReferenceFolder] = self._db.run_immediate_read_task(fetch_folders)
-        if not folders:
-            return None
 
         for rf in sorted(folders, key=_sort_key):
             last_scanned = float(rf.last_scanned) if rf.last_scanned else 0.0
@@ -132,7 +162,31 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 ),
             )
 
-        return None
+        return self._root_task(folders, now)
+
+    def _root_task(self, folders: list[ReferenceFolder], now: float):
+        """The library-root scan, when it is due. Folders go first: a root scan
+        walks the whole library, so it must not push a pending mount back."""
+        if self._image_root is None or not os.path.isdir(self._image_root):
+            return None
+        last = self._root_last_scanned
+        if last is not None and (now - last) < _RESCAN_INTERVAL_S:
+            return None
+        # Stamped when the task is handed out, not when it finishes, so a slow
+        # scan is not queued a second time behind itself.
+        self._root_last_scanned = now
+        return ReferenceFolderScanTask(
+            database=self._db,
+            folder_id=None,
+            folder_path=self._image_root,
+            resolved_path=self._image_root,
+            # A reference folder registered inside the root is that folder's
+            # scan to index, not the root's.
+            other_resolved_paths=frozenset(
+                self._path_mapper.resolve(rf.folder) for rf in folders
+            ),
+            on_root_scanned=self._note_root_scanned,
+        )
 
     def _mark_mount_error(self, folder_id: int) -> None:
         def update(session: Session) -> None:

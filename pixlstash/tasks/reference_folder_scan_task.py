@@ -11,6 +11,7 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.deleted_file_log import DeletedFileLog
+from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
@@ -48,6 +49,13 @@ logger = get_logger(__name__)
 _BUILD_CHUNK_SIZE = 128
 _MAX_BUILD_WORKERS = 8
 
+# Top-level directories PixlStash itself writes under the library root, and so
+# must never be indexed by a root scan: snapshots (snapshot_service), tmp (set
+# and face thumbnail caches). Dot-directories (.ref_thumbs, .staging) are
+# pruned by name shape. vault.db and friends are not media and fall out on
+# extension.
+_ROOT_INTERNAL_DIRS = frozenset({"snapshots", "tmp"})
+
 
 def _is_supported_file(file_path: str) -> bool:
     return is_supported_media_file(file_path)
@@ -79,15 +87,27 @@ class ReferenceFolderScanTask(BaseTask):
     ``move_reconciliation_service.record_pending_reviews``): a root with no
     layout has no vocabulary a folder name could contradict, so there is
     nothing for Phase 5 to reconcile even though the file still moved.
+
+    **The library's own picture root is scanned by this same task** with
+    ``folder_id=None``. A laid-out root is a folder tree the owner reorganises
+    in their file manager, and without this scan a rename there is a row the
+    purge sweep deletes an hour later. The root differs from a reference folder
+    in exactly the ways ``layout_move_service.LayoutRoot`` names: pictures are
+    the ``reference_folder_id IS NULL`` rows, ``Picture.file_path`` is stored
+    relative to the root (:meth:`_stored`), the layout comes from
+    ``LibrarySettings`` and there is no status, sidecar sync or suffix
+    detection. Everything else - move following by pixel hash, the move
+    journal, the review queue, the thumbnail carry - is shared unchanged.
     """
 
     def __init__(
         self,
         database,
-        folder_id: int,
+        folder_id: int | None,
         folder_path: str,
         resolved_path: str,
         other_resolved_paths: frozenset[str] = frozenset(),
+        on_root_scanned=None,
     ):
         super().__init__(
             task_type="ReferenceFolderScanTask",
@@ -102,6 +122,9 @@ class ReferenceFolderScanTask(BaseTask):
         self._folder_path = folder_path
         self._resolved_path = resolved_path
         self._other_resolved_paths = other_resolved_paths
+        # ``None`` is the library's own picture root (see the class docstring).
+        self._is_root = folder_id is None
+        self._on_root_scanned = on_root_scanned
         # Sidecar filename suffixes for this folder, loaded at the start of
         # _run_task(); None means "use known conventions / module defaults".
         self._tags_suffix: str | None = None
@@ -136,6 +159,11 @@ class ReferenceFolderScanTask(BaseTask):
         # tags/description sidecars are resolved for new and existing pictures;
         # the sync flags decide whether missing sidecars are exported to disk.
         def fetch_folder_config(session: Session):
+            if self._is_root:
+                settings = session.exec(select(LibrarySettings)).first()
+                layout = settings.layout if settings is not None else None
+                unfiled = settings.layout_unfiled if settings is not None else None
+                return (None, None, False, False, False, layout, unfiled)
             rf = session.get(ReferenceFolder, folder_id)
             if rf is None:
                 return None
@@ -209,6 +237,13 @@ class ReferenceFolderScanTask(BaseTask):
             # Prune subdirectories that are roots of other reference folders so
             # their files are only indexed by their own scan task.
             dirs[:] = [d for d in dirs if os.path.join(root, d) not in other_roots]
+            if self._is_root:
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if not d.startswith(".")
+                    and not (root == resolved and d in _ROOT_INTERNAL_DIRS)
+                ]
             # Prune a PixlStash Views tree. Every file under it is a link to a
             # picture indexed somewhere else already, and os.walk lists a
             # symlinked *file* in ``files`` -- only symlinked directories are
@@ -240,20 +275,30 @@ class ReferenceFolderScanTask(BaseTask):
         # `new_paths`; without them, the scan would re-import the same file every
         # time it ran while the picture sat in the scrapheap.
         def fetch_existing(session: Session) -> list[Picture]:
-            return list(
-                session.exec(
-                    select(Picture).where(
-                        Picture.reference_folder_id == folder_id,
-                    )
-                ).all()
+            owner = (
+                Picture.reference_folder_id.is_(None)
+                if self._is_root
+                else Picture.reference_folder_id == folder_id
             )
+            return list(session.exec(select(Picture).where(owner)).all())
 
         existing_pictures: list[Picture] = self._db.run_task(
             fetch_existing, priority=DBPriority.LOW
         )
-        existing_by_path: dict[str, Picture] = {
-            p.file_path: p for p in existing_pictures if p.file_path
-        }
+        # Keyed by the path os.walk produces. For a reference folder that is
+        # the stored absolute path as-is; for the root the stored path is
+        # relative, so it is resolved here and a row whose path escapes the
+        # root is left out - not in disk_paths either, so never "removed".
+        existing_by_path: dict[str, Picture] = {}
+        for p in existing_pictures:
+            if not p.file_path:
+                continue
+            key = p.file_path
+            if self._is_root:
+                key = os.path.normpath(os.path.join(resolved, p.file_path))
+                if not path_is_within(key, resolved):
+                    continue
+            existing_by_path[key] = p
 
         # Fetch the permanent-deletion ledger.  When a user empties the
         # scrapheap and the reference folder forbids file deletion
@@ -290,13 +335,13 @@ class ReferenceFolderScanTask(BaseTask):
         if is_explicit_import:
             new_paths = set(candidate_new)
             override_path_shas = {
-                DeletedFileLog.hash_path(p) for p in candidate_new
+                DeletedFileLog.hash_path(self._stored(p)) for p in candidate_new
             } & deleted_path_shas
         else:
             new_paths = {
                 p
                 for p in candidate_new
-                if DeletedFileLog.hash_path(p) not in deleted_path_shas
+                if DeletedFileLog.hash_path(self._stored(p)) not in deleted_path_shas
             }
             override_path_shas = set()
         removed_paths = set(existing_by_path.keys()) - disk_paths
@@ -376,7 +421,8 @@ class ReferenceFolderScanTask(BaseTask):
             # becomes NULL-width, which is what an in-flight
             # ThumbnailGenerationTask would otherwise be free to overwrite.
             carried_thumbnails = {
-                old: self._carry_thumbnail(old, new) for old, new in moved_paths.items()
+                old: self._carry_thumbnail(self._stored(old), self._stored(new))
+                for old, new in moved_paths.items()
             }
 
             def apply_moves(
@@ -391,7 +437,10 @@ class ReferenceFolderScanTask(BaseTask):
                 # that has both paths and a session.
                 ours = claim_own_moves(
                     session,
-                    [(old_path, new_path) for _, new_path, _, old_path in pairs],
+                    [
+                        (self._stored(old_path), self._stored(new_path))
+                        for _, new_path, _, old_path in pairs
+                    ],
                 )
                 # The journal's only other reader is ``LayoutMoveTask``, which
                 # runs only when a picture is due a check - so in a library
@@ -419,7 +468,7 @@ class ReferenceFolderScanTask(BaseTask):
                             new_path,
                         )
                         continue
-                    pic.file_path = new_path
+                    pic.file_path = self._stored(new_path)
                     # The explicit move route (routes/reference_folders.py) sets
                     # this from the destination basename, and _build_picture
                     # initialises it from the path.  Leaving it alone would make
@@ -431,9 +480,10 @@ class ReferenceFolderScanTask(BaseTask):
                         pic.thumbnail_width = None
                         pic.thumbnail_height = None
                     session.add(pic)
-                    if (old_path, new_path) not in ours:
+                    stored_pair = (self._stored(old_path), self._stored(new_path))
+                    if stored_pair not in ours:
                         external.append(pic_id)
-                        external_moves.append((pic_id, old_path, new_path))
+                        external_moves.append((pic_id, *stored_pair))
                 if external_moves and self._layout is not None:
                     # Only a laid-out root has a vocabulary this move could
                     # contradict (v1.11 Phase 5); see
@@ -532,7 +582,10 @@ class ReferenceFolderScanTask(BaseTask):
             tags_by_pic = self._fetch_folder_tags(folder_id)
 
         caption_updates: list[dict] = []
-        for file_path, pic in existing_by_path.items():
+        # The root has no sidecar convention: a stray .txt beside a managed
+        # picture is not a caption, and reading it as one would tag the picture.
+        sidecar_candidates = () if self._is_root else existing_by_path.items()
+        for file_path, pic in sidecar_candidates:
             if file_path in removed_paths or pic.deleted:
                 # Don't touch sidecar data for removed/scrapheap pictures.
                 continue
@@ -642,6 +695,17 @@ class ReferenceFolderScanTask(BaseTask):
                 external_moved_picture_ids if self._layout is not None else []
             ),
         }
+
+    def _stored(self, path: str) -> str:
+        """The value ``Picture.file_path`` holds for an on-disk *path*.
+
+        Absolute for a reference folder, root-relative with ``/`` for the
+        library root - the two conventions ``ImageUtils.get_thumbnail_path``
+        and ``layout_move_service.stored_form`` already read.
+        """
+        if not self._is_root:
+            return path
+        return os.path.relpath(path, self._resolved_path).replace(os.sep, "/")
 
     def _fetch_folder_tags(self, folder_id: int) -> dict[int, list[str]]:
         """Return ``{picture_id: [tag, ...]}`` for this folder's pictures.
@@ -1028,13 +1092,13 @@ class ReferenceFolderScanTask(BaseTask):
         # inside the reference folder where the next scan would index it.
         if thumbnail_bytes:
             ImageUtils.write_thumbnail_bytes(
-                self._db.image_root, file_path, thumbnail_bytes
+                self._db.image_root, self._stored(file_path), thumbnail_bytes
             )
 
         size_bytes = os.path.getsize(file_path)
 
         pic = Picture(
-            file_path=file_path,
+            file_path=self._stored(file_path),
             reference_folder_id=folder_id,
             pixel_sha=pixel_sha,
             format=img_format,
@@ -1103,7 +1167,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         tags_suffix = _accepted("tags_suffix")
         description_suffix = _accepted("description_suffix")
-        if tags_suffix is None and description_suffix is None:
+        if self._is_root or (tags_suffix is None and description_suffix is None):
             return
 
         def update(session: Session) -> None:
@@ -1126,6 +1190,13 @@ class ReferenceFolderScanTask(BaseTask):
         update_last_scanned: bool = False,
         clear_pending_reimport: bool = False,
     ) -> None:
+        if self._is_root:
+            # No row to stamp; the finder keeps the root's schedule. A finished
+            # scan (not a mount_error exit) is what the purge sweep waits for.
+            if status == ReferenceFolderStatus.ACTIVE and self._on_root_scanned:
+                self._on_root_scanned()
+            return
+
         def update(session: Session) -> None:
             rf = session.get(ReferenceFolder, self._folder_id)
             if rf is None:
