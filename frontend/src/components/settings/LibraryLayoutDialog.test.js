@@ -511,6 +511,37 @@ describe("LibraryLayoutDialog", () => {
     );
   });
 
+  it("says undoing, with an indeterminate bar, while the undo runs", async () => {
+    // Undo is one request. Rendering it through the per-pass "Moving X of Y"
+    // template read the finished run's count against a post-run preview of 0.
+    runLayoutMigrationPass.mockResolvedValue(PASS_DONE);
+    let finishUndo;
+    undoBatchById.mockReturnValue(
+      new Promise((resolve) => {
+        finishUndo = resolve;
+      }),
+    );
+
+    const wrapper = mountDialog();
+    await flushPromises();
+    await buttonWith(wrapper, "Move them now").trigger("click");
+    await flushPromises();
+    await buttonWith(wrapper, "Undo").trigger("click");
+    await flushPromises();
+
+    const text = wrapper.find(".layout-consequence__num").text();
+    expect(text).toContain("Undoing…");
+    expect(text).not.toContain("of 0");
+    expect(wrapper.find("progress").attributes("value")).toBeUndefined();
+    expect(buttonWith(wrapper, "Stop after this pass")).toBeFalsy();
+
+    finishUndo({ operations: [] });
+    await flushPromises();
+    expect(wrapper.find(".layout-consequence__num").text()).not.toContain(
+      "Undoing",
+    );
+  });
+
   it("will not move on a stale count, and says counting instead of a number", async () => {
     // The bar carries the number beside the verb, so a modal confirm would be a
     // second yes for one gesture. The button being inert while the number does

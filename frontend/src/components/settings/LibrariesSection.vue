@@ -120,6 +120,12 @@ const cliCommands = computed(() => {
       description:
         "Forget one. No files are removed and nothing inside the folder changes.",
     },
+    {
+      verb: "backup",
+      syntax: "backup <name> <destination>",
+      description:
+        "Write the library and the hub to one archive, even while it is open. Read it back with restore.",
+    },
   ].map((item) => ({ ...item, command: `${base} ${item.syntax}` }));
 });
 

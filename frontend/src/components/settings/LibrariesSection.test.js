@@ -655,6 +655,7 @@ describe("teaching the CLI", () => {
     // the poorer of the two, which it is not.
     expect(wrapper.text()).toContain("rename <name> <new name>");
     expect(wrapper.text()).toContain("No files are removed");
+    expect(wrapper.text()).toContain("backup <name> <destination>");
   });
 
   it("keeps the commands behind a button so the pane stays short", async () => {
