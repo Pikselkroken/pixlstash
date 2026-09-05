@@ -33,19 +33,21 @@ SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
 DEFAULT_ENTRY_CAP = 200_000
 
 
-#: What ``ImageUtils.get_thumbnail_path`` writes beside a managed picture.
+#: The suffix every thumbnail PixlStash writes carries.
 THUMBNAIL_SUFFIX = f"_thumb{THUMBNAIL_EXTENSION}"
 
 
 def is_pixlstash_thumbnail(name_or_path: str) -> bool:
     """True when this file is a thumbnail PixlStash itself wrote.
 
-    Managed pictures keep their thumbnail *beside* the original as
+    Until #1164 a managed picture kept its thumbnail *beside* the original as
     ``<name>_thumb.webp``, so a walk of a library's own folder finds them, and
     ``.webp`` is a supported extension. Indexing one makes it a picture, which
     earns it a thumbnail of its own - ``<name>_thumb_thumb.webp`` - which the
     next walk indexes in turn. That is not a slow leak: it is a generation per
-    pass, and it was found four deep in a real library.
+    pass, and it was found four deep in a real library. New thumbnails live in
+    ``.pixlstash-thumbnails/``, a dot-folder every walk prunes, but a library
+    is migrated one picture at a time, so the old siblings stay excluded.
     """
     return name_or_path.lower().endswith(THUMBNAIL_SUFFIX)
 

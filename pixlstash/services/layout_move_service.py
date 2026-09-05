@@ -809,23 +809,21 @@ def _carry_thumbnail(
     """Move a moved picture's thumbnail to its new path-derived name.
 
     **Both arguments are the STORED form of the path, never the absolute one**,
-    because that is the form ``get_thumbnail_path`` branches on: an absolute
-    path means a reference-folder picture and routes the bitmap to a hashed name
-    under ``.ref_thumbs``, and a relative one means a library picture whose
-    thumbnail is a sibling file. Handing it the absolute path of a library
-    picture would look for the sibling under ``.ref_thumbs``, find nothing, and
-    strand a bitmap at the old name that nothing ever collects - the sweep only
-    ever looks where a row's *current* path says.
+    because the thumbnail's name is a hash of exactly that string
+    (``get_thumbnail_path``): a library picture is keyed by its root-relative
+    path and a reference-folder picture by its absolute one, and handing over
+    the other form looks for a name nobody wrote, finds nothing, and strands a
+    bitmap at the old name that nothing ever collects - the sweep only ever
+    looks where a row's *current* path says. ``find_thumbnail`` also brings a
+    pre-#1164 sibling bitmap home before the rename.
     """
-    old_thumb = ImageUtils.get_thumbnail_path(image_root, old_stored)
+    old_thumb = ImageUtils.find_thumbnail(image_root, old_stored)
     new_thumb = ImageUtils.get_thumbnail_path(image_root, new_stored)
     if not old_thumb or not new_thumb:
         return False
     if old_thumb == new_thumb:
         return os.path.exists(new_thumb)
     try:
-        if not os.path.exists(old_thumb):
-            return False
         os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
         os.replace(old_thumb, new_thumb)
         return True

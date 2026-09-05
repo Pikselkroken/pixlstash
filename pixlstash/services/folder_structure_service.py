@@ -503,8 +503,8 @@ class FolderStructureRead:
             )
             lowered = {f.lower() for f in filenames}
             # `is_supported_media_file` drops our own `_thumb.webp` files, which
-            # a library that has been indexed before is full of, sitting beside
-            # every original. Counting them made the total grow on every re-read
+            # a library indexed before #1164 is full of, sitting beside every
+            # original. Counting them made the total grow on every re-read
             # of the same folder - the "different number each time" - and
             # sampling them spent the face pass on 96px thumbnails.
             folder.direct_media = sum(

@@ -1429,18 +1429,7 @@ def remove_picture_files(
                 file_path,
                 was_reference_protected,
             )
-        thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
-        if thumb_path and os.path.isfile(thumb_path):
-            try:
-                os.remove(thumb_path)
-            except Exception as e:
-                logger.warning(
-                    "Delete-forever: failed to delete thumbnail %s for "
-                    "picture id=%s: %s",
-                    thumb_path,
-                    pic_id,
-                    e,
-                )
+        ImageUtils.remove_thumbnail(image_root, rel_path)
     return unconfirmed
 
 

@@ -729,16 +729,17 @@ def test_swapping_the_project_moves_the_file_and_keeps_the_owners_subfolder(libr
 
 
 def test_the_thumbnail_follows_the_file(library):
-    """A library picture's thumbnail is a SIBLING file, not a ``.ref_thumbs``
-    entry, and the difference is which path form the mover hands to
-    ``get_thumbnail_path``: it branches on absolute-vs-relative. Handing it the
-    absolute path would look under ``.ref_thumbs``, find nothing, blank the
-    stored dimensions and strand a bitmap nothing ever collects."""
+    """A library picture's thumbnail is keyed by its RELATIVE stored path, and
+    the mover has to hand ``get_thumbnail_path`` exactly that form: the name is
+    a hash of the string. Handing it the absolute path would look for a name
+    nobody wrote, find nothing, blank the stored dimensions and strand a bitmap
+    nothing ever collects."""
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     session, root = library["session"], library["root"]
     picture = session.get(Picture, library["picture_id"])
     old_thumb = ImageUtils.get_thumbnail_path(root, picture.file_path)
+    os.makedirs(os.path.dirname(old_thumb), exist_ok=True)
     with open(old_thumb, "wb") as handle:
         handle.write(b"thumbnail")
     picture.thumbnail_width = 320
@@ -1204,6 +1205,7 @@ def test_the_rollback_brings_the_thumbnail_back_too(library):
     session, root = library["session"], library["root"]
     picture = session.get(Picture, library["picture_id"])
     old_thumb = ImageUtils.get_thumbnail_path(root, picture.file_path)
+    os.makedirs(os.path.dirname(old_thumb), exist_ok=True)
     with open(old_thumb, "wb") as handle:
         handle.write(b"thumbnail")
 

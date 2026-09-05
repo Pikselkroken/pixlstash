@@ -719,11 +719,12 @@ class ReferenceFolderScanTask(BaseTask):
     def _carry_thumbnail(self, old_path: str, new_path: str) -> bool:
         """Move a followed picture's thumbnail bitmap to its new path-derived name.
 
-        Thumbnails live at ``sha256(file_path)`` under ``image_root/.ref_thumbs``
-        (``ImageUtils.get_thumbnail_path``), so a followed move renames the
-        bitmap rather than re-rendering it.  Nothing sweeps that directory by
-        anything but a row's current ``file_path``, so a bitmap left at the old
-        name would never be reachable and never be collected.
+        Thumbnails live at ``sha256(file_path)`` under
+        ``image_root/.pixlstash-thumbnails`` (``ImageUtils.get_thumbnail_path``),
+        so a followed move renames the bitmap rather than re-rendering it.
+        Nothing sweeps that directory by anything but a row's current
+        ``file_path``, so a bitmap left at the old name would never be reachable
+        and never be collected.
 
         Returns:
             ``True`` when the new path now has the bitmap, so the caller can keep
@@ -732,13 +733,11 @@ class ReferenceFolderScanTask(BaseTask):
             ``MissingThumbnailFinder`` renders a fresh one.
         """
         image_root = self._db.image_root
-        old_thumb = ImageUtils.get_thumbnail_path(image_root, old_path)
+        old_thumb = ImageUtils.find_thumbnail(image_root, old_path)
         new_thumb = ImageUtils.get_thumbnail_path(image_root, new_path)
         if not old_thumb or not new_thumb or old_thumb == new_thumb:
             return bool(old_thumb and old_thumb == new_thumb)
         try:
-            if not os.path.exists(old_thumb):
-                return False
             os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
             os.replace(old_thumb, new_thumb)
             return True
@@ -1025,8 +1024,8 @@ class ReferenceFolderScanTask(BaseTask):
                     exc,
                 )
 
-        # Write thumbnail into image_root/.ref_thumbs/ so it doesn't land
-        # inside the reference folder and get re-indexed on the next scan.
+        # The thumbnail goes to image_root/.pixlstash-thumbnails/, never
+        # inside the reference folder where the next scan would index it.
         if thumbnail_bytes:
             ImageUtils.write_thumbnail_bytes(
                 self._db.image_root, file_path, thumbnail_bytes

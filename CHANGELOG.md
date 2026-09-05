@@ -4,6 +4,11 @@
   no PixlStash record and asks whether to include them. Enter keeps them, so a
   restore puts back exactly what was there; `--skip-orphans` and
   `--include-orphans` answer without asking, and `--yes` includes them.
+- Thumbnails no longer sit next to your pictures. They live in one hidden
+  `.pixlstash-thumbnails` folder at the top of the library, so your own folders
+  hold only your own files and nothing PixlStash writes is ever mistaken for a
+  picture. Existing thumbnails move there on their own, the first time each is
+  needed; nothing is re-generated.
 
 # [1.11.0] [Security:High]
 
