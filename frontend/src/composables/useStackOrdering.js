@@ -18,7 +18,11 @@ import {
   shiftRangesForDelta,
 } from "../utils/utils.js";
 import { getPictureId } from "../utils/media.js";
-import { isLockedRefusal, lockedSetsSentence, lockedSets } from "../utils/dedup.js";
+import {
+  isLockedRefusal,
+  lockedSetsSentence,
+  lockedSets,
+} from "../utils/dedup.js";
 import {
   getStack,
   listStackPictures,
@@ -637,7 +641,10 @@ export function useStackOrdering(
   }
 
   async function refreshExpandedStacksAfterFetch() {
-    const expanded = Array.from(expandedStackIds.value || []);
+    // Every mutation of expandedStackIds assigns a fresh Set, so identity is
+    // enough to tell whether an expand/collapse landed during the await below.
+    const startIds = expandedStackIds.value;
+    const expanded = Array.from(startIds || []);
     if (!expanded.length) return;
     const fetchStart = visibleStart.value;
     const fetchEnd = visibleEnd.value;
@@ -673,6 +680,13 @@ export function useStackOrdering(
         })),
       ),
     );
+
+    if (expandedStackIds.value !== startIds) {
+      // A collapse (or another expand) superseded this refresh while the
+      // members were loading; writing nextExpanded back would re-expand
+      // stacks the user just collapsed.
+      return;
+    }
 
     for (const { stackId, fallbackCount, loaded } of fetchResults) {
       if (loaded !== false) {
