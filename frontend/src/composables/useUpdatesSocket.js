@@ -582,13 +582,13 @@ export function useUpdatesSocket({
   // library changes tags in eight-picture batches, and raising the pill per
   // batch had it back on screen seconds after every refresh for as long as the
   // run lasted. One pill when the run ends says the same thing once.
-  let heldSortChangedIds = [];
+  // A Set, so a long pass costs one insert per id rather than a rebuild of
+  // everything held so far on every eight-picture batch.
+  const heldSortChangedIds = new Set();
   function onFlagSortChanged(ids) {
     if (!Array.isArray(ids) || !ids.length) return;
     if (tasksStore.taggingActive) {
-      const held = new Set(heldSortChangedIds);
-      for (const id of ids) held.add(id);
-      heldSortChangedIds = Array.from(held);
+      for (const id of ids) heldSortChangedIds.add(id);
       return;
     }
     const pending = new Set(wsStore.pendingExternalImportIds);
@@ -599,9 +599,9 @@ export function useUpdatesSocket({
   watch(
     () => tasksStore.taggingActive,
     (active) => {
-      if (active || !heldSortChangedIds.length) return;
-      const ids = heldSortChangedIds;
-      heldSortChangedIds = [];
+      if (active || !heldSortChangedIds.size) return;
+      const ids = Array.from(heldSortChangedIds);
+      heldSortChangedIds.clear();
       onFlagSortChanged(ids);
     },
   );
@@ -627,7 +627,7 @@ export function useUpdatesSocket({
     () => {
       wsStore.clearPendingExternalImportIds();
       wsStore.clearSortChangedExternalIds();
-      heldSortChangedIds = [];
+      heldSortChangedIds.clear();
     },
   );
 
