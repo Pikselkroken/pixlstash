@@ -132,6 +132,7 @@ from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
+from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -459,7 +460,7 @@ class Server(
             logger=logger,
         ).run()
         _log_stage("startup checks (disk/VRAM/CUDA/SSL)")
-        write_json_atomic(server_config_path, self._server_config)
+        persist_server_config(server_config_path, self._server_config)
 
         # Internal loopback transport (Electron desktop shell).
         #
@@ -1260,6 +1261,9 @@ class Server(
             # falling back to CPU with no explanation.
             _valid_devices = {"cpu", "cuda", "gpu", "auto"}
             if _device_override in _valid_devices:
+                # Remember what the owner configured: persist_server_config
+                # writes that back, never the runtime's answer.
+                server_config[DEVICE_ON_DISK_KEY] = server_config.get("default_device")
                 server_config["default_device"] = _device_override
             else:
                 logger.warning(

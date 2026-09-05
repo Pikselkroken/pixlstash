@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority, VaultDatabase
 from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
-from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.system_utils import default_max_vram_gb
 
 
@@ -1254,7 +1254,7 @@ class AuthService:
         # nested under the USERNAME branch, so removing only PASSWORD_HASH left
         # the stale hash on disk.
         if removed_any:
-            write_json_atomic(self._server_config_path, self._server_config)
+            persist_server_config(self._server_config_path, self._server_config)
         return user
 
     def token_from_value(self, token_value: str) -> Optional[UserToken]:
