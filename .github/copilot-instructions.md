@@ -1,58 +1,44 @@
 # Copilot and Claude Instructions for PixlStash
 
-## The repository layout: work in `develop/`
+## Working in the checkout
 
-`~/Projects/pixlstash` is a container, not a checkout:
+Several agent sessions may run against one clone at once and cannot see each
+other. Before touching anything: `git status && git branch --show-current`. If
+the tree holds uncommitted changes you did not make, or the current branch is
+another session's work in progress, say so and stop rather than switching under
+it.
+
+Start work on its own branch with the base set explicitly: feature work on
+`develop`, bugfixes on `main` (see the PR base rules):
 
 ```
-~/Projects/pixlstash/
-  develop/       the main checkout: all code work happens and is tested here
-  main/          a worktree pinned to main, the release rig, never edited
-  testing/       scratch rig for trying several PRs together, nothing leaves it
-  worktrees/     older per-session worktrees; make a new one only when asked
+git fetch origin && git checkout -b <branch> origin/<base>
 ```
-
-`develop/` holds the git dir and is where branches are made, edited, tested,
-committed and pushed. It is not pinned to the `develop` branch: check out
-whatever branch the work is on.
 
 **Do not create a worktree on your own.** When every session made one, the cost
 was fifty-odd checkouts and nothing where the person testing expected it. If
 one is genuinely necessary (a second lane at the same time, a long bisect) say
 so and let the person decide.
 
-### Starting work
-
-```
-cd ~/Projects/pixlstash/develop
-git status && git branch --show-current
-git fetch origin && git checkout -b <branch> origin/<base>
-```
-
-Set the base explicitly: feature work on `develop`, bugfixes on `main` (see the
-PR base rules). If the tree holds uncommitted changes you did not make, or the
-current branch is another session's work in progress, say so and stop rather
-than switching under it. Several sessions run against this repository at once
-and cannot see each other.
-
 **The hub and the vault live outside the repo** (platformdirs user data dir), so
 every checkout runs against the same library. Do not "fix" it into per-checkout
 data.
 
-Commit and push from `develop/`, open the PR, and when it merges
-`git checkout develop && git pull`. Stage by name, never `git add -A`: never
+Commit and push from the checkout you are in, open the PR, and when it merges
+`git checkout <base> && git pull`. Stage by name, never `git add -A`: never
 stage a file you did not write in this session.
 
 Sessions that only read (questions, reviewing pushed code) can stay put.
 
 ### Say where the work can be tested
 
-A session that changes behaviour ends by stating the branch and the commands:
+A session that changes behaviour ends by stating the checkout, the branch and
+the commands:
 
 ```
-Test at: ~/Projects/pixlstash/develop   (branch <branch>, based on <base>)
-  backend:  cd ~/Projects/pixlstash/develop && python -m pixlstash.app
-  frontend: cd ~/Projects/pixlstash/develop/frontend && npm run dev
+Test at: <checkout>   (branch <branch>, based on <base>)
+  backend:  cd <checkout> && python -m pixlstash.app
+  frontend: cd <checkout>/frontend && npm run dev
 ```
 
 If the work is already merged, say so and say to pull. "It's on the branch" is
