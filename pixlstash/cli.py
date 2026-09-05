@@ -273,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
             "so it cannot hang on a question."
         ),
     )
-    orphans.add_argument(
+    backup_parser.add_argument(
         "--skip-orphans",
         dest="include_orphans",
         action="store_false",
