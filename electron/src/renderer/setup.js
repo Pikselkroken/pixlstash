@@ -193,27 +193,45 @@ function renderSteps() {
   questionSteps().forEach((step, i) => {
     const cell = document.getElementById(`value-${step}`);
     if (!cell) return;
-    cell.innerHTML = i < at || (i === at && step === 'library') ? answerFor(step) : '';
+    const answer = i < at || (i === at && step === 'library') ? answerFor(step) : null;
+    // The icon is a constant declared in this file, so it goes in as markup.
+    // The label is not: for the library step it is the owner's own folder name,
+    // and a folder may legally be called `<img src=x onerror=...>` on every
+    // platform PixlStash runs on. It goes in as text, the way every other
+    // dynamic value in this renderer already does (see `renderLines`).
+    cell.innerHTML = answer ? answer.icon : '';
+    if (answer) {
+      const label = document.createElement('span');
+      label.textContent = answer.text;
+      cell.appendChild(label);
+    }
   });
 }
 
+/**
+ * The answer shown beside a completed step, as `{icon, text}` or null.
+ *
+ * Split rather than returned as one HTML string so the caller can put the icon
+ * in as markup and the label in as text. Returning markup made the folder name
+ * an HTML injection point.
+ */
 function answerFor(step) {
   if (step === 'library') {
-    if (!mode) return '';
+    if (!mode) return null;
     const icon = mode === 'open' && inspection && inspection.isLibrary ? LOGO : FOLDER_ICON;
     // The folder's own name, clipped by CSS when even that is long. The whole
     // path is on the row, because the name alone cannot tell two "Pictures"
     // apart.
-    return `${icon}<span>${basename(els.folder.value)}</span>`;
+    return { icon, text: basename(els.folder.value) };
   }
   if (step === 'compute') {
-    return `${CHIP_ICON}<span>${selectedComputeLabel()}</span>`;
+    return { icon: CHIP_ICON, text: selectedComputeLabel() };
   }
   if (step === 'privacy') {
     const opt = PRIVACY_OPTIONS[privacyVariant].find((o) => o.key === privacyChoice);
-    return opt ? `${barsMark(opt.bars)}<span>${opt.name}</span>` : '';
+    return opt ? { icon: barsMark(opt.bars), text: opt.name } : null;
   }
-  return '';
+  return null;
 }
 
 function barsMark(lit) {
