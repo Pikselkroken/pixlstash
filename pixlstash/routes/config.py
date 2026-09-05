@@ -25,7 +25,7 @@ from pixlstash.services import (
     views_service,
 )
 from pixlstash.telemetry import mark_install_established
-from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
     changed_penalised_tags,
@@ -986,7 +986,7 @@ def create_router(server) -> APIRouter:
         server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
-            write_json_atomic(config_path, server._server_config)
+            persist_server_config(config_path, server._server_config)
         return {"status": "success", "daily_snapshots": body.daily_snapshots}
 
     def _scrapheap_retention_payload() -> dict:
@@ -1089,7 +1089,7 @@ def create_router(server) -> APIRouter:
         server.vault.set_scrapheap_retention(effective_days, reduced_at)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
-            write_json_atomic(config_path, server._server_config)
+            persist_server_config(config_path, server._server_config)
         return _scrapheap_retention_payload()
 
     @router.get(
