@@ -25,7 +25,7 @@ every checkout runs against the same library. Do not "fix" it into per-checkout
 data.
 
 Commit and push from the checkout you are in, open the PR, and when it merges
-`git checkout develop && git pull`. Stage by name, never `git add -A`: never
+`git checkout <base> && git pull`. Stage by name, never `git add -A`: never
 stage a file you did not write in this session.
 
 Sessions that only read (questions, reviewing pushed code) can stay put.
