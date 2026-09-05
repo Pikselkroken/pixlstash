@@ -12,11 +12,11 @@ accumulate from:
 
 What counts as "not orphaned" (kept):
   * every managed picture file (``Picture.file_path`` joined to image_root);
-  * its thumbnail ``{stem}_thumb.webp``;
+  * its pre-#1164 sibling thumbnail ``{stem}_thumb.webp``;
   * its sidecar caption ``{stem}.txt`` / ``{stem}.caption``;
   * system content under image_root: ``vault.db`` (+ ``-wal``/``-shm``/
-    ``-journal``), and the ``snapshots/``, ``.ref_thumbs/``, ``tmp/`` and
-    ``.orphan_trash/`` directories.
+    ``-journal``), and the ``snapshots/``, ``.pixlstash-thumbnails/``,
+    ``.ref_thumbs/``, ``tmp/`` and ``.orphan_trash/`` directories.
 
 Reference-folder pictures have absolute ``file_path`` (outside image_root), so
 they are never scanned.
@@ -45,7 +45,13 @@ _SIDECAR_EXTENSIONS = (".txt", ".caption")
 
 # Top-level directories under image_root that hold system / derived content
 # and must never be treated as orphans. Pruned from the walk entirely.
-_EXCLUDED_DIRS = {"snapshots", ".ref_thumbs", "tmp", ".orphan_trash"}
+_EXCLUDED_DIRS = {
+    "snapshots",
+    ".pixlstash-thumbnails",
+    ".ref_thumbs",
+    "tmp",
+    ".orphan_trash",
+}
 
 # System files that legitimately live at the image_root top level.
 _EXCLUDED_FILES = {

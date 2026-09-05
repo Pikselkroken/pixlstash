@@ -169,8 +169,8 @@ def register_routes(router, server):
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        thumb_path = ImageUtils.get_thumbnail_path(vault.image_root, pic.file_path)
-        if thumb_path and os.path.exists(thumb_path):
+        thumb_path = ImageUtils.find_thumbnail(vault.image_root, pic.file_path)
+        if thumb_path:
             if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.debug(

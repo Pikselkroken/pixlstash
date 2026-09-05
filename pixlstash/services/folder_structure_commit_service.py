@@ -447,8 +447,9 @@ def register_reference_folder(
 #: Top-level folders under a library's own root that hold PixlStash's files,
 #: not the owner's pictures: the snapshot tree, and the ``tmp/`` cache the
 #: set and character thumbnail routes write into. Every walk of a library's
-#: root skips these; the dot-folder rule covers the rest (``.ref_thumbs``,
-#: ``.pixlstash``, ``.staging``). Found the hard way: an import of a library's
+#: root skips these; the dot-folder rule covers the rest
+#: (``.pixlstash-thumbnails``, the older ``.ref_thumbs``, ``.staging``). Found
+#: the hard way: an import of a library's
 #: own root indexed 24 set and face thumbnails as pictures.
 LIBRARY_OWN_FOLDERS = ("snapshots", "tmp")
 
@@ -601,11 +602,11 @@ def local_import_pictures(
     image_root = os.path.normpath(server.vault.image_root)
 
     # Prune dot-folders exactly as the Phase 2 read does (`folder_structure_
-    # service.py`): a vault's own caches - `.ref_thumbs/`, `.pixlstash`
-    # sidecars - sit *inside* image_root, and root_path is commonly
-    # image_root itself. Without this prune, local_import would re-import
-    # every reference-folder thumbnail already sitting in `.ref_thumbs/` as
-    # if it were a picture of its own (`.webp` is a supported extension).
+    # service.py`): a vault's own caches - `.pixlstash-thumbnails/`, the
+    # older `.ref_thumbs/` - sit *inside* image_root, and root_path is
+    # commonly image_root itself. Without this prune, local_import would
+    # re-import every thumbnail in there as if it were a picture of its own
+    # (`.webp` is a supported extension).
     own = library_own_folders(image_root)
     file_paths: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root_path):

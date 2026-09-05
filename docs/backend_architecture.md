@@ -4049,11 +4049,22 @@ and updates `file_path` on the existing row instead.
 - **Confirmation stops at the size.** Import de-dup follows a candidate match
   with a full-byte hash of *both* sides; here one side is a file that no longer
   exists, so the stored columns are all there is to compare.
+- **Every thumbnail lives in `image_root/.pixlstash-thumbnails/` (#1164).**
+  `ImageUtils.get_thumbnail_path` names it `<stem>_<sha256(stored file_path)[:16]>_thumb.webp`
+  for managed and reference pictures alike; the hash is of the STORED path
+  (relative for a library picture, absolute for a reference one), so callers hand
+  it that form and never the resolved one. Before 1.11.1 a managed picture's
+  bitmap sat beside it as `<stem>_thumb.webp` and a reference picture's under
+  `.ref_thumbs/`. Nothing migrates them in one go: `find_thumbnail` moves a
+  legacy bitmap home the first time it is looked for, the startup pass in
+  `maintenance.py` looks for every one, and `remove_thumbnail` deletes at every
+  location a picture's bitmap could be. `is_pixlstash_thumbnail` keeps excluding
+  the old siblings from every walk until they have all moved.
 - **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
   `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
-  alongside the picture rather than abandoned: nothing sweeps `.ref_thumbs` by
-  anything but a row's *current* `file_path`, so a bitmap left at the old name
-  would never be reachable and never be collected. Only when there is nothing to
+  alongside the picture rather than abandoned: nothing sweeps
+  `.pixlstash-thumbnails` by anything but a row's *current* `file_path`, so a
+  bitmap left at the old name would never be reachable and never be collected. Only when there is nothing to
   carry, or the rename fails, are `thumbnail_width` / `thumbnail_height` blanked
   so `MissingThumbnailFinder` renders a fresh one.
 - **`original_file_name` follows too**, matching the explicit move route
@@ -4536,8 +4547,7 @@ worth knowing:
   the same validity rule as the watermark cache — the cached file must be at
   least as new as the source, so the next rotate invalidates it by rewriting the
   original. Reference-folder pictures are rendered per request instead: this
-  library does not write beside the user's own files, the same rule that puts
-  their thumbnails under `.ref_thumbs`.
+  library does not write beside the user's own files.
 - **Re-encoding drops PNG text chunks, so they are carried across explicitly.**
   This response is what "Save image as" hands the user, and a saved copy of a
   rotated picture that had quietly lost its `workflow` / `prompt` would be a
@@ -6320,7 +6330,8 @@ layout and for a file that is not going into the library's own root at all (a
 ComfyUI edit or a plugin output written beside its original in a reference
 folder is already where the owner's tree put it). `ImageUtils.create_picture_from_bytes`
 takes the answer as `subfolder` and keeps the stored path **relative**, so the
-picture is still a library picture and its thumbnail is still a sibling file;
+picture is still a library picture and its thumbnail is still keyed by that
+relative path;
 only `output_dir` makes a path absolute, and that means a reference folder.
 
 Wired at every site that writes into the library root: the staged import, the

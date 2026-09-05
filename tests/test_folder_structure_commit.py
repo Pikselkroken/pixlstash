@@ -481,18 +481,18 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
     characters = owner.get(f"{API}/characters").json()
     assert any(c["name"] == "nova" for c in characters)
 
-    # The originals are untouched - no move, rename or copy - but a sibling
-    # `_thumb.webp` per image is expected: for a MANAGED picture (unlike a
-    # reference-folder one) the thumbnail lands next to the source file, same
-    # as any other ordinary import. `_snapshot` doesn't distinguish; filter
-    # it back out before comparing.
-    after = _snapshot(root)
-    after_originals = {k: v for k, v in after.items() if not k.endswith("_thumb.webp")}
-    assert after_originals == before, (
-        "local_import must move, rename or copy zero files"
+    # The originals are untouched - no move, rename or copy, and since #1164
+    # not even a thumbnail beside them: those land in the library's own
+    # `.pixlstash-thumbnails/`, one per imported image.
+    assert _snapshot(root) == before, (
+        "local_import must move, rename, copy or write zero files in the folder"
     )
-    new_thumbs = [k for k in after if k.endswith("_thumb.webp")]
-    assert len(new_thumbs) == 3, "each imported image should get its own thumbnail"
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    for relative in ("2027/nova/a.jpg", "2027/nova/b.jpg", "2027/raw/c.jpg"):
+        stored = f"local-import-library/{relative}"
+        thumb = ImageUtils.get_thumbnail_path(server.vault.image_root, stored)
+        assert os.path.isfile(thumb), f"{relative} should have a thumbnail at {thumb}"
 
 
 def test_local_import_wakes_the_planner_as_each_chunk_lands(

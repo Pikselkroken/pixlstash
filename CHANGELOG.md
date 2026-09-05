@@ -1,3 +1,11 @@
+# [1.11.1]
+
+- Thumbnails no longer sit next to your pictures. They live in one hidden
+  `.pixlstash-thumbnails` folder at the top of the library, so your own folders
+  hold only your own files and nothing PixlStash writes is ever mistaken for a
+  picture. Existing thumbnails move there on their own, the first time each is
+  needed; nothing is re-generated.
+
 # [1.11.0] [Security:High]
 
 - Several dependabot updates: transformers, xmldom, humanfs, fast-uri
