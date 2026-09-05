@@ -36,7 +36,7 @@
 - Fixed: the desktop GPU overlay could shadow the app's own dependencies on
   Windows and silently fall back to CPU.
 - Fixed: the Docker image refused to start over folder permissions. Loose
-  permissions now warn instead of refuse.
+  permissions now warn instead of refusing to start.
 - Fixed: regenerating descriptions ran the captioner twice per picture, left
   the task-manager count stuck, blanked the grid, and could leave pictures
   without a description. The VRAM readout on Windows no longer shows 0.
