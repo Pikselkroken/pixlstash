@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version as package_version
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -693,6 +694,47 @@ def _opened_first(connection, sql: str, params: tuple = ()):
     return dict(row) if isinstance(row, sqlite3.Row) else row
 
 
+RELEASES_URL = "https://github.com/pikselkroken/pixlstash/releases/latest"
+_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations" / "versions"
+
+
+def known_vault_revisions() -> set[str]:
+    """Return every Alembic revision id this build understands."""
+    pattern = re.compile(r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M)
+    revisions: set[str] = set()
+    for path in _MIGRATIONS_DIR.glob("*.py"):
+        if path.stem.startswith("__"):
+            continue
+        match = pattern.search(path.read_text(encoding="utf-8"))
+        if match:
+            revisions.add(match.group(1))
+    return revisions
+
+
+def newer_library_message(unknown: list[str], *, library: str) -> str:
+    """Explain a vault written by a later build than this one, in three lines.
+
+    *library* names the vault as the reader knows it. The revision ids stay
+    in, last, because a bug report needs them.
+    """
+    try:
+        this = f"This version ({package_version('pixlstash')})"
+    except PackageNotFoundError:
+        this = "This version"
+
+    def number(rev: str) -> str:
+        return rev.split("_", 1)[0]  # "0113_reset_..." -> "0113"
+
+    latest = number(max(known_vault_revisions(), default="none"))
+    return (
+        f"{library} was last opened by a newer PixlStash. {this} cannot "
+        "read it; nothing has been changed.\n"
+        f"  Update PixlStash and try again: {RELEASES_URL}\n"
+        f"  (Library revision {', '.join(map(number, unknown))}; this version "
+        f"knows up to {latest}.)"
+    )
+
+
 def _opened_revision_rows(connection) -> list[str]:
     try:
         exists = _opened_first(
@@ -765,21 +807,13 @@ def prevalidate_opened_library(connection, library: Library) -> None:
             f"contains {observed}, but this registration expects {library.uuid}."
         )
 
-    known = set()
-    revision_pattern = re.compile(
-        r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M
-    )
-    versions = Path(__file__).resolve().parent.parent / "migrations" / "versions"
-    for path in versions.glob("*.py"):
-        match = revision_pattern.search(path.read_text(encoding="utf-8"))
-        if match:
-            known.add(match.group(1))
+    known = known_vault_revisions()
     unknown = [rev for rev in _opened_revision_rows(connection) if rev not in known]
     if unknown:
         raise HubBootstrapError(
-            "This library was last opened by a newer version of PixlStash "
-            f"(database revision {', '.join(unknown)}). Update PixlStash before "
-            "opening it. Nothing has been changed."
+            newer_library_message(
+                unknown, library=f'The library "{library.name}" ({library.path})'
+            )
         )
 
 

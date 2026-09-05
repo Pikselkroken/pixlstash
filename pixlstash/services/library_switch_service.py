@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import re
 import shutil
 import threading
 from enum import Enum
@@ -40,6 +39,8 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.hub.bootstrap import (
+    known_vault_revisions,
+    newer_library_message,
     registered_vault_path,
 )
 from pixlstash.routes.pictures import clear_stats_cache
@@ -99,19 +100,6 @@ def _bring_up(vault, label: str) -> None:
     vault.start()
 
 
-def known_vault_revisions() -> set[str]:
-    """Return every Alembic revision id this build understands."""
-    revisions: set[str] = set()
-    pattern = re.compile(r'^revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M)
-    for path in _MIGRATIONS_DIR.glob("*.py"):
-        if path.stem.startswith("__"):
-            continue
-        match = pattern.search(path.read_text(encoding="utf-8"))
-        if match:
-            revisions.add(match.group(1))
-    return revisions
-
-
 def assert_vault_not_newer(vault_path: str) -> None:
     """Refuse a vault whose schema this build has never heard of.
 
@@ -144,9 +132,7 @@ def assert_vault_not_newer(vault_path: str) -> None:
     unknown = [row[0] for row in rows if row[0] and row[0] not in known]
     if unknown:
         raise LibrarySwitchError(
-            f"This library was last opened by a newer version of PixlStash "
-            f"(database revision {', '.join(unknown)}). Update PixlStash before "
-            "switching to it. Nothing has been changed."
+            newer_library_message(unknown, library=f"The library at {vault_path}")
         )
 
 
