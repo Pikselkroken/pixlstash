@@ -1,84 +1,55 @@
-# [1.11.1]
-
-- Thumbnails no longer sit next to your pictures. They live in one hidden
-  `.pixlstash-thumbnails` folder at the top of the library, so your own folders
-  hold only your own files and nothing PixlStash writes is ever mistaken for a
-  picture. Existing thumbnails move there on their own, the first time each is
-  needed; nothing is re-generated.
-
 # [1.11.0] [Security:High]
 
-- Several dependabot updates: transformers, xmldom, humanfs, fast-uri
-- Settings → Libraries adds, renames and removes libraries, so the command line
-  is no longer the only way. `+ Add a library…` takes one folder and works out
-  what it is: a library you already made is added as it is, with its tags,
-  scores and people; a folder of pictures is counted and brought in; an empty
-  folder starts a fresh library. Nothing in that folder is moved, renamed or
-  copied. A folder already covered by another library is refused, and says which
-  one.
-- Each row's ⋯ menu opens, renames or stops using that library. Stopping using
-  one removes no file: PixlStash forgets it, everything inside the folder stays
-  where it is, and adding the folder again brings back its tags and its share
-  links. The library you have open has no Stop using this — switch away first.
-- Two libraries can no longer be given the same name, which used to break every
-  command-line verb that takes one for both of them.
-- Managing libraries is available on the machine running PixlStash, or over your
-  local network or Tailscale, because it points the server at folders on that
-  machine. A session from further away is told so rather than shown controls
-  that fail.
-- The first screen of a new library now offers three ways to fill it instead of
-  one, and leads with the one that moves nothing: point PixlStash at a folder
-  you already have and it reads it where it sits. Dropping pictures in and
-  connecting ComfyUI are the other two. It no longer talks about a "database".
-- **PixlStash Views** — publish your sets, people and projects as folders of
-  links, in Settings → Libraries. They are links, not copies: nothing is
-  duplicated, no original moves, and deleting the whole folder loses no picture.
-  One picture in three projects appears in three view folders while its one real
-  file stays where you put it. Views are *additional* to the folders you already
-  keep, never a replacement for them.
-- A view folder is an ordinary folder, so if you put a file of your own in one,
-  PixlStash leaves it exactly where it is. A rebuild removes links and nothing
-  else — never a file whose only copy is there — and tells you which files it
-  kept. Switching a kind off removes its folder, so nothing stale is left behind.
-- **Your folders, laid out.** A library can now be given a folder layout —
-  `Project / Person or Set` to begin with — and PixlStash writes new pictures
-  where that says. Choosing a layout moves nothing that is already there: the
-  folders you have are where your projects and people came from in the first
-  place, so they are already right. A library with no layout chosen behaves
-  exactly as it always has, and that is still every library — the screen for
-  choosing one lands with the rest of this release.
-- **A picture only moves when its folder stops being true.** Adding a second
-  project, or a second person, moves nothing — it is still in the first one.
-  Removing the project a picture's folder is named after is what moves it, and
-  swapping one project for another. Two changes in a row are one move rather
-  than a trip through the inbox folder and back.
-- A move keeps the folders you made underneath: a picture in
-  `2024 Shoots / Mira / 2026-08` that changes project ends up in
-  `Client · Nordvik / Mira / 2026-08`, not flattened into one folder. Renaming a
-  project, a person or a set renames their folder and moves no files at all.
-- A folder that does not match the layout is never wrong. Drop something into a
-  folder of your own and PixlStash has nothing to contradict, so it stays there —
-  permanently, with no setting to remember. A folder left empty is kept, never
-  deleted.
-- Where a picture is filed truthfully but not where the layout would put it
-  today, **Move to match** is available for it. It is offered, never automatic.
-  Every move is counted before it happens and the whole batch is one undo.
-- PixlStash records the moves it makes itself, so a folder you reorganise by hand
-  is still read as your decision and its own writes are not.
-- Views checks the folder you pick before writing anything, and says why when it
-  cannot use one: inside your library (it would break backups), inside a
-  reference folder (every link would be re-imported as a second copy), a folder
-  your cloud client syncs (it would upload the pictures again instead of the
-  links), or a drive with no link support at all — exFAT and FAT drives have
-  neither kind, and on Windows symbolic links need administrator rights or
-  Developer Mode, in which case PixlStash uses hard links instead. Hard links
-  cannot span two drives, so a library split across disks gets the folders it
-  can make and a list of the ones it could not, rather than a silently
-  incomplete tree.
-- Update the transformers library, which captioning and search embeddings run
-  on, to 5.12.1, picking up an upstream fix for a path traversal in its
-  `save_pretrained` writer that is rated high. This release carries no security
-  tag: PixlStash never calls that writer, so no installed version was exposed.
+- Settings → Libraries: add, rename and stop using libraries without the
+  command line. Adding a folder works out what it is: an existing library, a
+  folder of pictures, or an empty one. Nothing in the folder is moved or copied,
+  and stopping using a library deletes nothing.
+- Two libraries can no longer share a name.
+- Library management is offered on the machine running PixlStash and over your
+  local network or Tailscale, not from further away.
+- The empty-library screen offers three ways to fill it, leading with pointing
+  PixlStash at a folder you already have.
+- PixlStash Views: publish sets, people and projects as folders of links, from
+  Settings → Libraries. Links, not copies: deleting a view folder loses no
+  picture. A destination Views cannot use (inside the library, a reference
+  folder, a cloud-synced folder, or a drive without link support) is refused
+  with the reason.
+- Folder layouts: give a library a layout such as Project / Person or Set and
+  new pictures are filed accordingly. Choosing a layout moves nothing that
+  already exists. "Move to match" is offered, counted first, and undoable as one
+  batch. A picture moves only when its folder stops being true, never when a
+  second project or person is added. Folders you made underneath are kept,
+  renames move no files, and a folder that does not match the layout is left
+  alone.
+- Thumbnails no longer sit next to your pictures. They live in a hidden
+  `.pixlstash-thumbnails` folder at the library root; existing ones move there
+  the first time they are needed.
+- The desktop app's first run asks which library to open before anything else.
+  The telemetry question moves there too.
+- Tagger plugins can now produce tag predictions, not only the built-in tagger.
+- Fixed: sorting by likeness to a person took seconds per page on a large
+  library, and the likeness pill had been missing from the grid since 1.10.0.
+- Fixed: a library last opened by a newer PixlStash is explained in plain words,
+  with a link to the latest release.
+- Fixed: a library database that will not open offers to start over instead of
+  crashing at startup. The old file is renamed, never deleted.
+- Fixed: the desktop GPU overlay could shadow the app's own dependencies on
+  Windows and silently fall back to CPU.
+- Fixed: the Docker image refused to start over folder permissions. Loose
+  permissions now warn instead of refuse.
+- Fixed: regenerating descriptions ran the captioner twice per picture, left
+  the task-manager count stuck, blanked the grid, and could leave pictures
+  without a description. The VRAM readout on Windows no longer shows 0.
+- Fixed: the desktop runtime's device choice was written into
+  `server-config.json`, so a boot on the CPU runtime made later launches run
+  on CPU.
+- Fixed: the "View changed externally" pill kept reappearing for as long as a
+  tagging run lasted.
+- Fixed: Collapse all could re-expand stacks while a refresh was in flight.
+- Fixed: the Libraries CLI dialog did not list the backup command.
+- Fixed: the macOS DMG volume size.
+- Dependency updates: transformers 5.12.1 (a high-severity path traversal in a
+  writer PixlStash does not call), xmldom, humanfs, fast-uri.
 
 # [1.10.2]
 
