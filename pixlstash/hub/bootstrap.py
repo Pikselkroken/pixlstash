@@ -32,7 +32,6 @@ from pixlstash.hub.registry import (
     validate_vault_folder,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.services.portable_identity import sanitize_vault_connection
 
@@ -372,13 +371,16 @@ def _register_first_library(
     registry: LibraryRegistry,
     image_root: str,
 ) -> Library:
-    # Every missing component 0700, and nothing that already exists touched:
-    # `image_root` is routinely a picture folder the owner has had for years,
-    # and start-up is not the moment to take read access to it away from the
-    # rest of their machine. `registry.create` uses the same helper for the same
-    # reason; a directory this call did not make is the owner's, and the guarded
-    # open needs it not to be group/world-*writable*, not to be 0700.
-    mkdir_private(Path(image_root))
+    # Creation only, and it must still raise on a path that is not one: an
+    # empty string or an existing *file* has to end start-up here rather than
+    # be registered as a library, which is why this is `makedirs` and not
+    # `mkdir_private` (that one no-ops on both). What it creates is 0700; what
+    # was already there keeps the mode the owner gave it, because `image_root`
+    # is routinely a picture folder they have had for years and start-up is not
+    # the moment to take read access to it away from the rest of their machine.
+    # The guarded open needs it not to be group/world-*writable*, not to be
+    # 0700, and `startup_permissions` offers that repair with their consent.
+    os.makedirs(image_root, mode=0o700, exist_ok=True)
     vault_path = os.path.join(image_root, VAULT_FILENAME)
     exists = os.path.isfile(vault_path)
 
@@ -592,7 +594,12 @@ def prevalidate_library_fingerprint(library: Library) -> None:
 
 
 def _vault_is_loadable(library: Library) -> bool:
-    """True when the file at ``vault_path`` is one this build could open.
+    """False only when the file at ``vault_path`` is decisively not a vault.
+
+    **True does not promise the database opens** - it promises the caller has
+    no grounds to offer starting over, which is the only decision this answers.
+    A vault this machine merely could not read reports True for that reason;
+    see below.
 
     Read-only, and about the file rather than the registration: a vault that
     passes here but still fails to open is a different problem with a different
