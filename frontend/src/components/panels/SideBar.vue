@@ -506,9 +506,17 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 
+/** A path made comparable: trailing separators dropped, `\` folded to `/`.
+ *  Only ever for comparing - the original spelling is what goes on to the
+ *  server, and normalising that would be a different (and wrong) change. */
+function _normPath(p) {
+  return String(p || "")
+    .replace(/[\\/]+$/, "")
+    .replace(/\\/g, "/");
+}
+
 function _samePath(a, b) {
-  const norm = (p) => String(p || "").replace(/[\\/]+$/, "");
-  return norm(a) !== "" && norm(a) === norm(b);
+  return _normPath(a) !== "" && _normPath(a) === _normPath(b);
 }
 
 /**
@@ -520,8 +528,12 @@ function _samePath(a, b) {
  * names instead of the folder root. `null` means "the route names the folder
  * itself", which is the ordinary case and the pre-existing behaviour.
  *
- * Both separators, because the path comes from the server and may be a Windows
- * path while the browser showing it is not.
+ * Compared through `_normPath`, so the two sides may disagree about separators
+ * and still match. They come from the same server and normally agree, but the
+ * `?path=` half is a URL: it survives being shared, edited and pasted, and a
+ * `/` where the folder listing said `\` would otherwise silently drop the
+ * reader back to the folder root. The value handed back keeps its original
+ * spelling - only the comparison is normalised.
  *
  * @param {string} root the reference folder's own path
  * @returns {{pathPrefix: string, label: string}|null}
@@ -530,11 +542,9 @@ function routeSubfolderUnder(root) {
   const filter = viewStore.view?.folderFilter;
   if (!filter?.pathPrefix || !root) return null;
   if (_samePath(filter.pathPrefix, root)) return null;
-  const prefix = String(root).replace(/[\\/]+$/, "");
-  const inside =
-    filter.pathPrefix.startsWith(`${prefix}/`) ||
-    filter.pathPrefix.startsWith(`${prefix}\\`);
-  return inside ? filter : null;
+  return _normPath(filter.pathPrefix).startsWith(`${_normPath(root)}/`)
+    ? filter
+    : null;
 }
 
 // The pending mapping this library can act on. A `local_import` entry names

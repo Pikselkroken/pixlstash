@@ -76,6 +76,8 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const ROOT = "/home/me/library/refs";
 const SUB = "/home/me/library/refs/2024/summer";
+// A second folder, spelled the way a Windows server's listing spells it.
+const WIN_ROOT = "D:\\library\\refs";
 
 // `status: active` with no `last_scanned` is what makes `selectedFolderScanning`
 // true while this folder is selected, which is how a test sees the sidebar's
@@ -91,9 +93,11 @@ const FOLDER = {
   last_scanned: null,
 };
 
+const WIN_FOLDER = { id: 6, folder: WIN_ROOT, label: "Win refs", active: true };
+
 function respond(url) {
   if (String(url).includes("/reference-folders")) {
-    return { data: { folders: [FOLDER], in_docker: true } };
+    return { data: { folders: [FOLDER, WIN_FOLDER], in_docker: true } };
   }
   return { data: [] };
 }
@@ -118,11 +122,13 @@ function lastFolderPayload(wrapper) {
   return emitted ? emitted[emitted.length - 1][0] : null;
 }
 
-/** Put the app on `/ref-folder/5`, with or without a `?path=`. */
-function routeToFolder(path) {
+/** Put the app on `/ref-folder/<id>`, with or without a `?path=`. */
+function routeToFolder(path, folderKey = "rf-5") {
   useViewStore().view = {
-    folderKey: "rf-5",
-    folderFilter: path ? { pathPrefix: path, label: path.split("/").pop() } : null,
+    folderKey,
+    folderFilter: path
+      ? { pathPrefix: path, label: path.split(/[/\\]/).pop() }
+      : null,
   };
 }
 
@@ -219,6 +225,27 @@ describe("restoring /ref-folder/:id", () => {
     await flushPromises();
 
     expect(sidebarStore.folderScanning).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("matches a subfolder whose separators disagree with the folder's", async () => {
+    // The folder listing and the `?path=` come from the same server and
+    // normally agree, but the query half is a URL: it gets shared, edited and
+    // pasted. A `/` where the listing said `\` used to read as "not inside
+    // this folder" and drop the reader back to the folder root.
+    const slashed = `${WIN_ROOT.replace(/\\/g, "/")}/2024/summer`;
+    const wrapper = await mountSidebar();
+    routeToFolder(slashed, "rf-6");
+    await flushPromises();
+
+    // The payload keeps the URL's own spelling - only the comparison that got
+    // it here was normalised.
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 6,
+      pathPrefix: slashed,
+      label: "summer",
+    });
 
     wrapper.unmount();
   });
