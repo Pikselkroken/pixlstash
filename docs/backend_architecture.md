@@ -6192,26 +6192,71 @@ does the only filesystem *read* left: indexing every file into a `Picture`
 row, in place, exactly as it does for any other reference folder.
 `register_reference_folder` is deliberately **not** the same function as
 `routes.reference_folders.create_reference_folder` — it is a smaller,
-one-directional insert kept separate because the two entry points validate
-different things upstream (that route re-derives accessibility from a
-caller-supplied path and checks conflicts against every other registered
-folder, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has
-no UI for; this one starts from a path a settled read already walked) — and
-because their **conflict answers differ**. `create_reference_folder` 409s
-outright on an existing path. `register_reference_folder`'s `fetch_or_create`
-is narrower: it reuses an existing row **only** when that row has never
-completed a scan (`last_scanned is None`) — the shape of a commit that
-registered the folder and then crashed before the first scan finished, safe to
-resume because nothing has been indexed under it yet that a fresh wait could
-miss. A row that **has** completed a scan — an unrelated pre-existing
-reference folder, or an earlier commit of this same path from a since-cancelled
-read run again — is refused with a `CommitError` rather than silently reused,
-because reusing it would apply this mapping to whatever happens to be indexed
-under it already, not to what the read the owner just accepted actually found.
-"Cancel and organise later" during `Main` or `MapTree` therefore leaves
-nothing committed and nothing registered at all — there is no reference folder
-row yet at that point for a resumed commit to collide with — and the narrow
-crash-recovery case above is the only path re-use is safe.
+one-directional insert kept separate because the two entry points start from
+different places (that route re-derives accessibility from a caller-supplied
+path, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has no
+UI for; this one starts from a path a settled read already walked).
+
+**The conflict rule is not one of those differences.** Both call
+`utils.reference_folder_validator.validate_reference_folder_conflicts` — a root
+may not equal, contain, or sit inside `image_root` or any other registered
+reference folder. This path used to check *nothing*, so a root that contained
+`image_root` (the commit route's own guard only refuses one equal to or inside
+it) or that swallowed another reference folder was accepted, and two scan tasks
+then each indexed the same files believing they owned them.
+
+What does still differ is the answer to **an existing row at the same path**.
+`create_reference_folder` 409s outright. `register_reference_folder` reuses one
+in exactly two shapes, and refuses every other:
+
+- the row has never completed a scan (`last_scanned is None`) — a commit that
+  registered the folder and crashed before the first scan finished; nothing has
+  been indexed under it that a fresh wait could miss;
+- the row is **this commit's own**, which `_commit_owns_this_root` decides from
+  the durable record rather than from the path: the `FolderMappingCommit` for
+  this `task_id` is still `pending` and its `stage` has left `registering`,
+  which it does only once `register_reference_folder` has already returned once.
+  The mapping provably did not run — assigning settles the record inside its own
+  transaction — so this is a commit interrupted *after* its scan completed, and
+  finishing it is the entire purpose of the record. Refusing it (which is what
+  the `last_scanned` test alone did) wedged the record `pending` for ever:
+  every start-up resumed it and failed identically.
+
+Anything else — an unrelated pre-existing reference folder, or an earlier
+*settled* commit of this same path from a since-cancelled read run again — is
+refused with a `CommitError` rather than silently reused, because reusing it
+would apply this mapping to whatever happens to be indexed under it already,
+not to what the read the owner just accepted actually found. "Cancel and
+organise later" during `Main` or `MapTree` leaves nothing committed and nothing
+registered at all, so there is no row at that point for a resumed commit to
+collide with.
+
+### The newest accepted mapping is the only resumable one
+
+`FolderMappingCommit` promises "at most one row is `pending`", and the endpoint's
+in-memory single-slot rule is not enough to keep it: a commit that *fails*
+deliberately leaves its record pending (the failure is usually transient and
+losing the intent is what the record exists to prevent) while clearing the
+in-memory slot, so the owner can legitimately accept a second mapping over the
+first. `record_pending_commit` therefore marks every older pending row
+`STATE_SUPERSEDED` as it writes the new one. Without it both rows are pending:
+the next start-up resumes the newest, and the start-up *after that* resumes the
+older one and re-applies a mapping the owner has already replaced.
+
+### One pruning rule for every walk of a tree
+
+§24's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
+`.ref_thumbs/`, `.pixlstash` sidecar stores, anything the owner hid) and so does
+`local_import_pictures`; `ReferenceFolderScanTask` did not. Since a
+reference-mode commit is precisely the read and that scan looking at one root,
+the two disagreed about what was in it — the read's `picture_count` excluded the
+cache and the scan indexed every file in it as a picture, which the mapping then
+filed. The rule is `utils.media_files.is_hidden_entry`, now called by all three.
+The scan additionally keeps rows under a newly-pruned dot-folder out of
+`removed_paths` (`has_hidden_component`), for the reason the views-tree prune
+beside it spells out: "absent from `disk_paths`" is what that task hard-deletes a
+`Picture` for, and a path it never looked for says nothing about whether the file
+is still there.
 
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last
@@ -6231,6 +6276,21 @@ workers started the same second the commit reported `done`. A `vault.wake()`
 per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
 running on the first chunk while the walk continues; it is a scheduler poke,
 not an event, so the SPA is still told about the import once, at the end.
+
+### The assigning step costs a bounded number of statements
+
+`_link_pictures` resolves every folder first and only then links, because with
+the answers in hand the human-label ledger can be written in **one batched
+pass** (`label_ledger.record_human_labels`) rather than one indexed `SELECT` per
+`(picture, tag)`. On a fresh `local_import` no predictions exist yet, so the
+per-pair shape was a round trip per picture per tag-mapped folder. The `IN`
+lists either side of it — `local_import_pictures`'s existing-`file_path` load
+and `apply_local_mapping`'s id load — are chunked through
+`utils.sql_chunking.chunked` for the separate reason that unchunked they are the
+whole import and cross SQLite's bound-parameter cap.
+`tests/test_folder_structure_commit.py::test_linking_a_large_import_costs_a_bounded_number_of_statements`
+pins it by counting statements at two import sizes: twenty times the pictures
+must not cost more statements.
 
 ### A read commits once, enforced
 

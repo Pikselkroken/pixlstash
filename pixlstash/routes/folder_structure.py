@@ -565,8 +565,11 @@ def create_router(server) -> APIRouter:
                     server, picture_ids, assignments, root_path, task_id=task_id
                 )
             else:
+                # task_id, so a resume can tell the folder THIS commit
+                # registered (adopt it and finish the mapping) from one that
+                # was already there (refuse).
                 rf = commit_service.register_reference_folder(
-                    server, root_path, label=label
+                    server, root_path, label=label, task_id=task_id
                 )
                 _commit_progress(task_id, "indexing", 0, expected_pictures)
                 commit_service.record_commit_stage(server, task_id, "indexing")
