@@ -511,6 +511,32 @@ function _samePath(a, b) {
   return norm(a) !== "" && norm(a) === norm(b);
 }
 
+/**
+ * The `?path=` on the current folder route, when it names a folder INSIDE
+ * `root` rather than `root` itself.
+ *
+ * A subfolder click pushes `/ref-folder/:id?path=<abs path>`, and this is what
+ * reads it back so a reload or a shared link lands on the subfolder the URL
+ * names instead of the folder root. `null` means "the route names the folder
+ * itself", which is the ordinary case and the pre-existing behaviour.
+ *
+ * Both separators, because the path comes from the server and may be a Windows
+ * path while the browser showing it is not.
+ *
+ * @param {string} root the reference folder's own path
+ * @returns {{pathPrefix: string, label: string}|null}
+ */
+function routeSubfolderUnder(root) {
+  const filter = viewStore.view?.folderFilter;
+  if (!filter?.pathPrefix || !root) return null;
+  if (_samePath(filter.pathPrefix, root)) return null;
+  const prefix = String(root).replace(/[\\/]+$/, "");
+  const inside =
+    filter.pathPrefix.startsWith(`${prefix}/`) ||
+    filter.pathPrefix.startsWith(`${prefix}\\`);
+  return inside ? filter : null;
+}
+
 // The pending mapping this library can act on. A `local_import` entry names
 // the library root it was saved for; shown or auto-opened against any OTHER
 // library it would offer to "set up" a library that is already set up - which
@@ -3932,10 +3958,16 @@ watch(
       const id = parseInt(newKey.slice(3), 10);
       const folder = referenceFolders.value.find((f) => f.id === id);
       if (folder) {
-        handleFolderNodeSelect(newKey, {
+        // A subfolder in the URL wins over the folder root: the route is only
+        // re-read when `activeFolderKey` itself changes, so this restores the
+        // subfolder on a reload, a deep link or a Back out of another view -
+        // not on Back between two subfolders of the SAME folder, which never
+        // changes the key.
+        const sub = routeSubfolderUnder(folder.folder);
+        handleFolderNodeSelect(sub ? `path-${sub.pathPrefix}` : newKey, {
           referenceFolderId: folder.id,
-          pathPrefix: folder.folder,
-          label: folder.label || folder.folder,
+          pathPrefix: sub ? sub.pathPrefix : folder.folder,
+          label: sub ? sub.label : folder.label || folder.folder,
         });
       }
     } else if (newKey.startsWith("if-")) {

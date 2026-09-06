@@ -258,10 +258,19 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
 
     if (sel.selectedFolderFilter) {
       const f = sel.selectedFolderFilter;
+      // `?path=` rides along on the folder routes too. A sidebar subfolder
+      // click carries `rfId` (`FolderTreeNode.vue` requires it), so it takes
+      // the ref-folder branch, and without the query the URL named the folder
+      // ROOT: a reload or a shared link landed one level up from what was on
+      // screen. The id still owns the payload - `useViewStore.applyView`
+      // refuses to overwrite it from `?path=` on a folder route, and the
+      // sidebar restores the subfolder from the query instead.
+      const folderQuery = f.pathPrefix ? { path: f.pathPrefix } : {};
       if (f.referenceFolderId != null) {
         pushAppRoute({
           name: "ref-folder",
           params: { id: String(f.referenceFolderId) },
+          query: folderQuery,
         });
         return;
       }
@@ -269,21 +278,14 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         pushAppRoute({
           name: "import-folder",
           params: { id: String(f.importFolderId) },
+          query: folderQuery,
         });
         return;
       }
       // A folder payload with no id of any kind - what an "About your
       // library" finding points at. It travels as `?path=` rather than being
       // dropped, and `useViewStore.parseFolderPath` reads it back.
-      //
-      // NOT the sidebar's subfolder case: `FolderTreeNode.vue` requires
-      // `rfId`, so a subfolder click takes the ref-folder branch above and its
-      // path is still lost from the URL. Fixing that is a change to the folder
-      // tree's route restoration, not to this branch.
-      pushAppRoute({
-        name: "all-pictures",
-        query: f.pathPrefix ? { path: f.pathPrefix } : {},
-      });
+      pushAppRoute({ name: "all-pictures", query: folderQuery });
       return;
     }
 

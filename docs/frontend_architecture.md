@@ -290,15 +290,20 @@ It is split in two so the URL contract is testable on its own:
 **`?path=<absolute folder>` is the folder facet for folders that have no id.** A
 reference folder and an import folder each have a route (`/ref-folder/:id`,
 `/import-folder/:id`) and the sidebar owns their payload — which is why those
-two routes do not clear `selectedFolderFilter`, and why `?path=` is ignored on
-them (`applyView` guards on `folderKey`). The folder an "About your library"
-finding points at (§9.3) has no id of any kind, which is what this param is
-for. **The sidebar's subfolder selection is still not in the URL:**
+two routes do not clear `selectedFolderFilter`, and why `applyView` refuses to
+apply `?path=` on them (it guards on `folderKey`). The folder an "About your
+library" finding points at (§9.3) has no id of any kind, which is what this
+param is for. **It also carries the sidebar's subfolder selection.**
 `FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
-`pushRouteForCurrentSelection`'s ref-folder branch and the path is dropped as
-before — closing that means teaching the sidebar's `activeFolderKey` watcher to
-restore a subfolder rather than the folder root, which is a change to the
-folder tree. `parseFolderPath`
+`pushRouteForCurrentSelection`'s ref-folder branch; the branch now pushes the
+`pathPrefix` as `?path=` alongside the id, and `SideBar.routeSubfolderUnder`
+reads it back once the folder listing is in, selecting the subfolder rather
+than the folder root. The id still owns `referenceFolderId`, so
+`reference_folder_id` stays in the grid query — the query only says which
+folder *inside* it is open. The route is re-read when `activeFolderKey`
+changes, so a reload, a deep link and a Back out of another view all restore
+the subfolder; Back between two subfolders of the same folder does not, since
+that never changes the key. `parseFolderPath`
 resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
 to the listing API's existing `file_path_prefix` param — there is no new backend
 filter behind it. Read on every grid route rather than only on `/`, the same

@@ -1906,10 +1906,12 @@ A reference folder and an import folder each have a route of their own
 no id of any kind, so it travels as **`?path=<absolute folder>`** on any grid
 route (`useViewStore.parseFolderPath`), resolving to the same `{pathPrefix}`
 payload the sidebar emits and therefore to the listing API's existing
-`file_path_prefix` query param. It is ignored on a folder route, where the
-sidebar owns the payload. (It does **not** yet put the sidebar's own subfolder
-selection in the URL: `FolderTreeNode.vue` requires an `rfId`, so a subfolder
-click still takes the ref-folder branch.)
+`file_path_prefix` query param. On a folder route the sidebar owns the payload,
+so the route never applies it directly — but it does ride along there, because
+it is also how the sidebar's own subfolder selection stays in the URL: a
+subfolder click carries an `rfId` and so takes the ref-folder branch, which
+pushes `/ref-folder/:id?path=<abs folder>`, and the sidebar restores the
+subfolder from the query once the folder listing is in.
 
 **`?face=with_face|without_face`** is the face facet, additive like
 `?stack_state=` — an absent or unrecognised value leaves
