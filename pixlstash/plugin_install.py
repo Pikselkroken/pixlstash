@@ -814,8 +814,13 @@ class DependencyChange:
           download; it does not switch pip into hash-checking mode, so entries
           that have no hash (VCS, a local directory) still install alongside.
 
-        Falls back to ``name==version`` only when the report carried no
-        ``download_info`` at all.
+        Falls back to ``name==version`` whenever the entry carries no usable
+        ``download_info.url`` -- a missing ``download_info``, an empty one, or
+        one without a ``url``.  That fallback is the pre-#1177 behaviour and
+        therefore the vulnerable one, so it is deliberately the narrowest case:
+        pip records a ``url`` for every entry it resolves, and an entry without
+        one means the report did not say where the artefact came from, which
+        leaves the package name as the only thing left to install by.
         """
         info = self.download_info or {}
         url = info.get("url")

@@ -1793,11 +1793,26 @@ def test_a_subdirectory_survives_the_round_trip(pip_report, tmp_path):
     assert change.pin.endswith(f"#sha256={_SHA}&subdirectory=packages/moondream")
 
 
-def test_a_report_without_download_info_falls_back_to_name_and_version(
-    pip_report, tmp_path
+def test_a_dependency_with_no_download_info_at_all_pins_name_and_version():
+    """The absent-key case, asserted directly: `_entry` cannot express it."""
+    assert plugin_install.DependencyChange("flask", "3.1.3").pin == "flask==3.1.3"
+
+
+@pytest.mark.parametrize(
+    "download_info", [{}, {"archive_info": {"hashes": {"sha256": _SHA}}}]
+)
+def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
+    pip_report, tmp_path, download_info
 ):
-    """The one case that cannot be pinned to an artefact still installs."""
-    pip_report(("flask", "3.1.3", {}, False), installed={})
+    """The one case that cannot be pinned to an artefact still installs.
+
+    Every spelling of "the report did not say where this came from" takes the
+    fallback, not only a missing `download_info`: an empty object, and one
+    carrying a hash but no url, reach it too. This branch is the pre-#1177
+    behaviour and therefore the vulnerable one, so this pins exactly how narrow
+    it is.
+    """
+    pip_report(("flask", "3.1.3", download_info, False), installed={})
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("flask\n", encoding="utf-8")
 
