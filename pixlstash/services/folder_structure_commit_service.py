@@ -87,6 +87,7 @@ from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
+    canonical_path,
     validate_reference_folder_accessible,
     validate_reference_folder_conflicts,
     validate_reference_folder_path,
@@ -438,11 +439,12 @@ def _commit_owns_this_root(
         row is not None
         and row.state == STATE_PENDING
         and row.stage != "registering"
-        # Both sides resolved: `register_reference_folder` resolves the root it
-        # is handed, so comparing a merely-normalised record path against it
-        # would make a resumed commit under a symlinked root fail to recognise
-        # its own row and refuse to finish.
-        and os.path.realpath(os.path.normpath(row.root_path)) == root_path
+        # Both sides through `canonical_path`, the same spelling
+        # `validate_reference_folder_conflicts` compares by. Comparing a
+        # merely-normalised record path would make a resumed commit under a
+        # symlinked root - or, on Windows, one whose root is spelled in another
+        # case - fail to recognise its own row and refuse to finish.
+        and canonical_path(row.root_path) == canonical_path(root_path)
     )
 
 

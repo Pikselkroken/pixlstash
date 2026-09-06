@@ -124,13 +124,25 @@ def validate_reference_folder_path(path: str) -> str | None:
     return None
 
 
-def _resolved(path: str) -> str:
+def canonical_path(path: str) -> str:
     """One canonical spelling of *path*, for comparing two paths as strings.
 
     ``realpath`` never raises: an unmounted or not-yet-created path resolves as
     far as it exists, which keeps the Docker pending-mount callers working.
+
+    ``normcase`` last, and it is not cosmetic: Windows and macOS spell one
+    directory in several cases, so without it ``C:\\Photos`` and ``c:\\photos``
+    compare unequal and every containment check below walks straight past a
+    registered root - the overlap this function exists to catch, reached by
+    spelling instead of by symlink. It is identity on POSIX, so the gate cannot
+    see the difference; ``views_service._resolved`` case-folds for the same
+    reason and says so.
+
+    Comparison only. The value is never stored or shown: a row keeps the real
+    case so the scan walks the directory the owner named, and every refusal
+    message quotes the caller's own spelling.
     """
-    return os.path.realpath(os.path.normpath(path))
+    return os.path.normcase(os.path.realpath(os.path.normpath(path)))
 
 
 def validate_reference_folder_conflicts(
@@ -171,9 +183,9 @@ def validate_reference_folder_conflicts(
     Returns:
         An error message, or ``None`` when the path is free to use.
     """
-    folder = _resolved(folder)
+    folder = canonical_path(folder)
     if image_root:
-        image_root = _resolved(image_root)
+        image_root = canonical_path(image_root)
         if (
             folder == image_root
             or folder.startswith(image_root + os.sep)
@@ -183,7 +195,7 @@ def validate_reference_folder_conflicts(
     for other in session.exec(select(ReferenceFolder)).all():
         if exclude_id is not None and other.id == exclude_id:
             continue
-        other_norm = _resolved(other.folder)
+        other_norm = canonical_path(other.folder)
         if folder == other_norm:
             return "A reference folder with this path already exists."
         if folder.startswith(other_norm + os.sep):
