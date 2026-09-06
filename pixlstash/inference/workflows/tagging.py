@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from pixlstash.inference.vram_budget import WD14_BASE_MB, WD14_PER_ITEM_MB
+from pixlstash.inference.vram_budget import (
+    MAX_CONCURRENT_GPU_IMAGES,
+    WD14_BASE_MB,
+    WD14_PER_ITEM_MB,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import merge_video_frame_tags
@@ -16,7 +20,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
-_MAX_CONCURRENT_GPU = 64
 _MAX_CONCURRENT_CPU = 8
 
 
@@ -587,7 +590,7 @@ class TaggingWorkflow:
     def _max_concurrent_images(self) -> int:
         """Maximum image concurrency determined by device type."""
         if self._engine.device == "cuda":
-            return _MAX_CONCURRENT_GPU
+            return MAX_CONCURRENT_GPU_IMAGES
         return _MAX_CONCURRENT_CPU
 
     def _vram_limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
