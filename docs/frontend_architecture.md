@@ -308,7 +308,15 @@ watching only the key meant every subfolder click created a history entry
 deduplicates, so there was none) whose Back moved the address bar and nothing
 else. The watcher's "already in sync" test therefore compares the folder *and*
 the path, or a click would re-fetch both listings and re-emit the payload it
-had just set. `parseFolderPath`
+had just set — **through `_urlPath`, not `_samePath`**, because
+`routeSubfolderUnder` re-spells the path into the folder's own separators and
+`parseFolderPath` keeps the URL's, so the two are in different spaces. Compared
+in the wrong one they never match, the sidebar stops recognising its own work,
+and the re-emit pushes a URL that differs from the one that arrived — the
+inert-Back bug again, in a loop. `SideBarFolderRouteRestore.test.js` pins the
+whole class with one property, "a route arriving twice is inert",
+parameterised over the separator-changing inputs; the POSIX-only version of it
+was green while the Windows case looped. `parseFolderPath`
 resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
 to the listing API's existing `file_path_prefix` param — there is no new backend
 filter behind it. Read on every grid route rather than only on `/`, the same

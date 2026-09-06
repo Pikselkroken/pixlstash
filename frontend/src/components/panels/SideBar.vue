@@ -526,15 +526,28 @@ const librariesStore = useLibrariesStore();
 //      `file_path`, so it MUST be in the server's spelling.
 //   5. Tree path    `entry.path` from the browse listing. Server spelling.
 //
-// Exactly three crossings are legitimate, and each has one owner:
+// Four crossings are legitimate, and each has one owner:
 //   1 -> 2         `selectedFolderRouteKey`
 //   2 + 3 -> 1,4   `routeSubfolderUnder`  (the only place a URL path is
 //                  allowed to become a server path)
+//   4 vs 3         the watcher's "already in sync" test, through `_urlPath`.
+//                  This is the one an earlier pass missed: `routeSubfolderUnder`
+//                  RE-SPELLS the path, so the sidebar's copy and the `?path=`
+//                  that produced it are in different spaces and `_samePath`
+//                  could never match them.
 //   5 -> 1,4       direct; both are already the server's spelling.
 //
-// Anything else that compares two of these with `===`, or coerces an id
-// without `_folderId`, is the next bug. Add the crossing to the list above or
-// route it through an owner; do not inline a fourth one.
+// **The guardrail, not this comment, is the mechanism.** This list was written
+// with three crossings and a claim that anything else was a bug; a fourth was
+// found the same day, and the id rule it stated was already violated five
+// times in this file. So: `SideBarFolderRouteRestore.test.js` asserts a route
+// arriving twice is inert, parameterised over the separator-changing inputs -
+// that is what fails when a new crossing is compared in the wrong space. Treat
+// the list above as a map to read before editing, and add to it when you add a
+// crossing; it is documentation, and the test is the enforcement.
+//
+// Ids: read every one through `_folderId`. That IS enforced, in the sense that
+// there is now no other coercion in this file to copy from.
 
 /**
  * A reference-folder id, or null. The ONE rule for reading one.
@@ -612,13 +625,22 @@ function _urlPath(p) {
 function routeSubfolderUnder(root) {
   const filter = viewStore.view?.folderFilter;
   if (!filter?.pathPrefix || !root) return null;
-  const here = _urlPath(filter.pathPrefix);
-  const base = _urlPath(root);
+  const raw = _normPath(filter.pathPrefix);
+  const rootPath = _normPath(root);
+  // `_urlPath` only swaps `\` for `/` one-for-one, so these keep `raw`'s
+  // offsets and the tail can be sliced back out of the ORIGINAL spelling.
+  const here = _urlPath(raw);
+  const base = _urlPath(rootPath);
   if (!base || here === base || !here.startsWith(`${base}/`)) return null;
-  const sep = _pathSeparator(_normPath(root));
-  const tail = here.slice(base.length + 1).split("/").join(sep);
+  const sep = _pathSeparator(rootPath);
+  const rawTail = raw.slice(base.length + 1);
+  // On Windows both characters separate, so the tail is re-spelled. On POSIX
+  // only `/` does and a `\` is part of a folder's NAME - re-spelling there
+  // would corrupt the very name `_urlPath` exists to protect, so the tail is
+  // taken verbatim and the whole function is genuinely a no-op.
+  const tail = sep === "/" ? rawTail : rawTail.split(/[\\/]/).join(sep);
   return {
-    pathPrefix: `${_normPath(root)}${sep}${tail}`,
+    pathPrefix: `${rootPath}${sep}${tail}`,
     label: tail.split(sep).pop() || filter.label,
   };
 }
@@ -728,14 +750,21 @@ watch(
 // through on a fresh desktop library.
 let loosePicturesOffer = null;
 function offerLoosePictures() {
-  // `pendingForThisLibrary`, never the raw `mappingStore.pending`. That entry
-  // is localStorage-backed and unbounded, and the auto-open above deliberately
-  // refuses two whole classes of it (a `reference` entry; a `local_import`
-  // saved against a library that is no longer the active one). Gating on the
-  // raw flag meant an empty library whose owner held one of those got no
-  // wizard AND no offer, for the life of the install - the same failure the
-  // telemetry question had, in a second place.
-  if (isReadOnly.value || pendingForThisLibrary.value) return Promise.resolve();
+  // Suppressed only by an entry that will ACTUALLY bring a wizard up, which is
+  // the auto-open's own condition above: a `local_import` for this library.
+  // `mappingStore.pending` is localStorage-backed and unbounded, and
+  // `pendingForThisLibrary` is not the answer either - it returns a
+  // `reference` entry unchanged, and the auto-open refuses those. Gating on
+  // either meant an empty library whose owner held a stale entry got no wizard
+  // AND no offer, for the life of the install; there was no way into the
+  // library at all. This has to stay the same test as the auto-open, so state
+  // it the same way.
+  if (
+    isReadOnly.value ||
+    pendingForThisLibrary.value?.mode === "local_import"
+  ) {
+    return Promise.resolve();
+  }
   loosePicturesOffer ??= _offerLoosePictures();
   return loosePicturesOffer;
 }
@@ -947,8 +976,8 @@ async function importFolderSaved() {
   }
 
   if (!selectedFolderKey.value?.startsWith("if-")) return;
-  const selectedId = Number(selectedFolderKey.value.slice(3));
-  if (!Number.isFinite(selectedId)) return;
+  const selectedId = _folderId(selectedFolderKey.value.slice(3));
+  if (selectedId == null) return;
   const selectedImportFolder = importFolders.value.find(
     (entry) => Number(entry.id) === selectedId,
   );
@@ -999,8 +1028,8 @@ const selectedReferenceFolderForHeader = computed(() => {
 
 const selectedImportFolderForHeader = computed(() => {
   if (!selectedFolderKey.value?.startsWith("if-")) return null;
-  const id = Number(selectedFolderKey.value.slice(3));
-  if (!Number.isFinite(id)) return null;
+  const id = _folderId(selectedFolderKey.value.slice(3));
+  if (id == null) return null;
   return importFolders.value.find((entry) => Number(entry.id) === id) || null;
 });
 
@@ -1008,8 +1037,8 @@ const selectedImportFolderForHeader = computed(() => {
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
   if (selectedFolderKey.value?.startsWith("if-")) {
-    const id = Number(selectedFolderKey.value.slice(3));
-    if (!Number.isFinite(id)) return false;
+    const id = _folderId(selectedFolderKey.value.slice(3));
+    if (id == null) return false;
     const importFolder = importFolders.value.find(
       (entry) => Number(entry.id) === id,
     );
@@ -1029,12 +1058,12 @@ const collapsedProjectBtnTitle = computed(() => {
   if (sidebarPrimaryTab.value === "folders") {
     if (!selectedFolderKey.value) return "Folders";
     if (selectedFolderKey.value.startsWith("rf-")) {
-      const id = Number(selectedFolderKey.value.slice(3));
+      const id = _folderId(selectedFolderKey.value.slice(3));
       const rf = referenceFolders.value.find((f) => f.id === id);
       return rf ? rf.label || rf.folder : "Folder";
     }
     if (selectedFolderKey.value.startsWith("if-")) {
-      const id = Number(selectedFolderKey.value.slice(3));
+      const id = _folderId(selectedFolderKey.value.slice(3));
       const imf = importFolders.value.find((f) => Number(f.id) === id);
       return imf ? imf.label || imf.folder : "Folder";
     }
@@ -4071,10 +4100,22 @@ watch(
     // Already showing exactly what the route names, folder AND subfolder. A
     // click gets here right after setting both, so without this every one of
     // them would re-fetch the listings and re-emit the payload it just sent.
+    //
+    // `_urlPath`, NOT `_samePath`: this compares the sidebar's path, which
+    // `routeSubfolderUnder` has re-spelled into the folder's separators,
+    // against `?path=`, which `parseFolderPath` keeps verbatim from the URL.
+    // With `_samePath` the two could never match once the re-spelling changed
+    // anything, so the sidebar could not recognise its own work: it re-emitted,
+    // the emit pushed the re-spelled path as a NEW url, and Back returned to
+    // the original spelling and started the round again. A shared Windows link
+    // could not be navigated away from.
     const showingSubfolder = selectedFolderKey.value?.startsWith("path-");
+    const routePath = _urlPath(newPath);
     if (
       selectedFolderRouteKey.value === newKey &&
-      (newPath ? _samePath(selectedFolderPath.value, newPath) : !showingSubfolder)
+      (newPath
+        ? routePath !== "" && _urlPath(selectedFolderPath.value) === routePath
+        : !showingSubfolder)
     ) {
       return;
     }

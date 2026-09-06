@@ -78,6 +78,9 @@ const ROOT = "/home/me/library/refs";
 const SUB = "/home/me/library/refs/2024/summer";
 // A second folder, spelled the way a Windows server's listing spells it.
 const WIN_ROOT = "D:\\library\\refs";
+// A third: POSIX, but with a backslash inside a folder NAME. Legal on POSIX,
+// and the reason `_urlPath` is not folded into `_samePath`.
+const ODD_ROOT = "/home/me/refs/a\\b";
 
 // `status: active` with no `last_scanned` is what makes `selectedFolderScanning`
 // true while this folder is selected, which is how a test sees the sidebar's
@@ -94,6 +97,7 @@ const FOLDER = {
 };
 
 const WIN_FOLDER = { id: 6, folder: WIN_ROOT, label: "Win refs", active: true };
+const ODD_FOLDER = { id: 7, folder: ODD_ROOT, label: "Odd refs", active: true };
 
 const IMPORT_FOLDER = { id: 9, folder: "/home/me/inbox", label: "Inbox" };
 
@@ -102,7 +106,7 @@ function respond(url) {
     return { data: { folders: [IMPORT_FOLDER] } };
   }
   if (String(url).includes("/reference-folders")) {
-    return { data: { folders: [FOLDER, WIN_FOLDER], in_docker: true } };
+    return { data: { folders: [FOLDER, WIN_FOLDER, ODD_FOLDER], in_docker: true } };
   }
   return { data: [] };
 }
@@ -278,25 +282,66 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
-  it("does not re-fetch the listings for a route it is already showing", async () => {
-    // The other side of watching the query: a click sets the selection and
-    // THEN pushes, so the watcher sees its own work arrive. Without the
-    // in-sync test that is two listing round trips and a duplicate
-    // `select-folder` on every single subfolder click.
-    const wrapper = await mountSidebar();
-    routeToFolder(SUB);
-    await flushPromises();
-    const emittedOnce = wrapper.emitted("select-folder").length;
-    const fetchedOnce = apiGet.mock.calls.length;
+  // THE GUARDRAIL for this whole region. A route arriving twice must be inert
+  // the second time.
+  //
+  // That one property catches the entire bug class the key-space map describes,
+  // because every one of these spellings ends up compared against another one
+  // here: if any crossing compares two spaces with the wrong comparator, the
+  // sidebar stops recognising its own work, re-emits, and the emit pushes a
+  // route that differs from the one that arrived - a new history entry whose
+  // Back returns to the first spelling and starts the round again. That is not
+  // a redundant fetch, it is a folder view you cannot leave.
+  //
+  // **Parameterised over the separator-changing inputs on purpose.** The POSIX
+  // case alone passed happily while the Windows case looped, because on POSIX
+  // `routeSubfolderUnder` re-spells nothing and the two spaces coincide. A
+  // guardrail that only tries the input where the spaces agree cannot see a
+  // spaces-disagree bug.
+  describe("a route arriving twice is inert", () => {
+    const cases = [
+      // [name, folderKey, the ?path= as it arrives in the URL]
+      ["a POSIX path, spelled as the server spells it", "rf-5", SUB],
+      ["the folder root", "rf-5", ROOT],
+      [
+        "a Windows folder reached by a slash-spelled link",
+        "rf-6",
+        `${WIN_ROOT.replace(/\\/g, "/")}/2024/summer`,
+      ],
+      [
+        "a Windows folder reached by its own spelling",
+        "rf-6",
+        `${WIN_ROOT}\\2024\\summer`,
+      ],
+      [
+        "a POSIX folder whose own name contains a backslash",
+        "rf-7",
+        `${ODD_ROOT}/2024`,
+      ],
+      [
+        "a POSIX SUBfolder whose name contains a backslash",
+        "rf-7",
+        `${ODD_ROOT}/c\\d`,
+      ],
+    ];
 
-    // Exactly what the sidebar just applied, arriving again.
-    routeToFolder(SUB);
-    await flushPromises();
+    it.each(cases)("%s", async (_name, folderKey, path) => {
+      const wrapper = await mountSidebar();
+      routeToFolder(path, folderKey);
+      await flushPromises();
+      const emittedOnce = wrapper.emitted("select-folder")?.length ?? 0;
+      const fetchedOnce = apiGet.mock.calls.length;
+      expect(emittedOnce).toBeGreaterThan(0);
 
-    expect(wrapper.emitted("select-folder").length).toBe(emittedOnce);
-    expect(apiGet.mock.calls.length).toBe(fetchedOnce);
+      // Exactly what the sidebar just applied, arriving again.
+      routeToFolder(path, folderKey);
+      await flushPromises();
 
-    wrapper.unmount();
+      expect(wrapper.emitted("select-folder").length).toBe(emittedOnce);
+      expect(apiGet.mock.calls.length).toBe(fetchedOnce);
+
+      wrapper.unmount();
+    });
   });
 
   // `selectedFolderRouteKey` is the one crossing from the sidebar's row-key
@@ -327,6 +372,26 @@ describe("restoring /ref-folder/:id", () => {
     await flushPromises();
 
     expect(sidebarStore.folderScanning).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("keeps a backslash that is part of a POSIX folder's name", async () => {
+    // The mirror of the Windows case. There `/` in the URL means "separator";
+    // here it does not, and a `\` is a legal character in a POSIX folder name.
+    // Re-spelling the tail on POSIX would rewrite `c\d` to `c/d`, hand the
+    // listing a `file_path_prefix` for a folder that does not exist, and come
+    // back with an empty grid - the same failure the re-spelling exists to
+    // prevent, caused by the fix for it.
+    const wrapper = await mountSidebar();
+    routeToFolder(`${ODD_ROOT}/c\\d`, "rf-7");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 7,
+      pathPrefix: `${ODD_ROOT}/c\\d`,
+      label: "c\\d",
+    });
 
     wrapper.unmount();
   });
