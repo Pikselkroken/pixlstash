@@ -41,7 +41,9 @@ def _write_index(tmp_path):
 def test_placeholder_is_replaced_with_every_declared_bucket(
     tmp_path, monkeypatch, install_type
 ):
-    monkeypatch.setattr(Server, "detect_install_type", staticmethod(lambda: install_type))
+    monkeypatch.setattr(
+        Server, "detect_install_type", staticmethod(lambda: install_type)
+    )
     body = Server._index_html_response(_Stub(str(_write_index(tmp_path)))).body.decode()
 
     assert f'content="{install_type}"' in body
