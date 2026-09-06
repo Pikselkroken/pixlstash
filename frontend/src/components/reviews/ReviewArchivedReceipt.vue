@@ -49,7 +49,7 @@ const store = useReviewSessionsStore();
 const receipt = computed(() => store.receiptFor(props.review.id));
 
 function formatWhen(iso) {
-  if (!iso) return " - ";
+  if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   return d.toLocaleDateString(undefined, {

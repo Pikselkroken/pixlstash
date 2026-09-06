@@ -322,7 +322,7 @@ const canRestore = computed(
               {{ cp.kind }}
             </v-chip>
             <span class="restore-picker-label">
-              {{ cp.label || " - " }}
+              {{ cp.label || "—" }}
             </span>
             <span
               class="restore-picker-date"
@@ -369,7 +369,7 @@ const canRestore = computed(
               {{ preview.snapshot?.kind }}
             </v-chip>
             <span class="restore-preview-cp-label">
-              {{ preview.snapshot?.label || " - " }}
+              {{ preview.snapshot?.label || "—" }}
             </span>
             <span
               class="restore-preview-cp-date"

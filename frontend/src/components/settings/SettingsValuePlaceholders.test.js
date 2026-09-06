@@ -13,6 +13,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
@@ -113,5 +115,29 @@ describe("a Settings readout with no value", () => {
     expect(values).not.toContain("-");
 
     wrapper.unmount();
+  });
+});
+
+// The sweep flattened eight of these, not the three found first. Rather than
+// mount five more components for one glyph each, this reads the sources: the
+// point is that no value placeholder is spelled `" - "` anywhere, and a source
+// read says that about files no test happens to mount. Verified against
+// c760dd05, which is where each of these lost its em dash.
+describe("no value placeholder was left flattened by the em-dash sweep", () => {
+  const SWEPT = [
+    "components/settings/AccountSection.vue",
+    "components/settings/WorkflowsSection.vue",
+    "components/settings/SnapshotsSection.vue",
+    "components/widgets/RestoreConfirmDialog.vue",
+    "components/panels/StatsSidebar.vue",
+    "components/reviews/ReviewArchivedReceipt.vue",
+  ];
+
+  it.each(SWEPT)("%s spells its empty value as an em dash", (relative) => {
+    const source = readFileSync(join(process.cwd(), "src", relative), "utf8");
+    // `" - "` as a whole string literal is only ever a placeholder; prose
+    // hyphens live inside longer sentences and are not matched by this.
+    expect(source).not.toMatch(/"\s-\s"/);
+    expect(source).toContain(EM_DASH);
   });
 });

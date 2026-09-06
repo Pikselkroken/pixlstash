@@ -1280,7 +1280,7 @@ defineExpose({ focusTasksTab });
                 {{
                   stats.total > 0
                     ? Math.round((stats.tagged / stats.total) * 100) + "%"
-                    : " - "
+                    : "—"
                 }}
               </text>
             </svg>
