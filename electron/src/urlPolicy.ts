@@ -68,6 +68,48 @@ export function isBundledRendererPage(
 }
 
 /**
+ * True only when `target` is a page served by the running backend itself.
+ *
+ * SECURITY: the counterpart to {@link isBundledRendererPage}, for the channels
+ * that belong to the *app* rather than to the wizard. `server:setSettings`
+ * flips `external_server_enabled` on, sets `host` to `0.0.0.0`, can clear
+ * `require_ssl`, and restarts the backend - turning a local photo application
+ * into a network service. That is the app's Settings dialog's job and nothing
+ * else's, so a bundled `file://` page (the wizard, the splash, the permission
+ * repair screen) is refused here even though the navigation guard is happy to
+ * load it.
+ *
+ * Stricter than {@link isAllowedNavigation} in the other direction: only the
+ * exact origin of the page actually loaded counts, never a `file://` URL and
+ * never the pre-backend loopback fallback. Before the backend is up there is no
+ * app, so `currentUrl` being null refuses everything.
+ *
+ * **What this does not do:** it does not defend against hostile JavaScript
+ * running *inside* the app's own origin, which would pass. Nothing at this
+ * boundary can - the app is the legitimate caller. It removes the other
+ * renderer surfaces, and the backend's own refusal to expose an external
+ * listener without an owner password (`listeners.py`) is what stands behind it.
+ */
+export function isBackendOrigin(target: string, currentUrl: string | null): boolean {
+  if (!currentUrl) return false;
+  let url: URL;
+  let current: URL;
+  try {
+    url = new URL(target);
+    current = new URL(currentUrl);
+  } catch {
+    return false;
+  }
+  // Same three rules isAllowedNavigation applies, for the same reasons: an
+  // embedded credential is never part of anything we loaded, and an opaque
+  // scheme can carry a matching origin (`blob:http://127.0.0.1:1234/x`) while
+  // being a document the page authored rather than one the backend served.
+  if (url.username || url.password) return false;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  return url.origin === current.origin;
+}
+
+/**
  * Decide whether the window may load `target` - used by BOTH the top-level
  * navigation guard and `setWindowOpenHandler`, so the origin policy lives in one
  * place the way the scheme policy already does. The privileged

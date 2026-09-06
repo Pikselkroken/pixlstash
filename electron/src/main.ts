@@ -23,7 +23,12 @@ import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetecto
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
-import { isAllowedNavigation, isBundledRendererPage, redactUrl } from './urlPolicy';
+import {
+  isAllowedNavigation,
+  isBackendOrigin,
+  isBundledRendererPage,
+  redactUrl,
+} from './urlPolicy';
 import { ServerProcess, StartupRecovery, devInterpreter } from './backend/ServerProcess';
 import {
   isPermissionRepairRequired,
@@ -1244,6 +1249,27 @@ function requireSetupRenderer(event: Electron.IpcMainInvokeEvent, channel: strin
   throw new Error(`${channel} is only available during first-run setup.`);
 }
 
+/**
+ * Refuse a channel that belongs to the running app, not to a bundled page.
+ *
+ * SECURITY: `server:setSettings` is the one that matters - it writes
+ * `external_server_enabled`, `host: '0.0.0.0'` and `require_ssl` and restarts
+ * the backend, i.e. it decides whether this machine listens on the network
+ * (#1201 F4). Item 57 validated the *shape* of that payload and left the
+ * *capability* ungated, so `{enabled: true, ssl: false}` from any renderer page
+ * still turned the listener on. The siblings are gated with it:
+ * `server:checkPort` briefly binds a caller-named port on all interfaces, and
+ * `server:getSettings` returns this machine's LAN addresses.
+ *
+ * See isBackendOrigin for what this deliberately does NOT stop.
+ */
+function requireAppRenderer(event: Electron.IpcMainInvokeEvent, channel: string): void {
+  const sender = event.senderFrame?.url ?? event.sender.getURL();
+  if (isBackendOrigin(sender, currentUrl)) return;
+  console.warn(`[ipc] refusing ${channel} from ${redactUrl(sender)}: not the app window`);
+  throw new Error(`${channel} is only available from the PixlStash app window.`);
+}
+
 function registerIpc(): void {
   ipcMain.handle('app:bootstrap', async () => ({
     version: app.getVersion(),
@@ -1590,13 +1616,20 @@ function registerIpc(): void {
 
   // External server (remote access) settings. The loopback the window uses is
   // never affected by these - only the optional second listener.
-  ipcMain.handle('server:getSettings', () => readServerSettings());
+  ipcMain.handle('server:getSettings', (event) => {
+    requireAppRenderer(event, 'server:getSettings');
+    return readServerSettings();
+  });
   // `enabled` and `ssl` decide whether a listener binds 0.0.0.0 and whether it
   // demands TLS, and both reached the config unchecked before this.
-  ipcMain.handle('server:setSettings', async (_e, raw: unknown) => {
+  ipcMain.handle('server:setSettings', async (event, raw: unknown) => {
+    requireAppRenderer(event, 'server:setSettings');
     await writeServerSettings(requireServerSettings(raw));
   });
-  ipcMain.handle('server:checkPort', (_e, port: number) => checkPortAvailable(port));
+  ipcMain.handle('server:checkPort', (event, port: number) => {
+    requireAppRenderer(event, 'server:checkPort');
+    return checkPortAvailable(port);
+  });
 
   // Custom title-bar window controls (the window is frameless).
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());

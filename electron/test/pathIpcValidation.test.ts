@@ -284,7 +284,14 @@ describe('the path-taking IPC handlers validate before they use the value', () =
     const start = main.indexOf("ipcMain.handle('server:setSettings'");
     assert.ok(start >= 0, 'server:setSettings handler not found');
     const body = main.slice(start, main.indexOf('ipcMain.handle(', start + 1));
-    assert.match(body, /\(_e,\s*raw:\s*unknown\)/);
+    // `event`, not `_e`: the handler now also gates on the sending frame, so
+    // it needs the event. The payload is still narrowed before it is written.
+    assert.match(body, /\(event,\s*raw:\s*unknown\)/);
     assert.match(body, /writeServerSettings\(requireServerSettings\(raw\)\)/);
+    assert.match(
+      body,
+      /requireAppRenderer\(event, 'server:setSettings'\)/,
+      'validating the payload shape does not gate the capability',
+    );
   });
 });
