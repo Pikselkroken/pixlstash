@@ -1755,8 +1755,12 @@ def test_an_indexed_requirement_is_pinned_to_the_artefact_pip_resolved(
 
     (change,) = plugin_install.resolve_requirements(requirements)
     assert change.pin == f"zzprivate @ {find_links['url']}#sha256={_SHA}"
-    # Display stays quiet: the requirement itself did not name a URL.
-    assert change.url is None
+    # And it is NAMED. Pinning the artefact without saying where it came from
+    # only made the substitution reliable: the listing would have read as "the
+    # PyPI project called zzprivate" while installing the plugin author's own
+    # wheel. `is_direct` is false here, which is why keying the display on it
+    # printed nothing.
+    assert change.url == find_links["url"]
     assert "zzprivate==1.0" not in _installed_command(change, monkeypatch)
 
 
@@ -1818,6 +1822,56 @@ def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
 
     (change,) = plugin_install.resolve_requirements(requirements)
     assert change.pin == "flask==3.1.3"
+
+
+def test_the_listing_names_a_find_links_source_the_user_never_asked_for(
+    pip_report, tmp_path, capsys
+):
+    """The consent half of item 14, found by #1201's adversarial review.
+
+    A plugin's own requirements.txt can carry `--find-links` / `--index-url`,
+    and an ordinary NAMED requirement resolved through one is reported by pip
+    with `is_direct == False`. Keying the display on `is_direct` printed
+    nothing, so a package silently replacing an installed one read exactly like
+    the PyPI project of the same name - while the pin faithfully installed the
+    plugin author's artefact. Named on the resolved host instead.
+    """
+    hostile = {
+        "url": "file:///srv/plugin-wheels/requests-99.0.0-py3-none-any.whl",
+        "archive_info": {"hashes": {"sha256": _SHA}},
+    }
+    pip_report(("requests", "99.0.0", hostile, False), installed={"requests": "2.34.2"})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "--find-links /srv/plugin-wheels\nrequests\n", encoding="utf-8"
+    )
+
+    changes = plugin_install.resolve_requirements(requirements)
+    # It replaces an installed package, so consent is refused without
+    # --force-deps; the listing is printed either way and is what matters here.
+    cli._report_dependencies(changes, force=False)
+    out = capsys.readouterr().out
+    assert hostile["url"] in out, "a non-PyPI source must be named before consent"
+
+
+def test_the_listing_surfaces_index_options_from_the_plugins_requirements(tmp_path):
+    """The cause, not just the effect: the option lines are the attack."""
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "# a comment\n"
+        "--extra-index-url https://packages.example.invalid/simple\n"
+        "--find-links /srv/plugin-wheels\n"
+        "requests\n",
+        encoding="utf-8",
+    )
+    assert plugin_install.index_options(requirements) == [
+        "--extra-index-url https://packages.example.invalid/simple",
+        "--find-links /srv/plugin-wheels",
+    ]
+    # An ordinary requirements.txt has none, so the warning stays off screen.
+    plain = tmp_path / "plain.txt"
+    plain.write_text("flask\npillow==11.0.0\n", encoding="utf-8")
+    assert plugin_install.index_options(plain) == []
 
 
 def test_the_listing_names_the_url_a_direct_requirement_comes_from(

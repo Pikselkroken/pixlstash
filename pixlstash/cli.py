@@ -1558,6 +1558,24 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # Resolved before anything is copied. pip is asked what it would
             # do, and it is asked first, so a plugin whose dependencies cannot
             # be had leaves nothing behind to clean up.
+            # Named BEFORE the resolution, because these lines are the cause of
+            # anything surprising in the listing below: pip honours them, so a
+            # plainly-named requirement can resolve from the plugin author's
+            # own server rather than from PyPI.
+            options = plugin_install.index_options(plan.requirements)
+            if options:
+                print(
+                    f"\nwarning: {plan.requirements.name} changes where pip "
+                    "downloads from:",
+                    file=sys.stderr,
+                )
+                for option in options:
+                    print(f"  {option}", file=sys.stderr)
+                print(
+                    "  Packages below may not come from PyPI; check the "
+                    "source shown against each one.",
+                    file=sys.stderr,
+                )
             print(f"\nResolving {plan.requirements.name}...")
             changes = plugin_install.resolve_requirements(plan.requirements)
             if not _report_dependencies(changes, force=args.force_deps):

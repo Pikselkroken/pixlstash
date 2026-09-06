@@ -34,6 +34,7 @@ from importlib.metadata import version as metadata_version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator
+from urllib.parse import urlparse
 
 import requests
 from platformdirs import user_data_dir
@@ -78,6 +79,11 @@ _REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 
 PLUGINS_REPO = "Pikselkroken/PixlStash-plugins"
 DEFAULT_REF = "main"
+
+#: Hosts that mean "this came from the ordinary Python package index".  An
+#: artefact resolved from anywhere else is named in the dependency listing; see
+#: :attr:`DependencyChange.url`.
+_INDEX_HOSTS = frozenset({"files.pythonhosted.org", "pypi.org"})
 
 
 class PluginError(Exception):
@@ -779,13 +785,27 @@ class DependencyChange:
 
     @property
     def url(self) -> str | None:
-        """The URL a directly-pinned requirement named, for the listing.
+        """Where this artefact really comes from, when that is not the index.
 
-        Only for ``is_direct`` entries: an ordinary indexed package also has a
-        URL, but naming ``files.pythonhosted.org`` on every line would be noise
-        that trains people to skip the one line that matters.
+        SECURITY: keyed on the resolved URL's host, NOT on ``is_direct``.  A
+        plugin's own ``requirements.txt`` may carry ``--index-url``,
+        ``--extra-index-url`` or ``--find-links``, and an ordinary *named*
+        requirement resolved through one of those is reported by pip with
+        ``is_direct == False`` -- so keying on ``direct`` printed nothing and
+        the listing read as "the PyPI project called requests" while
+        :attr:`pin` faithfully installed a wheel from the plugin author's own
+        server.  Pinning the artefact without naming it made the substitution
+        *reliable* rather than preventing it: the user consents to a name and
+        receives something else.
+
+        An entry served from PyPI's own file host is not named, because a URL
+        on every line is noise that trains people to skip the one line that
+        matters.  Anything else is named, including ``file://``.
         """
-        return (self.download_info or {}).get("url") if self.direct else None
+        url = (self.download_info or {}).get("url")
+        if not url:
+            return None
+        return None if (urlparse(url).hostname or "") in _INDEX_HOSTS else url
 
     @property
     def pin(self) -> str:
@@ -936,6 +956,24 @@ def read_requirements(requirements: Path) -> list[str]:
         for line in read_source(requirements).splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def index_options(requirements: Path) -> list[str]:
+    """Return the option lines in *requirements*, which redirect where pip looks.
+
+    SECURITY: a plugin's ``requirements.txt`` is written by the plugin author,
+    and pip honours option lines in it -- ``--index-url``,
+    ``--extra-index-url``, ``--find-links``, ``--no-index``, ``--trusted-host``
+    and their short forms.  Any of those makes an ordinary *named* requirement
+    resolve from somewhere other than PyPI, which is the cause of the
+    substitution :attr:`DependencyChange.url` reports the effect of.  The user
+    should see the cause before agreeing, so these are surfaced verbatim.
+
+    Every option line is returned rather than a curated subset: a plugin has no
+    ordinary reason to carry one at all, and an allowlist of "harmless" options
+    is a thing to get wrong in the direction of silence.
+    """
+    return [line for line in read_requirements(requirements) if line.startswith("-")]
 
 
 def install_requirements(changes: list[DependencyChange]) -> None:
