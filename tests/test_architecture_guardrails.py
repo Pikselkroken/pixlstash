@@ -2675,3 +2675,111 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
         "A client-only extension uploads the whole file and then fails the "
         "commit; a server-only one is refused before it is ever offered."
     )
+
+
+def _assemble_changelog_module():
+    """The release's changelog assembler, loaded from ``scripts/`` by path.
+
+    By path rather than by ``sys.path`` insertion: this file shares a process
+    with the rest of a gate shard, and a leftover entry pointing at ``scripts/``
+    would silently change what every later test imports.
+    """
+    import importlib.util
+
+    path = REPO_ROOT / "scripts" / "assemble_changelog.py"
+    spec = importlib.util.spec_from_file_location("assemble_changelog", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_every_changelog_fragment_is_a_markdown_list():
+    """A fragment is pasted verbatim under the release's version heading.
+
+    Nothing reads it before then, so a fragment carrying its own heading, a
+    version, or a stray paragraph is only discovered when the release notes are
+    already written. The parser that will consume it runs here instead.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    try:
+        assemble_changelog.read_entries(assemble_changelog.fragments())
+    except ValueError as exc:
+        pytest.fail(str(exc))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "# [1.2.3]\n\n- something\n",
+        "- something\n\n# [1.2.3]\n",
+        "not a list item at all\n",
+        "  - something\n",
+        "\n\n- something\n",
+        "- something\n  # [1.2.3]\n",
+        "- something\n    ## still a heading\n",
+    ],
+    ids=[
+        "leading heading",
+        "trailing heading",
+        "bare prose",
+        "opens indented",
+        "opens blank",
+        "indented heading",
+        "deeply indented heading",
+    ],
+)
+def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
+    """The check above can still fail - the mutation that proves it is alive.
+
+    The trailing case is the one a first-line-only check misses: pasted under
+    the release's heading, that stray `# [1.2.3]` becomes a version section of
+    its own and every entry below it moves into the wrong release.
+
+    The `opens` pair are the ones a leading `strip()` masks: both open on
+    something that is not a top-level list item, and stripping the front turns
+    each into a fragment that passes and is then pasted in edited form.
+
+    The indented pair are the ones the continuation rule masks. Two spaces is a
+    legal continuation of a list item and `  # [1.2.3]` is still a heading -
+    to CommonMark, and to `release-version.yml`, which strips each line before
+    testing it for `#`. Indenting the heading was all it took to put a version
+    section nobody released into the middle of the file.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    bad = tmp_path / "bad.md"
+    bad.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError):
+        assemble_changelog.read_entries([bad])
+
+
+def test_a_continuation_line_may_cite_an_issue_number(tmp_path):
+    """The over-refusal control for the heading check above.
+
+    `#1234` is not a heading - CommonMark wants whitespace after the hashes -
+    and citing an issue on a wrapped line is the obvious thing a fragment does.
+    A heading rule that refused it would be found here rather than by whoever
+    is cutting the release.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    good = tmp_path / "good.md"
+    good.write_text("- Fixed the thing\n  #1234 was the culprit.\n", encoding="utf-8")
+
+    assert assemble_changelog.read_entries([good]) == [
+        "- Fixed the thing\n  #1234 was the culprit."
+    ]
+
+
+def test_the_changelog_opens_on_a_released_version_heading():
+    """`.github/workflows/release-version.yml` reads `[Security: LEVEL]` off the
+    first heading in the released tag's CHANGELOG.md to publish
+    latest-version.json. Only ``scripts/assemble_changelog.py`` writes that file;
+    an unreleased section left at the top by hand would hand the workflow the
+    wrong version's security level."""
+    first = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lstrip()
+    assert re.match(r"# \[\d+\.\d+\.\d+[^\]]*\]", first), (
+        "CHANGELOG.md does not open on a version heading: "
+        f"{first.splitlines()[0] if first else '(empty)'}"
+    )
