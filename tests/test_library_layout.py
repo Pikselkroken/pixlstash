@@ -911,6 +911,7 @@ def test_renaming_a_project_renames_the_folder_and_moves_no_files(library):
         Facet.PROJECT,
         "2024 Shoots",
         "2024 Shoots (archive)",
+        entity_id=library["project_id"],
         image_root=root,
     )
     session.commit()
@@ -932,7 +933,12 @@ def test_renaming_a_project_renames_the_folder_and_moves_no_files(library):
 def test_a_rename_is_journalled_so_the_scan_does_not_read_it_as_intent(library):
     session, root = library["session"], library["root"]
     engine.rename_entity_folders(
-        session, Facet.PROJECT, "2024 Shoots", "Renamed", image_root=root
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "Renamed",
+        entity_id=library["project_id"],
+        image_root=root,
     )
     session.commit()
     rows = session.exec(select(PictureMove)).all()
@@ -952,6 +958,348 @@ def test_a_taken_destination_is_declined_not_overwritten(library):
     assert skipped == [(library["picture_id"], "destination_taken")]
     with open(os.path.join(blocker, "0412.png"), "rb") as handle:
         assert handle.read() == b"somebody else's file"
+
+
+def _spell_the_project_folder(library, on_disk: str) -> None:
+    """Respell the project's directory and its rows without renaming the entity.
+
+    Standing in for a case-insensitive filesystem, where the directory really
+    written is ``2024 shoots`` while the layout spells the project ``2024
+    Shoots`` and ``is_true`` attributes it anyway. Simulated rather than
+    observed so the tests below are just as sharp on a case-SENSITIVE runner,
+    which is what CI is: there the buggy code skipped the folder outright, and
+    on a case-insensitive one it renamed the folder and repointed nothing.
+    """
+    session, root = library["session"], library["root"]
+    os.rename(os.path.join(root, "2024 Shoots"), os.path.join(root, on_disk))
+    picture = session.get(Picture, library["picture_id"])
+    picture.file_path = picture.file_path.replace("2024 Shoots/", f"{on_disk}/", 1)
+    session.add(picture)
+    session.commit()
+
+
+def test_a_folder_spelled_differently_is_renamed_under_its_real_name(library):
+    """The severe one: the rename must claim the directory that is really there.
+
+    Matching on the joined path finds a directory whose real spelling differs
+    on a case-insensitive filesystem, renames THAT, and then repoints nothing -
+    because the rows underneath carry the real spelling. Every picture under the
+    folder is left naming a path with no file at it, which the purge sweep
+    deletes within the hour along with its metadata.
+    """
+    session, root = library["session"], library["root"]
+    _spell_the_project_folder(library, "2024 shoots")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2025 Shoots"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2025 Shoots",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 1
+    assert os.path.isfile(
+        os.path.join(root, "2025 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    # The row is the point. A rename that moved the directory and left this
+    # naming the old one is the data-loss case.
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2025 Shoots/Mira/2026-08/0412.png"
+    )
+
+
+def test_a_rename_that_only_changes_case_is_made_not_refused(library):
+    """``2024 shoots`` -> ``2024 SHOOTS`` is the entity's own folder, not a rival."""
+    session, root = library["session"], library["root"]
+    _spell_the_project_folder(library, "2024 shoots")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2024 SHOOTS"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2024 SHOOTS",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 1
+    assert os.path.isfile(
+        os.path.join(root, "2024 SHOOTS", "Mira", "2026-08", "0412.png")
+    )
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2024 SHOOTS/Mira/2026-08/0412.png"
+    )
+
+
+def test_a_sibling_spelled_differently_still_blocks_the_rename(library):
+    """The other direction: a folder that is not this entity's is not claimed.
+
+    ``os.path.exists`` cannot see it on a case-sensitive filesystem, so the
+    rename would put two folders the layout reads as one name side by side.
+    """
+    session, root = library["session"], library["root"]
+    rival = os.path.join(root, "2025 shoots")
+    os.makedirs(rival)
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2025 Shoots"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2025 Shoots",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 0
+    assert os.path.isdir(rival)
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2024 Shoots/Mira/2026-08/0412.png"
+    )
+
+
+def test_a_rename_that_cannot_name_its_own_entity_is_refused_loudly(library):
+    """No id, no rename. The exclusion is by primary key or it is nothing.
+
+    Without an id the only thing left to tell this entity's row from a second
+    entity of the same name is the name itself - which is the comparison that
+    renamed the wrong person's folder. A caller that cannot say which row it is
+    renaming has a bug, and it must not degrade quietly back into that.
+    """
+    session, root = library["session"], library["root"]
+    with pytest.raises(ValueError, match="entity_id"):
+        engine.rename_entity_folders(
+            session,
+            Facet.PROJECT,
+            "2024 Shoots",
+            "2025 Shoots",
+            entity_id=None,
+            image_root=root,
+        )
+    assert os.path.isdir(os.path.join(root, "2024 Shoots"))
+
+
+def test_a_file_sharing_the_folders_name_does_not_hide_the_folder(library):
+    """A directory outranks a file, even one spelled exactly as the layout does.
+
+    Taking the first entry that matches lets an unrelated file stand in for the
+    entity's real folder: the rename then finds a non-directory, skips it, and
+    silently does not happen - the folder stays under a name the library no
+    longer knows and its pictures drop out of the layout.
+
+    The two names collide through the LIGATURE rather than through case. That
+    is not decoration: ``_match_key`` folds ``ﬁ`` to ``fi``, an expansion no
+    filesystem's case-insensitive comparison performs, because those tables map
+    one character to one character and cannot produce two. So the collision the
+    matcher sees is real on every platform while the two entries stay separate
+    on every platform - including the Windows runners, where two names
+    differing only in case cannot both exist and creating the second would
+    error the module out before a single assertion ran.
+    """
+    session, root = library["session"], library["root"]
+    real = "Field Notes"
+    written = "ﬁeld Notes"
+    assert engine._match_key(real) == engine._match_key(written)
+    assert real != written
+
+    _spell_the_project_folder(library, real)
+    # Spelled exactly as the layout writes the entity's name, so the old "exact
+    # name wins" short-circuit returned THIS deterministically, whatever order
+    # the directory happens to be listed in.
+    try:
+        with open(os.path.join(root, written), "wb") as handle:
+            handle.write(b"not a folder")
+    except OSError as exc:  # pragma: no cover - not seen on Linux or Windows
+        pytest.skip(f"this filesystem stores the two names as one entry: {exc}")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "Field Trip"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        written,
+        "Field Trip",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 1
+    assert os.path.isfile(
+        os.path.join(root, "Field Trip", "Mira", "2026-08", "0412.png")
+    )
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "Field Trip/Mira/2026-08/0412.png"
+    )
+    # The owner's file is not ours to touch.
+    assert os.path.isfile(os.path.join(root, written))
+
+
+def test_a_file_at_the_destination_still_blocks_the_rename(library):
+    """The control on the ranking above: preferring directories must not stop a
+    FILE from being a collision.
+
+    ``os.rename`` onto an existing file is not a rename this may make, and the
+    destination question is "is anything already called that", not "is a folder".
+    """
+    session, root = library["session"], library["root"]
+    with open(os.path.join(root, "2025 shoots"), "wb") as handle:
+        handle.write(b"the owner's own file")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2025 Shoots"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2025 Shoots",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 0
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    with open(os.path.join(root, "2025 shoots"), "rb") as handle:
+        assert handle.read() == b"the owner's own file"
+
+
+def test_a_file_spelled_exactly_like_the_destination_is_a_collision(caplog, library):
+    """The destination question ranks the opposite way round from the source one.
+
+    Looking for the entity's folder a directory must win. Asking whether the
+    destination is taken the exact spelling must win: otherwise the source
+    directory itself comes back as the best key match, reads as "not taken", and
+    the rename goes ahead into an ``os.rename`` that cannot succeed - the folder
+    keeps its old name and its pictures go off-layout, reported as a failed
+    syscall rather than as the collision it is.
+
+    Built from the ligature for the same reason as the test above: on the
+    Windows runners a directory and a file whose names differ only in case
+    cannot both exist.
+    """
+    session, root = library["session"], library["root"]
+    real = "ﬁeld Notes"
+    destination = "Field Notes"
+    assert engine._match_key(real) == engine._match_key(destination)
+
+    _spell_the_project_folder(library, real)
+    try:
+        with open(os.path.join(root, destination), "wb") as handle:
+            handle.write(b"the owner's own file")
+    except OSError as exc:  # pragma: no cover - not seen on Linux or Windows
+        pytest.skip(f"this filesystem stores the two names as one entry: {exc}")
+
+    project = session.get(Project, library["project_id"])
+    project.name = destination
+    session.add(project)
+    with caplog.at_level("WARNING", logger=engine.logger.name):
+        renamed = engine.rename_entity_folders(
+            session,
+            Facet.PROJECT,
+            real,
+            destination,
+            entity_id=library["project_id"],
+            image_root=root,
+        )
+
+    assert renamed == 0
+    # The refusal has to be the DELIBERATE one. Reaching os.rename and having it
+    # fail leaves the same folder on disk, so the count alone cannot tell a
+    # handled collision from a syscall we should never have attempted.
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("already exists" in message for message in messages), messages
+    assert not any("could not rename" in message for message in messages), messages
+
+    assert os.path.isdir(os.path.join(root, real))
+    with open(os.path.join(root, destination), "rb") as handle:
+        assert handle.read() == b"the owner's own file"
+
+
+def test_renaming_one_of_two_people_of_the_same_name_touches_no_folder(library):
+    """Two people really can be called Mira, and only one of them was renamed.
+
+    The self-exclusion has to be by primary key. Excluding every row still
+    holding the old name excludes the OTHER Mira too, so the name reads as
+    unambiguous and her folder is renamed out from under her.
+    """
+    session, root = library["session"], library["root"]
+    person = session.get(Character, library["person_id"])
+    session.add(Character(name="Mira"))
+    session.commit()
+
+    person.name = "Mira K"
+    session.add(person)
+    # Deliberately NOT committed: the caller must not commit before the rename.
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PERSON,
+        "Mira",
+        "Mira K",
+        entity_id=person.id,
+        image_root=root,
+    )
+
+    assert renamed == 0
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2024 Shoots/Mira/2026-08/0412.png"
+    )
+
+
+def test_a_rename_driven_before_the_callers_commit_lands_whole(library):
+    """How the routes call it: the name change is pending, and this commits it.
+
+    The directory rename and the ``file_path`` rewrites that describe it have to
+    land in ONE commit with the name that caused them - a commit that lands only
+    two of the three leaves the pictures naming paths that do not exist. The
+    ``rollback`` is the assertion: anything still uncommitted dies there.
+    """
+    session, root = library["session"], library["root"]
+    project = session.get(Project, library["project_id"])
+    project.name = "2024 Shoots (archive)"
+    session.add(project)
+
+    assert (
+        engine.rename_entity_folders(
+            session,
+            Facet.PROJECT,
+            "2024 Shoots",
+            "2024 Shoots (archive)",
+            entity_id=library["project_id"],
+            image_root=root,
+        )
+        == 1
+    )
+    session.rollback()
+
+    assert session.get(Project, library["project_id"]).name == "2024 Shoots (archive)"
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2024 Shoots (archive)/Mira/2026-08/0412.png"
+    )
 
 
 def test_a_symlinked_source_is_refused(library, tmp_path):
@@ -1198,6 +1546,45 @@ def test_a_person_landing_on_a_picture_stamps_it(stamped):
     assert _due(session, stamped["picture_id"]) is not None
 
 
+def test_taking_a_person_off_a_picture_stamps_it(stamped):
+    """The face that named the folder is gone, so the folder may have stopped
+    being true - and a deleted row has no attribute history to say so.
+
+    Reached from the untag route and from the face-model refresh, both of which
+    delete the row rather than null it. Without this the picture is never
+    revisited and its folder keeps a name nobody on it answers to.
+    """
+    session = stamped["session"]
+    face = session.exec(
+        select(Face).where(Face.picture_id == stamped["picture_id"])
+    ).first()
+    assert face.character_id is not None
+    session.delete(face)
+    session.commit()
+    assert _due(session, stamped["picture_id"]) is not None
+
+
+def test_removing_a_face_that_named_nobody_stamps_nothing(stamped):
+    """The narrowing has to survive: face DETECTION must not wake the engine.
+
+    Detection writes and rewrites unassigned faces constantly. Stamping on every
+    deleted face rather than on what it carried would put the whole library
+    through the layout check for work that changed no assignment.
+    """
+    session = stamped["session"]
+    face = Face(picture_id=stamped["picture_id"], character_id=None, face_index=7)
+    session.add(face)
+    session.commit()
+    picture = session.get(Picture, stamped["picture_id"])
+    picture.layout_check_due_at = None
+    session.add(picture)
+    session.commit()
+
+    session.delete(face)
+    session.commit()
+    assert _due(session, stamped["picture_id"]) is None
+
+
 def test_the_task_finds_only_what_is_due(stamped):
     from pixlstash.tasks.layout_move_task import LayoutMoveTask
 
@@ -1315,7 +1702,12 @@ def test_renaming_a_person_leaves_a_same_named_sets_folder_alone(library):
     session.add(person)
     session.commit()
     renamed = engine.rename_entity_folders(
-        session, Facet.PERSON, "Summer", "Summer B", image_root=root
+        session,
+        Facet.PERSON,
+        "Summer",
+        "Summer B",
+        entity_id=person.id,
+        image_root=root,
     )
 
     assert renamed == 0

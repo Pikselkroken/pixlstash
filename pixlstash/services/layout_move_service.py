@@ -62,6 +62,10 @@ from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     Facet,
+    # The component-level fold, deliberately not ``folder_match_key``: an
+    # on-disk name is already a folder name, and running ``folder_name`` over it
+    # again would read the real directory ``A:B`` as the entity ``A_B``.
+    _match_key,
     folder_match_key,
     format_layout,
     match_destination,
@@ -1180,6 +1184,7 @@ def rename_entity_folders(
     old_name: str,
     new_name: str,
     *,
+    entity_id: int,
     image_root: Optional[str],
 ) -> int:
     """Rename the folders named after an entity. **Moves no files.**
@@ -1212,6 +1217,20 @@ def rename_entity_folders(
     language and costs nobody a moved file - the direction this whole design
     errs in.
 
+    Args:
+        entity_id: The primary key of the entity being renamed, so its own row
+            can be told apart from a genuine second entity of the same name.
+            Two people really can be called Mira.
+
+    Raises:
+        ValueError: If ``entity_id`` is ``None``. Without it there is no way to
+            tell this entity's own row from a second entity of the same name,
+            and the function would silently fall back to the name comparison
+            this replaced - which either renames the other entity's folder or
+            refuses a rename that was fine, depending on flush state. A caller
+            that cannot name the row it is renaming has a bug, and a loud one is
+            worth more than a rename that quietly goes to the wrong folder.
+
     **The caller must not commit before this returns**, and this commits for
     them: the directory renames and the ``file_path`` rewrites that describe
     them have to land together, or a failed commit leaves every picture under a
@@ -1222,6 +1241,13 @@ def rename_entity_folders(
     Returns:
         How many directories were renamed.
     """
+    if entity_id is None:
+        raise ValueError(
+            "rename_entity_folders needs the entity_id of the entity being "
+            f"renamed ({facet}, {old_name!r} -> {new_name!r}); without it its "
+            "own row cannot be told apart from a second entity of the same name"
+        )
+
     old_folder = folder_name(old_name)
     new_folder = folder_name(new_name)
     if old_folder == new_folder:
@@ -1231,7 +1257,9 @@ def rename_entity_folders(
     renamed: list = []
     try:
         for root in roots.values():
-            if _name_is_ambiguous(session, facet, old_name, root.layout):
+            if _name_is_ambiguous(
+                session, facet, old_name, root.layout, entity_id=entity_id
+            ):
                 logger.warning(
                     "Layout rename: %r names more than one thing this layout "
                     "could put at the same depth, so its folders under %s are "
@@ -1245,16 +1273,26 @@ def rename_entity_folders(
                 if facet not in segment:
                     continue
                 for parent in _directories_at_depth(root.path, depth):
-                    source = os.path.join(parent, old_folder)
-                    destination = os.path.join(parent, new_folder)
-                    if not os.path.isdir(source):
+                    # The directory as it is REALLY spelled, not as the layout
+                    # spells it - see :func:`_entry_matching`.
+                    source = _entry_matching(parent, old_folder)
+                    if source is None or not os.path.isdir(source):
                         continue
-                    if os.path.exists(destination):
+                    destination = os.path.join(parent, new_folder)
+                    # "Is the destination taken" is the same match question, not
+                    # ``os.path.exists``: an entry that IS the source (a rename
+                    # that only changes case) is not a collision, and a sibling
+                    # spelled differently is one even where ``exists`` says no.
+                    # Asked exact-first, because here the exactly-spelled entry
+                    # is the collision even when the source also matches the key
+                    # - see :func:`_entry_matching`.
+                    taken = _entry_matching(parent, new_folder, prefer_exact=True)
+                    if taken is not None and taken != source:
                         logger.warning(
                             "Layout rename: %s already exists, so %s keeps its "
                             "old name. Its pictures read as off-layout until "
                             "one of the two folders is renamed by hand.",
-                            destination,
+                            taken,
                             source,
                         )
                         continue
@@ -1291,7 +1329,12 @@ def rename_entity_folders(
 
 
 def _name_is_ambiguous(
-    session: Session, facet: Facet, name: str, layout: Layout
+    session: Session,
+    facet: Facet,
+    name: str,
+    layout: Layout,
+    *,
+    entity_id: Optional[int],
 ) -> bool:
     """Whether another entity would write the same folder name at the same depth.
 
@@ -1306,21 +1349,22 @@ def _name_is_ambiguous(
     }
     key = folder_match_key(name)
     for other in wanted:
-        for candidate in _entity_names(session, other):
+        for candidate_id, candidate in _entity_names(session, other):
             if folder_match_key(candidate) != key:
                 continue
-            if other is facet and candidate == name:
-                # The entity being renamed no longer carries this name (the
-                # caller wrote the new one first), so a row still holding it is
-                # a genuine second entity. A row that IS this one - an
-                # unflushed session, a caller that renames after - is not.
+            if other is facet and candidate_id == entity_id:
+                # The row that IS the entity being renamed, told apart by
+                # primary key rather than by name. By name it could not be:
+                # two people really can be called Mira, and skipping every row
+                # holding the name would skip the second one too - so renaming
+                # one Mira would rename the other Mira's folder.
                 continue
             return True
     return False
 
 
 def _entity_names(session: Session, facet: Facet) -> list:
-    """Every name in the library for one facet."""
+    """Every ``(id, name)`` in the library for one facet."""
     model = {
         Facet.PROJECT: Project,
         Facet.SET: PictureSet,
@@ -1328,7 +1372,70 @@ def _entity_names(session: Session, facet: Facet) -> list:
     }.get(facet)
     if model is None:
         return []
-    return [name for name in session.exec(select(model.name)).all() if name]
+    return [
+        (entity_id, name)
+        for entity_id, name in session.exec(select(model.id, model.name)).all()
+        if name
+    ]
+
+
+def _entry_matching(
+    parent: str, folder: str, *, prefer_exact: bool = False
+) -> Optional[str]:
+    """The real on-disk path in *parent* that the layout reads as *folder*.
+
+    ``os.path.isdir(os.path.join(parent, folder))`` is not enough, and the
+    difference destroys pictures. On a case-insensitive filesystem it answers
+    yes for a directory really spelled ``summer`` when the layout spells it
+    ``Summer`` - ``is_true`` attributes it, so the rename is right to claim it -
+    and ``os.rename`` then renames that real directory. But the rows underneath
+    carry the real spelling, so :func:`_repoint_under` matches none of them and
+    every one of those pictures is left naming a path with no file at it, which
+    ``MissingFilePurgeFinder`` purges within the hour along with its metadata.
+
+    So resolve the entry the way the truth check compares, and hand back the
+    name as it is actually written.
+
+    **The two questions this answers rank the candidates the opposite way, and
+    that is the whole reason for the flag.** Looking for the entity's own folder
+    (``prefer_exact=False``) a *directory* wins, because a stray file sharing an
+    entity's match key must not stand in for the folder and make the rename
+    silently not happen. Asking whether the destination is taken
+    (``prefer_exact=True``) the *exact spelling* wins, because the question is
+    "is something already sitting where I am about to write" - and a file named
+    exactly like the destination is a collision even when the source directory
+    also matches the key. Ranking that one directory-first hands back the source
+    itself, which reads as "not taken" and sends a case-only rename into an
+    ``os.rename`` that cannot succeed. Within each question the other property
+    breaks the tie, so a case-sensitive filesystem holding both ``Summer`` and
+    ``summer`` still renames the one that was asked for.
+
+    Args:
+        parent: The directory to look in.
+        folder: The folder name as the layout writes it.
+        prefer_exact: Rank an exactly-spelled entry above a directory. Use it
+            for the destination, not for the source.
+
+    Returns:
+        The path of the best-matching entry, or ``None`` if nothing matches.
+    """
+    key = _match_key(folder)
+    best = None
+    best_rank = None
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if _match_key(entry.name) != key:
+                    continue
+                exact, is_dir = entry.name == folder, entry.is_dir()
+                rank = (exact, is_dir) if prefer_exact else (is_dir, exact)
+                if best_rank is None or rank > best_rank:
+                    best, best_rank = entry.path, rank
+                if best_rank == (True, True):
+                    break
+    except OSError as exc:
+        logger.warning("Layout rename: cannot list %s (%s)", parent, exc)
+    return best
 
 
 def _directories_at_depth(root: str, depth: int) -> list:

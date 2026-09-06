@@ -6608,10 +6608,28 @@ collide the same way. `_name_is_ambiguous` declines those. The cost is that
 those folders drop out of the layout's language; the alternative costs the owner
 moved files, and this design errs the other way every time.
 
+Two entities of the same name are told apart by **primary key**, not by name.
+`rename_entity_folders` takes the id of the entity being renamed and
+`_name_is_ambiguous` skips only that row: excluding every row still holding the
+old name would exclude the *other* Mira as well, so renaming one would read as
+unambiguous and rename the other's folder.
+
+**The directory is found by scanning, not by joining the path.** `_entry_matching`
+resolves the real on-disk entry with the same fold `is_true` compares under, so
+the name is read as it is actually spelled. Joining `parent/<layout name>` and
+asking `os.path.isdir` is what a case-insensitive filesystem answers yes to for a
+directory really called `summer`; the rename would then move that directory while
+every row underneath still carried the real spelling, `_repoint_under` would match
+none of them, and the purge sweep would delete those pictures. The same match
+decides whether the destination is taken, so a rename that only changes case is
+made rather than refused, and a sibling spelled differently blocks it even where
+`os.path.exists` cannot see it.
+
 The renames and the `file_path` rewrites that describe them commit **together**,
 inside `rename_entity_folders` itself, and the directories are renamed back if
 that commit fails. A half-applied rename would leave every picture under the
-folder naming a path that does not exist, which is the purge sweep's input.
+folder naming a path that does not exist, which is the purge sweep's input. That
+is why every caller renames **before** its own `session.commit()`, not after.
 
 ### What Phase 6 sees once a layout is on
 

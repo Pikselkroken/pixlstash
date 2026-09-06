@@ -533,6 +533,30 @@ def create_router(server) -> APIRouter:
                 project.extra_metadata = payload.extra_metadata
             session.add(project)
             try:
+                if normalized_name is not None and previous_name != normalized_name:
+                    # **Renaming a project renames its FOLDER; it moves no
+                    # files** (v1.11 §4). It is also not cosmetic: the layout
+                    # reads folder names against the library's *current*
+                    # vocabulary, so a folder left under the old name would name
+                    # nothing PixlStash knows and its pictures would drop out of
+                    # the layout for good.
+                    #
+                    # BEFORE the commit, as its docstring requires: the renames
+                    # and the ``file_path`` rewrites describing them have to
+                    # land together, or a failed commit leaves every picture
+                    # under a renamed folder naming a path that no longer
+                    # exists. It commits for itself when it renamed anything and
+                    # rolls the directories back if it cannot - and being inside
+                    # this ``try`` is what still turns a name-uniqueness race
+                    # into a 409 once the directories are back.
+                    rename_entity_folders(
+                        session,
+                        Facet.PROJECT,
+                        previous_name,
+                        normalized_name,
+                        entity_id=pid,
+                        image_root=server.vault.image_root,
+                    )
                 session.commit()
             except IntegrityError:
                 session.rollback()
@@ -541,22 +565,6 @@ def create_router(server) -> APIRouter:
                     detail="Project name already exists",
                 )
             session.refresh(project)
-            if normalized_name is not None and previous_name != normalized_name:
-                # **Renaming a project renames its FOLDER; it moves no files**
-                # (v1.11 §4). It is also not cosmetic: the layout reads folder
-                # names against the library's *current* vocabulary, so a folder
-                # left under the old name would name nothing PixlStash knows
-                # and its pictures would drop out of the layout for good.
-                # Commits for itself, and rolls the directories back if it
-                # cannot: the renames and the ``file_path`` rewrites describing
-                # them have to land together.
-                rename_entity_folders(
-                    session,
-                    Facet.PROJECT,
-                    previous_name,
-                    normalized_name,
-                    image_root=server.vault.image_root,
-                )
             return project
 
         return server.vault.db.run_task(

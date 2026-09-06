@@ -1056,24 +1056,32 @@ def create_router(server) -> APIRouter:
                                 pic.text_embedding = None
                                 session.add(pic)
 
+                    if name_changing:
+                        # **Renaming a person renames their FOLDER; it moves no
+                        # files** (v1.11 §4). Required rather than tidy: the
+                        # layout reads folder names against the library's
+                        # current vocabulary, so a folder left under the old
+                        # name names nobody and its pictures fall out of the
+                        # rule for good.
+                        #
+                        # BEFORE the commit, as its docstring requires: the
+                        # renames and the ``file_path`` rewrites describing them
+                        # have to land together, or a failed commit leaves every
+                        # picture under a renamed folder naming a path that no
+                        # longer exists. It commits for itself when it renamed
+                        # anything; the commit below is the fallback for when it
+                        # did not. A name change always sets ``updated``, so
+                        # this block is never skipped by sitting inside it.
+                        rename_entity_folders(
+                            session,
+                            Facet.PERSON,
+                            previous_name,
+                            character.name,
+                            entity_id=id,
+                            image_root=server.vault.image_root,
+                        )
                     session.commit()
                     session.refresh(character)
-                if name_changing:
-                    # **Renaming a person renames their FOLDER; it moves no
-                    # files** (v1.11 §4). Required rather than tidy: the layout
-                    # reads folder names against the library's current
-                    # vocabulary, so a folder left under the old name names
-                    # nobody and its pictures fall out of the rule for good.
-                    # Commits for itself, and rolls the directories back if
-                    # it cannot: the renames and the ``file_path`` rewrites
-                    # describing them have to land together.
-                    rename_entity_folders(
-                        session,
-                        Facet.PERSON,
-                        previous_name,
-                        character.name,
-                        image_root=server.vault.image_root,
-                    )
                 # Serialize while the session is open; the row may be detached
                 # (and its attributes expired) by the time the handler returns.
                 payload = character.model_dump(exclude_unset=False)
