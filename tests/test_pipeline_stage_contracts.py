@@ -478,3 +478,59 @@ def test_a_full_card_on_a_video_is_never_recorded_as_no_faces(tmp_path, monkeypa
 
     with pytest.raises(RuntimeError, match="out of memory"):
         task._extract_features([pic])
+
+
+# ── the tag window ──────────────────────────────────────────────────────────
+
+
+class _TagEngine:
+    """Enough of an engine for MissingTagFinder: one picture per task."""
+
+    tagger_settings = {"active_tag_plugin": "wd14"}
+
+    class tagging_workflow:  # noqa: N801 - stands in for an attribute
+        @staticmethod
+        def suggested_task_size():
+            return 1
+
+
+def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
+    """Tagging must not starve behind a run of corrupt files.
+
+    A picture TagTask cannot decode is marked unprocessable and keeps its
+    pending-tag sentinel for ever - nothing writes tags for it, so nothing
+    clears the sentinel. ``_filter_and_claim`` refuses to claim it, but the
+    candidate window is ordered by ``Picture.id`` and bounded, so once enough
+    of them sit below the pictures that still need tagging every sweep reads
+    only corrupt rows, claims none and returns None. The planner reads that as
+    "no work" and backs off. The face, thumbnail and embedding finders all
+    exclude the suppressed set at the query; this one did not.
+    """
+    with Vault(image_root=str(tmp_path)) as vault:
+        names = [f"c{index}.png" for index in range(6)]
+        ids = _seed_pending(vault, tmp_path, names)
+
+        def add_face_rows(session: Session):
+            for pid in ids:
+                session.add(Face(picture_id=pid, face_index=-1))
+            session.commit()
+
+        vault.db.run_task(add_face_rows)
+
+        # Every picture but the last is undecodable. The window is
+        # suggested_task_size * (TAGGER_MAX_INFLIGHT + 1) = 4 rows, so the
+        # five suppressed ones fill it completely.
+        for pid, name in zip(ids[:-1], names[:-1]):
+            assert vault.db.unprocessable_images.mark_unprocessable(
+                pid, str(tmp_path / name), reason="test-corrupt fixture"
+            )
+        good = ids[-1]
+
+        finder = MissingTagFinder(vault.db, lambda: _TagEngine())
+        task = finder.find_task()
+
+        assert task is not None, (
+            "tagging returned no work while a taggable picture was waiting "
+            "behind the suppressed rows"
+        )
+        assert task.params["picture_ids"] == [good]
