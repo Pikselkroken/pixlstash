@@ -74,18 +74,38 @@ export function requireAccel(value: unknown): Accel {
  */
 export type PathPurpose = 'library' | 'backends';
 
-const offeredPaths: Record<PathPurpose, Set<string>> = {
-  library: new Set(),
-  backends: new Set(),
+/**
+ * The lookup key for a path, matching the platform's own idea of path identity.
+ *
+ * Windows filesystems are case-insensitive, so `C:\\Users\\me\\Pictures` and
+ * `c:\\users\\me\\pictures` are one directory and a case-sensitive comparison
+ * would refuse a folder the user really did choose - the over-blocking failure
+ * this whole guard must not cause. POSIX is case-SENSITIVE, where `~/Pictures`
+ * and `~/pictures` are two different directories, so folding there would let a
+ * path that was never offered match one that was. Same rule, and the same
+ * `process.platform` switch, as {@link normalizeBackendsRoot}.
+ */
+export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+  const resolved = resolve(path.trim());
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+// Key -> the path as PixlStash actually offered it. A Map rather than a Set so
+// the value that flows on is the one the main process vouched for, never the
+// renderer's own spelling of it.
+const offeredPaths: Record<PathPurpose, Map<string, string>> = {
+  library: new Map(),
+  backends: new Map(),
 };
 
 /** Record a path as offered to the renderer for *purpose*, and return it. */
 export function offerPath<T extends string | null | undefined>(
   path: T,
   purpose: PathPurpose,
+  platform: NodeJS.Platform = process.platform,
 ): T {
   if (typeof path === 'string' && path.trim()) {
-    offeredPaths[purpose].add(resolve(path.trim()));
+    offeredPaths[purpose].set(pathKey(path, platform), resolve(path.trim()));
   }
   return path;
 }
@@ -94,14 +114,16 @@ export function offerPath<T extends string | null | undefined>(
  * Narrow a folder the renderer sent back to one {@link offerPath} recorded for
  * the same *purpose*, or throw. *what* names the field for the message shown.
  *
- * Compared after `resolve` on both sides, so a trailing separator or an
- * `a/../b` spelling of an offered path is accepted while resolving to that same
- * offered path - and nothing else is.
+ * Compared by {@link pathKey} on both sides, so a trailing separator, an
+ * `a/../b` spelling, or (on Windows only) a different drive-letter or path
+ * casing is accepted while resolving to that same offered path - and nothing
+ * else is. Returns the path as it was OFFERED, not as the renderer spelled it.
  */
 export function requireOfferedPath(
   value: unknown,
   purpose: PathPurpose,
   what: string,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   // Described the way requireAccel describes a value, and for its reasons: IPC
   // carries a BigInt (JSON.stringify throws on one) and an object may supply
@@ -110,14 +132,14 @@ export function requireOfferedPath(
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${what} must be a folder path, not ${shown}.`);
   }
-  const resolved = resolve(value.trim());
-  if (!offeredPaths[purpose].has(resolved)) {
+  const offered = offeredPaths[purpose].get(pathKey(value, platform));
+  if (offered === undefined) {
     throw new Error(
       `${what} ${shown} was not offered by PixlStash for this choice. Choose ` +
         'the folder with the Change\u2026 button and try again.',
     );
   }
-  return resolved;
+  return offered;
 }
 
 /** The backend's external-listener settings, as stored in the server config. */
@@ -153,10 +175,20 @@ export function requireServerSettings(value: unknown): ServerSettings {
       );
     }
   }
+  // The port is TYPE-checked here and RANGE-checked in writeServerSettings.
+  // Leniency about the range is what keeps a half-typed field from throwing;
+  // it was never a reason to accept a string or a missing value, which is not
+  // something the port field can produce. `typeof x === 'number'` is deliberate
+  // and Number.isFinite() would be wrong: NaN and 0 are exactly what
+  // `Number('')` and `Number('x')` hand over mid-keystroke, and both must
+  // still reach writeServerSettings to be ignored there.
+  if (typeof settings?.port !== 'number') {
+    throw new Error(`Server setting "port" must be a number, not ${typeof settings?.port}.`);
+  }
   return {
-    enabled: settings!.enabled as boolean,
-    ssl: settings!.ssl as boolean,
-    port: settings!.port as number,
+    enabled: settings.enabled as boolean,
+    ssl: settings.ssl as boolean,
+    port: settings.port,
   };
 }
 

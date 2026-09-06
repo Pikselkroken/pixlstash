@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { describe, it } from 'node:test';
-import { offerPath, requireOfferedPath, requireServerSettings } from '../src/config';
+import { offerPath, pathKey, requireOfferedPath, requireServerSettings } from '../src/config';
 
 /**
  * `backend:setLocation` and `setup:commit` take a folder from the renderer and
@@ -23,6 +23,39 @@ describe('requireOfferedPath', () => {
     const chosen = resolve(sep, 'home', 'me', 'Pictures');
     offerPath(chosen, 'library');
     assert.equal(requireOfferedPath(chosen, 'library', 'Library folder'), chosen);
+  });
+
+  it('accepts a different casing on Windows and refuses it on POSIX', () => {
+    // Windows filesystems are case-insensitive, so a folder coming back as
+    // `c:\\users\\me` when it was offered as `C:\\Users\\me` is the SAME folder and
+    // refusing it would break the picker - the over-blocking failure this
+    // guard must never cause. POSIX is case-sensitive, where those really are
+    // two directories, so the same tolerance there would accept a path that
+    // was never offered.
+    const win = 'C:\\Users\\me\\Pictures';
+    offerPath(win, 'library', 'win32');
+    assert.equal(requireOfferedPath('c:\\users\\me\\pictures', 'library', 'Library folder', 'win32'), resolve(win));
+    // And it hands back the casing PixlStash offered, not the renderer's.
+    assert.equal(requireOfferedPath(win.toLowerCase(), 'library', 'Library folder', 'win32'), resolve(win));
+
+    const posix = resolve(sep, 'home', 'me', 'CaseSensitive');
+    offerPath(posix, 'library', 'linux');
+    assert.equal(requireOfferedPath(posix, 'library', 'Library folder', 'linux'), posix);
+    assert.throws(
+      () => requireOfferedPath(posix.toLowerCase(), 'library', 'Library folder', 'linux'),
+      /was not offered by PixlStash/,
+      'a differently-cased path is a different directory on POSIX',
+    );
+  });
+
+  it('pathKey folds case only on Windows', () => {
+    const p = resolve(sep, 'Home', 'Me', 'Pictures');
+    assert.equal(pathKey(p, 'win32'), resolve(p).toLowerCase());
+    assert.equal(pathKey(p, 'linux'), resolve(p));
+    assert.equal(pathKey(p, 'darwin'), resolve(p));
+    // Trailing separator and `..` still normalise on every platform.
+    assert.equal(pathKey(`  ${p}${sep}  `, 'linux'), resolve(p));
+    assert.equal(pathKey(join(p, 'x', '..'), 'linux'), resolve(p));
   });
 
   it('refuses a path offered for the OTHER question', () => {
@@ -145,6 +178,26 @@ describe('requireServerSettings', () => {
         () => requireServerSettings(bad),
         /must be true or false/,
         `${JSON.stringify(bad) ?? String(bad)} must not be accepted`,
+      );
+    }
+  });
+
+  it('refuses a port that is not a number at all', () => {
+    // Range leniency is for the field mid-keystroke; it was never a reason to
+    // accept a string or a missing value, neither of which the port field can
+    // produce. This is the same trust-boundary point as `enabled` and `ssl`.
+    for (const bad of [
+      { enabled: true, port: '9537', ssl: false },
+      { enabled: true, port: undefined, ssl: false },
+      { enabled: true, port: null, ssl: false },
+      { enabled: true, port: {}, ssl: false },
+      { enabled: true, port: [9537], ssl: false },
+      { enabled: true, ssl: false },
+    ]) {
+      assert.throws(
+        () => requireServerSettings(bad),
+        /"port" must be a number/,
+        `${JSON.stringify(bad)} must not be accepted`,
       );
     }
   });
