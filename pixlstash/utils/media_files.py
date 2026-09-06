@@ -52,6 +52,34 @@ def is_pixlstash_thumbnail(name_or_path: str) -> bool:
     return name_or_path.lower().endswith(THUMBNAIL_SUFFIX)
 
 
+def is_hidden_entry(name: str) -> bool:
+    """True for a dot-prefixed file or directory name.
+
+    The one rule every walk of a picture tree has to agree on: the Phase 2
+    folder-structure read, ``local_import_pictures``, and
+    ``ReferenceFolderScanTask``. A dot-folder is either a vault's own cache
+    (``.pixlstash-thumbnails/``, the older ``.ref_thumbs/``, ``.pixlstash``
+    sidecar stores) or something the owner deliberately hid; neither is content
+    to index. Two of the three pruned them and the scan did not, so a
+    reference-mode commit's read and its indexing pass disagreed about what was
+    under one root - the read's count excluded the cache and the scan indexed
+    it as pictures, which the mapping then filed.
+    """
+    return name.startswith(".")
+
+
+def has_hidden_component(path: str, root: str) -> bool:
+    """True when *path* is, or lies under, a hidden entry below *root*.
+
+    The pruning rule asked of a whole path rather than one name, for the caller
+    that has to decide what a *pruned* walk did not look at. *root* itself is
+    not examined: a library whose own folder happens to be dotted is still a
+    library.
+    """
+    relative = os.path.relpath(path, root)
+    return any(is_hidden_entry(part) for part in relative.split(os.sep))
+
+
 def is_supported_media_file(name_or_path: str) -> bool:
     """True when *name_or_path* names an image or video PixlStash can index.
 
