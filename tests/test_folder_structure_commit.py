@@ -1468,6 +1468,46 @@ def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
         )
 
 
+def test_a_reference_commit_refuses_a_symlink_to_a_registered_root(owner_env):
+    """The conflict check is a string comparison, and two names for one
+    directory do not compare equal. The "add a reference folder" route stores
+    rows resolved and the commit path stored them merely normalised, so a
+    symlink pointing at a registered root matched no row, was accepted as a
+    free path, and left two scan tasks indexing the same files. Both sides are
+    resolved before they are compared now, and the row this path writes is
+    stored resolved like the route's.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    real = os.path.join(owner_env["tmp"], "the-real-root")
+    _make_tree(real, {"": ["a.jpg"]})
+    link = os.path.join(owner_env["tmp"], "a-link-to-it")
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"this filesystem will not make a symlink: {exc}")
+
+    folder_id = _insert_reference_folder(server, real, last_scanned=time.time())
+    try:
+        # Refused as the scanned root it resolves to, rather than accepted as a
+        # free path. Which of the two refusals it is does not matter; that it is
+        # refused at all is the whole finding.
+        with pytest.raises(svc.CommitError, match="already a reference folder"):
+            svc.register_reference_folder(server, link)
+    finally:
+        _forget_reference_folder(server, folder_id)
+
+    # And with nothing registered, the row it writes names the directory the
+    # scan will walk - not the link, which could be repointed afterwards at
+    # somewhere no check ever saw.
+    rf = svc.register_reference_folder(server, link)
+    try:
+        assert rf.folder == os.path.realpath(real)
+    finally:
+        _forget_reference_folder(server, rf.id)
+
+
 def test_the_read_and_the_reference_scan_agree_about_dot_folders(owner_env):
     """#1177 item 20. The Phase 2 read prunes dot-folders; the reference scan
     that indexes the very same root did not, so the two passes over one tree

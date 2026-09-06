@@ -171,19 +171,26 @@ def record_human_labels(
     tags = sorted({tag for _, tag in wanted})
     picture_ids = sorted({picture_id for picture_id, _ in wanted})
 
-    # Both lists are bound parameters of the same statement, so the id chunk
-    # leaves room for the tags sitting beside it.
+    # Both lists are bound parameters of the SAME statement, so neither can be
+    # left whole: shrinking only the id chunk still overran the cap once there
+    # were more distinct tags than the cap itself, however small that chunk got,
+    # and a folder-structure commit's tags are one per tag-mapped folder - the
+    # library decides how many there are, not this code. Tags take at most half
+    # the budget so the ids always keep the other half; the two lists together
+    # can never exceed SQLITE_ID_CHUNK.
     existing: dict[tuple[int, str], TagPrediction] = {}
-    for chunk in chunked(picture_ids, max(1, SQLITE_ID_CHUNK - len(tags))):
-        existing.update(
-            ((pred.picture_id, pred.tag), pred)
-            for pred in session.exec(
-                select(TagPrediction).where(
-                    TagPrediction.picture_id.in_(list(chunk)),
-                    TagPrediction.tag.in_(tags),
-                )
-            ).all()
-        )
+    for tag_group in chunked(tags, max(1, SQLITE_ID_CHUNK // 2)):
+        id_chunk = max(1, SQLITE_ID_CHUNK - len(tag_group))
+        for picture_group in chunked(picture_ids, id_chunk):
+            existing.update(
+                ((pred.picture_id, pred.tag), pred)
+                for pred in session.exec(
+                    select(TagPrediction).where(
+                        TagPrediction.picture_id.in_(list(picture_group)),
+                        TagPrediction.tag.in_(list(tag_group)),
+                    )
+                ).all()
+            )
 
     now = datetime.utcnow()
     for picture_id, tag in wanted:

@@ -124,6 +124,15 @@ def validate_reference_folder_path(path: str) -> str | None:
     return None
 
 
+def _resolved(path: str) -> str:
+    """One canonical spelling of *path*, for comparing two paths as strings.
+
+    ``realpath`` never raises: an unmounted or not-yet-created path resolves as
+    far as it exists, which keeps the Docker pending-mount callers working.
+    """
+    return os.path.realpath(os.path.normpath(path))
+
+
 def validate_reference_folder_conflicts(
     session: "Session",
     folder: str,
@@ -142,9 +151,19 @@ def validate_reference_folder_conflicts(
     - or sits inside - another reference folder, was accepted and then indexed
     by two scans that each believe they own the files.
 
+    Every path is resolved before it is compared, for the reason
+    `validate_reference_folder_path` resolves its own: these are string
+    comparisons, and two names for one directory do not compare equal. The
+    "add a reference folder" route stores rows resolved, the commit path did
+    not, so a symlink to a registered root - or to one containing
+    ``image_root`` - matched no row and was accepted as a free path, and two
+    scans then indexed the same files each believing it owned them. Resolving
+    here rather than at each call site is the same argument that comment makes:
+    a call site is where it gets forgotten.
+
     Args:
         session: Open session, used to read the registered folders.
-        folder: Candidate root, already ``normpath``-ed.
+        folder: Candidate root. Any shape; resolved here.
         image_root: The active library's own storage; ``""`` when unset.
         exclude_id: A reference folder row to ignore - the one being edited, or
             the row a resumed commit registered for itself.
@@ -152,7 +171,9 @@ def validate_reference_folder_conflicts(
     Returns:
         An error message, or ``None`` when the path is free to use.
     """
+    folder = _resolved(folder)
     if image_root:
+        image_root = _resolved(image_root)
         if (
             folder == image_root
             or folder.startswith(image_root + os.sep)
@@ -162,7 +183,7 @@ def validate_reference_folder_conflicts(
     for other in session.exec(select(ReferenceFolder)).all():
         if exclude_id is not None and other.id == exclude_id:
             continue
-        other_norm = os.path.normpath(other.folder)
+        other_norm = _resolved(other.folder)
         if folder == other_norm:
             return "A reference folder with this path already exists."
         if folder.startswith(other_norm + os.sep):

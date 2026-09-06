@@ -438,7 +438,11 @@ def _commit_owns_this_root(
         row is not None
         and row.state == STATE_PENDING
         and row.stage != "registering"
-        and os.path.normpath(row.root_path) == root_path
+        # Both sides resolved: `register_reference_folder` resolves the root it
+        # is handed, so comparing a merely-normalised record path against it
+        # would make a resumed commit under a symlinked root fail to recognise
+        # its own row and refuse to finish.
+        and os.path.realpath(os.path.normpath(row.root_path)) == root_path
     )
 
 
@@ -467,7 +471,16 @@ def register_reference_folder(
             one. It is what lets a resumed commit adopt the row it registered
             itself - see `_commit_owns_this_root`.
     """
-    root_path = os.path.normpath(root_path)
+    # Resolved, not merely normalised, for the reason
+    # `routes.reference_folders.create_reference_folder` gives where it does the
+    # same: the row is what the scan walks, so storing a link's own name would
+    # leave the row naming one directory and the scan walking another, and
+    # repointing the link afterwards would move the folder somewhere no check
+    # ever saw. It also makes this row comparable with the ones that route
+    # writes - `validate_reference_folder_conflicts` resolves both sides now,
+    # but a row stored under an alias would still read back wrong everywhere
+    # else.
+    root_path = os.path.realpath(os.path.normpath(root_path))
     error = validate_reference_folder_path(root_path)
     if error:
         raise CommitError(error)
