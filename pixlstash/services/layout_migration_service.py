@@ -392,9 +392,13 @@ def _folder_tree(
 ) -> list:
     """The library as this layout would draw it, every folder of it.
 
-    A folder is in it when anything about it is non-zero, which is why the
-    library root is not: it has no row of its own to show, and a synthetic one
-    would draw a level the owner does not have. Uncapped on purpose: an earlier
+    A folder is in it when anything about it is non-zero, **and the library root
+    is one of them** (#1161). It has no name of its own, which is why it was
+    left out originally, but leaving it out made the pictures the layout cannot
+    place invisible: with the unfiled sweep off they stay in the root, and a
+    tree that draws every folder except the one they are in reads as "nothing
+    stayed behind". It is not synthetic - it is a row only when pictures are
+    actually in it, the same rule as every other row. Uncapped on purpose: an earlier
     version kept the sixty busiest and counted the rest, and on a library filed
     by date that was "...and 299 more folders" over the rows the owner needed
     to check. A few thousand rows is a list; a count of the rows withheld is
@@ -407,7 +411,6 @@ def _folder_tree(
     and that is the inclusion rule, not a cap.
     """
     paths = set(have) | set(arriving) | set(leaving)
-    paths.discard("")
     return [
         {
             "path": path,

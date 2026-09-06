@@ -3135,13 +3135,28 @@ detail, so this section is the map rather than a second copy of it.
 
 A `Layout` is an ordered list of segments, one folder level each. A segment
 holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
-picture has a value for wins; a segment nothing fills is **skipped rather than
-left as an empty folder**, which keeps the tree two deep instead of five. A new
-library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
+picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
+(`Global`) **when a later segment is filled**, and is dropped when none is: under
+`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
+one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
+tree two deep instead of five while putting every person folder at one depth,
+and — the reason `Global` is in the layout's *language* rather than being
+decoration — it gives an unprojected picture a folder to move **out of** when a
+project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
+then `Person or Set`.
+
+`_walk` therefore reads `Global` at every segment whatever the picture is, and
+treats it as the picture's own only where nothing fills that segment. Reading it
+only where the picture has nothing would make it unparseable in exactly the case
+that has to move. The cost, stated once: a folder of the owner's own literally
+named `Global` at a layout level is adopted by the layout instead of being the
+permanent override an unreadable name would be. A picture that fills no segment
+at all still answers `layout.unfiled`, not `Global`, which is what keeps the
+migration's unfiled sweep an opt-in rather than something `Global` does anyway.
 
 | Function | Answers |
 |---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
 | `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
 
 The release rests on `is_true`, and on one property of it: **a path that does
@@ -6833,6 +6848,14 @@ returns a `ReconciledMove(outcome, removals, additions)`:
    deliberate "nothing files this" signal, not as an unreadable destination —
    the one component check `reconcile_move` makes before the general
    off-layout test.
+5. **Arriving under `Global`** is the same signal for one segment rather than
+   for the whole path. `read_named_components` consumes a `Global` component,
+   names nothing for it and carries on, so dragging a picture from
+   `Nordvik/Mira` to `Global/Mira` reads as "leave the project, still Mira" and
+   comes back as a removal; a real entity actually named `Global` wins, because
+   the facet lookup runs first. A bare `Global/` names nothing at all, so it
+   skips the off-layout test the same way the unfiled folder does — otherwise
+   the project the owner just dragged the picture out of would never come off.
 
 Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
 91–100% of assigned pictures have exactly one project or set, so `AMBIGUOUS`
