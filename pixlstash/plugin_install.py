@@ -85,9 +85,53 @@ DEFAULT_REF = "main"
 #: :attr:`DependencyChange.url`.
 _INDEX_HOSTS = frozenset({"files.pythonhosted.org", "pypi.org"})
 
+#: pip names the requirement it could not satisfy and lists the versions it
+#: still had after filtering.  ``(from versions: none)`` is the only wording
+#: that can mean "published, but not as a wheel": it says *nothing* survived
+#: the wheels-only filter for that project.  A non-empty list is an ordinary
+#: version-constraint failure -- some version has a usable wheel, the pinned
+#: one does not exist -- and has nothing to do with building from source.
+_NO_WHEEL_RE = re.compile(
+    r"requirement (?P<requirement>.+?)(?: \(from [^()]*\))? \(from versions: none\)"
+)
+#: The project name at the head of a requirement string, before any extras,
+#: version specifier or environment marker.
+_PROJECT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+#: The option lines from a plugin's ``requirements.txt`` that are forwarded to
+#: the index lookup.  These are the ones that decide *where* pip looks, and so
+#: the ones that decide whether a project exists at all -- the only question
+#: the lookup asks.  Everything else is left off deliberately: an option the
+#: ``index`` subcommand does not accept would fail the lookup outright and turn
+#: a truthful "published only as source" into a false "not found".  Nothing is
+#: hidden by this: :func:`pip_options` still shows the reader every line.
+_INDEX_LOOKUP_OPTIONS = frozenset(
+    {"--index-url", "-i", "--extra-index-url", "--no-index", "--find-links", "-f"}
+)
+
 
 class PluginError(Exception):
     """A refusal carrying a message written for the person at the terminal."""
+
+
+class SourceOnlyRequirements(PluginError):
+    """Resolving needs build code to run, because a package has no wheel.
+
+    Raised instead of a bare :class:`PluginError` when the wheels-only
+    resolution failed *and* the index says the projects it failed on exist --
+    they are simply not published as a wheel this machine can use.  The two
+    cases produce the same message from pip ("No matching distribution found"),
+    and telling a reader "not found" about a package that is right there,
+    published as source, is its own lie.
+
+    The caller can act on this one, which is why it has its own type: it can
+    say what is actually true and ask.  :attr:`packages` names the projects so
+    the question can name them too.
+    """
+
+    def __init__(self, message: str, packages: list[str]) -> None:
+        super().__init__(message)
+        self.packages = packages
 
 
 @dataclass
@@ -879,6 +923,71 @@ class DependencyChange:
         return self.installed is not None and self.installed != self.version
 
 
+def _index_lookup_options(requirements: Path) -> list[str]:
+    """Return the ``requirements.txt`` option lines the lookup has to honour."""
+    forwarded: list[str] = []
+    for line in pip_options(requirements):
+        # split(maxsplit=1), not shlex: it never raises on a quote, and it
+        # keeps a path with spaces as one argv token, which is what pip wants.
+        tokens = line.split(maxsplit=1)
+        if tokens and tokens[0].split("=", 1)[0] in _INDEX_LOOKUP_OPTIONS:
+            forwarded.extend(tokens)
+    return forwarded
+
+
+def _index_knows(project: str, options: list[str]) -> bool:
+    """Return whether the index publishes *project* at all, running nothing.
+
+    SECURITY: this is the one thing allowed to happen before consent, so it
+    has to be the one thing that cannot execute anything.  ``pip index
+    versions`` asks the index which files exist for a name and prints them; it
+    downloads no archive, unpacks nothing and builds no metadata, so no
+    ``setup.py`` runs.  That is the whole reason the classification is done
+    this way rather than by re-resolving with sdists allowed -- re-resolving
+    *is* the execution being asked about.
+
+    A lookup that fails for any reason answers False, which reports the
+    package as simply not found.  That is the conservative direction on
+    purpose: it costs a truthful message and falls back to the behaviour
+    before this function existed, where the alternative -- guessing "it must
+    be source-only" -- would put a question about running build code in front
+    of someone whose dependency is just a typo.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "index", "versions", project, *options],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and "Available versions:" in result.stdout
+
+
+def source_only_projects(requirements: Path, pip_output: str) -> list[str]:
+    """Return the projects *pip_output* failed on that exist only as source.
+
+    Two facts make a project source-only, and both are needed.  pip has to
+    have found no wheel candidate for it at all (``from versions: none``,
+    rather than a version-constraint miss), and the index has to know the name
+    (:func:`_index_knows`, which builds nothing).  A name failing only the
+    first test is missing; a name failing only the second cannot occur.
+
+    "No wheel candidate" also covers a project whose wheels do not fit this
+    interpreter or platform, and that is deliberate rather than sloppy: the
+    consequence of going ahead is identical -- pip falls back to the source
+    distribution and runs its build code here -- so the question the caller
+    has to ask is the same question.
+    """
+    projects: list[str] = []
+    for match in _NO_WHEEL_RE.finditer(pip_output):
+        head = _PROJECT_RE.match(match.group("requirement").strip())
+        if head is not None and head.group(0) not in projects:
+            projects.append(head.group(0))
+    if not projects:
+        return []
+    options = _index_lookup_options(requirements)
+    return [project for project in projects if _index_knows(project, options)]
+
+
 def resolve_requirements(
     requirements: Path, *, allow_sdist: bool = False
 ) -> list[DependencyChange]:
@@ -901,11 +1010,21 @@ def resolve_requirements(
     therefore passed by default, so nothing is built and nothing executes
     before the listing.
 
-    The trade is real and deliberate: a dependency published only as an sdist,
-    and any VCS or source-tree requirement, cannot be resolved this way at all.
-    *allow_sdist* is the way through, and the refusal below names it -- but it
-    is opt-in precisely because taking it means running the plugin author's
-    build code to find out what installing would do.
+    The trade is real: a dependency published only as an sdist, and any VCS or
+    source-tree requirement, cannot be resolved this way at all.  So a failure
+    is classified rather than merely reported.  pip says "No matching
+    distribution found" for a package that does not exist *and* for one that
+    exists only as source, and repeating that wording would tell a reader
+    "not found" about a package that is right there -- a worse untruth than
+    the one the wheels-only default removes.  When
+    :func:`source_only_projects` shows the names are real,
+    :class:`SourceOnlyRequirements` is raised carrying them, and the caller
+    asks; otherwise the message is the plain not-found one.
+
+    Calling again with *allow_sdist* is the second phase, and *allow_sdist*
+    stays a flag as well, because a script or a CI run has no one to ask.
+    Either way it means running the plugin author's build code to find out
+    what installing would do, which is why it is never the first attempt.
 
     Nothing here decides whether the answer is acceptable; it says what would
     happen, and the caller shows it to the person who has to agree to it.
@@ -931,9 +1050,28 @@ def resolve_requirements(
             check=False,
         )
         if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip().splitlines()
+            output = (result.stderr or result.stdout).strip()
+            detail = output.splitlines()
+            # Which of the two failures this is decides what the caller can
+            # say, and pip's own message cannot tell them apart. Classified
+            # here, by an index lookup that executes nothing.
+            source_only = (
+                [] if allow_sdist else source_only_projects(requirements, output)
+            )
+            if source_only:
+                plural = len(source_only) > 1
+                raise SourceOnlyRequirements(
+                    f"{', '.join(source_only)} {'are' if plural else 'is'} "
+                    "published, but not as a wheel this machine can use, so "
+                    f"working out what {requirements.name} needs means running "
+                    f"{'their' if plural else 'its'} own build code here, as "
+                    "you. Nothing was installed.",
+                    source_only,
+                )
             # Name the way through, or a plugin whose dependency is published
-            # only as an sdist is a dead end with no message saying why.
+            # only as an sdist is a dead end with no message saying why. Still
+            # reached when the lookup could not classify the failure, so the
+            # flag stays the answer of last resort rather than the first one.
             hint = (
                 ""
                 if allow_sdist

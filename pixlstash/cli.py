@@ -421,9 +421,10 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
         "--allow-sdist",
         action="store_true",
         help=(
-            "Allow dependencies published only as source. Working out what "
-            "they would install runs their build code first, before you are "
-            "shown anything."
+            "Agree in advance to running the build code of dependencies "
+            "published only as source, which happens before you are shown "
+            "anything. Without it you are asked when one turns up, and a run "
+            "with no terminal to ask at is refused."
         ),
     )
     install_parser.set_defaults(handler=_cmd_plugins_install)
@@ -1546,6 +1547,72 @@ def _report_dependencies(
     return True
 
 
+def _consent_to_source_builds(packages: list[str], *, yes: bool) -> bool:
+    """Ask whether source-only dependencies may run their build code here.
+
+    A second question, and deliberately not folded into the dependency
+    listing's one: the listing asks whether these artefacts may be
+    *installed*, and this asks whether code written by their authors may
+    *run on this machine, as this user*, merely to work out what that listing
+    would say. One agreement cannot stand for both, because the second
+    happens first and cannot be taken back.
+
+    **``--yes`` is not an answer to it.** ``--yes`` means "do not ask me about
+    the package list"; reading it as "run whatever code the internet supplies"
+    would silently widen a convenience flag every scripted install already
+    carries. ``--allow-sdist`` is what a script says instead, because saying
+    it is a decision somebody made once, in writing.
+
+    **Nothing is asked when there is no one to answer.** A daemon, a cron job
+    or a CI run has a non-tty stdin, where a question either blocks forever on
+    a pipe nobody will write to or is answered by whatever happens to be in
+    it. Both are worse than a refusal that names the flag.
+
+    One yes covers the whole resolution, and says so. There is no way to allow
+    source builds for one package and not another without enumerating the
+    transitive set, which is exactly what has not been resolved yet; and pip
+    surfaces one unsatisfied requirement at a time, so a per-package question
+    would reappear for each, which is its own way of training people to say
+    yes.
+    """
+    plural = len(packages) > 1
+    print(
+        f"\n{', '.join(packages)} {'are' if plural else 'is'} published, but "
+        "not as a pre-built package this machine can install.",
+        file=sys.stderr,
+    )
+    print(
+        "Working out what installing would do therefore means running "
+        f"{'their' if plural else 'its'} authors' build scripts here, as you, "
+        "before anything can be listed. That code can do whatever you can.",
+        file=sys.stderr,
+    )
+    print(
+        "Agreeing covers every source-only package in this resolution, "
+        "including ones it has not reached yet.",
+        file=sys.stderr,
+    )
+    if yes or not _stdin_is_a_person():
+        print(
+            "\nRefused: --yes answers for the package list, not for running "
+            "build code, and nothing here can be asked without a terminal. "
+            "Pass --allow-sdist to say yes to this in advance, or install the "
+            "plugin without --with-deps and set its dependencies up yourself.",
+            file=sys.stderr,
+        )
+        return False
+    return _confirm("Run their build code to find out what it needs?")
+
+
+def _stdin_is_a_person() -> bool:
+    """Whether there is someone at a terminal to answer a question."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except ValueError:
+        # A detached or already-closed stdin. Nobody is there either way.
+        return False
+
+
 def _cmd_plugins_install(args: argparse.Namespace) -> int:
     """Validate a plugin source, say where it lands, and copy it there."""
     with plugin_install.materialise(args.source, args.ref) as root:
@@ -1563,6 +1630,10 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
         )
 
         changes: list[plugin_install.DependencyChange] = []
+        # Tracked rather than read off args, because agreeing to the question
+        # below turns it on for the rest of this install: the install step has
+        # to match the resolution that was actually shown and agreed to.
+        allow_sdist = args.allow_sdist
         if args.with_deps and plan.requirements:
             # Resolved before anything is copied. pip is asked what it would
             # do, and it is asked first, so a plugin whose dependencies cannot
@@ -1590,7 +1661,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
                     "against each.",
                     file=sys.stderr,
                 )
-            if args.allow_sdist:
+            if allow_sdist:
                 print(
                     "\nwarning: --allow-sdist. Working out what these need "
                     "runs build code from any source-only package among them, "
@@ -1598,9 +1669,22 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
             print(f"\nResolving {plan.requirements.name}...")
-            changes = plugin_install.resolve_requirements(
-                plan.requirements, allow_sdist=args.allow_sdist
-            )
+            # Wheels first, always. Nothing runs in that pass, so the common
+            # case reaches the listing below with no code from the plugin's
+            # dependencies having executed at all. Only a failure that turns
+            # out to be a source-only package leads to the second question.
+            try:
+                changes = plugin_install.resolve_requirements(
+                    plan.requirements, allow_sdist=allow_sdist
+                )
+            except plugin_install.SourceOnlyRequirements as unresolved:
+                if not _consent_to_source_builds(unresolved.packages, yes=args.yes):
+                    print("Cancelled. Nothing was written.", file=sys.stderr)
+                    return EXIT_REFUSED
+                allow_sdist = True
+                changes = plugin_install.resolve_requirements(
+                    plan.requirements, allow_sdist=True
+                )
             if not _report_dependencies(changes, force=args.force_deps):
                 return EXIT_REFUSED
         elif plan.requirements:
@@ -1623,7 +1707,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # The resolution that was shown and agreed to, not the file it came
             # from: re-reading the file would resolve it a second time and
             # could install something nobody was asked about.
-            plugin_install.install_requirements(changes, allow_sdist=args.allow_sdist)
+            plugin_install.install_requirements(changes, allow_sdist=allow_sdist)
 
     print(f"Installed {plan.name} to {plan.destination}")
     if plan.kind == plugin_install.CAPTIONING:

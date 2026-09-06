@@ -1716,6 +1716,303 @@ def test_a_refusal_names_the_flag_that_gets_past_it(monkeypatch, tmp_path):
     assert "--allow-sdist" not in str(caught.value)
 
 
+# ----------------------------------------------------------------------
+# Source-only dependencies: told apart, then asked about
+# ----------------------------------------------------------------------
+#
+# The wheels-only pass executes nothing, and that is the whole point of it.
+# But pip's refusal is the same sentence for a package that does not exist and
+# for one published only as source, so repeating it says "not found" about a
+# package that is right there. The difference is one index lookup, which
+# downloads no archive and builds no metadata; below, the resolve and the
+# lookup are both stubbed and what is tested is the rule applied to them.
+
+_NO_WHEEL_STDERR = (
+    "ERROR: Could not find a version that satisfies the requirement "
+    "{requirement} (from versions: none)\n"
+    "ERROR: No matching distribution found for {requirement}\n"
+)
+
+
+class _Terminal:
+    """A stdin claiming to be a terminal, which pytest's own never is."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _never_installed(name: str) -> str:
+    raise plugin_install.PackageNotFoundError(name)
+
+
+def _refuse_to_be_asked(prompt):
+    raise AssertionError(f"asked a question nobody should be asked: {prompt!r}")
+
+
+@pytest.fixture
+def sdist_pip(monkeypatch):
+    """Stub pip for the two-phase resolve, recording every argv it was given.
+
+    The wheels-only pass always fails on *requirement*; whether the index then
+    admits to knowing the project is what a test varies, because that one bit
+    is the entire difference between "published only as source" and "does not
+    exist". A resolve without ``--only-binary=:all:`` is the second phase and
+    succeeds, so a test can tell whether consent was taken by whether it ran.
+    """
+
+    def serve(
+        requirement: str = "evilpkg",
+        *,
+        index_knows: bool = True,
+        versions_seen: str = "none",
+        packages: tuple = (("evilpkg", "1.0"),),
+    ):
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(list(command))
+            if "index" in command:
+                if index_knows:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=f"{requirement} (1.0)\nAvailable versions: 1.0\n",
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr=f"ERROR: No matching distribution found for {requirement}\n",
+                )
+            if "--dry-run" in command:
+                if "--only-binary=:all:" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        1,
+                        stdout="",
+                        stderr=_NO_WHEEL_STDERR.format(requirement=requirement).replace(
+                            "versions: none", f"versions: {versions_seen}"
+                        ),
+                    )
+                report = Path(command[command.index("--report") + 1])
+                report.write_text(_report(*packages), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(command, 0)
+
+        monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+        monkeypatch.setattr(plugin_install, "metadata_version", _never_installed)
+        return calls
+
+    return serve
+
+
+def _plugin_needing(tmp_path, requirement: str, extra: str = "") -> Path:
+    """A captioning plugin folder whose requirements.txt asks for *requirement*."""
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", extra + f"{requirement}\n")
+    return folder
+
+
+def test_a_source_only_dependency_is_not_reported_as_missing(sdist_pip, tmp_path):
+    """The lie #1201 would otherwise have shipped: "not found" for a real package."""
+    calls = sdist_pip("evilpkg")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("evilpkg\n", encoding="utf-8")
+
+    with pytest.raises(plugin_install.SourceOnlyRequirements) as caught:
+        plugin_install.resolve_requirements(requirements)
+    assert caught.value.packages == ["evilpkg"]
+    assert "not as a wheel" in str(caught.value)
+    # And the message does not push a flag the caller is about to make
+    # unnecessary by asking.
+    assert "--allow-sdist" not in str(caught.value)
+    # The lookup asked the index and nothing else: no install, no download.
+    (lookup,) = [command for command in calls if "index" in command]
+    assert lookup[-3:] == ["index", "versions", "evilpkg"]
+    assert "install" not in lookup and "download" not in lookup
+
+
+def test_a_package_that_really_is_missing_still_says_so(sdist_pip, tmp_path):
+    """The other half of the distinction, and the one that must not prompt."""
+    sdist_pip("nosuchpkg", index_knows=False)
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("nosuchpkg\n", encoding="utf-8")
+
+    with pytest.raises(PluginError) as caught:
+        plugin_install.resolve_requirements(requirements)
+    assert not isinstance(caught.value, plugin_install.SourceOnlyRequirements)
+    assert "not as a wheel" not in str(caught.value)
+
+
+def test_a_version_that_does_not_exist_is_never_a_build_question(sdist_pip, tmp_path):
+    """pip listing candidate versions means wheels exist; the pin is the fault.
+
+    Classifying that as source-only would ask someone to agree to running
+    build code because they typed a version number wrong.
+    """
+    calls = sdist_pip("goodpkg>=99", versions_seen="1.0")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("goodpkg>=99\n", encoding="utf-8")
+
+    with pytest.raises(PluginError) as caught:
+        plugin_install.resolve_requirements(requirements)
+    assert not isinstance(caught.value, plugin_install.SourceOnlyRequirements)
+    assert not [command for command in calls if "index" in command]
+
+
+def test_the_index_lookup_is_told_where_the_plugin_sends_pip(sdist_pip, tmp_path):
+    """A plugin serving its own index must be asked about on that index.
+
+    Looking the name up on PyPI instead would report a package published only
+    on the author's own server as not existing at all.
+    """
+    calls = sdist_pip("evilpkg")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "--find-links /tmp/wheels\n--require-hashes\nevilpkg\n", encoding="utf-8"
+    )
+
+    with pytest.raises(plugin_install.SourceOnlyRequirements):
+        plugin_install.resolve_requirements(requirements)
+    (lookup,) = [command for command in calls if "index" in command]
+    assert "--find-links" in lookup and "/tmp/wheels" in lookup
+    # ...and not an option the index subcommand would reject, which would fail
+    # the lookup and turn a truthful answer into "not found".
+    assert "--require-hashes" not in lookup
+
+
+def test_a_wheel_only_resolve_never_asks_about_build_code(
+    tmp_path, plugin_root, pip_report, monkeypatch, capsys
+):
+    """The over-blocking regression: the common path must be unchanged."""
+    monkeypatch.setattr("builtins.input", _refuse_to_be_asked)
+    monkeypatch.setattr(cli.sys, "stdin", _Terminal())
+    monkeypatch.setattr(plugin_install, "install_requirements", lambda *a, **k: None)
+    pip_report(("something", "1.0"), installed={})
+
+    assert (
+        _install(_plugin_needing(tmp_path, "something"), "--with-deps") == cli.EXIT_OK
+    )
+    assert "build code" not in capsys.readouterr().err
+
+
+def test_declining_the_build_question_stops_before_anything_runs(
+    tmp_path, plugin_root, sdist_pip, monkeypatch, capsys
+):
+    calls = sdist_pip("evilpkg")
+    monkeypatch.setattr(cli.sys, "stdin", _Terminal())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    folder = _plugin_needing(tmp_path, "evilpkg")
+    assert (
+        cli.main(["plugins", "install", str(folder), "--with-deps"]) == cli.EXIT_REFUSED
+    )
+    error = capsys.readouterr().err
+    assert "evilpkg is published" in error
+    assert "build scripts here" in error
+    # No second resolve, so no build code ran, and nothing was written.
+    assert not [
+        command
+        for command in calls
+        if "--dry-run" in command and "--only-binary=:all:" not in command
+    ]
+    assert not (plugin_root / "tagger-plugins").exists()
+
+
+def test_agreeing_resolves_again_and_then_asks_the_ordinary_question(
+    tmp_path, plugin_root, sdist_pip, monkeypatch, capsys
+):
+    """Two questions, because they are two risks: run their code, then install."""
+    calls = sdist_pip("evilpkg")
+    asked: list[str] = []
+    installed: list[dict] = []
+    monkeypatch.setattr(cli.sys, "stdin", _Terminal())
+    monkeypatch.setattr("builtins.input", lambda prompt: (asked.append(prompt), "y")[1])
+    monkeypatch.setattr(
+        plugin_install,
+        "install_requirements",
+        lambda changes, **kwargs: installed.append({"changes": changes, **kwargs}),
+    )
+
+    folder = _plugin_needing(tmp_path, "evilpkg")
+    assert cli.main(["plugins", "install", str(folder), "--with-deps"]) == cli.EXIT_OK
+    assert len(asked) == 2, asked
+    assert "build code" in asked[0]
+    # The listing that was agreed to is the one the second resolve produced.
+    assert "evilpkg" in capsys.readouterr().out
+    assert installed and installed[0]["allow_sdist"] is True
+    assert [change.name for change in installed[0]["changes"]] == ["evilpkg"]
+    assert [
+        command
+        for command in calls
+        if "--dry-run" in command and "--only-binary=:all:" not in command
+    ]
+
+
+def test_yes_answers_for_the_package_list_and_not_for_running_code(
+    tmp_path, plugin_root, sdist_pip, monkeypatch, capsys
+):
+    """--yes must not quietly become a grant to execute code off the internet."""
+    calls = sdist_pip("evilpkg")
+    monkeypatch.setattr(cli.sys, "stdin", _Terminal())
+    monkeypatch.setattr("builtins.input", _refuse_to_be_asked)
+
+    folder = _plugin_needing(tmp_path, "evilpkg")
+    assert _install(folder, "--with-deps") == cli.EXIT_REFUSED
+    error = capsys.readouterr().err
+    assert "--yes answers for the package list" in error
+    assert "--allow-sdist" in error
+    assert not [
+        command
+        for command in calls
+        if "--dry-run" in command and "--only-binary=:all:" not in command
+    ]
+
+
+def test_with_no_terminal_it_refuses_instead_of_waiting_for_an_answer(
+    tmp_path, plugin_root, sdist_pip, monkeypatch, capsys
+):
+    """A daemon or a CI run has nobody to answer, and must not block on a pipe."""
+    sdist_pip("evilpkg")
+    # pytest's own stdin already reports isatty() False; the guard is that
+    # input() is never reached, whatever that pipe would have done.
+    monkeypatch.setattr("builtins.input", _refuse_to_be_asked)
+
+    folder = _plugin_needing(tmp_path, "evilpkg")
+    assert (
+        cli.main(["plugins", "install", str(folder), "--with-deps"]) == cli.EXIT_REFUSED
+    )
+    error = capsys.readouterr().err
+    # The refusal has to be *this* one. pip's own dead end also names
+    # --allow-sdist, so asserting only that would pass against code that never
+    # classified the failure and so never had a question to decline.
+    assert "not as a pre-built package" in error
+    assert "--allow-sdist" in error
+
+
+def test_allow_sdist_skips_the_question_and_not_the_listing(
+    tmp_path, plugin_root, sdist_pip, monkeypatch, capsys
+):
+    """The escape hatch scripts use: one question fewer, no less information."""
+    sdist_pip("evilpkg")
+    asked: list[str] = []
+    monkeypatch.setattr(cli.sys, "stdin", _Terminal())
+    monkeypatch.setattr("builtins.input", lambda prompt: (asked.append(prompt), "y")[1])
+    monkeypatch.setattr(plugin_install, "install_requirements", lambda *a, **k: None)
+
+    folder = _plugin_needing(tmp_path, "evilpkg")
+    assert (
+        cli.main(["plugins", "install", str(folder), "--with-deps", "--allow-sdist"])
+        == cli.EXIT_OK
+    )
+    assert len(asked) == 1 and "build code" not in asked[0]
+    output = capsys.readouterr().out
+    assert "This operation will install the following Python packages:" in output
+    assert "evilpkg" in output
+
+
 def test_installing_matches_the_resolve_on_building_from_source(monkeypatch):
     """A pin must not build what the resolve refused to build."""
     commands: list[list[str]] = []
