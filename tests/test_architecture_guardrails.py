@@ -2870,7 +2870,12 @@ def test_action_pin_guardrail_has_teeth(tmp_path):
     action.write_text("runs:\n  steps:\n    - uses: actions/cache@v5\n")
 
     offenders = _floating_action_refs([bad, good, action])
-    caught = {str(o).split(":", 1)[0] for o in offenders}
+    # Not a plain split(":", 1): a Windows path starts "C:\...", so the first
+    # colon in the string belongs to the drive letter, not the path/line
+    # separator. Anchor on the "<path>:<lineno>: " shape instead - greedy
+    # ``.*`` eats the drive-letter colon too before backtracking to the real
+    # split point.
+    caught = {re.match(r"^(.*):\d+: ", o).group(1) for o in offenders}
     assert caught == {str(bad), str(action)}, (
         f"the guardrail reported the wrong set of files: {offenders}"
     )
