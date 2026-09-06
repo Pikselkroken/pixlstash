@@ -15,6 +15,7 @@ import tokenize
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -346,3 +347,134 @@ def test_a_non_memory_detector_failure_still_degrades_to_no_faces():
         assert FaceExtractionTask.detect_faces_in_images(object(), [image]) == [[]]
     finally:
         module.BatchedFaceRunner = original
+
+
+# ── the video path is the still path ────────────────────────────────────────
+
+
+class _RecordingDetector:
+    """Stands in for RetinaFace and records every frame handed to it."""
+
+    def __init__(self):
+        self.seen = []
+
+    def detect(self, img):
+        self.seen.append(img.shape)
+        return np.empty((0, 5), dtype=np.float32), None
+
+
+def _clip_task(tmp_path, frames, detector=None):
+    """A FaceExtractionTask wired to run one preloaded clip and nothing else.
+
+    Built by hand rather than through a Server: the assertion is about which
+    detection entry point ``_extract_features`` reaches for a video, which
+    needs neither a database nor a real file. ``_preloaded_images`` is keyed by
+    resolved path and holds ``(frames, inv_scale)`` for a clip, so the frames
+    go straight in and ``_read_video_frames`` never runs.
+    """
+    task = FaceExtractionTask.__new__(FaceExtractionTask)
+    task._db = SimpleNamespace(
+        image_root=str(tmp_path),
+        # What decides ``need_faces`` when the relationship is not loaded.
+        run_immediate_read_task=lambda _fetch: False,
+    )
+    task._engine = SimpleNamespace(insightface_model_pack="buffalo_l")
+    task._stop_event = threading.Event()
+    task._insightface_app = SimpleNamespace(det_model=detector, models={})
+    task._init_insightface_app = lambda: None
+    task._preloaded_images = {str(tmp_path / "clip.mp4"): (frames, 1.0)}
+    return task
+
+
+def test_a_video_frame_below_the_minimum_dimension_never_reaches_the_detector(
+    tmp_path,
+):
+    """The min-dimension guard is the still path's, and a clip needs it too.
+
+    A 1x512 frame makes RetinaFace compute ``new_width = int(det_size /
+    aspect_ratio) == 0`` and its cv2.resize raises - proved against the real
+    models in ``test_face_detection_extreme_aspect_ratio.py``. The video branch
+    called ``BatchedFaceRunner.run_batch`` directly, so the guard in
+    ``detect_faces_in_images`` never ran and the raise escaped the whole chunk:
+    every picture batched with the clip loses its Face rows and the finder
+    re-offers exactly the same batch on the next sweep, for ever.
+    """
+    detector = _RecordingDetector()
+    task = _clip_task(
+        tmp_path, [(0, np.zeros((512, 1, 3), dtype=np.uint8))], detector=detector
+    )
+    pic = SimpleNamespace(id=1, file_path="clip.mp4", description="tiny clip")
+
+    _updates, bulk_faces, _crops = task._extract_features([pic])
+
+    assert detector.seen == [], "an undetectable frame was handed to RetinaFace"
+    # A sentinel row, exactly as a 1x512 still produces: undetectable, done.
+    assert [(f.picture_id, f.face_index, f.bbox) for f in bulk_faces] == [(1, -1, None)]
+
+
+def test_a_normal_video_frame_still_reaches_the_detector(tmp_path):
+    """The positive control: the guard must not swallow a usable frame."""
+    detector = _RecordingDetector()
+    task = _clip_task(
+        tmp_path, [(0, np.zeros((64, 64, 3), dtype=np.uint8))], detector=detector
+    )
+    pic = SimpleNamespace(id=3, file_path="clip.mp4", description="ordinary clip")
+
+    task._extract_features([pic])
+
+    assert detector.seen == [(64, 64, 3)]
+
+
+def _clip_with_failing_runner(tmp_path, monkeypatch, exc, picture_id):
+    """One clip whose detector raises *exc*; returns ``(task, picture)``."""
+
+    class _FailingRunner:
+        def __init__(self, _app):
+            pass
+
+        def run_batch(self, _images):
+            raise exc
+
+    monkeypatch.setattr(
+        "pixlstash.tasks.face_extraction_task.BatchedFaceRunner", _FailingRunner
+    )
+    task = _clip_task(tmp_path, [(0, np.zeros((64, 64, 3), dtype=np.uint8))])
+    pic = SimpleNamespace(id=picture_id, file_path="clip.mp4", description="clip")
+    return task, pic
+
+
+def test_a_non_memory_detector_failure_on_a_video_degrades_to_no_faces(
+    tmp_path, monkeypatch
+):
+    """The OOM classifier is the still path's, and a clip needs it too.
+
+    ``detect_faces_in_images`` splits detector failures in two: a VRAM OOM is
+    re-raised so the runner retries it, anything else is a bad frame and
+    degrades to "no faces". The video branch had neither half, so a decoder
+    error on ONE clip escaped ``_extract_features`` and cost the whole chunk -
+    up to 100 pictures - their Face rows, on every sweep, for ever.
+    """
+    task, pic = _clip_with_failing_runner(
+        tmp_path, monkeypatch, ValueError("cv2 could not resize a degenerate frame"), 2
+    )
+
+    _updates, bulk_faces, _crops = task._extract_features([pic])
+
+    assert [(f.picture_id, f.face_index, f.bbox) for f in bulk_faces] == [(2, -1, None)]
+
+
+def test_a_full_card_on_a_video_is_never_recorded_as_no_faces(tmp_path, monkeypatch):
+    """The other half of the same split, and the reason it is a split.
+
+    Written as a sentinel a full card would mark the clip permanently faceless;
+    the runner's OOM retry only sees it if it propagates.
+    """
+    task, pic = _clip_with_failing_runner(
+        tmp_path,
+        monkeypatch,
+        RuntimeError("[ONNXRuntimeError] : 1 : FAIL : CUDA failure: out of memory"),
+        4,
+    )
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        task._extract_features([pic])
