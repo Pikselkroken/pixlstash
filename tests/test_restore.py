@@ -4188,7 +4188,7 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     def _blocked_token_clear(session):
         entered_queue_gap.set()
-        assert release_token_clear.wait(10), "test did not release token clear"
+        assert release_token_clear.wait(120), "test did not release token clear"
         return original_clear(session)
 
     monkeypatch.setattr(service, "_swap_database", _assert_gate_then_swap)
@@ -4204,8 +4204,16 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     thread = threading.Thread(target=_restore, daemon=True)
     thread.start()
-    assert entered_queue_gap.wait(10), "restore never reached token-clear queue gap"
     try:
+        # Inside the try, so a restore that never arrives is still released and
+        # joined: left blocked, it holds the scratch snapshot.sqlite open and
+        # the next test's snapshots rmtree fails on Windows. The wait is about
+        # whether the gap is reached at all - materialising and
+        # alembic-upgrading the snapshot comes first, and a Windows runner
+        # takes several times the ~2.7s that costs on Linux.
+        assert entered_queue_gap.wait(120), (
+            "restore never reached token-clear queue gap"
+        )
         assert server.auth.is_auth_closed_for_restore()
 
         class _PreRestoreWebSocket:

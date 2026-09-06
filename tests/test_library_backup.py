@@ -519,6 +519,115 @@ class TestReferenceFolders:
         assert not result.has_external_folders
 
 
+class TestOrphanedFiles:
+    """Picture files no catalogue row names: counted, asked about, honoured."""
+
+    @staticmethod
+    def _drop_orphan(folder, name="stray.png"):
+        with open(os.path.join(folder, name), "wb") as handle:
+            handle.write(b"nobody catalogued me")
+        # Not pictures, so never counted: our own thumbnail and cache files.
+        with open(os.path.join(folder, "0_thumb.webp"), "wb") as handle:
+            handle.write(b"thumb")
+        os.makedirs(os.path.join(folder, "tmp"), exist_ok=True)
+        with open(os.path.join(folder, "tmp", "cache.png"), "wb") as handle:
+            handle.write(b"cache")
+
+    def test_orphans_are_counted_and_included_by_default(
+        self, registry, library, tmp_path
+    ):
+        self._drop_orphan(library.path)
+
+        result = create_backup(
+            library, str(tmp_path / "out.tar.zst"), registry.hub_path
+        )
+
+        assert result.orphan_count == 1
+        assert result.orphans_included
+        archive = read_archive(result.path)
+        assert "images/stray.png" in archive
+        manifest = json.loads(archive["manifest.json"])
+        assert manifest["orphan_count"] == 1 and manifest["orphans_included"]
+
+    def test_the_owner_is_asked_and_a_no_leaves_them_out(
+        self, registry, library, tmp_path
+    ):
+        self._drop_orphan(library.path)
+        asked: list[str] = []
+
+        def decline(message):
+            asked.append(message)
+            return False
+
+        result = create_backup(
+            library,
+            str(tmp_path / "out.tar.zst"),
+            registry.hub_path,
+            ask_orphans=decline,
+        )
+
+        assert asked and "1 picture file(s)" in asked[0]
+        assert result.orphan_count == 1 and not result.orphans_included
+        archive = read_archive(result.path)
+        assert "images/stray.png" not in archive
+        assert "images/0.png" in archive, "catalogued pictures are untouched"
+        assert not json.loads(archive["manifest.json"])["orphans_included"]
+
+    def test_a_decided_answer_is_not_asked_again(self, registry, library, tmp_path):
+        self._drop_orphan(library.path)
+
+        def never(message):
+            raise AssertionError("include_orphans was given; nothing to ask")
+
+        result = create_backup(
+            library,
+            str(tmp_path / "out.tar.zst"),
+            registry.hub_path,
+            include_orphans=False,
+            ask_orphans=never,
+        )
+        assert "images/stray.png" not in read_archive(result.path)
+
+    def test_a_clean_library_asks_nothing(self, registry, library, tmp_path):
+        def never(message):
+            raise AssertionError("no orphans, nothing to ask")
+
+        result = create_backup(
+            library, str(tmp_path / "out.tar.zst"), registry.hub_path, ask_orphans=never
+        )
+        assert result.orphan_count == 0
+
+    def test_the_cli_reports_and_skips_on_request(self, tmp_path, capsys):
+        from pixlstash.cli import main as cli_main
+
+        hub_path = str(tmp_path / "hub.db")
+        folder = make_vault(str(tmp_path / "cli-orphans"))
+        self._drop_orphan(folder)
+        assert cli_main(["--hub", hub_path, "libraries", "attach", folder]) == 0
+        capsys.readouterr()
+
+        code = cli_main(
+            [
+                "--hub",
+                hub_path,
+                "libraries",
+                "backup",
+                "cli-orphans",
+                str(tmp_path / "out.tar.zst"),
+                "--skip-orphans",
+            ]
+        )
+
+        captured = capsys.readouterr()
+        assert code == 0
+        assert (
+            "1 picture file(s) in the library folder have no PixlStash record"
+            in captured.err
+        )
+        assert "NOT included" in captured.err
+        assert "images/stray.png" not in read_archive(str(tmp_path / "out.tar.zst"))
+
+
 class TestDestinationHandling:
     def test_a_directory_destination_gets_a_dated_name(
         self, registry, library, tmp_path

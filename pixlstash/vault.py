@@ -478,6 +478,18 @@ class Vault:
             logger.warning("Could not fetch reference folders for FS watching: %s", exc)
             return
 
+        # The library's own root is watched under the id None, the same key
+        # layout_move_service.layout_roots gives it. A rename the owner makes
+        # in the laid-out tree is otherwise a row the purge sweep deletes.
+        try:
+            self._ref_folder_watcher.watch_folder(None, self.image_root)
+        except Exception as exc:
+            logger.warning(
+                "Could not start FS watch for the library root %s: %s",
+                self.image_root,
+                exc,
+            )
+
         for rf in folders:
             try:
                 resolved = effective_mapper.resolve(rf.folder)
@@ -573,12 +585,13 @@ class Vault:
             return
         self._ref_folder_watcher.unwatch_folder(folder_id)
 
-    def _on_reference_folder_fs_changed(self, folder_id: int) -> None:
+    def _on_reference_folder_fs_changed(self, folder_id: int | None) -> None:
         """Callback invoked by the filesystem watcher when a relevant file changes.
 
         Resets ``last_scanned`` to zero so the
         :class:`~pixlstash.tasks.reference_folder_scan_finder.ReferenceFolderScanFinder`
         schedules an immediate rescan, then wakes the work-planner thread.
+        ``None`` is the library root, whose schedule the finder keeps itself.
         """
         from pixlstash.db_models.reference_folder import ReferenceFolder
 
@@ -588,16 +601,21 @@ class Vault:
                 rf.last_scanned = 0.0
                 session.commit()
 
-        try:
-            self.db.run_task(
-                reset_last_scanned, folder_id, priority=DBPriority.IMMEDIATE
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to reset last_scanned for reference folder %d: %s",
-                folder_id,
-                exc,
-            )
+        if folder_id is None:
+            finder = self._planner_work_finders.get(TaskType.REFERENCE_FOLDER_SCAN)
+            if finder is not None:
+                finder.mark_root_due()
+        else:
+            try:
+                self.db.run_task(
+                    reset_last_scanned, folder_id, priority=DBPriority.IMMEDIATE
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to reset last_scanned for reference folder %d: %s",
+                    folder_id,
+                    exc,
+                )
         if self._work_planner and self._work_planner.is_running():
             self._work_planner.wake()
 
