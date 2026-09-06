@@ -20,11 +20,12 @@ place anything from the mapping screen is written.
   already held loose files. Those pictures already live where the library
   keeps its own, so they become ordinary MANAGED pictures (relative
   ``file_path``, same shape as any other import) rather than reference-folder
-  ones. Routing this case through ``mode="reference"`` instead would either
-  bypass or have to reimplement the exact conflict guard
-  ``routes.reference_folders._validate_reference_folder_conflicts`` already
-  enforces - a reference folder may never equal or contain ``image_root`` -
-  which is the proof the two need to stay two commit modes, not one.
+  ones. Routing this case through ``mode="reference"`` instead is not merely
+  wrong, it is refused: ``utils.reference_folder_validator``'s shared conflict
+  rule, which both this module and the ``/reference-folders`` routes go
+  through, says a reference folder may never equal, contain or sit inside
+  ``image_root`` - which is the proof the two need to stay two commit modes,
+  not one.
   ``local_import_pictures`` does the read this mode's own filesystem step
   (there is no already-shipped scan task for "index my own image_root in
   place"); ``apply_local_mapping`` then reuses the same entity-resolution code
@@ -64,6 +65,7 @@ from pixlstash.db_models.folder_mapping_commit import (
     FolderMappingCommit,
     STATE_DONE,
     STATE_PENDING,
+    STATE_SUPERSEDED,
 )
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_project import PictureProjectMember
@@ -77,15 +79,17 @@ from pixlstash.services.project_membership_service import (
     set_picture_set_projects,
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
-from pixlstash.utils.service.label_ledger import POS, record_human_label
+from pixlstash.utils.service.label_ledger import POS, record_human_labels
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
-from pixlstash.utils.media_files import is_supported_media_file
+from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
+    canonical_path,
     validate_reference_folder_accessible,
+    validate_reference_folder_conflicts,
     validate_reference_folder_path,
 )
 
@@ -230,9 +234,30 @@ def record_pending_commit(
     Before, deliberately. A record written afterwards would not exist for the
     window this whole mechanism is about - the crash that lands between "the
     owner pressed the button" and "the pictures are organised".
+
+    Accepting a mapping also **supersedes** every older pending one: the newest
+    record is the only resumable one. A failed commit deliberately leaves its
+    record pending while clearing the in-memory slot, so a second mapping can
+    legitimately be accepted over an unfinished first - and without this the
+    older row survives its successor and is resumed at the next start-up,
+    re-applying folders the owner has already replaced.
     """
 
     def write(session: Session) -> None:
+        for stale in session.exec(
+            select(FolderMappingCommit).where(
+                FolderMappingCommit.state == STATE_PENDING
+            )
+        ).all():
+            logger.info(
+                "Folder-mapping commit %s superseded by the newly accepted %s; "
+                "it will not be resumed.",
+                stale.task_id,
+                task_id,
+            )
+            stale.state = STATE_SUPERSEDED
+            stale.updated_at = datetime.now(timezone.utc)
+            session.add(stale)
         session.add(
             FolderMappingCommit(
                 task_id=task_id,
@@ -255,6 +280,11 @@ def pending_commit(server) -> Optional[dict]:
 
     Returns the recorded arguments in the shape `_run_commit` takes, with
     ``assignments`` already parsed back into `Assignment` rows.
+
+    Newest first, though `record_pending_commit` supersedes the older ones as
+    it writes: the ordering is what makes a row left pending by a version
+    without that rule resolve to the owner's latest intent rather than their
+    oldest.
     """
 
     def read(session: Session) -> Optional[dict]:
@@ -378,8 +408,52 @@ def _resolve_folder(
     return project, person, set_, tags
 
 
+def _commit_owns_this_root(
+    session: Session, task_id: Optional[str], root_path: str
+) -> bool:
+    """True when the pending record *task_id* already registered *root_path*.
+
+    The one question that separates the two ways a fully-scanned reference
+    folder can turn up under a commit's root:
+
+    * a folder that was **already there** - an unrelated reference folder, or
+      an earlier settled commit of this same path. Reusing it would apply this
+      mapping to whatever happens to be indexed under it rather than to what
+      the read found, so it is refused;
+    * the row **this very commit** registered, whose scan then completed
+      before the process died. The mapping provably did not run (assigning
+      settles the record inside its own transaction, so a record still pending
+      never got there), and finishing it is the entire purpose of the durable
+      record - so the row is reused rather than refused.
+
+    ``stage`` answers it without a column of its own: it leaves
+    ``"registering"`` only once `register_reference_folder` has returned, so
+    anything past that means the row at this root is this commit's own work.
+    """
+    if not task_id:
+        return False
+    row = session.exec(
+        select(FolderMappingCommit).where(FolderMappingCommit.task_id == task_id)
+    ).first()
+    return (
+        row is not None
+        and row.state == STATE_PENDING
+        and row.stage != "registering"
+        # Both sides through `canonical_path`, the same spelling
+        # `validate_reference_folder_conflicts` compares by. Comparing a
+        # merely-normalised record path would make a resumed commit under a
+        # symlinked root - or, on Windows, one whose root is spelled in another
+        # case - fail to recognise its own row and refuse to finish.
+        and canonical_path(row.root_path) == canonical_path(root_path)
+    )
+
+
 def register_reference_folder(
-    server, root_path: str, *, label: Optional[str] = None
+    server,
+    root_path: str,
+    *,
+    label: Optional[str] = None,
+    task_id: Optional[str] = None,
 ) -> ReferenceFolder:
     """Register *root_path* for in-place indexing, or return it if it already is.
 
@@ -387,40 +461,59 @@ def register_reference_folder(
     (or a retry of a stalled one) does not fight the row it made last time.
     Mirrors ``routes.reference_folders.create_reference_folder``'s essential
     shape; kept separate rather than sharing that closure because the two
-    entry points validate different things upstream (that route re-derives
-    accessibility from a caller-supplied path with its own conflict checks
-    against every other registered folder; this one starts from a path a
-    settled folder-structure read already walked).
+    entry points start from different places (that route re-derives
+    accessibility from a caller-supplied path; this one starts from a path a
+    settled folder-structure read already walked). The conflict rule is *not*
+    one of the differences - both go through
+    `validate_reference_folder_conflicts`, or this path accepts a root that
+    contains ``image_root`` or overlaps another registered folder.
+
+    Args:
+        task_id: The durable record this registration belongs to, when there is
+            one. It is what lets a resumed commit adopt the row it registered
+            itself - see `_commit_owns_this_root`.
     """
-    root_path = os.path.normpath(root_path)
+    # Resolved, not merely normalised, for the reason
+    # `routes.reference_folders.create_reference_folder` gives where it does the
+    # same: the row is what the scan walks, so storing a link's own name would
+    # leave the row naming one directory and the scan walking another, and
+    # repointing the link afterwards would move the folder somewhere no check
+    # ever saw. It also makes this row comparable with the ones that route
+    # writes - `validate_reference_folder_conflicts` resolves both sides now,
+    # but a row stored under an alias would still read back wrong everywhere
+    # else.
+    root_path = os.path.realpath(os.path.normpath(root_path))
     error = validate_reference_folder_path(root_path)
     if error:
         raise CommitError(error)
+    image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
 
     def fetch_or_create(session: Session) -> ReferenceFolder:
         existing = session.exec(
             select(ReferenceFolder).where(ReferenceFolder.folder == root_path)
         ).first()
+        conflict = validate_reference_folder_conflicts(
+            session,
+            root_path,
+            image_root,
+            # Its own row is not a conflict with itself; whether that row may
+            # be reused is the separate question decided just below.
+            exclude_id=existing.id if existing is not None else None,
+        )
+        if conflict:
+            raise CommitError(conflict)
         if existing is not None:
-            if existing.last_scanned is not None:
-                # A row with a completed scan pass is either an unrelated
-                # reference folder the owner already had, or an EARLIER
-                # commit of this same path (a fresh read run again over a
-                # folder that was already organised once) - either way,
-                # reusing it here without re-scanning would silently apply
-                # this mapping to whatever pictures happen to be indexed
-                # already, not to what the read the owner just accepted
-                # actually found. Refuse cleanly rather than under-apply.
+            if existing.last_scanned is not None and not _commit_owns_this_root(
+                session, task_id, root_path
+            ):
                 raise CommitError(
                     f"{root_path} is already a reference folder. Remove it "
                     "first, or edit its mapping from the sidebar instead of "
                     "committing this read."
                 )
-            # last_scanned is None: registered but its first scan has not
-            # completed yet - a retry of a commit that crashed after
-            # registering but before the scan finished. Safe to keep waiting
-            # on the same row rather than erroring, since nothing has been
-            # indexed under it that this wait could miss.
+            # Either the first scan has not completed yet (a crash after
+            # registering, nothing indexed a wait could miss), or this commit
+            # registered the row itself and only the assigning step is left.
             return existing
         access_error = validate_reference_folder_accessible(root_path)
         status = (
@@ -467,9 +560,9 @@ def validate_local_import_root(server, root_path: str) -> None:
 
     `local_import` turns pictures already on disk into ordinary MANAGED
     pictures - the mirror image of `register_reference_folder`, which
-    `routes.reference_folders._validate_reference_folder_conflicts` already
-    refuses for exactly this path (a reference folder may never equal or
-    contain `image_root`). This is the same rule read the other way: a folder
+    `validate_reference_folder_conflicts` refuses for exactly this path (a
+    reference folder may never equal, contain or sit inside `image_root`).
+    This is the same rule read the other way: a folder
     outside `image_root` must never be walked by `local_import`, only ever
     registered as a reference folder.
 
@@ -614,11 +707,11 @@ def local_import_pictures(
         dirnames[:] = [
             name
             for name in dirnames
-            if not name.startswith(".")
+            if not is_hidden_entry(name)
             and os.path.realpath(os.path.join(dirpath, name)) not in own
         ]
         for name in filenames:
-            if not name.startswith(".") and is_supported_media_file(name):
+            if not is_hidden_entry(name) and is_supported_media_file(name):
                 file_paths.append(os.path.join(dirpath, name))
     rel_by_abs = {
         path: os.path.relpath(path, image_root).replace(os.sep, "/")
@@ -627,12 +720,19 @@ def local_import_pictures(
     total = expected_pictures or len(file_paths)
 
     def load_existing(session: Session) -> dict[str, int]:
-        rows = session.exec(
-            select(Picture.file_path, Picture.id).where(
-                Picture.file_path.in_(rel_by_abs.values())
+        # Chunked: this list is every supported file in the import, so an
+        # unchunked IN crosses SQLite's bound-parameter cap on any real library
+        # and fails the whole commit at execution time.
+        found: dict[str, int] = {}
+        for chunk in chunked(list(rel_by_abs.values())):
+            found.update(
+                session.exec(
+                    select(Picture.file_path, Picture.id).where(
+                        Picture.file_path.in_(list(chunk))
+                    )
+                ).all()
             )
-        ).all()
-        return {rel: pid for rel, pid in rows}
+        return found
 
     existing_by_rel = server.vault.db.run_immediate_read_task(load_existing)
 
@@ -986,7 +1086,13 @@ def _link_pictures(
 
     tag_created: set[str] = set()
 
-    for folder_relpath, folder_pictures in by_folder.items():
+    # Resolve every folder first, then link. The order is what keeps the cost
+    # of this step bounded: with the answers in hand the human-label ledger can
+    # be written in one batched pass below rather than one round trip per
+    # (picture, tag), which on a fresh import is one per picture.
+    resolved: dict[str, tuple[Optional[int], Optional[int], Optional[int], list[str]]]
+    resolved = {}
+    for folder_relpath in by_folder:
         project_a, person_a, set_a, tag_as = _resolve_folder(folder_relpath, by_path)
         project_id = get_project(project_a) if project_a else None
         character_id = get_character(person_a, project_id) if person_a else None
@@ -998,7 +1104,29 @@ def _link_pictures(
             if tag_name not in tag_created:
                 tag_created.add(tag_name)
                 result.tags_created += 1
+        resolved[folder_relpath] = (project_id, character_id, set_id, tag_names)
 
+    # The owner accepted these folders as tags, so every pair is a human POS and
+    # belongs in the label ledger. Without it the tags do not survive: these
+    # pictures still carry TAG_PENDING_SENTINEL, and when TagTask reaches one it
+    # deletes every Tag row and rewrites the picture from
+    # `model_tags | human_POS - human_NEG`. The general upsert, not
+    # `record_human_label_if_relevant`: a folder tag is usually outside the
+    # tagger's anomaly vocabulary, which is exactly the case that variant
+    # declines to record.
+    record_human_labels(
+        session,
+        (
+            (pic.id, tag_name)
+            for folder_relpath, (_, _, _, tag_names) in resolved.items()
+            for tag_name in tag_names
+            for pic in by_folder[folder_relpath]
+        ),
+        POS,
+    )
+
+    for folder_relpath, folder_pictures in by_folder.items():
+        project_id, character_id, set_id, tag_names = resolved[folder_relpath]
         for pic in folder_pictures:
             if project_id is not None:
                 pic.project_id = project_id
@@ -1018,15 +1146,8 @@ def _link_pictures(
                 existing_sets.add((set_id, pic.id))
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic.id))
             for tag_name in tag_names:
-                # The owner accepted this folder as a tag, so it is a human POS
-                # and belongs in the label ledger. Without it the tag does not
-                # survive: these pictures still carry TAG_PENDING_SENTINEL, and
-                # when TagTask reaches one it deletes every Tag row and rewrites
-                # the picture from `model_tags | human_POS - human_NEG`. The
-                # general upsert, not `record_human_label_if_relevant`: a folder
-                # tag is usually outside the tagger's anomaly vocabulary, which
-                # is exactly the case that variant declines to record.
-                record_human_label(session, pic.id, tag_name, POS)
+                # The ledger entry for this pair was written by the batched
+                # pass above; this is only the Tag row itself.
                 if (pic.id, tag_name) in existing_tags:
                     continue
                 existing_tags.add((pic.id, tag_name))
@@ -1096,11 +1217,15 @@ def apply_local_mapping(
     image_root = os.path.normpath(server.vault.image_root)
 
     def commit(session: Session) -> CommitResult:
-        pictures = (
-            list(session.exec(select(Picture).where(Picture.id.in_(picture_ids))).all())
-            if picture_ids
-            else []
-        )
+        # Chunked for the same reason `local_import_pictures` chunks its own
+        # load: this id list is the whole import.
+        pictures = [
+            picture
+            for chunk in chunked(picture_ids)
+            for picture in session.exec(
+                select(Picture).where(Picture.id.in_(list(chunk)))
+            ).all()
+        ]
         result = CommitResult(pictures_indexed=len(pictures))
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
         if task_id:
@@ -1135,13 +1260,12 @@ def resolve_pending_people_with_faces(server, picture_ids: list[int]) -> int:
     def fetch(session: Session) -> list[int]:
         found: list[int] = []
         # Chunked: SQLite bounds the number of bound parameters per statement.
-        for start in range(0, len(picture_ids), 500):
-            chunk = picture_ids[start : start + 500]
-            extracted = select(Face.id).where(Face.picture_id == Picture.id).exists()
+        extracted = select(Face.id).where(Face.picture_id == Picture.id).exists()
+        for chunk in chunked(picture_ids):
             found.extend(
                 session.exec(
                     select(Picture.id).where(
-                        Picture.id.in_(chunk),
+                        Picture.id.in_(list(chunk)),
                         Picture.pending_character_id.is_not(None),
                         extracted,
                     )

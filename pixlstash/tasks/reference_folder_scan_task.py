@@ -34,7 +34,11 @@ from pixlstash.utils.caption_file_utils import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils, THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.utils.media_files import is_supported_media_file
+from pixlstash.utils.media_files import (
+    has_hidden_component,
+    is_hidden_entry,
+    is_supported_media_file,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.layout_move_service import (
     claim_own_moves,
@@ -268,16 +272,22 @@ class ReferenceFolderScanTask(BaseTask):
 
         for root, dirs, files in os.walk(resolved, topdown=True, onerror=_walk_error):
             # Prune subdirectories that are roots of other reference folders so
-            # their files are only indexed by their own scan task, plus - under
-            # the library root - the folders PixlStash writes itself.
+            # their files are only indexed by their own scan task; dot-folders,
+            # which are nobody's pictures - a vault's own caches or something
+            # the owner hid, and which the Phase 2 folder-structure read prunes
+            # too, so the read that counts a root and the scan that indexes it
+            # cannot disagree about what is in it; and, under the library root,
+            # the non-dot folders PixlStash writes itself.
             kept: list[str] = []
             for name in dirs:
                 full = os.path.join(root, name)
-                if full in other_roots or (
-                    self._is_root
-                    and (
-                        name.startswith(".")
-                        or (root == resolved and name in _ROOT_INTERNAL_DIRS)
+                if (
+                    full in other_roots
+                    or is_hidden_entry(name)
+                    or (
+                        self._is_root
+                        and root == resolved
+                        and name in _ROOT_INTERNAL_DIRS
                     )
                 ):
                     unscanned_roots.append(full)
@@ -306,7 +316,7 @@ class ReferenceFolderScanTask(BaseTask):
                 unscanned_roots.append(root)
                 continue
             for file_name in files:
-                if file_name.endswith(_thumb_suffix):
+                if is_hidden_entry(file_name) or file_name.endswith(_thumb_suffix):
                     continue
                 full_path = os.path.join(root, file_name)
                 if _is_supported_file(full_path):
@@ -398,6 +408,23 @@ class ReferenceFolderScanTask(BaseTask):
             }
             override_path_shas = set()
         removed_paths = set(existing_by_path.keys()) - disk_paths
+        # Hidden paths first, and separately from the unscanned subtrees below:
+        # `unscanned_roots` records pruned DIRECTORIES, and the file loop skips
+        # hidden FILES as well, which nothing above remembers. Same reasoning
+        # either way - a path that was never looked for says nothing about
+        # whether its file is still there, and "absent from disk_paths" is what
+        # this task hard-deletes a row for. A folder indexed before the prune
+        # existed keeps its pictures instead of losing them on the next scan.
+        hidden_kept = {p for p in removed_paths if has_hidden_component(p, resolved)}
+        if hidden_kept:
+            logger.info(
+                "Reference folder %s: %d indexed pictures lie under a hidden "
+                "folder that is no longer scanned, so their records are kept "
+                "rather than removed.",
+                self._folder_path,
+                len(hidden_kept),
+            )
+            removed_paths -= hidden_kept
         if removed_paths and unscanned_roots:
             # A path under a subtree this walk did not enter was not looked
             # for, so its absence from disk_paths says nothing about whether
