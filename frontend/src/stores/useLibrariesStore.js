@@ -72,8 +72,10 @@ export const useLibrariesStore = defineStore("libraries", () => {
     hasLoadedSuccessfully.value = false;
   }
 
-  // Logout / login / share-token entry / library switch all funnel through the
-  // one chokepoint in apiClient, so there is no second mechanism to keep in sync.
+  // Logout, login and share-token entry all funnel through the one chokepoint
+  // in apiClient, so there is no second mechanism to keep in sync. A library
+  // switch is NOT one of them - it ends in `reloadPage()`, which discards this
+  // store along with the whole document, so it needs no reset and gets none.
   const unsubscribe = onSessionReset(reset);
   onScopeDispose(() => unsubscribe());
 

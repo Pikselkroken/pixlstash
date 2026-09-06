@@ -459,6 +459,26 @@ describe("switching", () => {
     warn.mockRestore();
   });
 
+  it("says nothing when no focus target was offered in the first place", async () => {
+    // `begin` is also called with no trigger at all - the folder-mapping
+    // wizard's own switch does exactly that - and those are not failures to
+    // report. Without the guard this warns on an ordinary overlay dismissal,
+    // which is a console line on a working flow.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const switchStore = useLibrarySwitchStore();
+
+    await switchStore.begin(
+      { uuid: "uuid-b", name: "Client work" },
+      { uuid: "uuid-a", name: "Family Photos" },
+      null,
+    );
+    const restored = await switchStore.stayOnCurrent();
+
+    expect(restored).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("does not POST until the share-link warning has been accepted", async () => {
     let resolveConfirm;
     confirmMock.mockReturnValue(
