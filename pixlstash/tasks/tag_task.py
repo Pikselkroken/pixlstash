@@ -754,7 +754,21 @@ class TagTask(BaseTask):
                 # anomaly score by ``feeds_anomaly_score`` because raw
                 # confidences are not comparable between models.
                 full_scores_by_path: dict = {}
-                use_pixlstash_tagger = active_workflow.is_pixlstash_tagger_enabled
+                full_pass = active_workflow.active_plugin_name(self._engine_override)
+                # `tag_quality_crops` ALWAYS runs the built-in PixlStash
+                # tagger, whichever plugin ran the full-image pass, but the
+                # prediction rows are stamped with the full pass's
+                # `active_model_version`. Merging crop confidences under
+                # another model's version records model A's numbers as model
+                # B's, and `model_version` is the sole staleness key - so
+                # invalidation, comparison and re-tagging would all act on a
+                # provenance that never existed. Only merge when the two
+                # passes are the same model; the crop's *tags* are unversioned
+                # and still apply either way.
+                use_pixlstash_tagger = (
+                    active_workflow.is_pixlstash_tagger_enabled
+                    and full_pass == "pixlstash_tagger"
+                )
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
@@ -957,9 +971,6 @@ class TagTask(BaseTask):
                     # `inference_s` is all WD14 or all PixlStash tagger; the
                     # crop pass is always the PixlStash tagger. Split so the
                     # two models and the CPU crop build are separate numbers.
-                    full_pass = active_workflow.active_plugin_name(
-                        self._engine_override
-                    )
                     wd14_s = inference_s if full_pass == "wd14" else 0.0
                     pixlstash_tagger_s = (
                         inference_s if full_pass == "pixlstash_tagger" else 0.0

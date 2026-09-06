@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from sqlalchemy import event
@@ -248,6 +250,110 @@ def test_transient_error_classifier():
 
 
 # --- The per-picture crop guard (PR #750 review blocker B2) ------------------
+
+
+# --- Prediction provenance ---------------------------------------------------
+
+
+class _PredictionDb:
+    """Runs the task's DB callables inline and records the prediction write."""
+
+    def __init__(self, image_root, picture_ids):
+        self.image_root = image_root
+        self._picture_ids = picture_ids
+        self.prediction_calls = []
+
+    def run_immediate_read_task(self, fn, *args, **kwargs):
+        # Only `_fetch_faces_for_pictures` comes through here: no faces, so
+        # every picture takes the centre-crop fallback.
+        return {}
+
+    def run_task(self, fn, *args, priority=None):
+        name = getattr(fn, "__name__", "")
+        if name == "_add_tags_bulk":
+            return list(self._picture_ids)
+        if name == "_write_predictions_from_tags":
+            self.prediction_calls.append(args)
+        return None
+
+
+class _PluginWorkflow:
+    """A third-party tag plugin for the full pass, PixlStash tagger for crops.
+
+    That is the shipped arrangement whenever `active_tag_plugin` is anything
+    but the built-in tagger: `tag_quality_crops` has no plugin dispatch, it
+    always runs `pixlstash_tagger_service`.
+    """
+
+    is_pixlstash_tagger_enabled = True
+
+    def __init__(self):
+        self.crop_scores_requested = None
+
+    def active_plugin_name(self, engine_override=None):
+        return engine_override or "acme_tagger"
+
+    def active_model_version(self, engine_override=None):
+        return "acme_tagger:v1"
+
+    def pixlstash_tagger_image_size_quality_crop(self):
+        return 32
+
+    def tag_images(self, image_paths, out_raw_scores=None, **_kwargs):
+        for path in image_paths:
+            out_raw_scores[path] = {"acme_label": 0.90}
+        return {path: ["acme_label"] for path in image_paths}
+
+    def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
+        self.crop_scores_requested = out_raw_scores is not None
+        if out_raw_scores is not None:
+            for key, _crop in items:
+                out_raw_scores[key] = {"blocky": 0.99}
+        return {key: ["blocky"] for key, _crop in items}
+
+
+def test_crop_confidences_are_never_stamped_with_another_models_version(tmp_path):
+    """A confidence produced by model A must not be recorded as model B's.
+
+    The crop pass is always the built-in PixlStash tagger; the prediction rows
+    carry the FULL pass's `active_model_version`. Merging the crop's numbers
+    into the full pass's score map therefore files the built-in tagger's
+    confidences under the plugin's version - and `model_version` is the sole
+    staleness key, so invalidation, comparison and re-tagging all act on a
+    provenance that never existed.
+    """
+    path = _png(tmp_path, "provenance.png")
+    picture = Picture(id=1, file_path=str(path))
+    db = _PredictionDb(str(tmp_path), [1])
+    workflow = _PluginWorkflow()
+
+    task = TagTask.__new__(TagTask)
+    task.id = "test-provenance"
+    task._db = db
+    task._pictures = [picture]
+    task._tagging_workflow = workflow
+    task._engine_override = None
+    task._cpu_spillover_enabled = False
+    task._preload_thread = None
+    task._preload_started_at = None
+    task._preload_finished_at = None
+    task._preload_lock = threading.Lock()
+    task._preloaded_images = {}
+    task.on_queued = lambda: None
+
+    task._tag_pictures_batch()
+
+    assert db.prediction_calls, "the plugin's own confidences still get rows"
+    label_scores, _tags, model_version = db.prediction_calls[0]
+    assert model_version == "acme_tagger:v1"
+    assert label_scores == {1: {"acme_label": 0.90}}, (
+        "'blocky' came from the built-in PixlStash tagger and has been filed "
+        f"under {model_version}"
+    )
+    assert workflow.crop_scores_requested is False, (
+        "crop confidences must not even be collected when the full pass is a "
+        "different model"
+    )
 
 
 class _FakeFace:
