@@ -75,8 +75,22 @@ def has_hidden_component(path: str, root: str) -> bool:
     that has to decide what a *pruned* walk did not look at. *root* itself is
     not examined: a library whose own folder happens to be dotted is still a
     library.
+
+    Two spellings ``relpath`` produces that are not names at all:
+
+    * ``path == root`` gives ``"."``, which is dot-prefixed and so read as
+      hidden - the exact opposite of the sentence above. Answered ``False``
+      explicitly rather than left to ``is_hidden_entry``.
+    * a *path outside root* gives leading ``".."`` components, also read as
+      hidden. That one is left as ``True`` on purpose. The caller subtracts
+      this set from the rows it is about to hard-delete, so ``True`` means
+      "keep the row"; a path the walk never covered is exactly the case where
+      absence from the walk's results proves nothing, and answering ``False``
+      would turn a keep into a delete.
     """
     relative = os.path.relpath(path, root)
+    if relative == os.curdir:
+        return False
     return any(is_hidden_entry(part) for part in relative.split(os.sep))
 
 

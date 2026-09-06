@@ -34,6 +34,7 @@ from pixlstash.services.operation_log_service import apply_orientation
 from pixlstash.services.scrapheap_service import remove_picture_files
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
+from pixlstash.utils.media_files import has_hidden_component
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
     canonical_path,
@@ -223,6 +224,35 @@ class _CaseFoldingOs:
 
     def __getattr__(self, name):
         return getattr(os, name)
+
+
+def test_has_hidden_component_answers_for_the_root_and_for_outside_it():
+    """#1194 review. The helper decides which picture rows a reference-folder
+    scan *keeps* instead of hard-deleting, so both of `relpath`'s non-name
+    answers have to be deliberate rather than fall through `is_hidden_entry`.
+
+    `path == root` gives `"."`, which is dot-prefixed: the helper called its own
+    root hidden, contradicting the one thing its docstring promises. A path
+    outside root gives `".."`, also dot-prefixed, and that one stays `True` on
+    purpose - the caller subtracts this set from the rows it is about to
+    delete, so it is the answer that keeps a row the walk never covered.
+    """
+    # The root is not examined, however it is spelled.
+    assert has_hidden_component("/a/b", "/a/b") is False
+    assert has_hidden_component("/a/b", "/a/b/") is False
+    # ...including a library whose own folder is dotted, which is the sentence
+    # the docstring makes and the case the "." answer used to break.
+    assert has_hidden_component("/a/.hidden", "/a/.hidden") is False
+    assert has_hidden_component("/a/.hidden/pics/x.jpg", "/a/.hidden") is False
+
+    # Ordinary containment, both directions.
+    assert has_hidden_component("/a/b/pics/x.jpg", "/a/b") is False
+    assert has_hidden_component("/a/b/.cache/x.jpg", "/a/b") is True
+
+    # Outside the root: kept, not deleted. Asserted so that flipping it to
+    # False - which reads like a tidy-up - has to be a deliberate choice about
+    # a hard-delete rather than a quiet consequence.
+    assert has_hidden_component("/a/c/x.jpg", "/a/b") is True
 
 
 def test_canonical_path_folds_case_where_the_filesystem_does(tmp_path, monkeypatch):
