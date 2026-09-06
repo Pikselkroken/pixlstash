@@ -2675,3 +2675,51 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
         "A client-only extension uploads the whole file and then fails the "
         "commit; a server-only one is refused before it is ever offered."
     )
+
+
+def _assemble_changelog_module():
+    """The release's changelog assembler, imported from ``scripts/``."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import assemble_changelog
+
+    return assemble_changelog
+
+
+def test_every_changelog_fragment_is_a_markdown_list():
+    """A fragment is pasted verbatim under the release's version heading.
+
+    Nothing reads it before then, so a fragment carrying its own heading, a
+    version, or a stray paragraph is only discovered when the release notes are
+    already written. The parser that will consume it runs here instead.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    try:
+        assemble_changelog.read_entries(assemble_changelog.fragments())
+    except ValueError as exc:
+        pytest.fail(str(exc))
+
+
+def test_a_fragment_that_is_not_a_list_is_refused(tmp_path):
+    """The check above can still fail - the mutation that proves it is alive."""
+    assemble_changelog = _assemble_changelog_module()
+
+    bad = tmp_path / "bad.md"
+    bad.write_text("# [1.2.3]\n\n- something\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="markdown list item"):
+        assemble_changelog.read_entries([bad])
+
+
+def test_the_changelog_opens_on_a_released_version_heading():
+    """`.github/workflows/release-version.yml` reads `[Security: LEVEL]` off the
+    first heading in the released tag's CHANGELOG.md to publish
+    latest-version.json. Only ``scripts/assemble_changelog.py`` writes that file;
+    an unreleased section left at the top by hand would hand the workflow the
+    wrong version's security level."""
+    first = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lstrip()
+    assert re.match(r"# \[\d+\.\d+\.\d+[^\]]*\]", first), (
+        "CHANGELOG.md does not open on a version heading: "
+        f"{first.splitlines()[0] if first else '(empty)'}"
+    )

@@ -494,6 +494,23 @@ Mandatory for any change touching authentication, authorization, or access-scope
 - **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
 - **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
 
+## Never edit `CHANGELOG.md` on a branch
+
+Every branch appended to the same few lines at the top of the same file, so any
+two open PRs conflicted there even when they touched nothing else in common, and
+the conflict came back on every re-merge of `develop`. **A branch writes a file
+under `changelog.d/` instead**, named for its branch or PR number and containing
+the changelog lines themselves. `scripts/assemble_changelog.py <version>` folds
+them into one version section when the release is cut; that script is the only
+thing that writes `CHANGELOG.md`. Full format in `changelog.d/README.md`.
+
+**Write a fragment only for a user-visible change** — what someone would want to
+read in the release notes of an app they use. A bug introduced and fixed inside
+the same development cycle never reached anybody, so it gets no entry, and
+neither does a refactor, a test fix, a CI repair or a doc edit. Most branches
+need no fragment and nothing fails when one is missing; a wrong entry is worse
+than a missing one, because it makes the release notes longer and less true.
+
 ## Always Run Ruff on Python code before considering the job complete
 
 Do ruff format and ruff check.
