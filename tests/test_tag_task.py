@@ -256,12 +256,14 @@ def test_transient_error_classifier():
 
 
 class _PredictionDb:
-    """Runs the task's DB callables inline and records the prediction write."""
+    """Runs the task's DB callables inline and records what it was asked to write."""
 
     def __init__(self, image_root, picture_ids):
         self.image_root = image_root
         self._picture_ids = picture_ids
         self.prediction_calls = []
+        self.tag_payloads = []
+        self.cleared_sentinels = []
 
     def run_immediate_read_task(self, fn, *args, **kwargs):
         # Only `_fetch_faces_for_pictures` comes through here: no faces, so
@@ -271,10 +273,31 @@ class _PredictionDb:
     def run_task(self, fn, *args, priority=None):
         name = getattr(fn, "__name__", "")
         if name == "_add_tags_bulk":
+            self.tag_payloads.extend(args[0])
             return list(self._picture_ids)
         if name == "_write_predictions_from_tags":
             self.prediction_calls.append(args)
+        if name == "_clear_sentinels":
+            self.cleared_sentinels.extend(args[0])
         return None
+
+
+def _prediction_task(db, workflow, pictures):
+    """A TagTask wired to run one batch with no preload and no spillover."""
+    task = TagTask.__new__(TagTask)
+    task.id = "test-provenance"
+    task._db = db
+    task._pictures = pictures
+    task._tagging_workflow = workflow
+    task._engine_override = None
+    task._cpu_spillover_enabled = False
+    task._preload_thread = None
+    task._preload_started_at = None
+    task._preload_finished_at = None
+    task._preload_lock = threading.Lock()
+    task._preloaded_images = {}
+    task.on_queued = lambda: None
+    return task
 
 
 class _PluginWorkflow:
@@ -289,6 +312,8 @@ class _PluginWorkflow:
 
     def __init__(self):
         self.crop_scores_requested = None
+        self.full_pass_tags = ["acme_label"]
+        self.crop_tags = ["blocky"]
 
     def active_plugin_name(self, engine_override=None):
         return engine_override or "acme_tagger"
@@ -301,15 +326,15 @@ class _PluginWorkflow:
 
     def tag_images(self, image_paths, out_raw_scores=None, **_kwargs):
         for path in image_paths:
-            out_raw_scores[path] = {"acme_label": 0.90}
-        return {path: ["acme_label"] for path in image_paths}
+            out_raw_scores[path] = {t: 0.90 for t in self.full_pass_tags}
+        return {path: list(self.full_pass_tags) for path in image_paths}
 
     def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
         self.crop_scores_requested = out_raw_scores is not None
         if out_raw_scores is not None:
             for key, _crop in items:
                 out_raw_scores[key] = {"blocky": 0.99}
-        return {key: ["blocky"] for key, _crop in items}
+        return {key: list(self.crop_tags) for key, _crop in items}
 
 
 def test_crop_confidences_are_never_stamped_with_another_models_version(tmp_path):
@@ -327,32 +352,56 @@ def test_crop_confidences_are_never_stamped_with_another_models_version(tmp_path
     db = _PredictionDb(str(tmp_path), [1])
     workflow = _PluginWorkflow()
 
-    task = TagTask.__new__(TagTask)
-    task.id = "test-provenance"
-    task._db = db
-    task._pictures = [picture]
-    task._tagging_workflow = workflow
-    task._engine_override = None
-    task._cpu_spillover_enabled = False
-    task._preload_thread = None
-    task._preload_started_at = None
-    task._preload_finished_at = None
-    task._preload_lock = threading.Lock()
-    task._preloaded_images = {}
-    task.on_queued = lambda: None
-
+    task = _prediction_task(db, workflow, [picture])
     task._tag_pictures_batch()
 
     assert db.prediction_calls, "the plugin's own confidences still get rows"
-    label_scores, _tags, model_version = db.prediction_calls[0]
+    label_scores, tags, model_version = db.prediction_calls[0]
     assert model_version == "acme_tagger:v1"
     assert label_scores == {1: {"acme_label": 0.90}}, (
         "'blocky' came from the built-in PixlStash tagger and has been filed "
         f"under {model_version}"
     )
+    # The tag set is the other half of the same row: `_write_predictions_from_tags`
+    # writes a row for everything in it, so a crop tag reaching it becomes a
+    # TagPrediction(tag='blocky', model_version='acme_tagger:v1') - the same
+    # false provenance by a second channel, and one that outlives the pass.
+    assert tags == {1: {"acme_label"}}, (
+        "the prediction tag set carries a tag the full pass never emitted; it "
+        f"would be written as {model_version}'s own call"
+    )
     assert workflow.crop_scores_requested is False, (
         "crop confidences must not even be collected when the full pass is a "
         "different model"
+    )
+
+
+def test_a_crop_never_deletes_another_models_tags(tmp_path):
+    """The crop may add what it found; it may not overrule a different model.
+
+    "Crops are ground truth for the tags they own" is an argument about
+    resolution and holds between two passes of the same model. Applied across
+    models it strips the plugin's own whitelist tag from the picture, and
+    `_resolve_pending_predictions` then reads the applied set back and flips
+    the plugin's call to REJECTED under the plugin's own version.
+    """
+    path = _png(tmp_path, "strip.png")
+    picture = Picture(id=1, file_path=str(path))
+    db = _PredictionDb(str(tmp_path), [1])
+    workflow = _PluginWorkflow()
+    # The plugin emits the crop's own whitelist tag, at its own confidence, and
+    # the crop pass runs but does not reproduce it - the case where "the crop is
+    # ground truth" actually deletes something.
+    workflow.full_pass_tags = ["acme_label", "blocky"]
+    workflow.crop_tags = []
+
+    task = _prediction_task(db, workflow, [picture])
+    task._tag_pictures_batch()
+
+    applied = {u["pic_id"]: set(u["tags"]) for u in db.tag_payloads}
+    assert applied == {1: {"acme_label", "blocky"}}, (
+        "the crop pass deleted a tag the plugin emitted, leaving the plugin's "
+        "own prediction row with nothing to confirm it"
     )
 
 

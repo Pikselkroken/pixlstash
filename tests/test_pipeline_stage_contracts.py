@@ -10,6 +10,7 @@ GPU, no model: these run on a bare ``Vault`` and on the source tree.
 from __future__ import annotations
 
 import io
+import os
 import re
 import tokenize
 import threading
@@ -483,15 +484,44 @@ def test_a_full_card_on_a_video_is_never_recorded_as_no_faces(tmp_path, monkeypa
 # ── the tag window ──────────────────────────────────────────────────────────
 
 
+class _StubWorkflow:
+    """A tagger that behaves like the real one for a file it cannot open.
+
+    `tag_images` returns an entry only for a path it could actually read -
+    exactly what every real full pass does, whether the path was dropped by
+    the loader\'s `continue`, or the whole batch by a plugin that raised.
+    """
+
+    is_pixlstash_tagger_enabled = False
+
+    @staticmethod
+    def suggested_task_size():
+        return 1
+
+    def ensure_active_plugin_ready(self, engine_override=None):
+        return True
+
+    def active_plugin_name(self, engine_override=None):
+        return engine_override or "wd14"
+
+    def active_model_version(self, engine_override=None):
+        return "wd14:v3"
+
+    def pixlstash_tagger_image_size_quality_crop(self):
+        return 32
+
+    def tag_images(self, image_paths, out_raw_scores=None, **_kwargs):
+        return {p: ["a tag"] for p in image_paths if os.path.exists(p)}
+
+    def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
+        return {}
+
+
 class _TagEngine:
     """Enough of an engine for MissingTagFinder: one picture per task."""
 
     tagger_settings = {"active_tag_plugin": "wd14"}
-
-    class tagging_workflow:  # noqa: N801 - stands in for an attribute
-        @staticmethod
-        def suggested_task_size():
-            return 1
+    tagging_workflow = _StubWorkflow()
 
 
 def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
@@ -534,3 +564,65 @@ def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
             "behind the suppressed rows"
         )
         assert task.params["picture_ids"] == [good]
+
+
+def test_an_unreachable_picture_does_not_hold_the_tag_window_for_ever(tmp_path):
+    """The second door into the same starvation, and the one still open.
+
+    Suppression only covers pictures TagTask classes as *undecodable*. A file
+    that is merely unreachable - drive unplugged, share down, deleted outside
+    the app - raises ``FileNotFoundError``, which carries ``errno`` 2 and is
+    therefore classed *transient*: `_load_pic` returns without marking, the
+    full pass drops the path it could not open, no update payload is built,
+    and the pending sentinel survives. Nothing suppresses the picture, so
+    `_filter_and_claim` claims it again on the very next sweep - a task IS
+    returned every time, so unlike the suppressed case the planner does not
+    even back off.
+
+    `FaceExtractionTask` never had this: it writes a terminal row for every
+    picture it is handed, including one whose file it could not open. This is
+    that contract, on the tag stage.
+    """
+    with Vault(image_root=str(tmp_path)) as vault:
+        names = [f"u{index}.png" for index in range(6)]
+        ids = _seed_pending(vault, tmp_path, names)
+
+        def add_face_rows(session: Session):
+            for pid in ids:
+                session.add(Face(picture_id=pid, face_index=-1))
+            session.commit()
+
+        vault.db.run_task(add_face_rows)
+
+        # The first five files go away - unreachable, never suppressed. The
+        # window is suggested_task_size * (TAGGER_MAX_INFLIGHT + 1) = 4 rows,
+        # so they fill it completely and the sixth is never reached.
+        for name in names[:-1]:
+            (tmp_path / name).unlink()
+        good = ids[-1]
+
+        finder = MissingTagFinder(vault.db, lambda: _TagEngine())
+        task = finder.find_task()
+        assert task is not None, "the unreachable pictures are still claimable"
+        assert good not in task.params["picture_ids"], (
+            "precondition: the taggable picture is behind the unreachable ones"
+        )
+
+        # Run the batch the way the runner does. Nothing can be tagged, so the
+        # task must still retire what it was given rather than leave it pending.
+        task._tag_pictures_batch()
+        finder.on_task_complete(task, None)
+
+        offered = set()
+        for _sweep in range(6):
+            nxt = finder.find_task()
+            if nxt is None:
+                break
+            offered.update(nxt.params["picture_ids"])
+            nxt._tag_pictures_batch()
+            finder.on_task_complete(nxt, None)
+
+        assert good in offered, (
+            "the taggable picture was never offered: unreachable files still "
+            "own the candidate window"
+        )

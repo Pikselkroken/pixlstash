@@ -355,6 +355,77 @@ class TagTask(BaseTask):
             )
             return None
 
+    @staticmethod
+    def _clear_sentinels(session: Session, picture_ids: list) -> list:
+        """Delete only the pending-tag sentinel rows of *picture_ids*.
+
+        Only the sentinel: a retag request carries the picture's existing tags
+        alongside it, and writing an empty tag set through ``_add_tags_bulk``
+        would delete those too. A picture the tagger never reached must lose
+        its place in the queue, not its labels.
+        """
+        if not picture_ids:
+            return []
+        frozen = locked_picture_ids(session, picture_ids)
+        cleared = [pid for pid in picture_ids if pid not in frozen]
+        if not cleared:
+            return []
+        session.exec(
+            delete(Tag).where(
+                Tag.picture_id.in_(cleared),
+                Tag.tag.like(
+                    TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                ),
+            )
+        )
+        session.commit()
+        return cleared
+
+    def _retire_unresolved(self, batch: list, resolved_ids: set) -> None:
+        """Give every picture in the batch a terminal outcome, as faces do.
+
+        ``FaceExtractionTask`` writes a row for every picture it is handed - a
+        ``face_index=-1`` sentinel when it found nothing, including for a file
+        it could not open - so ``~Picture.faces.any()`` always drains.
+        ``TagTask`` wrote *nothing* for a picture that produced no result, and
+        there are four ways to produce none: the full pass drops a path it
+        cannot load (``tagging.py``'s ``continue``), the configured plugin is
+        missing or lacks tag support, the plugin raises, or the batch is
+        cancelled. The pending sentinel then survives, and - unlike a corrupt
+        file, which the unprocessable registry suppresses - an *unreachable*
+        one is classed transient (``FileNotFoundError`` carries ``errno`` 2)
+        and is never suppressed, so the finder claims it again on every sweep.
+        A handful of them at low ids starve tagging library-wide, and worse
+        than the case this task's finder already guards: a task IS returned
+        each sweep, so the planner never even backs off.
+
+        Suppressed pictures are deliberately left pending: the registry is
+        keyed to the file's ``(mtime, size)`` and lifts by itself when the file
+        is repaired, and ``MissingTagFinder`` keeps them out of its candidate
+        window meanwhile, so they are already both terminal and recoverable.
+        """
+        unresolved = [
+            pic.id
+            for pic in batch
+            if getattr(pic, "id", None) is not None and pic.id not in resolved_ids
+        ]
+        if not unresolved:
+            return
+        registry = getattr(self._db, "unprocessable_images", None)
+        if registry is not None:
+            unresolved = [pid for pid in unresolved if not registry.is_suppressed(pid)]
+        if not unresolved:
+            return
+        logger.warning(
+            "TagTask %s: %d picture(s) produced no tag result and are not "
+            "suppressed (ids %s); clearing their pending-tag sentinel so they "
+            "stop being re-queued. Their existing tags are kept.",
+            self.id,
+            len(unresolved),
+            unresolved[:20],
+        )
+        self._db.run_task(self._clear_sentinels, unresolved, priority=DBPriority.LOW)
+
     def _mark_unprocessable(self, pic, file_path) -> None:
         """Record *pic* as undecodable so the finders stop re-selecting it (#585).
 
@@ -778,6 +849,15 @@ class TagTask(BaseTask):
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
+                # What the FULL PASS said, before the crop pass rewrites
+                # `tag_results` below. The prediction rows are stamped with the
+                # full pass's `active_model_version`, so they must be built
+                # from this and never from the rewritten set: a crop tag
+                # merged in would be written as the full pass's own call,
+                # which is the same false provenance as a crop confidence.
+                full_pass_tags_by_path = {
+                    path: list(tags or []) for path, tags in tag_results.items()
+                }
 
                 # --- Quality crop pass ---
                 # Fetch face bboxes and run the custom tagger on expanded crops so
@@ -857,14 +937,29 @@ class TagTask(BaseTask):
                         # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
                         # fallback (which leaves face tags from the full-image pass alone).
+                        #
+                        # "Ground truth" is an argument about RESOLUTION, and it
+                        # holds between two passes of the same model. When the
+                        # full pass is a different model the crop may still add
+                        # what it found, but must not delete another model's
+                        # output: stripping it leaves the plugin's own
+                        # prediction row with no matching applied tag, and
+                        # `_resolve_pending_predictions` then flips the
+                        # plugin's call to REJECTED under the plugin's own
+                        # version.
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
                             allowed = whitelist_by_path[path]
-                            stripped = [
-                                t for t in tag_results[path] if t not in allowed
-                            ]
-                            tag_results[path] = stripped + list(crop_quality)
+                            if use_pixlstash_tagger:
+                                kept = [
+                                    t for t in tag_results[path] if t not in allowed
+                                ]
+                            else:
+                                kept = list(tag_results[path])
+                            tag_results[path] = list(
+                                dict.fromkeys(kept + list(crop_quality))
+                            )
                             if crop_quality:
                                 logger.debug(
                                     "Quality crop tags for %s: %s", path, crop_quality
@@ -903,6 +998,8 @@ class TagTask(BaseTask):
                         }
                     )
 
+                self._retire_unresolved(batch, {u["pic_id"] for u in update_payloads})
+
                 if update_payloads:
                     db_tags_start = time.perf_counter()
                     updated_ids = self._db.run_task(
@@ -939,10 +1036,15 @@ class TagTask(BaseTask):
                             if pic is not None and scores:
                                 label_scores_by_pic_id[pic.id] = scores
                         if label_scores_by_pic_id:
-                            tags_by_pic_id = {
-                                u["pic_id"]: set(u.get("tags") or [])
-                                for u in update_payloads
-                            }
+                            # The full pass's own tags, not the applied set:
+                            # these rows are stamped with the full pass's
+                            # model_version, and the applied set may carry a
+                            # quality tag the built-in crop model contributed.
+                            tags_by_pic_id = {}
+                            for path, tags in full_pass_tags_by_path.items():
+                                pic = pic_by_path.get(path)
+                                if pic is not None:
+                                    tags_by_pic_id[pic.id] = set(tags)
                             model_version = active_workflow.active_model_version(
                                 self._engine_override
                             )
