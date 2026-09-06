@@ -2783,3 +2783,88 @@ def test_the_changelog_opens_on_a_released_version_heading():
         "CHANGELOG.md does not open on a version heading: "
         f"{first.splitlines()[0] if first else '(empty)'}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: every third-party Action reference is pinned to a full commit SHA
+# ---------------------------------------------------------------------------
+
+_ACTION_REF_RE = re.compile(r'uses:\s*["\']?([^"\'\s#]+)')
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _floating_action_refs(paths: list[Path]) -> list[str]:
+    """Return ``"<path>:<lineno>: <line>"`` for every un-pinned ``uses:``.
+
+    A local composite action (``./.github/actions/...``) and a Docker-image
+    reference (``docker://...``) name no upstream tag to float, so both are
+    skipped. Everything else naming a third-party action must pin ``@<ref>``
+    to a full 40-character commit SHA - a moving tag like ``@v4`` or
+    ``@main`` can be repointed by whoever controls that repository.
+    """
+    offenders: list[str] = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            match = _ACTION_REF_RE.search(line)
+            if not match:
+                continue
+            ref = match.group(1)
+            if ref.startswith("./") or ref.startswith("docker://"):
+                continue
+            if "@" not in ref:
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
+                continue
+            sha = ref.rsplit("@", 1)[1]
+            if not _FULL_SHA_RE.fullmatch(sha):
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
+    return offenders
+
+
+def test_every_action_reference_is_pinned_to_a_sha():
+    """A floating tag on a workflow action is a supply-chain hole (#1177 item 60).
+
+    #1192 pinned ``ci.yml`` and ``docker-build.yml``; this closes the sweep
+    over every remaining workflow and composite action so a *new* floating
+    tag fails the build instead of quietly shipping.
+    """
+    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    action_files = sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml"))
+    assert workflow_files, "no workflow files found - the scan target moved"
+
+    offenders = _floating_action_refs([*workflow_files, *action_files])
+    assert not offenders, (
+        "these Action references are not pinned to a full commit SHA:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nFix: pin to the commit SHA the tag currently resolves to, with "
+        "the human-readable version in a trailing comment, e.g. "
+        "`uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0`."
+    )
+
+
+def test_action_pin_guardrail_has_teeth(tmp_path):
+    """Both directions, or the guardrail can pass by being broken."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    actions = tmp_path / ".github" / "actions" / "example"
+    actions.mkdir(parents=True)
+
+    bad = workflows / "bad.yml"
+    bad.write_text(
+        "steps:\n  - uses: actions/checkout@v4\n  - uses: actions/checkout@main\n"
+    )
+    good = workflows / "good.yml"
+    good.write_text(
+        "steps:\n"
+        "  - uses: ./.github/actions/setup-backend\n"
+        "  - uses: docker://alpine:3\n"
+        "  - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\n"
+    )
+    action = actions / "action.yml"
+    action.write_text("runs:\n  steps:\n    - uses: actions/cache@v5\n")
+
+    offenders = _floating_action_refs([bad, good, action])
+    caught = {str(o).split(":", 1)[0] for o in offenders}
+    assert caught == {str(bad), str(action)}, (
+        f"the guardrail reported the wrong set of files: {offenders}"
+    )
