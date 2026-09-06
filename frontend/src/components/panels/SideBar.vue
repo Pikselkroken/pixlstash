@@ -493,6 +493,9 @@ const referenceFoldersImageRoot = ref(null);
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
+/** The absolute folder path the selection is filtering on, or null. The row key
+    above cannot carry it: a folder ROOT row's key is `rf-{id}`. */
+const selectedFolderPath = ref(null);
 const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
@@ -506,17 +509,28 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 
-/** A path made comparable: trailing separators dropped, `\` folded to `/`.
- *  Only ever for comparing - the original spelling is what goes on to the
- *  server, and normalising that would be a different (and wrong) change. */
+/** A path made comparable: trailing separators dropped. */
 function _normPath(p) {
-  return String(p || "")
-    .replace(/[\\/]+$/, "")
-    .replace(/\\/g, "/");
+  return String(p || "").replace(/[\\/]+$/, "");
 }
 
 function _samePath(a, b) {
   return _normPath(a) !== "" && _normPath(a) === _normPath(b);
+}
+
+/**
+ * The same, and `\` folded to `/` as well.
+ *
+ * ONLY for comparing a path against one that arrived in a URL, where the two
+ * halves can genuinely disagree about separators. Deliberately not folded into
+ * `_samePath`: a POSIX folder may legally be named `a\b`, and making every
+ * caller treat that as `a/b` would let the parked-read and pending-mapping
+ * matches fire on the wrong folder - a wrong action, which is worse than the
+ * missed one this guards against. Comparison only; the original spelling is
+ * what goes on to the server.
+ */
+function _urlPath(p) {
+  return _normPath(p).replace(/\\/g, "/");
 }
 
 /**
@@ -541,10 +555,10 @@ function _samePath(a, b) {
 function routeSubfolderUnder(root) {
   const filter = viewStore.view?.folderFilter;
   if (!filter?.pathPrefix || !root) return null;
-  if (_samePath(filter.pathPrefix, root)) return null;
-  return _normPath(filter.pathPrefix).startsWith(`${_normPath(root)}/`)
-    ? filter
-    : null;
+  const here = _urlPath(filter.pathPrefix);
+  const base = _urlPath(root);
+  if (!base || here === base) return null;
+  return here.startsWith(`${base}/`) ? filter : null;
 }
 
 // The pending mapping this library can act on. A `local_import` entry names
@@ -652,7 +666,14 @@ watch(
 // through on a fresh desktop library.
 let loosePicturesOffer = null;
 function offerLoosePictures() {
-  if (isReadOnly.value || mappingStore.pending) return Promise.resolve();
+  // `pendingForThisLibrary`, never the raw `mappingStore.pending`. That entry
+  // is localStorage-backed and unbounded, and the auto-open above deliberately
+  // refuses two whole classes of it (a `reference` entry; a `local_import`
+  // saved against a library that is no longer the active one). Gating on the
+  // raw flag meant an empty library whose owner held one of those got no
+  // wizard AND no offer, for the life of the install - the same failure the
+  // telemetry question had, in a second place.
+  if (isReadOnly.value || pendingForThisLibrary.value) return Promise.resolve();
   loosePicturesOffer ??= _offerLoosePictures();
   return loosePicturesOffer;
 }
@@ -1101,26 +1122,23 @@ function referenceFolderCanDisclose(rf) {
 }
 
 /**
- * Whether the sidebar's current folder selection sits under the folder the
- * route key `key` names.
+ * The sidebar's current selection, said the way a ROUTE says it.
  *
- * The two are NOT always the same string. A subfolder row's key is
- * `path-<absolute path>` (`FolderTreeNode.vue`) while the route only ever says
- * `rf-<id>` / `if-<id>`, so an equality test read "not mine" for every
- * subfolder and left the highlight - and `selectedFolderReferenceId`, which
- * the scanning light reads - stuck on a folder the app had navigated away
- * from. `selectedFolderReferenceId` is the folder a `path-` selection belongs
- * to, which is what makes the two comparable.
- *
- * @param {string} key an `activeFolderKey` value
- * @returns {boolean}
+ * The sidebar's own key identifies a row, so a subfolder's is
+ * `path-<absolute path>` (`FolderTreeNode.vue`); the route only ever names the
+ * folder the row sits in. These two are what let the watcher below compare the
+ * two spellings without either of them having to change: this is the folder,
+ * `selectedFolderPath` is which folder inside it. An equality test on the row
+ * key alone could neither tell "already showing this" from "showing its
+ * sibling", nor recognise its own selection on the way out.
  */
-function _selectionBelongsToFolderKey(key) {
-  if (!key || !selectedFolderKey.value) return false;
-  if (selectedFolderKey.value === key) return true;
-  if (!selectedFolderKey.value.startsWith("path-")) return false;
-  return key === `rf-${selectedFolderReferenceId.value}`;
-}
+const selectedFolderRouteKey = computed(() => {
+  const id = Number(selectedFolderReferenceId.value);
+  if (Number.isFinite(id)) return `rf-${id}`;
+  return selectedFolderKey.value?.startsWith("if-")
+    ? selectedFolderKey.value
+    : null;
+});
 
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
@@ -1133,6 +1151,7 @@ function handleFolderNodeSelect(key, payload) {
   } else {
     selectedFolderReferenceId.value = null;
   }
+  selectedFolderPath.value = payload?.pathPrefix ?? null;
   emit("select-folder", payload);
   // Emit immediately on selection so ImageGrid updates before next poll tick.
   sidebarStore.folderScanning = selectedFolderScanning.value;
@@ -3966,35 +3985,55 @@ watch(
 // When App.vue navigates to /ref-folder/:id or /import-folder/:id it passes
 // the matching key via the activeFolderKey prop so we can switch to the
 // folders tab and emit the correct filter payload.
+//
+// `?path=` is watched alongside the key, and it has to be: a subfolder click
+// pushes a route that differs from its sibling's ONLY in the query, so the key
+// alone cannot see the difference. Watching just the key made every one of
+// those a history entry whose Back went nowhere - the address bar moved and the
+// grid did not - which is worse than the previous behaviour, where the pushes
+// were identical and vue-router created no Back target at all.
 watch(
-  () => viewStore.activeFolderKey,
-  async (newKey, oldKey) => {
+  () => [
+    viewStore.activeFolderKey,
+    viewStore.view?.folderFilter?.pathPrefix ?? null,
+  ],
+  async ([newKey, newPath], [oldKey] = []) => {
     if (!newKey) {
       // Route left a folder view - clear the sidebar's folder highlight.
-      if (oldKey && _selectionBelongsToFolderKey(oldKey)) {
+      if (oldKey && selectedFolderRouteKey.value === oldKey) {
         selectedFolderKey.value = null;
         selectedFolderReferenceId.value = null;
+        selectedFolderPath.value = null;
       }
       return;
     }
-    if (selectedFolderKey.value === newKey) return; // already in sync
+    // Already showing exactly what the route names, folder AND subfolder. A
+    // click gets here right after setting both, so without this every one of
+    // them would re-fetch the listings and re-emit the payload it just sent.
+    const showingSubfolder = selectedFolderKey.value?.startsWith("path-");
+    if (
+      selectedFolderRouteKey.value === newKey &&
+      (newPath ? _samePath(selectedFolderPath.value, newPath) : !showingSubfolder)
+    ) {
+      return;
+    }
 
     sidebarPrimaryTab.value = "folders";
     await fetchReferenceFolders();
     await fetchImportFolders();
 
-    // Guard: user may have navigated away while fetches were in flight.
+    // Guard: user may have navigated away - or to a sibling subfolder, which
+    // moves only the query - while the fetches were in flight.
     if (viewStore.activeFolderKey !== newKey) return;
+    if ((viewStore.view?.folderFilter?.pathPrefix ?? null) !== newPath) return;
 
     if (newKey.startsWith("rf-")) {
       const id = parseInt(newKey.slice(3), 10);
       const folder = referenceFolders.value.find((f) => f.id === id);
       if (folder) {
-        // A subfolder in the URL wins over the folder root: the route is only
-        // re-read when `activeFolderKey` itself changes, so this restores the
-        // subfolder on a reload, a deep link or a Back out of another view -
-        // not on Back between two subfolders of the SAME folder, which never
-        // changes the key.
+        // A subfolder in the URL wins over the folder root, on every way in:
+        // a reload, a deep link, Back out of another view, and Back between
+        // two subfolders of this same folder.
         const sub = routeSubfolderUnder(folder.folder);
         handleFolderNodeSelect(sub ? `path-${sub.pathPrefix}` : newKey, {
           referenceFolderId: folder.id,

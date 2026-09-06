@@ -229,6 +229,71 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
+  // The push half of item 43 gives each subfolder click a distinct URL, which
+  // means vue-router now creates a Back target where it used to deduplicate
+  // the identical `/ref-folder/5` and create none. Watching only
+  // `activeFolderKey` left every one of those inert - `rf-5` either side, so
+  // nothing re-read the query and the grid stayed on the newer subfolder while
+  // the address bar went back. A Back button that moves the URL and nothing
+  // else is worse than the gesture having had nowhere to go.
+  it("follows Back from one subfolder to its sibling", async () => {
+    const other = `${ROOT}/2023/winter`;
+    const wrapper = await mountSidebar();
+    routeToFolder(SUB);
+    await flushPromises();
+    expect(lastFolderPayload(wrapper).pathPrefix).toBe(SUB);
+
+    routeToFolder(other); // Back: same folderKey, different ?path=
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: other,
+      label: "winter",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("follows Back from a subfolder to the folder root", async () => {
+    const wrapper = await mountSidebar();
+    routeToFolder(SUB);
+    await flushPromises();
+    expect(lastFolderPayload(wrapper).pathPrefix).toBe(SUB);
+
+    routeToFolder(ROOT); // Back again, to the root click's own URL
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: ROOT,
+      label: "Refs",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("does not re-fetch the listings for a route it is already showing", async () => {
+    // The other side of watching the query: a click sets the selection and
+    // THEN pushes, so the watcher sees its own work arrive. Without the
+    // in-sync test that is two listing round trips and a duplicate
+    // `select-folder` on every single subfolder click.
+    const wrapper = await mountSidebar();
+    routeToFolder(SUB);
+    await flushPromises();
+    const emittedOnce = wrapper.emitted("select-folder").length;
+    const fetchedOnce = apiGet.mock.calls.length;
+
+    // Exactly what the sidebar just applied, arriving again.
+    routeToFolder(SUB);
+    await flushPromises();
+
+    expect(wrapper.emitted("select-folder").length).toBe(emittedOnce);
+    expect(apiGet.mock.calls.length).toBe(fetchedOnce);
+
+    wrapper.unmount();
+  });
+
   it("matches a subfolder whose separators disagree with the folder's", async () => {
     // The folder listing and the `?path=` come from the same server and
     // normally agree, but the query half is a URL: it gets shared, edited and

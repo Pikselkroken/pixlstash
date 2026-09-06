@@ -300,10 +300,15 @@ param is for. **It also carries the sidebar's subfolder selection.**
 reads it back once the folder listing is in, selecting the subfolder rather
 than the folder root. The id still owns `referenceFolderId`, so
 `reference_folder_id` stays in the grid query — the query only says which
-folder *inside* it is open. The route is re-read when `activeFolderKey`
-changes, so a reload, a deep link and a Back out of another view all restore
-the subfolder; Back between two subfolders of the same folder does not, since
-that never changes the key. `parseFolderPath`
+folder *inside* it is open. **The sidebar watcher watches `?path=` alongside
+`activeFolderKey`, and has to.** Two sibling subfolders of one folder push
+routes that differ only in the query, so the key alone cannot tell them apart;
+watching only the key meant every subfolder click created a history entry
+(`/ref-folder/5` used to be pushed identically each time, which vue-router
+deduplicates, so there was none) whose Back moved the address bar and nothing
+else. The watcher's "already in sync" test therefore compares the folder *and*
+the path, or a click would re-fetch both listings and re-emit the payload it
+had just set. `parseFolderPath`
 resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
 to the listing API's existing `file_path_prefix` param — there is no new backend
 filter behind it. Read on every grid route rather than only on `/`, the same
