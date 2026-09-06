@@ -524,6 +524,18 @@ class _TagEngine:
     tagging_workflow = _StubWorkflow()
 
 
+class _FailingWorkflow(_StubWorkflow):
+    """Simulate a transient plugin/inference failure for the whole batch."""
+
+    def tag_images(self, image_paths, out_raw_scores=None, **_kwargs):
+        return {}
+
+
+class _FailingTagEngine:
+    tagger_settings = {"active_tag_plugin": "wd14"}
+    tagging_workflow = _FailingWorkflow()
+
+
 def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
     """Tagging must not starve behind a run of corrupt files.
 
@@ -702,3 +714,27 @@ def test_a_whole_batch_transient_failure_deletes_nothing(tmp_path):
         recovered = finder.find_task()
         assert recovered is not None
         assert set(recovered.params["picture_ids"]) & set(ids)
+
+
+def test_transient_batch_failures_keep_pending_tag_sentinels_for_retry(tmp_path):
+    """A transient plugin failure must not retire retryable pictures."""
+    with Vault(image_root=str(tmp_path)) as vault:
+        (pid,) = _seed_pending(vault, tmp_path, ["retry.png"])
+
+        def add_face_row(session: Session):
+            session.add(Face(picture_id=pid, face_index=-1))
+            session.commit()
+
+        vault.db.run_task(add_face_row)
+
+        finder = MissingTagFinder(vault.db, lambda: _FailingTagEngine())
+        task = finder.find_task()
+        assert task is not None
+        assert task.params["picture_ids"] == [pid]
+
+        task._tag_pictures_batch()
+        finder.on_task_complete(task, None)
+
+        nxt = finder.find_task()
+        assert nxt is not None, "transient failure should leave the picture pending"
+        assert nxt.params["picture_ids"] == [pid]
