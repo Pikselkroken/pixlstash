@@ -2716,6 +2716,8 @@ def test_every_changelog_fragment_is_a_markdown_list():
         "not a list item at all\n",
         "  - something\n",
         "\n\n- something\n",
+        "- something\n  # [1.2.3]\n",
+        "- something\n    ## still a heading\n",
     ],
     ids=[
         "leading heading",
@@ -2723,6 +2725,8 @@ def test_every_changelog_fragment_is_a_markdown_list():
         "bare prose",
         "opens indented",
         "opens blank",
+        "indented heading",
+        "deeply indented heading",
     ],
 )
 def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
@@ -2732,9 +2736,15 @@ def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
     the release's heading, that stray `# [1.2.3]` becomes a version section of
     its own and every entry below it moves into the wrong release.
 
-    The last two are the ones a leading `strip()` masks: both open on something
-    that is not a top-level list item, and stripping the front turns each into a
-    fragment that passes and is then pasted in edited form.
+    The `opens` pair are the ones a leading `strip()` masks: both open on
+    something that is not a top-level list item, and stripping the front turns
+    each into a fragment that passes and is then pasted in edited form.
+
+    The indented pair are the ones the continuation rule masks. Two spaces is a
+    legal continuation of a list item and `  # [1.2.3]` is still a heading -
+    to CommonMark, and to `release-version.yml`, which strips each line before
+    testing it for `#`. Indenting the heading was all it took to put a version
+    section nobody released into the middle of the file.
     """
     assemble_changelog = _assemble_changelog_module()
 
@@ -2742,6 +2752,24 @@ def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
     bad.write_text(body, encoding="utf-8")
     with pytest.raises(ValueError):
         assemble_changelog.read_entries([bad])
+
+
+def test_a_continuation_line_may_cite_an_issue_number(tmp_path):
+    """The over-refusal control for the heading check above.
+
+    `#1234` is not a heading - CommonMark wants whitespace after the hashes -
+    and citing an issue on a wrapped line is the obvious thing a fragment does.
+    A heading rule that refused it would be found here rather than by whoever
+    is cutting the release.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    good = tmp_path / "good.md"
+    good.write_text("- Fixed the thing\n  #1234 was the culprit.\n", encoding="utf-8")
+
+    assert assemble_changelog.read_entries([good]) == [
+        "- Fixed the thing\n  #1234 was the culprit."
+    ]
 
 
 def test_the_changelog_opens_on_a_released_version_heading():

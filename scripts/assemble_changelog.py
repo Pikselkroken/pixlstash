@@ -17,6 +17,7 @@ editorial.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -24,6 +25,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FRAGMENT_DIR = REPO_ROOT / "changelog.d"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 SECURITY_LEVELS = ("Critical", "High", "Moderate", "Low")
+
+#: An ATX heading, by CommonMark: one to six ``#`` then whitespace or the end of
+#: the line. Leading indentation is stripped before this is applied, because
+#: indenting a heading does not stop it being one - to CommonMark, and to
+#: ``release-version.yml``, which strips each line before testing it for ``#``.
+#: ``#1234`` is deliberately not a heading: no space after the hashes, so a
+#: continuation line citing an issue number stays legal.
+_ATX_HEADING = re.compile(r"^#{1,6}(?:\s|$)")
 
 
 def fragments() -> list[Path]:
@@ -49,16 +58,30 @@ def read_entries(paths: list[Path]) -> list[str]:
     below and is then pasted as ``"- thing"`` - a fragment silently edited on
     its way into the release notes, which is exactly what "verbatim" rules out.
 
+    A heading is refused wherever it sits, including indented under a list
+    item, and that check runs *before* the continuation rule: two spaces is a
+    legal continuation and ``  # [1.2.3]`` is still a heading, so the
+    continuation rule on its own let exactly the thing this function exists to
+    refuse through the middle of a fragment.
+
     Raises:
-        ValueError: If any line is neither a markdown list item, an indented
-            continuation of one, nor blank, or if the fragment does not open on
-            a list item.
+        ValueError: If any line is a heading, or is neither a markdown list
+            item, an indented continuation of one, nor blank, or if the
+            fragment does not open on a list item.
     """
     entries = []
     for path in paths:
         body = path.read_text(encoding="utf-8").rstrip()
         for number, line in enumerate(body.splitlines(), start=1):
-            if not line.strip() or line.startswith(("- ", "  ")):
+            stripped = line.strip()
+            if _ATX_HEADING.match(stripped):
+                raise ValueError(
+                    f"{path.name} line {number} is a heading: {line!r}. A "
+                    "fragment is the changelog lines themselves; a heading "
+                    "pasted into the release notes becomes a version section "
+                    "of its own, and indenting it does not stop it being one."
+                )
+            if not stripped or line.startswith(("- ", "  ")):
                 continue
             raise ValueError(
                 f"{path.name} line {number} is neither a list item nor an "
