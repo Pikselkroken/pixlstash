@@ -1560,28 +1560,39 @@ def test_the_hub_is_read_off_the_command_line_in_both_spellings(monkeypatch):
 # `install` list holds only what is *not* already satisfied.
 
 
-def _report(*packages: tuple[str, str]) -> str:
-    """Return a pip install report naming *packages* as (name, version).
+#: A stand-in sha256, the length pip records.
+_SHA = "a" * 64
 
-    A third element, when present, is the direct URL pip resolved the
-    requirement to, and produces the `is_direct` / `download_info` shape pip
-    writes for `name @ https://...`.
+
+def _entry(name: str, version: str, download_info=None, direct=False) -> dict:
+    """One `install` entry in the shape pip's --report writes."""
+    if download_info is None:
+        # What pip writes for a package resolved from the default index.
+        download_info = {
+            "url": f"https://files.pythonhosted.org/packages/{name}-{version}.whl",
+            "archive_info": {"hash": f"sha256={_SHA}", "hashes": {"sha256": _SHA}},
+        }
+    return {
+        "metadata": {"name": name, "version": version},
+        "is_direct": direct,
+        "download_info": download_info,
+    }
+
+
+def _report(*packages) -> str:
+    """Return a pip install report naming *packages*.
+
+    Each entry is `(name, version)`, or `(name, version, download_info,
+    is_direct)` to model a URL, a `--find-links` hit or a VCS checkout.
     """
-    entries = []
-    for package in packages:
-        name, version = package[0], package[1]
-        url = package[2] if len(package) > 2 else None
-        entry: dict = {"metadata": {"name": name, "version": version}}
-        if url:
-            entry["is_direct"] = True
-            entry["download_info"] = {"url": url}
-        else:
-            entry["is_direct"] = False
-            entry["download_info"] = {
-                "url": f"https://files.pythonhosted.org/packages/{name}-{version}.whl"
-            }
-        entries.append(entry)
-    return json.dumps({"install": entries})
+    return json.dumps(
+        {
+            "install": [
+                _entry(*package) if len(package) > 2 else _entry(package[0], package[1])
+                for package in packages
+            ]
+        }
+    )
 
 
 @pytest.fixture
@@ -1684,19 +1695,14 @@ def test_a_pip_that_cannot_resolve_is_a_refusal_not_a_crash(monkeypatch, tmp_pat
 # the code that lands are different packages (CWE-494).
 
 _DIRECT_URL = "https://example.invalid/wheels/moondream-1.0-py3-none-any.whl"
+_DIRECT_INFO = {
+    "url": _DIRECT_URL,
+    "archive_info": {"hash": f"sha256={_SHA}", "hashes": {"sha256": _SHA}},
+}
 
 
-def test_a_direct_url_requirement_is_installed_from_that_url(
-    pip_report, tmp_path, monkeypatch
-):
-    """The negative: `name==version` must never be the pin for a URL pin."""
-    pip_report(("moondream", "1.0", _DIRECT_URL), installed={})
-    requirements = tmp_path / "requirements.txt"
-    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
-
-    (change,) = plugin_install.resolve_requirements(requirements)
-    assert change.url == _DIRECT_URL
-
+def _installed_command(change, monkeypatch) -> list[str]:
+    """Run install_requirements against a stubbed pip and return the argv."""
     commands: list[list[str]] = []
 
     def fake_run(command, **_kwargs):
@@ -1704,50 +1710,118 @@ def test_a_direct_url_requirement_is_installed_from_that_url(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
-    plugin_install.install_requirements([change])
-
+    plugin_install.install_requirements(
+        change if isinstance(change, list) else [change]
+    )
     (command,) = commands
-    assert command[-1] == f"moondream @ {_DIRECT_URL}"
+    return command
+
+
+def test_a_direct_url_requirement_is_installed_from_that_url(
+    pip_report, tmp_path, monkeypatch
+):
+    """The negative: `name==version` must never be the pin for a URL pin."""
+    pip_report(("moondream", "1.0", _DIRECT_INFO, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.url == _DIRECT_URL
+
+    command = _installed_command(change, monkeypatch)
+    assert command[-1] == f"moondream @ {_DIRECT_URL}#sha256={_SHA}"
     assert "moondream==1.0" not in command
 
 
-def test_an_indexed_requirement_still_installs_by_name_and_version(
+def test_an_indexed_requirement_is_pinned_to_the_artefact_pip_resolved(
     pip_report, tmp_path, monkeypatch
 ):
-    """The positive control: over-pinning ordinary packages is its own bug."""
-    pip_report(("flask", "3.1.3"), installed={})
+    """An index entry is a substitution vector too, and used to be missed.
+
+    A `--index-url`, `--extra-index-url` or `--find-links` line inside the
+    plugin's own requirements.txt resolves against *that* source, and pip marks
+    the result `is_direct: false` because the requirement named a name. Pinning
+    it `name==version` then re-resolves against the DEFAULT index, i.e. against
+    whoever owns that name on PyPI. The URL pip reported is the only thing that
+    names what was actually shown to the user.
+    """
+    find_links = {
+        "url": "file:///srv/wheels/zzprivate-1.0-py3-none-any.whl",
+        "archive_info": {"hashes": {"sha256": _SHA}},
+    }
+    pip_report(("zzprivate", "1.0", find_links, False), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("--find-links /srv/wheels\nzzprivate\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin == f"zzprivate @ {find_links['url']}#sha256={_SHA}"
+    # Display stays quiet: the requirement itself did not name a URL.
+    assert change.url is None
+    assert "zzprivate==1.0" not in _installed_command(change, monkeypatch)
+
+
+def test_a_vcs_requirement_is_pinned_to_the_resolved_commit(pip_report, tmp_path):
+    """`download_info.url` drops both the `git+` prefix and the commit.
+
+    Replaying the bare URL succeeds and installs the repository's *working
+    tree* instead of the revision that was resolved and shown - so it fails
+    silently, which is worse than failing loudly.
+    """
+    vcs = {
+        "url": "https://example.invalid/someone/moondream",
+        "vcs_info": {"vcs": "git", "commit_id": "b" * 40, "requested_revision": "main"},
+    }
+    pip_report(("moondream", "1.0", vcs, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "git+https://example.invalid/someone/moondream#egg=moondream\n",
+        encoding="utf-8",
+    )
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin == f"git+{vcs['url']}@{'b' * 40}"
+
+
+def test_a_subdirectory_survives_the_round_trip(pip_report, tmp_path):
+    """A monorepo requirement installs the wrong package without it."""
+    info = dict(_DIRECT_INFO, subdirectory="packages/moondream")
+    pip_report(("moondream", "1.0", info, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin.endswith(f"#sha256={_SHA}&subdirectory=packages/moondream")
+
+
+def test_a_report_without_download_info_falls_back_to_name_and_version(
+    pip_report, tmp_path
+):
+    """The one case that cannot be pinned to an artefact still installs."""
+    pip_report(("flask", "3.1.3", {}, False), installed={})
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("flask\n", encoding="utf-8")
 
     (change,) = plugin_install.resolve_requirements(requirements)
-    assert change.url is None
     assert change.pin == "flask==3.1.3"
-
-
-def test_a_transitive_dependency_of_a_direct_url_stays_indexed(pip_report, tmp_path):
-    """`is_direct` is per entry: only the requirement itself pinned a URL."""
-    pip_report(("moondream", "1.0", _DIRECT_URL), ("pillow", "11.0.0"), installed={})
-    requirements = tmp_path / "requirements.txt"
-    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
-
-    pins = {c.name: c.pin for c in plugin_install.resolve_requirements(requirements)}
-    assert pins == {
-        "moondream": f"moondream @ {_DIRECT_URL}",
-        "pillow": "pillow==11.0.0",
-    }
 
 
 def test_the_listing_names_the_url_a_direct_requirement_comes_from(
     pip_report, tmp_path, capsys
 ):
     """Consent has to describe the artefact, not just a name and a version."""
-    pip_report(("moondream", "1.0", _DIRECT_URL), installed={})
+    pip_report(
+        ("moondream", "1.0", _DIRECT_INFO, True), ("pillow", "11.0.0"), installed={}
+    )
     requirements = tmp_path / "requirements.txt"
     requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
 
     changes = plugin_install.resolve_requirements(requirements)
     assert cli._report_dependencies(changes, force=False)
-    assert _DIRECT_URL in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert _DIRECT_URL in out
+    # Over-reporting is its own regression: naming files.pythonhosted.org on
+    # every ordinary line trains people to skip the one line that matters.
+    assert "files.pythonhosted.org" not in out
 
 
 def test_install_refuses_dependencies_that_replace_a_package_in_use(

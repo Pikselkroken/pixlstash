@@ -770,27 +770,78 @@ class DependencyChange:
     version: str
     #: The version already installed, or None when the package is new here.
     installed: str | None = None
-    #: The direct URL the requirement pinned, or None when it came from an
-    #: index.  Set only for pip's ``is_direct`` entries; see
-    #: :func:`install_requirements` for why it has to survive the round trip.
-    url: str | None = None
+    #: pip's ``download_info`` for this entry -- the artefact it actually
+    #: resolved.  None only when the report did not carry one.
+    download_info: dict | None = None
+    #: pip's ``is_direct``: True when the *requirement* named a URL rather than
+    #: a name.  Display only; the pin uses ``download_info`` either way.
+    direct: bool = False
+
+    @property
+    def url(self) -> str | None:
+        """The URL a directly-pinned requirement named, for the listing.
+
+        Only for ``is_direct`` entries: an ordinary indexed package also has a
+        URL, but naming ``files.pythonhosted.org`` on every line would be noise
+        that trains people to skip the one line that matters.
+        """
+        return (self.download_info or {}).get("url") if self.direct else None
 
     @property
     def pin(self) -> str:
-        """The requirement to hand pip so it installs *this* distribution again.
+        """The requirement to hand pip so it installs *this* artefact again.
 
-        SECURITY: a direct-URL requirement (``name @ https://.../x.whl``, a VCS
-        or a local path) names one artefact and deliberately does not name the
-        public index.  Reinstalling it as ``name==version`` would let whoever
-        owns that name on PyPI supply the code instead - the resolution the
-        user agreed to and the code that lands would be different packages
-        (CWE-494, dependency confusion / substitution).  The URL is therefore
-        replayed verbatim as a PEP 508 direct reference, which pins the
-        artefact rather than the name.  Indexed packages keep ``==``.
+        SECURITY: ``name==version`` names a *project on the default index*, and
+        that is not what was resolved.  The resolution the user agreed to can
+        come from a URL the plugin pinned, from a ``--find-links`` directory or
+        an ``--index-url`` line inside the plugin's own ``requirements.txt``, or
+        from a VCS at one commit.  Replaying it by name hands the install to
+        whoever owns that name on PyPI instead -- the code shown and the code
+        that lands are different packages (CWE-494, dependency confusion /
+        substitution).
+
+        So every entry is pinned to the artefact, not the name, reconstructed
+        from ``download_info`` the way pip's own
+        ``direct_url_as_pep440_direct_reference`` does it:
+
+        * a VCS entry becomes ``<vcs>+<url>@<commit_id>``, because ``url``
+          alone drops both the ``git+`` prefix and the commit -- replaying that
+          installs the repository's *working tree* rather than the revision
+          that was resolved;
+        * anything else becomes ``name @ url``, carrying the ``sha256`` pip
+          recorded as a link fragment so the artefact cannot change between the
+          dry run and the install.  A fragment hash makes pip verify the
+          download; it does not switch pip into hash-checking mode, so entries
+          that have no hash (VCS, a local directory) still install alongside.
+
+        Falls back to ``name==version`` only when the report carried no
+        ``download_info`` at all.
         """
-        return (
-            f"{self.name} @ {self.url}" if self.url else f"{self.name}=={self.version}"
-        )
+        info = self.download_info or {}
+        url = info.get("url")
+        if not url:
+            return f"{self.name}=={self.version}"
+
+        fragments = []
+        vcs = info.get("vcs_info")
+        if vcs:
+            # Not a PEP 508 `name @ git+...` reference: pip 24 rejects that
+            # spelling outright for a `git+file://` URL ("Invalid requirement
+            # ... It looks like a path"), while the plain VCS form is accepted
+            # for every scheme.
+            requirement = f"{vcs['vcs']}+{url}@{vcs['commit_id']}"
+        else:
+            archive = info.get("archive_info") or {}
+            sha256 = (archive.get("hashes") or {}).get("sha256")
+            if sha256:
+                fragments.append(f"sha256={sha256}")
+            elif archive.get("hash"):
+                # Older reports carry a single "<name>=<value>" string instead.
+                fragments.append(archive["hash"])
+            requirement = f"{self.name} @ {url}"
+        if info.get("subdirectory"):
+            fragments.append(f"subdirectory={info['subdirectory']}")
+        return requirement + ("#" + "&".join(fragments) if fragments else "")
 
     @property
     def moves(self) -> bool:
@@ -857,13 +908,18 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
             installed = metadata_version(name)
         except PackageNotFoundError:
             installed = None
-        # `is_direct` is pip's own answer to "did the requirement name a URL
-        # rather than a name?", and `download_info.url` is the URL it actually
-        # resolved. Both have to be carried to the install step or the pin
-        # there silently becomes a PyPI lookup - see DependencyChange.pin.
-        url = entry["download_info"]["url"] if entry.get("is_direct") else None
+        # `download_info` is what pip actually resolved, for every entry and
+        # not only the ones whose requirement named a URL. It has to reach the
+        # install step or the pin there silently becomes a lookup of the name
+        # on the default index - see DependencyChange.pin.
         changes.append(
-            DependencyChange(name, entry["metadata"]["version"], installed, url)
+            DependencyChange(
+                name,
+                entry["metadata"]["version"],
+                installed,
+                entry.get("download_info"),
+                bool(entry.get("is_direct")),
+            )
         )
     return sorted(changes, key=lambda change: change.name.lower())
 
@@ -890,9 +946,12 @@ def install_requirements(changes: list[DependencyChange]) -> None:
     transitive dependency pip found, so letting it resolve again could only add
     something nobody was shown.
 
-    Each change contributes :attr:`DependencyChange.pin`, which keeps a
-    direct-URL requirement pinned to its URL instead of re-resolving the name
-    against PyPI.
+    Each change contributes :attr:`DependencyChange.pin`, which pins the
+    artefact pip resolved rather than re-resolving the name against the default
+    index.  ``--no-index`` is deliberately NOT passed: an entry's pin already
+    names its own URL, so there is nothing left for an index to answer, and
+    passing it would break the fallback pin for a report without
+    ``download_info``.
     """
     if not changes:
         return
