@@ -68,7 +68,7 @@ describe('the startup framework', () => {
       mainSrc,
       /existingRoot: offerPath\(\s*\n?\s*importedImageRoot && existsSync\(importedImageRoot\)/,
     );
-    assert.match(mainSrc, /newRoot: offerPath\(defaultLibraryDir\(\)\)/);
+    assert.match(mainSrc, /newRoot: offerPath\(defaultLibraryDir\(\), 'library'\)/);
     assert.match(script, /detectedLegacyIdentitySource \|\| defaults\.existingRoot \|\| ''/);
   });
 

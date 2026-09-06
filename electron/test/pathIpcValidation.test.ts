@@ -21,17 +21,39 @@ import { offerPath, requireOfferedPath, requireServerSettings } from '../src/con
 describe('requireOfferedPath', () => {
   it('accepts a path the dialog just handed out', () => {
     const chosen = resolve(sep, 'home', 'me', 'Pictures');
-    offerPath(chosen);
-    assert.equal(requireOfferedPath(chosen, 'Library folder'), chosen);
+    offerPath(chosen, 'library');
+    assert.equal(requireOfferedPath(chosen, 'library', 'Library folder'), chosen);
+  });
+
+  it('refuses a path offered for the OTHER question', () => {
+    // One pool would let the library folder be replayed as the GPU install
+    // location, which makes setBackendsRoot point at the user's pictures and
+    // accel:install / backend:setLocation then recursively delete
+    // `<library>/<accel>` inside it.
+    const library = resolve(sep, 'home', 'me', 'Pictures');
+    const backends = resolve(sep, 'home', 'me', '.cache', 'backends');
+    offerPath(library, 'library');
+    offerPath(backends, 'backends');
+    assert.throws(
+      () => requireOfferedPath(library, 'backends', 'GPU install location'),
+      /was not offered by PixlStash for this choice/,
+    );
+    assert.throws(
+      () => requireOfferedPath(backends, 'library', 'Library folder'),
+      /was not offered by PixlStash for this choice/,
+    );
+    // Each is still accepted for its own question.
+    assert.equal(requireOfferedPath(library, 'library', 'Library folder'), library);
+    assert.equal(requireOfferedPath(backends, 'backends', 'GPU install location'), backends);
   });
 
   it('accepts the same folder spelled differently', () => {
     // The renderer trims the readonly field, and a path may arrive with a
     // trailing separator; both must still resolve to the offered folder.
     const chosen = resolve(sep, 'home', 'me', 'Library Two');
-    offerPath(chosen);
-    assert.equal(requireOfferedPath(`  ${chosen}${sep}  `, 'Library folder'), chosen);
-    assert.equal(requireOfferedPath(join(chosen, 'x', '..'), 'Library folder'), chosen);
+    offerPath(chosen, 'library');
+    assert.equal(requireOfferedPath(`  ${chosen}${sep}  `, 'library', 'Library folder'), chosen);
+    assert.equal(requireOfferedPath(join(chosen, 'x', '..'), 'library', 'Library folder'), chosen);
   });
 
   it('refuses a folder nobody offered', () => {
@@ -43,7 +65,7 @@ describe('requireOfferedPath', () => {
       'C:\\Windows',
     ]) {
       assert.throws(
-        () => requireOfferedPath(bad, 'GPU install location'),
+        () => requireOfferedPath(bad, 'backends', 'GPU install location'),
         /was not offered by PixlStash/,
         `${bad} must not be accepted as a destination`,
       );
@@ -65,7 +87,7 @@ describe('requireOfferedPath', () => {
       [resolve(sep, 'home', 'me', 'Pictures')],
     ]) {
       assert.throws(
-        () => requireOfferedPath(bad, 'Library folder'),
+        () => requireOfferedPath(bad, 'library', 'Library folder'),
         /must be a folder path|was not offered by PixlStash/,
         `${typeof bad} must not be accepted as a destination`,
       );
@@ -77,10 +99,13 @@ describe('requireOfferedPath', () => {
     // transparent, and a `null` default (no detected legacy library) must not
     // put an empty string on the offered set.
     const chosen = resolve(sep, 'home', 'you', 'Pictures');
-    assert.equal(offerPath(chosen), chosen);
-    assert.equal(offerPath(null), null);
-    assert.equal(offerPath(undefined), undefined);
-    assert.throws(() => requireOfferedPath('', 'Library folder'), /must be a folder path/);
+    assert.equal(offerPath(chosen, 'library'), chosen);
+    assert.equal(offerPath(null, 'library'), null);
+    assert.equal(offerPath(undefined, 'library'), undefined);
+    assert.throws(
+      () => requireOfferedPath('', 'library', 'Library folder'),
+      /must be a folder path/,
+    );
   });
 });
 
@@ -151,7 +176,7 @@ describe('the path-taking IPC handlers validate before they use the value', () =
     assert.ok(start >= 0, 'backend:setLocation handler not found');
     const body = main.slice(start, main.indexOf('ipcMain.handle(', start + 1));
     assert.match(body, /\(_e,\s*raw:\s*unknown\)/);
-    assert.match(body, /requireOfferedPath\(raw,/);
+    assert.match(body, /requireOfferedPath\(raw, 'backends',/);
     assert.doesNotMatch(
       body,
       /changeBackendsLocation\(\s*raw\s*\)/,
@@ -165,8 +190,8 @@ describe('the path-taking IPC handlers validate before they use the value', () =
     const body = main.slice(start, main.indexOf("ipcMain.handle('startup:", start));
     assert.match(body, /imageRoot:\s*unknown/, 'imageRoot must not be typed as a string');
     assert.match(body, /installLocation\?:\s*unknown/);
-    assert.match(body, /requireOfferedPath\(choices\?\.imageRoot,/);
-    assert.match(body, /requireOfferedPath\(choices\.installLocation,/);
+    assert.match(body, /requireOfferedPath\(choices\?\.imageRoot, 'library',/);
+    assert.match(body, /requireOfferedPath\(choices\.installLocation, 'backends',/);
     assert.doesNotMatch(
       body,
       /runFirstRunSetup\(\s*choices\s*,/,
@@ -193,7 +218,11 @@ describe('the path-taking IPC handlers validate before they use the value', () =
       main.indexOf("ipcMain.handle('setup:probe'"),
       main.indexOf("ipcMain.handle('setup:inspect'"),
     );
-    for (const field of ['existingRoot: offerPath(', 'newRoot: offerPath(', 'installLocation: offerPath(']) {
+    for (const field of [
+      'existingRoot: offerPath(',
+      "newRoot: offerPath(defaultLibraryDir(), 'library')",
+      "installLocation: offerPath(backendsRoot(), 'backends')",
+    ]) {
       assert.ok(probe.includes(field), `setup:probe must offer ${field}`);
     }
   });

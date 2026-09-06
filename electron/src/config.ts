@@ -62,25 +62,47 @@ export function requireAccel(value: unknown): Accel {
  * run, not a persisted policy, and the wizard's own prefilled defaults have to
  * be in it or accepting the folder on screen would be refused. It is not a
  * containment check - the user may legitimately pick anywhere - so it says only
- * "this exact folder was on offer", never "this folder is safe".
+ * "this exact folder was on offer for this question", never "this folder is
+ * safe".
+ *
+ * Kept per {@link PathPurpose} rather than as one pool, because the two
+ * questions have very different consequences and one pool lets an answer to the
+ * gentler one be replayed as an answer to the harsher one: a *library* folder
+ * accepted as the *GPU install location* makes `setBackendsRoot` point at the
+ * user's pictures, and `accel:install` then wipes `<library>/<accel>` and
+ * `backend:setLocation` recursively deletes it.
  */
-const offeredPaths = new Set<string>();
+export type PathPurpose = 'library' | 'backends';
 
-/** Record a path as offered to the renderer, and return it unchanged. */
-export function offerPath<T extends string | null | undefined>(path: T): T {
-  if (typeof path === 'string' && path.trim()) offeredPaths.add(resolve(path.trim()));
+const offeredPaths: Record<PathPurpose, Set<string>> = {
+  library: new Set(),
+  backends: new Set(),
+};
+
+/** Record a path as offered to the renderer for *purpose*, and return it. */
+export function offerPath<T extends string | null | undefined>(
+  path: T,
+  purpose: PathPurpose,
+): T {
+  if (typeof path === 'string' && path.trim()) {
+    offeredPaths[purpose].add(resolve(path.trim()));
+  }
   return path;
 }
 
 /**
- * Narrow a folder the renderer sent back to one {@link offerPath} recorded, or
- * throw. *what* names the field, for the message the wizard shows.
+ * Narrow a folder the renderer sent back to one {@link offerPath} recorded for
+ * the same *purpose*, or throw. *what* names the field for the message shown.
  *
  * Compared after `resolve` on both sides, so a trailing separator or an
  * `a/../b` spelling of an offered path is accepted while resolving to that same
  * offered path - and nothing else is.
  */
-export function requireOfferedPath(value: unknown, what: string): string {
+export function requireOfferedPath(
+  value: unknown,
+  purpose: PathPurpose,
+  what: string,
+): string {
   // Described the way requireAccel describes a value, and for its reasons: IPC
   // carries a BigInt (JSON.stringify throws on one) and an object may supply
   // its own `toString`.
@@ -89,10 +111,10 @@ export function requireOfferedPath(value: unknown, what: string): string {
     throw new Error(`${what} must be a folder path, not ${shown}.`);
   }
   const resolved = resolve(value.trim());
-  if (!offeredPaths.has(resolved)) {
+  if (!offeredPaths[purpose].has(resolved)) {
     throw new Error(
-      `${what} ${shown} was not offered by PixlStash. Choose the folder with ` +
-        'the Change\u2026 button and try again.',
+      `${what} ${shown} was not offered by PixlStash for this choice. Choose ` +
+        'the folder with the Change\u2026 button and try again.',
     );
   }
   return resolved;

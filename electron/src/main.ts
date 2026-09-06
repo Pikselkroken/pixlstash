@@ -1262,6 +1262,7 @@ function registerIpc(): void {
       resolvedImportedRoot && existsSync(join(resolvedImportedRoot, 'vault.db'))
         ? resolvedImportedRoot
         : null,
+      'library',
     );
     const gpu = gpuUpgrade();
     const steps = ['library'];
@@ -1286,12 +1287,13 @@ function registerIpc(): void {
         // requireOfferedPath.
         existingRoot: offerPath(
           importedImageRoot && existsSync(importedImageRoot) ? importedImageRoot : null,
+          'library',
         ),
-        newRoot: offerPath(defaultLibraryDir()),
+        newRoot: offerPath(defaultLibraryDir(), 'library'),
         useGpu: Boolean(gpu),
         // Where the GPU runtime would install (only relevant when a GPU is
         // offered). On Windows this is inside the chosen install folder.
-        installLocation: offerPath(backendsRoot()),
+        installLocation: offerPath(backendsRoot(), 'backends'),
       },
       gpu: gpu
         ? { available: true, accel: gpu, label: ACCEL_LABELS[gpu], name: hardware?.gpuName ?? null }
@@ -1314,7 +1316,7 @@ function registerIpc(): void {
     });
     // The dialog is the provenance setup:commit checks for; recording the
     // result here is what makes the choice acceptable there.
-    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0]);
+    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0], 'library');
   });
 
   ipcMain.handle(
@@ -1345,9 +1347,9 @@ function registerIpc(): void {
 
       const validatedChoices = {
         ...choices,
-        imageRoot: requireOfferedPath(choices?.imageRoot, 'Library folder'),
+        imageRoot: requireOfferedPath(choices?.imageRoot, 'library', 'Library folder'),
         installLocation: choices?.installLocation
-          ? requireOfferedPath(choices.installLocation, 'GPU install location')
+          ? requireOfferedPath(choices.installLocation, 'backends', 'GPU install location')
           : undefined,
       };
 
@@ -1579,8 +1581,8 @@ function registerIpc(): void {
   // Where on-demand GPU overlays are stored. Lets the user keep the multi-GB
   // download off the system drive (the first-run wizard offers the same choice).
   ipcMain.handle('backend:getLocation', () => ({
-    dir: offerPath(backendsRoot()),
-    default: offerPath(defaultBackendsRoot()),
+    dir: offerPath(backendsRoot(), 'backends'),
+    default: offerPath(defaultBackendsRoot(), 'backends'),
   }));
 
   ipcMain.handle('backend:pickLocation', async (_e, current?: string) => {
@@ -1589,15 +1591,20 @@ function registerIpc(): void {
       defaultPath: current || backendsRoot(),
       properties: ['openDirectory', 'createDirectory'],
     });
-    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0]);
+    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0], 'backends');
   });
 
   // The destination reaches moveDir, which recursively deletes `<dir>/<accel>`.
   // Item 13 made the last segment a validated Accel; this makes the root one
   // PixlStash itself offered (see requireOfferedPath).
   ipcMain.handle('backend:setLocation', async (_e, raw: unknown) => {
-    await changeBackendsLocation(requireOfferedPath(raw, 'GPU install location'));
-    return { dir: offerPath(backendsRoot()), default: offerPath(defaultBackendsRoot()) };
+    await changeBackendsLocation(
+      requireOfferedPath(raw, 'backends', 'GPU install location'),
+    );
+    return {
+      dir: offerPath(backendsRoot(), 'backends'),
+      default: offerPath(defaultBackendsRoot(), 'backends'),
+    };
   });
 
   // The three handlers below take an accelerator straight from the renderer, and
