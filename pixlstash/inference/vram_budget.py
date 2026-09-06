@@ -29,6 +29,15 @@ ORT_ARENA_SHARE = {
     "insightface_session": None,
 }
 
+#: WD14's memory model in MiB: the loaded ONNX session, and one 448 px image's
+#: activations on top of it. **Both** the batch cap and that session's
+#: ``gpu_mem_limit`` are derived from these two numbers, which is the point of
+#: their being here rather than inline at the batch-sizing call. A batch sized
+#: from one model and an arena capped from another is an allocation the sizer
+#: sanctioned and the runtime refuses - a hard ORT failure, not a slow run.
+WD14_BASE_MB = 900
+WD14_PER_ITEM_MB = 220
+
 
 class VramBudget:
     """Stateful VRAM budget for GPU-memory-aware batch sizing.
@@ -114,7 +123,9 @@ class VramBudget:
             self._max_vram_usage_mb / 1024.0,
         )
 
-    def ort_cuda_provider_options(self, share: float | None) -> dict[str, object]:
+    def ort_cuda_provider_options(
+        self, share: float | None, min_limit_mb: int = 0
+    ) -> dict[str, object]:
         """CUDAExecutionProvider options for one ONNX Runtime session.
 
         ORT's default arena doubles on every growth (``kNextPowerOfTwo``) and
@@ -126,10 +137,23 @@ class VramBudget:
         and is left unset when there is none: a cap nobody configured is an
         OOM nobody asked for.
 
+        *share* is a split of the budget between sessions and knows nothing
+        about what the session will be asked to run. ``min_limit_mb`` is the
+        other half of the same question - :meth:`batch_footprint_mb` for the
+        model this session holds - and raises the cap to it when the share
+        alone would sit below what the batch sizer has already allowed. The
+        budget itself stays the ceiling. Without this the two disagree: at the
+        shipped 2 GB default, WD14's 40 % share is 819 MiB while its own model
+        base is 900 MiB, so the session was capped below its own weights.
+
         Args:
             share: Fraction of the configured budget, from
                 :data:`ORT_ARENA_SHARE`; ``None`` for a session that must never
                 be capped (only the cudnn search setting applies).
+            min_limit_mb: Floor for the cap, in MiB - what one full batch of
+                this session's model actually occupies. Ignored when there is
+                no budget (nothing is capped) or when the share already
+                exceeds it.
 
         Returns:
             Options dict for ``provider_options`` / a ``providers`` tuple.
@@ -141,8 +165,29 @@ class VramBudget:
             return options
         options["arena_extend_strategy"] = "kSameAsRequested"
         if self._max_vram_usage_mb is not None:
-            options["gpu_mem_limit"] = int(self._max_vram_usage_mb * share) * 1024**2
+            limit_mb = max(int(self._max_vram_usage_mb * share), int(min_limit_mb))
+            limit_mb = min(limit_mb, self._max_vram_usage_mb)
+            options["gpu_mem_limit"] = limit_mb * 1024**2
         return options
+
+    def batch_footprint_mb(self, base_mb: int, per_item_mb: int) -> int:
+        """MiB one full batch of this model occupies at the size this budget allows.
+
+        The counterpart to :meth:`limited_batch_cap`: what that cap costs. An
+        ORT session whose ``gpu_mem_limit`` is below this refuses an allocation
+        the batch sizer already sanctioned.
+
+        Args:
+            base_mb: Fixed model footprint in MiB (loaded once).
+            per_item_mb: Incremental VRAM per image/item in MiB.
+
+        Returns:
+            Footprint in MiB, or ``0`` when no budget is set - there is no cap
+            to reconcile against, so there is nothing to floor.
+        """
+        if self._max_vram_usage_mb is None:
+            return 0
+        return base_mb + per_item_mb * self.limited_batch_cap(base_mb, per_item_mb)
 
     def limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
         """Return the maximum batch size that fits within the configured budget.

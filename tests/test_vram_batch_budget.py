@@ -1,4 +1,11 @@
-from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
+import pytest
+
+from pixlstash.inference.vram_budget import (
+    ORT_ARENA_SHARE,
+    VramBudget,
+    WD14_BASE_MB,
+    WD14_PER_ITEM_MB,
+)
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
@@ -112,9 +119,17 @@ def test_missing_tags_finder_uses_suggested_task_size():
         tagging_workflow = FakeTaggingWorkflow()
         tagger_settings = {"active_tag_plugin": "wd14"}
 
+    class FakeRegistry:
+        def active_suppressed_ids(self):
+            return set()
+
+        def is_suppressed(self, _picture_id):
+            return False
+
     class FakeDB:
         def __init__(self):
             self.image_root = "/tmp"
+            self.unprocessable_images = FakeRegistry()
 
         def run_immediate_read_task(self, callback):
             class FakeTag:
@@ -182,3 +197,52 @@ def test_ort_session_options_cap_the_arena_only_when_a_budget_is_set():
         "an uncapped session gets neither a limit nor a strategy that only "
         "pays off against one"
     )
+
+
+@pytest.mark.parametrize("budget_mb", [2048, 4096, 8192, 16384])
+def test_the_wd14_arena_can_hold_the_batch_the_same_budget_hands_it(budget_mb):
+    """``gpu_mem_limit`` and the batch cap must come from the same figures.
+
+    They did not: the cap was ``budget - 20 %`` while the arena was 40 % of the
+    budget, so the batch sizer routinely sanctioned a batch the session was
+    forbidden to allocate - an ORT hard failure, not a slow run. At the shipped
+    2 GB default the share (819 MiB) did not even cover WD14's own model base
+    (900 MiB).
+    """
+    workflow = _build_workflow_for_budget_tests(budget_mb=budget_mb, onnx_capacity=64)
+    budget = workflow._engine.vram_budget
+
+    batch = workflow.effective_wd14_batch_size()
+    needed_mb = WD14_BASE_MB + WD14_PER_ITEM_MB * batch
+    limit_mb = (
+        budget.ort_cuda_provider_options(
+            ORT_ARENA_SHARE["wd14"],
+            min_limit_mb=budget.batch_footprint_mb(WD14_BASE_MB, WD14_PER_ITEM_MB),
+        )["gpu_mem_limit"]
+        // 1024**2
+    )
+
+    assert limit_mb >= needed_mb, (
+        f"WD14's ORT arena is capped at {limit_mb} MiB but the batch sizer "
+        f"hands it {batch} images needing {needed_mb} MiB"
+    )
+    assert limit_mb <= budget_mb, "the configured budget is still the ceiling"
+
+
+def test_the_arena_floor_never_shrinks_the_share_or_survives_an_unset_budget():
+    """The floor only ever raises the cap, and only when there is one."""
+    budgeted = VramBudget.__new__(VramBudget)
+    budgeted._device = "cuda"
+    budgeted._max_vram_usage_mb = 8192
+
+    share_only = budgeted.ort_cuda_provider_options(ORT_ARENA_SHARE["wd14"])
+    with_tiny_floor = budgeted.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["wd14"], min_limit_mb=1
+    )
+    assert with_tiny_floor["gpu_mem_limit"] == share_only["gpu_mem_limit"]
+
+    unlimited = VramBudget("cuda")
+    assert unlimited.batch_footprint_mb(WD14_BASE_MB, WD14_PER_ITEM_MB) == 0
+    assert "gpu_mem_limit" not in unlimited.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["wd14"], min_limit_mb=99_999
+    ), "no budget, no invented cap - not even from the floor"

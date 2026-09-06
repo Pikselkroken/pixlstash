@@ -15,7 +15,12 @@ import onnxruntime as ort
 import torch
 from tqdm import tqdm
 
-from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
+from pixlstash.inference.vram_budget import (
+    ORT_ARENA_SHARE,
+    VramBudget,
+    WD14_BASE_MB,
+    WD14_PER_ITEM_MB,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
@@ -278,8 +283,15 @@ class WD14Service:
                     provider_options=[{"device_type": "GPU", "precision": "FP32"}],
                 )
             else:
+                # The arena has to hold the batch `effective_wd14_batch_size`
+                # will hand it, which is sized from the same two figures; the
+                # bare share does not know about that batch and at a small
+                # budget lands under WD14's own model base.
                 cuda_options = self._vram_budget.ort_cuda_provider_options(
-                    ORT_ARENA_SHARE["wd14"]
+                    ORT_ARENA_SHARE["wd14"],
+                    min_limit_mb=self._vram_budget.batch_footprint_mb(
+                        WD14_BASE_MB, WD14_PER_ITEM_MB
+                    ),
                 )
                 logger.debug("WD14 CUDA provider options: %s", cuda_options)
                 self._ort_sess = ort.InferenceSession(
