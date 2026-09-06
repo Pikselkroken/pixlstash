@@ -1,6 +1,6 @@
-import { computed, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
-import { setRequestClientId } from "../utils/apiClient";
+import { onSessionReset, setRequestClientId } from "../utils/apiClient";
 
 const CLIENT_ID_STORAGE_KEY = "pixlstash:clientId";
 
@@ -97,6 +97,19 @@ export const useWsStore = defineStore("ws", () => {
   function clearSortChangedExternalIds() {
     sortChangedExternalIds.value = [];
   }
+
+  // Both pills are picture ids, and a picture id means nothing outside the
+  // session that produced it - a different library reuses the same numbers.
+  // Logout notifies BEFORE it flips `isAuthenticated`, so anything the app
+  // writes here on its way down (`useUpdatesSocket` hands over the ids a tag
+  // pass was holding) lands after the reset and would be offered to whoever
+  // logs in next, in the same tab, as "pictures that changed". Same reasoning
+  // as `useLibrariesStore.reset`: one chokepoint, no second mechanism.
+  const unsubscribeSessionReset = onSessionReset(() => {
+    clearPendingExternalImportIds();
+    clearSortChangedExternalIds();
+  });
+  onScopeDispose(unsubscribeSessionReset);
 
   return {
     wsTagUpdate,

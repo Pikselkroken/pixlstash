@@ -651,8 +651,14 @@ export function useUpdatesSocket({
     // The held ids are the one piece of state here the store does not already
     // hold: a tag pass still running when this composable goes away would
     // otherwise take the whole batch with it and the next view would never be
-    // told it had changed. The store outlives an App.vue remount, so hand them
-    // over rather than dropping them.
+    // told it had changed. Hand them over rather than dropping them.
+    //
+    // The one production unmount is the session ending (`Root.vue` swaps App
+    // out when `isAuthenticated` goes false) - route changes reuse this
+    // instance. `logout()` notifies its reset BEFORE flipping that flag, so
+    // this hand-over lands AFTER the reset; `useWsStore` subscribes to the
+    // same reset and clears both pills, which is what keeps the outgoing
+    // session's picture ids from being offered to the next login in this tab.
     releaseHeldSortChangedIds();
     disconnectUpdatesSocket();
     gridWsScheduler.cancel();

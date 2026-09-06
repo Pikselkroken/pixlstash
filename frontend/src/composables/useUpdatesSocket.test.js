@@ -60,7 +60,9 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useWsStore } from "../stores/useWsStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
-import { API_BASE_URL } from "../utils/apiClient";
+// The real ones: the apiClient mock below spreads `importOriginal`, so a test
+// can drive an actual session transition rather than a stand-in for one.
+import { API_BASE_URL, notifySessionReset } from "../utils/apiClient";
 
 describe("updates socket close lifecycle", () => {
   it("reloads a non-initiating client after a library switch", () => {
@@ -515,6 +517,40 @@ describe("the view-changed pill while the tagger runs", () => {
 
     expect(tasksStore.taggingActive).toBe(true);
     expect([...wsStore.sortChangedExternalIds].sort()).toEqual([11, 12]);
+  });
+
+  // The hand-over above lands on the way DOWN, and the only production unmount
+  // is the session ending: `logout()` notifies its reset and then flips
+  // `isAuthenticated`, so the ids arrive in the store *after* the reset has
+  // already run. A picture id means nothing outside the session that made it -
+  // a different library reuses the same numbers - so what stops the next login
+  // in this tab being offered the previous session's pictures is the store
+  // clearing on the reset that login itself fires.
+  it("does not carry held ids into the next session in this tab", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 800 } };
+    await host.vm.$nextTick();
+    api.onFlagSortChanged([31, 32]);
+
+    notifySessionReset("logout"); // logout notifies BEFORE the unmount
+    host.unmount();
+    host = null;
+    expect([...wsStore.sortChangedExternalIds].sort()).toEqual([31, 32]);
+
+    notifySessionReset("login"); // ...and the next login notifies again
+
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
+  });
+
+  it("does not carry the import pill into the next session either", () => {
+    // The half that predates the hand-over: an ordinary import pill queued
+    // before a logout survived it the same way.
+    const { wsStore } = mountApi();
+    wsStore.addPendingExternalImportIds([41, 42]);
+
+    notifySessionReset("login");
+
+    expect(wsStore.pendingExternalImportIds).toEqual([]);
   });
 
   it("does not raise a pill on unmount when nothing was held", () => {
