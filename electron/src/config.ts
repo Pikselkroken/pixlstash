@@ -44,6 +44,101 @@ export function requireAccel(value: unknown): Accel {
 }
 
 /**
+ * Every path this process has itself put in front of the user: a native file
+ * dialog's result, or a default it computed and sent to the setup wizard.
+ *
+ * SECURITY: `backend:setLocation` and `setup:commit` take a *destination* from
+ * the renderer, and the destination is meant to be a folder the user chose - so
+ * an allowlist of known-good directories is the wrong shape and would break the
+ * feature. What can be checked instead is provenance: only the main process can
+ * open a native dialog, so a path it never handed out did not come from one.
+ * Without that check `backend:setLocation` reaches `moveDir`, which
+ * `rm(..., { recursive: true, force: true })`s `<renderer-chosen root>/<accel>`
+ * (item 13 validated the last segment, not the root), and `setup:commit` writes
+ * a config naming an arbitrary `imageRoot` and downloads a 2.5 GB runtime into
+ * an arbitrary `installLocation`.
+ *
+ * Session-scoped and additive on purpose: it records what was offered in this
+ * run, not a persisted policy, and the wizard's own prefilled defaults have to
+ * be in it or accepting the folder on screen would be refused. It is not a
+ * containment check - the user may legitimately pick anywhere - so it says only
+ * "this exact folder was on offer", never "this folder is safe".
+ */
+const offeredPaths = new Set<string>();
+
+/** Record a path as offered to the renderer, and return it unchanged. */
+export function offerPath<T extends string | null | undefined>(path: T): T {
+  if (typeof path === 'string' && path.trim()) offeredPaths.add(resolve(path.trim()));
+  return path;
+}
+
+/**
+ * Narrow a folder the renderer sent back to one {@link offerPath} recorded, or
+ * throw. *what* names the field, for the message the wizard shows.
+ *
+ * Compared after `resolve` on both sides, so a trailing separator or an
+ * `a/../b` spelling of an offered path is accepted while resolving to that same
+ * offered path - and nothing else is.
+ */
+export function requireOfferedPath(value: unknown, what: string): string {
+  // Described the way requireAccel describes a value, and for its reasons: IPC
+  // carries a BigInt (JSON.stringify throws on one) and an object may supply
+  // its own `toString`.
+  const shown = typeof value === 'string' ? JSON.stringify(value) : typeof value;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${what} must be a folder path, not ${shown}.`);
+  }
+  const resolved = resolve(value.trim());
+  if (!offeredPaths.has(resolved)) {
+    throw new Error(
+      `${what} ${shown} was not offered by PixlStash. Choose the folder with ` +
+        'the Change\u2026 button and try again.',
+    );
+  }
+  return resolved;
+}
+
+/** The backend's external-listener settings, as stored in the server config. */
+export interface ServerSettings {
+  enabled: boolean;
+  port: number;
+  ssl: boolean;
+}
+
+/**
+ * Narrow the object `server:setSettings` was handed, or throw.
+ *
+ * SECURITY: `enabled` and `ssl` are written straight into the server config,
+ * which decides whether a second listener binds `0.0.0.0` and whether it
+ * demands TLS. A TypeScript parameter type is erased at run time, so before
+ * this the renderer could send `ssl: 0` or `ssl: []` - falsy to the Python that
+ * reads the config, truthy to the `Boolean(cfg.require_ssl)` this shell reads
+ * it back with, i.e. a plaintext LAN listener the desktop's own toggle reports
+ * as encrypted. Rejecting rather than coercing keeps the two readings in step
+ * (CWE-20).
+ *
+ * `port` is deliberately NOT rejected here. The port field hands over
+ * `Number('')` while it is being typed, and `writeServerSettings` already
+ * ignores anything outside 1-65535 and keeps the stored port; throwing on it
+ * would turn a half-typed field into an error dialog.
+ */
+export function requireServerSettings(value: unknown): ServerSettings {
+  const settings = value as Record<string, unknown> | null | undefined;
+  for (const field of ['enabled', 'ssl'] as const) {
+    if (typeof settings?.[field] !== 'boolean') {
+      throw new Error(
+        `Server setting "${field}" must be true or false, not ${typeof settings?.[field]}.`,
+      );
+    }
+  }
+  return {
+    enabled: settings!.enabled as boolean,
+    ssl: settings!.ssl as boolean,
+    port: settings!.port as number,
+  };
+}
+
+/**
  * Parse the developer/CI hardware-detection override. The override fakes which
  * GPU the machine appears to have so the backend-download/overlay flow can be
  * exercised on hardware that lacks the matching GPU. It is read from, in order

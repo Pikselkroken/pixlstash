@@ -62,8 +62,13 @@ describe('the startup framework', () => {
     // A prefilled path with nothing at it is how someone accepts the wrong
     // folder and opens an empty library; "start empty" is the only answer that
     // may name a folder that does not exist yet.
-    assert.match(mainSrc, /existingRoot:\s*\n?\s*importedImageRoot && existsSync\(importedImageRoot\)/);
-    assert.match(mainSrc, /newRoot: defaultLibraryDir\(\)/);
+    // Both defaults are wrapped in offerPath (see pathIpcValidation.test.ts);
+    // what this pins is which answer gets a suggestion, not the wrapper.
+    assert.match(
+      mainSrc,
+      /existingRoot: offerPath\(\s*\n?\s*importedImageRoot && existsSync\(importedImageRoot\)/,
+    );
+    assert.match(mainSrc, /newRoot: offerPath\(defaultLibraryDir\(\)\)/);
     assert.match(script, /detectedLegacyIdentitySource \|\| defaults\.existingRoot \|\| ''/);
   });
 

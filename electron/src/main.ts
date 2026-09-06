@@ -46,10 +46,14 @@ import {
   defaultLibraryDir,
   isDevBackend,
   normalizeBackendsRoot,
+  offerPath,
   overlayDir,
   parseForcedBackend,
   readRuntimeInfo,
   requireAccel,
+  requireOfferedPath,
+  requireServerSettings,
+  ServerSettings,
   serverConfigPath,
   serverLogPath,
   setBackendsRoot,
@@ -608,12 +612,6 @@ function showServerLogs(): void {
 
 /** Port offered for the external listener when the config has none yet. */
 const DEFAULT_EXTERNAL_PORT = 9537;
-
-interface ServerSettings {
-  enabled: boolean;
-  port: number;
-  ssl: boolean;
-}
 
 /** This machine's non-loopback IPv4 addresses, for showing reachable URLs. */
 function lanAddresses(): string[] {
@@ -1258,10 +1256,13 @@ function registerIpc(): void {
     const importedImageRoot =
       typeof imported?.image_root === 'string' ? (imported.image_root as string) : null;
     const resolvedImportedRoot = importedImageRoot ? resolve(importedImageRoot) : null;
-    detectedLegacyIdentitySource =
+    // Offered as well: it comes back as `legacyIdentitySource` and the wizard's
+    // "pictures I already have" card prefills the folder field from it.
+    detectedLegacyIdentitySource = offerPath(
       resolvedImportedRoot && existsSync(join(resolvedImportedRoot, 'vault.db'))
         ? resolvedImportedRoot
-        : null;
+        : null,
+    );
     const gpu = gpuUpgrade();
     const steps = ['library'];
     // The compute question only exists on a machine that has something to
@@ -1280,13 +1281,17 @@ function registerIpc(): void {
         // "pictures I already have" answer must not: prefilling a path with
         // nothing at it invites someone to accept it and open an empty
         // library, so it is offered only when something is actually there.
-        existingRoot:
+        // offerPath on each: the wizard's fields are readonly and prefilled from
+        // here, so setup:commit has to accept a default back - see
+        // requireOfferedPath.
+        existingRoot: offerPath(
           importedImageRoot && existsSync(importedImageRoot) ? importedImageRoot : null,
-        newRoot: defaultLibraryDir(),
+        ),
+        newRoot: offerPath(defaultLibraryDir()),
         useGpu: Boolean(gpu),
         // Where the GPU runtime would install (only relevant when a GPU is
         // offered). On Windows this is inside the chosen install folder.
-        installLocation: backendsRoot(),
+        installLocation: offerPath(backendsRoot()),
       },
       gpu: gpu
         ? { available: true, accel: gpu, label: ACCEL_LABELS[gpu], name: hardware?.gpuName ?? null }
@@ -1307,29 +1312,44 @@ function registerIpc(): void {
       defaultPath: current || defaultLibraryDir(),
       properties: ['openDirectory', 'createDirectory'],
     });
-    return res.canceled || !res.filePaths[0] ? null : res.filePaths[0];
+    // The dialog is the provenance setup:commit checks for; recording the
+    // result here is what makes the choice acceptable there.
+    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0]);
   });
 
   ipcMain.handle(
     'setup:commit',
     async (
       _e,
+      // `unknown` for the two path fields: their TypeScript types are erased at
+      // run time and both become destinations - `imageRoot` is written into the
+      // server config as the library, `installLocation` becomes backendsRoot()
+      // and a 2.5 GB download lands under it.
       choices: {
-        imageRoot: string;
+        imageRoot: unknown;
         useGpu: boolean;
-        installLocation?: string;
+        installLocation?: unknown;
         importLegacyIdentity?: boolean;
         telemetry?: Record<string, boolean> | null;
       },
     ) => {
       // Answering a question the app asked for changes nothing about the
-      // install: park the answer and hand the window back.
+      // install: park the answer and hand the window back. No path is read on
+      // this branch, so the paths are validated below it rather than above.
       if (requestedStartupSteps.length) {
         writePendingTelemetry(choices?.telemetry ?? null);
         requestedStartupSteps = [];
         if (currentUrl) await mainWindow?.loadURL(currentUrl);
         return;
       }
+
+      const validatedChoices = {
+        ...choices,
+        imageRoot: requireOfferedPath(choices?.imageRoot, 'Library folder'),
+        installLocation: choices?.installLocation
+          ? requireOfferedPath(choices.installLocation, 'GPU install location')
+          : undefined,
+      };
 
       if (!runtime) throw new Error('No bundled runtime available');
 
@@ -1340,7 +1360,7 @@ function registerIpc(): void {
 
       // The order of everything below is `runFirstRunSetup`; this is the wiring
       // that gives it the real collaborators.
-      await runFirstRunSetup(choices, {
+      await runFirstRunSetup(validatedChoices, {
         gpu: gpuUpgrade() ?? null,
         legacyIdentitySource: detectedLegacyIdentitySource,
         resolvePath: (path) => resolve(path),
@@ -1538,8 +1558,10 @@ function registerIpc(): void {
   // External server (remote access) settings. The loopback the window uses is
   // never affected by these - only the optional second listener.
   ipcMain.handle('server:getSettings', () => readServerSettings());
-  ipcMain.handle('server:setSettings', async (_e, settings: ServerSettings) => {
-    await writeServerSettings(settings);
+  // `enabled` and `ssl` decide whether a listener binds 0.0.0.0 and whether it
+  // demands TLS, and both reached the config unchecked before this.
+  ipcMain.handle('server:setSettings', async (_e, raw: unknown) => {
+    await writeServerSettings(requireServerSettings(raw));
   });
   ipcMain.handle('server:checkPort', (_e, port: number) => checkPortAvailable(port));
 
@@ -1557,8 +1579,8 @@ function registerIpc(): void {
   // Where on-demand GPU overlays are stored. Lets the user keep the multi-GB
   // download off the system drive (the first-run wizard offers the same choice).
   ipcMain.handle('backend:getLocation', () => ({
-    dir: backendsRoot(),
-    default: defaultBackendsRoot(),
+    dir: offerPath(backendsRoot()),
+    default: offerPath(defaultBackendsRoot()),
   }));
 
   ipcMain.handle('backend:pickLocation', async (_e, current?: string) => {
@@ -1567,12 +1589,15 @@ function registerIpc(): void {
       defaultPath: current || backendsRoot(),
       properties: ['openDirectory', 'createDirectory'],
     });
-    return res.canceled || !res.filePaths[0] ? null : res.filePaths[0];
+    return res.canceled || !res.filePaths[0] ? null : offerPath(res.filePaths[0]);
   });
 
-  ipcMain.handle('backend:setLocation', async (_e, dir: string) => {
-    await changeBackendsLocation(dir);
-    return { dir: backendsRoot(), default: defaultBackendsRoot() };
+  // The destination reaches moveDir, which recursively deletes `<dir>/<accel>`.
+  // Item 13 made the last segment a validated Accel; this makes the root one
+  // PixlStash itself offered (see requireOfferedPath).
+  ipcMain.handle('backend:setLocation', async (_e, raw: unknown) => {
+    await changeBackendsLocation(requireOfferedPath(raw, 'GPU install location'));
+    return { dir: offerPath(backendsRoot()), default: offerPath(defaultBackendsRoot()) };
   });
 
   // The three handlers below take an accelerator straight from the renderer, and
