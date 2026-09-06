@@ -143,14 +143,22 @@ const telemetryConsentIsUpgrade = ref(false);
 // Initial setup comes first: the telemetry question waits until the library
 // has been counted and any folder-mapping wizard (a pending mapping, or the
 // first-run offer to import the pictures already in the folder) is closed.
+//
+// It waits on the wizard being OPEN, never on `mappingStore.pending`. That
+// entry is localStorage-backed and unbounded: a `local_import` saved against a
+// library that was since detached, or a legacy `reference` entry, is one the
+// sidebar's auto-open deliberately refuses - so gating on it suppressed the
+// question for the life of the install. It fails closed
+// (`telemetry_send_install_id` defaults false), so the cost was a prompt the
+// owner never saw rather than a choice made for them. `librarySettled` is what
+// carries the ordering now; see `onLibraryLoaded`.
 const librarySettled = ref(false);
 const mappingStore = useFolderMappingStore();
 const telemetryConsentVisible = computed(
   () =>
     telemetryConsentOpen.value &&
     librarySettled.value &&
-    !mappingStore.wizardOpen &&
-    !mappingStore.pending,
+    !mappingStore.wizardOpen,
 );
 const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
@@ -372,7 +380,17 @@ function offerLoosePictures() {
 
 /** The first count is in; an empty library gets its import offer first. */
 async function onLibraryLoaded({ empty }) {
+  // The sidebar's pending-mapping auto-open watches the libraries listing, so
+  // `mappingStore.wizardOpen` only answers honestly once that listing is in
+  // and the watcher it feeds has flushed. Settling before either is what let
+  // the telemetry question open under a wizard that was on its way up.
+  // Owner-only, like the mount-time read: a share session would 403, and it
+  // has no wizard to wait for either.
+  if (!isReadOnly.value && !librariesStore.hasLoadedSuccessfully) {
+    await librariesStore.refresh();
+  }
   if (empty) await offerLoosePictures();
+  await nextTick();
   librarySettled.value = true;
 }
 
