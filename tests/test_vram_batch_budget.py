@@ -244,19 +244,44 @@ def test_the_wd14_arena_holds_the_batch_measured_against_the_arena_model(budget_
     assert limit_mb <= budget_mb, "the configured budget is still the ceiling"
 
 
-def test_the_configured_arena_share_still_decides_at_the_shipped_default():
-    """``ORT_ARENA_SHARE`` must stay a knob the code honours.
+@pytest.mark.parametrize(
+    "budget_mb,share_wins",
+    [
+        (1024, False),  # share 409, batch 1 needs 496 - the share cannot run it
+        (2048, True),  # share 819, batch 3 needs 718 - the shipped default
+        (8192, False),  # share 3276, batch 25 needs 3160 - only 3.6 % of margin
+        (32768, True),  # share 13107, batch 64 needs 7489 - ample
+    ],
+)
+def test_where_the_configured_share_decides_and_where_the_floor_takes_over(
+    budget_mb, share_wins
+):
+    """Pin the actual crossover, not the two budgets that flatter the fix.
 
-    Flooring the cap with WD14's *process* VRAM (900 + 220·n) instead of its
-    arena cost - roughly twice the figure - made the floor beat the share at
-    every budget from 0.5 GB to 32 GB, so 0.40 silently applied nowhere. At the
-    shipped 2 GB default the share is 819 MiB and the batch is 3, measuring
-    ~718 MiB: the share covers it, so the share must decide.
+    ``ORT_ARENA_SHARE`` must stay a knob the code honours *somewhere*: flooring
+    the cap with WD14's process VRAM (900 + 220·n) instead of its arena cost -
+    roughly twice the figure - made the floor beat the share at every budget
+    from 0.5 GB to 32 GB, and 0.40 applied nowhere. It applies at the shipped
+    default and at large budgets.
+
+    It does NOT apply across 3-16 GB, and that is deliberate rather than
+    overshoot: there the share lands within a few per cent of the measured
+    need, which is thinner than the ~10 % headroom the constants carry, so the
+    floor keeps the margin. Asserting only 2048 and 32768 would hide that.
     """
-    assert _wd14_limit_mb(_budget(2048)) == int(2048 * ORT_ARENA_SHARE["wd14"]), (
-        "the arena floor has displaced the configured share at the default "
-        "budget, where the share already covers the batch"
-    )
+    share_mb = int(budget_mb * ORT_ARENA_SHARE["wd14"])
+    limit_mb = _wd14_limit_mb(_budget(budget_mb))
+
+    if share_wins:
+        assert limit_mb == share_mb, (
+            "the arena floor has displaced the configured share at a budget "
+            "where the share already covers the batch with margin"
+        )
+    else:
+        assert limit_mb > share_mb, (
+            "the share is being trusted at a budget where it does not leave "
+            "the measured batch enough room"
+        )
 
 
 def test_the_arena_floor_rescues_a_budget_too_small_for_one_image():

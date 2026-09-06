@@ -278,10 +278,17 @@ class WD14Service:
                     provider_options=[{"device_type": "GPU", "precision": "FP32"}],
                 )
             else:
-                # The share alone is too small below ~1.25 GB of budget - it
-                # loads the model and cannot run a single image - so it is
-                # floored by what this session's arena actually needs. Above
-                # that the share stands.
+                # The share alone is a hard allocation failure below ~1.25 GB
+                # of budget: it loads the model and cannot run a single image.
+                # So it is floored by what this session's arena actually
+                # needs. The floor is the measured need plus ~10 %, and the
+                # share only clears that at the 2 GB default and again above
+                # ~24 GB - across 3-16 GB the share sits within a few per cent
+                # of the true need (at 8 GB, 3276 MiB against 3160) and the
+                # floor takes over to keep a margin. WD14 is therefore capped
+                # a little above 40 % of budget in that range: a ceiling, not
+                # a reservation, and an arena only grows to what a run asks
+                # for.
                 cuda_options = self._vram_budget.ort_cuda_provider_options(
                     ORT_ARENA_SHARE["wd14"],
                     min_limit_mb=self._vram_budget.wd14_arena_limit_mb(),
