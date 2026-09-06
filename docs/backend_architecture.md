@@ -2792,6 +2792,26 @@ instead of an offer deletes the file by hand to get the app started. A
 *fingerprint conflict* is not this case — that vault loads fine, and the answer
 is to put the right one back.
 
+**A failure about the machine is never turned into that offer**
+(release-review item 27). `_ENVIRONMENTAL_SQLITE_FAILURES` — `database is
+locked`, `disk I/O error`, `unable to open database file`, `database or disk is
+full`, `readonly database`, `permission denied`, `database disk image is
+malformed`, `out of memory`, all in SQLite's own wording (the "image" in the
+last one is the database file, nothing to do with a picture) — names the
+findings that say nothing about what the file contains, and
+`_is_environmental_failure` is the one classifier all three paths to the offer
+now ask: `unusable_vault_from_open_failure` (a migration that raised),
+`_vault_is_loadable` (the recovery in `_offer_a_usable_library`, reached on
+*every* start-up after the first) and the first-run `attach`. Before v1.11.1
+only the first of the three asked it, and `validate_vault_folder` reports "not
+a vault" and "this machine could not read it" as the same `NotAVaultError`, so a
+vault left mode 0000 by a bad restore, or held by another process, was offered
+"start over with an empty library database" — and `PIXLSTASH_RECREATE_VAULT=1`
+would then rename a perfectly good catalogue aside. The environmental cases now
+raise a plain `HubBootstrapError` saying what to fix; `SQLITE_NOTADB` is
+deliberately not in the list, because "this file is not a database" is exactly
+what the offer is for.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub
@@ -3287,7 +3307,7 @@ indexing the same pictures.
 **The two routes that take a path resolve it before they validate it.**
 `validate_reference_folder_path` compares against a literal blocklist, so
 checking the string the caller sent lets `~/link-to-etc` through — and `POST
-/libraries` then chmods that folder 0700 and writes a database into it. The
+/libraries` then writes a database into whatever folder that names. The
 sibling that gets this right is `validate_reference_folder_accessible`, which
 realpaths first; `_safe_folder` follows it, not `GET /filesystem/browse`'s
 ordering. A relative path is refused explicitly before resolution, because
@@ -3355,14 +3375,19 @@ Two placements in it are load-bearing:
   adds of one name both pass. `create`'s early call is the deliberate exception
   and is advisory — its job is to fail before a vault is built.
 
-**`register_pending` opts out** (`unique_name=False`). Its caller is start-up:
-`bootstrap._register_first_library` passes the hardcoded `"Library 1"` and does
-not catch `LibraryExistsError`, so refusing there would turn a duplicate label —
-a nuisance — into a server that will not boot. `record_legacy_preparation`
-writes its row directly and is outside the check for the same reason. The rule
-is *verbs a person types a name at refuse; start-up records what it was given*,
-and the ceiling that leaves is the pre-existing one: a hub can still hold a
-duplicate, and `get` by name still refuses both.
+**Start-up opts out** (`unique_name=False`). Its caller is
+`bootstrap._register_first_library`, which passes the hardcoded `"Library 1"`
+and does not catch `LibraryExistsError`, so refusing there would turn a
+duplicate label — a nuisance — into a server that will not boot. That function
+has **two** registration calls, one per branch, and the flag belongs on both:
+`register_pending` when the folder holds no vault yet, and `attach` when it
+already does. `attach` carried the check until v1.11.1 (release-review item 28),
+which meant the same hardcoded label refused to boot a hub that already held it
+— the branch where the library *exists* being the one that failed.
+`record_legacy_preparation` writes its row directly and is outside the check for
+the same reason. The rule is *verbs a person types a name at refuse; start-up
+records what it was given*, and the ceiling that leaves is the pre-existing one:
+a hub can still hold a duplicate, and `get` by name still refuses both.
 
 `GET /libraries` returns an `active_share_links` count on every library entry.
 It is owner metadata with no host path sensitivity and is available before the
