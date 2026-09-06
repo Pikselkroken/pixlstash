@@ -1508,57 +1508,6 @@ def test_a_reference_commit_refuses_a_symlink_to_a_registered_root(owner_env):
         _forget_reference_folder(server, rf.id)
 
 
-def test_a_reference_commit_case_folds_the_roots_it_compares(owner_env, monkeypatch):
-    """The same conflict as the symlink above, reached by spelling.
-
-    Windows and macOS spell one directory in several cases, so a registered
-    root compared as a raw string matches nothing under another spelling: the
-    path is accepted as free and two scans then index the same files. That is
-    what `validate_reference_folder_conflicts` exists to prevent, and
-    ``normcase`` is what makes it see the two names as one.
-
-    ``normcase`` is identity on this POSIX gate - `/tmp/CaseRoot` and
-    `/tmp/CASEROOT` really are two directories here - so folding is forced on
-    for the two calls that need it, the way `test_hub_engine` forces ``os.name``
-    to exercise the Windows carve-out. Without that the test passes on Linux
-    with or without the fix and pins nothing.
-
-    Both directions, because over-refusing is its own regression.
-
-    It lands on the conflict message rather than the reuse one: the row lookup
-    a few lines earlier is a SQL string equality, so under another spelling it
-    finds nothing and the conflict check answers instead. That is the safe way
-    round - refused, not duplicated - but it does mean a Windows owner who
-    respells their own root cannot resume that commit; they get a refusal.
-    Making the lookup fold too is a stored-column change, not this one.
-    """
-    from pixlstash.services import folder_structure_commit_service as svc
-    from pixlstash.utils import reference_folder_validator
-
-    server = owner_env["server"]
-    real = os.path.join(owner_env["tmp"], "CaseRoot")
-    _make_tree(real, {"Anna": ["a.jpg"]})
-    shouted = os.path.join(owner_env["tmp"], "CASEROOT")
-
-    folder_id = _insert_reference_folder(server, real, last_scanned=time.time())
-    try:
-        # The negative: refused under the other spelling rather than accepted
-        # as a free path. Folding is confined to this call - the module-scoped
-        # server's workers share the process, and `os.path` is one object.
-        with monkeypatch.context() as folded:
-            folded.setattr(reference_folder_validator.os.path, "normcase", str.lower)
-            with pytest.raises(svc.CommitError, match="already exists"):
-                svc.register_reference_folder(server, shouted)
-
-        # The positive control, unfolded: a different directory that merely
-        # looks similar is still free, so the refusal above is the case rule
-        # firing and not this root swallowing its neighbours.
-        rf = svc.register_reference_folder(server, shouted)
-        _forget_reference_folder(server, rf.id)
-    finally:
-        _forget_reference_folder(server, folder_id)
-
-
 def test_the_read_and_the_reference_scan_agree_about_dot_folders(owner_env):
     """#1177 item 20. The Phase 2 read prunes dot-folders; the reference scan
     that indexes the very same root did not, so the two passes over one tree

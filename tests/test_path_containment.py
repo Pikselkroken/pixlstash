@@ -36,6 +36,7 @@ from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
+    canonical_path,
     validate_reference_folder_path,
 )
 
@@ -195,6 +196,58 @@ def test_blocklist_still_accepts_an_ordinary_folder_and_a_benign_symlink(tmp_pat
     # A relative path is still refused before any resolution happens, so it can
     # never be quietly resolved against the server's working directory.
     assert validate_reference_folder_path("pictures") is not None
+
+
+class _CaseFoldingOsPath:
+    """``os.path`` with ``normcase`` folding, as it does on Windows and macOS."""
+
+    normcase = staticmethod(str.lower)
+
+    def __getattr__(self, name):
+        return getattr(os.path, name)
+
+
+class _CaseFoldingOs:
+    """``os`` carrying the folding ``path`` above; everything else falls through.
+
+    The validator module's own ``os`` name is swapped for this, rather than
+    ``os.path.normcase`` being patched in place. ``os.path`` is one object for
+    the whole process, and the gate's servers run background workers that walk
+    paths, so folding it globally would change their behaviour for as long as
+    the patch was up. Falling through by ``__getattr__`` rather than listing the
+    attributes keeps a validator function this test does not call from dying on
+    a missing name if one runs concurrently.
+    """
+
+    path = _CaseFoldingOsPath()
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+
+def test_canonical_path_folds_case_where_the_filesystem_does(tmp_path, monkeypatch):
+    """#1194 review. `canonical_path` is how two reference folder roots are
+    compared, and Windows and macOS spell one directory in several cases. Left
+    case-sensitive, a registered root matches nothing under another spelling:
+    the path is accepted as free and two scans then index the same files.
+
+    `normcase` is identity on this POSIX gate - `CaseRoot` and `CASEROOT` really
+    are two directories here - so the folding platform is simulated. Without
+    that the assertion passes with or without the fix and pins nothing.
+    """
+    from pixlstash.utils import reference_folder_validator
+
+    real = tmp_path / "CaseRoot"
+    real.mkdir()
+    shouted = str(tmp_path / "CASEROOT")
+
+    # Identity on POSIX, which is the over-refusal control: two directories that
+    # differ only in case are two directories here, and must stay distinct.
+    assert canonical_path(str(real)) != canonical_path(shouted)
+
+    monkeypatch.setattr(reference_folder_validator, "os", _CaseFoldingOs())
+
+    assert canonical_path(str(real)) == canonical_path(shouted)
 
 
 # ---------------------------------------------------------------------------
