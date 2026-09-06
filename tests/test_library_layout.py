@@ -1037,43 +1037,60 @@ def test_a_rename_that_cannot_name_its_own_entity_is_refused_loudly(library):
 
 
 def test_a_file_sharing_the_folders_name_does_not_hide_the_folder(library):
-    """A directory outranks a file, whichever of them is spelled exactly right.
+    """A directory outranks a file, even one spelled exactly as the layout does.
 
     Taking the first entry that matches lets an unrelated file stand in for the
     entity's real folder: the rename then finds a non-directory, skips it, and
     silently does not happen - the folder stays under a name the library no
     longer knows and its pictures drop out of the layout.
+
+    The two names collide through the LIGATURE rather than through case. That
+    is not decoration: ``_match_key`` folds ``ﬁ`` to ``fi``, an expansion no
+    filesystem's case-insensitive comparison performs, because those tables map
+    one character to one character and cannot produce two. So the collision the
+    matcher sees is real on every platform while the two entries stay separate
+    on every platform - including the Windows runners, where two names
+    differing only in case cannot both exist and creating the second would
+    error the module out before a single assertion ran.
     """
     session, root = library["session"], library["root"]
-    _spell_the_project_folder(library, "2024 shoots")
-    # Spelled exactly as the layout writes it, so the old "exact name wins"
-    # short-circuit returned THIS deterministically, whatever order the
-    # directory happens to be listed in.
-    with open(os.path.join(root, "2024 Shoots"), "wb") as handle:
-        handle.write(b"not a folder")
+    real = "Field Notes"
+    written = "ﬁeld Notes"
+    assert engine._match_key(real) == engine._match_key(written)
+    assert real != written
+
+    _spell_the_project_folder(library, real)
+    # Spelled exactly as the layout writes the entity's name, so the old "exact
+    # name wins" short-circuit returned THIS deterministically, whatever order
+    # the directory happens to be listed in.
+    try:
+        with open(os.path.join(root, written), "wb") as handle:
+            handle.write(b"not a folder")
+    except OSError as exc:  # pragma: no cover - not seen on Linux or Windows
+        pytest.skip(f"this filesystem stores the two names as one entry: {exc}")
 
     project = session.get(Project, library["project_id"])
-    project.name = "2025 Shoots"
+    project.name = "Field Trip"
     session.add(project)
     renamed = engine.rename_entity_folders(
         session,
         Facet.PROJECT,
-        "2024 Shoots",
-        "2025 Shoots",
+        written,
+        "Field Trip",
         entity_id=library["project_id"],
         image_root=root,
     )
 
     assert renamed == 1
     assert os.path.isfile(
-        os.path.join(root, "2025 Shoots", "Mira", "2026-08", "0412.png")
+        os.path.join(root, "Field Trip", "Mira", "2026-08", "0412.png")
     )
     assert (
         session.get(Picture, library["picture_id"]).file_path
-        == "2025 Shoots/Mira/2026-08/0412.png"
+        == "Field Trip/Mira/2026-08/0412.png"
     )
     # The owner's file is not ours to touch.
-    assert os.path.isfile(os.path.join(root, "2024 Shoots"))
+    assert os.path.isfile(os.path.join(root, written))
 
 
 def test_a_file_at_the_destination_still_blocks_the_rename(library):
