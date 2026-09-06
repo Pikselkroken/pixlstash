@@ -32,6 +32,7 @@ from pixlstash.hub.registry import (
     validate_vault_folder,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.services.portable_identity import sanitize_vault_connection
 
@@ -89,6 +90,21 @@ _ENVIRONMENTAL_SQLITE_FAILURES = (
 # statement about the file, which is exactly what the offer is for.
 
 
+def _is_environmental_failure(reason: object) -> bool:
+    """True when a failure is about the machine rather than the file's content.
+
+    One classifier for every start-up path that can end at "start over with an
+    empty library database". The three of them - the first-run ``attach``, the
+    recovery in :func:`_offer_a_usable_library`, and
+    :func:`unusable_vault_from_open_failure` - reach the same offer from three
+    different exception types, so the question they all have to ask lives here
+    rather than in the one that happened to be written first. Takes an exception
+    or a message, because the recovery path keeps only the reason string.
+    """
+    lowered = str(reason).lower()
+    return any(marker in lowered for marker in _ENVIRONMENTAL_SQLITE_FAILURES)
+
+
 def unusable_vault_from_open_failure(
     library: Library, exc: BaseException
 ) -> "UnusableVaultError | None":
@@ -104,8 +120,7 @@ def unusable_vault_from_open_failure(
     reason quotes it, and the recovery renames rather than deletes. Returns
     None for a failure that is about the machine - those must keep failing.
     """
-    lowered = str(exc).lower()
-    if any(marker in lowered for marker in _ENVIRONMENTAL_SQLITE_FAILURES):
+    if _is_environmental_failure(exc):
         return None
     # SQLAlchemy's own message is often a bare identifier - `NoSuchTableError:
     # user` reads as "user" on its own - so the reason says what the failure
@@ -357,7 +372,13 @@ def _register_first_library(
     registry: LibraryRegistry,
     image_root: str,
 ) -> Library:
-    os.makedirs(image_root, mode=0o700, exist_ok=True)
+    # Every missing component 0700, and nothing that already exists touched:
+    # `image_root` is routinely a picture folder the owner has had for years,
+    # and start-up is not the moment to take read access to it away from the
+    # rest of their machine. `registry.create` uses the same helper for the same
+    # reason; a directory this call did not make is the owner's, and the guarded
+    # open needs it not to be group/world-*writable*, not to be 0700.
+    mkdir_private(Path(image_root))
     vault_path = os.path.join(image_root, VAULT_FILENAME)
     exists = os.path.isfile(vault_path)
 
@@ -368,8 +389,25 @@ def _register_first_library(
             image_root,
         )
         try:
-            return registry.attach(image_root, "Library 1")
+            # `unique_name=False`: the name is this function's own hardcoded
+            # label, not something a person typed, and a hub already holding a
+            # "Library 1" must not be a hub that cannot boot.
+            return registry.attach(image_root, "Library 1", unique_name=False)
         except NotAVaultError as exc:
+            if _is_environmental_failure(exc):
+                # Locked, unreadable, full: the file may be perfectly good and
+                # this machine simply cannot read it right now. Offering to
+                # start over here would rename a working catalogue away over a
+                # transient condition, so say what is wrong and stop.
+                logger.error(
+                    "Could not read the library database at %s: %s", vault_path, exc
+                )
+                raise HubBootstrapError(
+                    f"{vault_path} could not be read: {exc}. That looks like a "
+                    "permissions, locking or disk problem rather than a damaged "
+                    "library, so nothing was changed. Fix it and start "
+                    "PixlStash again."
+                ) from exc
             # The file is there and is not something we can open. That is a
             # decision for a human - the only way forward loses whatever the
             # file holds - so raise a typed error the caller can put a question
@@ -385,10 +423,6 @@ def _register_first_library(
             set_aside_unusable_vault(vault_path)
             return registry.register_pending(image_root, "Library 1")
 
-    # This process is creating the SQLite namespace, so establish the trust
-    # boundary now instead of inheriting a permissive umask-created directory.
-    if os.name != "nt":
-        os.chmod(image_root, 0o700)
     return registry.register_pending(image_root, "Library 1")
 
 
@@ -563,11 +597,19 @@ def _vault_is_loadable(library: Library) -> bool:
     Read-only, and about the file rather than the registration: a vault that
     passes here but still fails to open is a different problem with a different
     answer, and must not be offered the recreate-it recovery.
+
+    ``validate_vault_folder`` reports one ``NotAVaultError`` for two very
+    different findings: "this file is not a vault", and "this machine could not
+    read it" - a mode of 0000, a lock another process holds, a full or failing
+    disk. Only the first is an answer about the file. The second reports
+    loadable, because the caller's sole use for a False is to offer starting
+    over, and renaming somebody's only catalogue on the strength of a
+    permissions glitch is the recovery being a catastrophe.
     """
     try:
         validate_vault_folder(library.path)
-    except NotAVaultError:
-        return False
+    except NotAVaultError as exc:
+        return _is_environmental_failure(exc)
     return True
 
 

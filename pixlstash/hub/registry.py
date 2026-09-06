@@ -410,7 +410,9 @@ class LibraryRegistry:
                 overlaps.append(library)
         return overlaps
 
-    def attach(self, folder: str, name: str | None = None) -> Library:
+    def attach(
+        self, folder: str, name: str | None = None, *, unique_name: bool = True
+    ) -> Library:
         """Register an existing library folder.
 
         Validates that the folder holds a vault, then records it. Any
@@ -418,13 +420,26 @@ class LibraryRegistry:
         being read: a library copied in from elsewhere must not import
         somebody's credentials.
 
+        Args:
+            unique_name: Refuse a name another attached library holds. True for
+                every verb a person types a name at. False only for start-up,
+                which is `register_pending`'s rule and applies here for the same
+                reason: `bootstrap._register_first_library` reaches this method
+                with the hardcoded ``"Library 1"`` whenever the folder already
+                holds a vault, and does not catch `LibraryExistsError`. A
+                duplicate label is a nuisance; a server that will not boot
+                because of one is not.
+
         Raises:
             NotAVaultError: The folder is not a vault.
-            LibraryExistsError: The path or name is already registered.
+            LibraryExistsError: The path is already registered, or the name is
+                and *unique_name* is set.
         """
         resolved = resolve_path(folder)
         validate_vault_folder(resolved)
-        return self._register(resolved, name or os.path.basename(resolved))
+        return self._register(
+            resolved, name or os.path.basename(resolved), unique_name=unique_name
+        )
 
     def register_pending(
         self,
@@ -477,10 +492,16 @@ class LibraryRegistry:
         # Every MISSING component 0700, not only the leaf (W21: makedirs'
         # mode stops at the leaf, so a deep new path left 0775 intermediates
         # under umask 002 and the guarded open refused them). Existing
-        # directories keep their modes.
+        # directories keep their modes: `POST /libraries` starts a library in a
+        # folder of pictures the owner already had, and narrowing that folder to
+        # 0700 behind their back takes read access away from every other account
+        # and every other program that had it. Nothing needs it - the vault file
+        # itself is created 0600, and `TrustedSQLiteLocation` refuses only a
+        # group/world-*writable* directory, which the startup permission scan
+        # offers to repair with the owner's consent (`startup_permissions.py`).
+        # `mkdir(mode=0o700)` is not raised by a umask, so what this call
+        # creates is 0700 without a chmod after it.
         mkdir_private(Path(resolved))
-        if os.name != "nt":
-            os.chmod(resolved, 0o700)
 
         # Local import: pulls in the ORM and the image stack (numpy, PIL), which
         # `list`, `attach` and `detach` have no use for. Importing it at module
