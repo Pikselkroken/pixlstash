@@ -890,26 +890,47 @@ def resolve_requirements(
     entries include transitive dependencies -- which is the point, since a
     plugin asking for one package can pull in forty.
 
-    **A dry run is not a safe run, which is why this asks for wheels only.**
-    Resolving a source distribution makes pip BUILD its metadata, and building
-    executes the package's own ``setup.py`` -- as this user, before
+    **A dry run is not a safe run.**  Resolving a source distribution makes
+    pip BUILD its metadata, and building executes the package's own
+    ``setup.py`` -- as this user, before
     :func:`~pixlstash.cli._report_dependencies` has printed anything and before
     anyone has agreed to anything.  The consent this module exists to obtain
     would be collected after the code it is about had already run, which also
     guts :attr:`DependencyChange.url`: naming where an artefact came from is
-    worth little once that artefact has run.  ``--only-binary=:all:`` is
-    therefore passed by default, so nothing is built and nothing executes
-    before the listing.
+    worth little once that artefact has run.
+
+    **Two controls, because one is not enough.**  ``--only-binary=:all:`` stops
+    a requirement resolved BY NAME from picking an sdist -- and nothing more:
+    pip exempts direct references, VCS URLs, paths and editables from it, all
+    of which built and ran under it (reproduced, pip 24.0).  So
+    :func:`source_requirements` refuses those forms out of the file *before pip
+    is invoked*, which is the only point at which refusing still prevents
+    execution rather than reporting it.
 
     The trade is real and deliberate: a dependency published only as an sdist,
-    and any VCS or source-tree requirement, cannot be resolved this way at all.
-    *allow_sdist* is the way through, and the refusal below names it -- but it
-    is opt-in precisely because taking it means running the plugin author's
-    build code to find out what installing would do.
+    and any VCS, direct-URL or source-tree requirement, cannot be resolved this
+    way at all.  *allow_sdist* is the way through, and both refusals name it --
+    but it is opt-in precisely because taking it means running the plugin
+    author's build code to find out what installing would do.
 
     Nothing here decides whether the answer is acceptable; it says what would
     happen, and the caller shows it to the person who has to agree to it.
     """
+    if not allow_sdist:
+        # BEFORE pip runs: once it has read the file, a direct reference or a
+        # path has already been fetched and built, and refusing afterwards
+        # reports the execution rather than preventing it.
+        building = source_requirements(requirements)
+        if building:
+            raise PluginError(
+                f"{requirements.name} asks for "
+                + ", ".join(building)
+                + ". Working out what those would install means downloading "
+                "and building them first, which runs their code as you before "
+                "you are shown anything. Pass --allow-sdist if you accept "
+                "that. Nothing was installed."
+            )
+
     with TemporaryDirectory(prefix="pixlstash-deps-") as scratch:
         report = Path(scratch) / "report.json"
         result = subprocess.run(
@@ -990,6 +1011,131 @@ def read_requirements(requirements: Path) -> list[str]:
     ]
 
 
+#: A requirement pip can resolve by NAME against an index.  Anything a
+#: requirements file can say that does not match this - a direct reference
+#: (``name @ url``), a VCS URL, a local path, an editable - makes pip fetch and
+#: BUILD the thing to find out what it is, and building runs its code.  Written
+#: as "what is safe" rather than "what is dangerous" on purpose: a form nobody
+#: anticipated fails to match and is refused, instead of slipping through.
+_PLAIN_REQUIREMENT_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*"  # project name
+    r"(?:\[[A-Za-z0-9,._\s-]+\])?"  # extras
+    r"(?:\s*[<>=!~][^;#]*)?"  # version specifier
+    r"(?:\s*;.*)?\Z"  # environment marker
+)
+
+#: ``-e``/``--editable``: an option line, so the plain-name test never sees it,
+#: and always a source tree.
+_EDITABLE_RE = re.compile(r"-(?:e|-editable)\b")
+
+
+def _without_inline_comment(line: str) -> str:
+    """Drop pip's ``  # ...`` inline comment, which is not part of the value."""
+    return re.split(r"\s+#", line, maxsplit=1)[0].strip()
+
+
+#: ``-r``/``-c`` include one requirements file from another.  pip reads the
+#: included file in full, so anything we check has to be checked there too.
+_INCLUDE_RE = re.compile(r"-(?:r|-requirement|c|-constraint)[=\s]+(.+)\Z")
+
+#: Includes nest, and a cycle or a very deep chain is not something a plugin
+#: has any reason to ship.  Beyond this the include is treated as unreadable.
+_MAX_INCLUDE_DEPTH = 5
+
+
+@dataclass
+class _Expanded:
+    """Every line pip will read from a requirements file, includes and all."""
+
+    #: The lines, in file order, with each include line kept in place so the
+    #: options warning still shows it.
+    lines: list[str] = field(default_factory=list)
+    #: Include lines we could NOT read ourselves.  Treated as build-triggering
+    #: by :func:`source_requirements`: pip will read them, and a file we cannot
+    #: see is a file we cannot vouch for.
+    unfollowable: list[str] = field(default_factory=list)
+
+
+def _expand_requirements(requirements: Path) -> _Expanded:
+    """Read *requirements* and every ``-r``/``-c`` file it pulls in.
+
+    SECURITY: without this, every check in this module reads one file while pip
+    reads several.  A plugin shipping ``-r deps/base.txt`` could put a direct
+    reference or an ``--index-url`` in that file and neither
+    :func:`source_requirements` nor :func:`pip_options` would see it -- verified
+    to run ``setup.py`` before this existed.
+
+    An include is followed only when it resolves inside the top requirements
+    file's own directory, is a real file, and is not too deeply nested.  A
+    plugin's requirements live with the plugin, so an include reaching outside
+    it is refused rather than read.
+    """
+    root = requirements.resolve().parent
+    found = _Expanded()
+    seen: set[Path] = set()
+    pending: list[tuple[Path, str | None, int]] = [(requirements.resolve(), None, 0)]
+    while pending:
+        path, via, depth = pending.pop(0)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            lines = read_requirements(path)
+        except (OSError, PluginError):
+            if via is not None:
+                found.unfollowable.append(via)
+            continue
+        for line in lines:
+            found.lines.append(line)
+            match = _INCLUDE_RE.match(line)
+            if match is None:
+                continue
+            target = (path.parent / match.group(1).strip().strip("\"'")).resolve()
+            if (
+                depth + 1 > _MAX_INCLUDE_DEPTH
+                or not _is_within(target, root)
+                or not target.is_file()
+            ):
+                found.unfollowable.append(line)
+                continue
+            pending.append((target, line, depth + 1))
+    return found
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """True when *path* is *root* or sits beneath it, both already resolved."""
+    return path == root or root in path.parents
+
+
+def source_requirements(requirements: Path) -> list[str]:
+    """Return the lines pip would have to fetch and BUILD in order to resolve.
+
+    SECURITY: this is the control ``--only-binary=:all:`` was mistakenly
+    believed to be.  pip applies ``--only-binary`` **only to requirements it
+    resolves by name through an index or ``--find-links``**; a direct
+    reference, a VCS URL, a local path and an editable are all exempt, and
+    every one of them runs the package's ``setup.py`` as this user during
+    ``--dry-run --report`` -- before the dependency listing exists and before
+    anyone agrees to anything (reproduced against pip 24.0 for all four).
+
+    So the refusal has to happen *before* pip is invoked at all, out of the
+    requirements file itself.  Includes are followed, because otherwise
+    ``-r deps/base.txt`` hides the very lines this refuses; an include that
+    cannot be followed is itself reported, since pip will read a file we could
+    not.
+    """
+    expanded = _expand_requirements(requirements)
+    risky: list[str] = list(expanded.unfollowable)
+    for line in expanded.lines:
+        if line.startswith("-"):
+            if _EDITABLE_RE.match(line):
+                risky.append(line)
+            continue
+        if not _PLAIN_REQUIREMENT_RE.fullmatch(_without_inline_comment(line)):
+            risky.append(line)
+    return risky
+
+
 def pip_options(requirements: Path) -> list[str]:
     """Return every option line in *requirements* -- each line starting ``-``.
 
@@ -1007,8 +1153,16 @@ def pip_options(requirements: Path) -> list[str]:
     no ordinary reason to carry any option line at all.  The caller shows them
     verbatim and lets the reader judge, rather than claiming per line what each
     one does.
+
+    Includes are followed (see :func:`_expand_requirements`), so an option
+    hidden one file down in ``-r deps/base.txt`` is listed rather than reported
+    as the innocuous-looking include line alone.
     """
-    return [line for line in read_requirements(requirements) if line.startswith("-")]
+    return [
+        line
+        for line in _expand_requirements(requirements).lines
+        if line.startswith("-")
+    ]
 
 
 def install_requirements(
@@ -1043,8 +1197,10 @@ def install_requirements(
             "pip",
             "install",
             "--no-deps",
-            # Matched to the resolve: without it a pin could still build from
-            # source here, which is the execution the resolve just refused.
+            # Matched to the resolve for the by-name case only. It does NOT
+            # constrain a direct-reference or VCS pin - pip exempts those - so
+            # what actually keeps those out is source_requirements() refusing
+            # them at resolve time, before a DependencyChange for one exists.
             *([] if allow_sdist else ["--only-binary=:all:"]),
             *pins,
         ],

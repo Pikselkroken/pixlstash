@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -1612,9 +1613,15 @@ def pip_report(monkeypatch, tmp_path):
         calls: list[list[str]] = []
 
         def fake_run(command, **kwargs):
+            # Both pip calls land here, not only the resolve: a test that runs
+            # `plugins install --with-deps` all the way through reaches
+            # install_requirements too, and that command carries no --report.
             calls.append(command)
-            index = command.index("--report")
-            Path(command[index + 1]).write_text(_report(*packages), encoding="utf-8")
+            if "--report" in command:
+                index = command.index("--report")
+                Path(command[index + 1]).write_text(
+                    _report(*packages), encoding="utf-8"
+                )
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         def fake_version(name: str) -> str:
@@ -1666,6 +1673,148 @@ def test_transitive_packages_are_reported_too(pip_report, tmp_path):
 
     changes = plugin_install.resolve_requirements(requirements)
     assert [c.name for c in changes] == ["blinker", "Flask", "Werkzeug"]
+
+
+# The tests below run REAL pip. The stubbed-argv tests further down assert that
+# `--only-binary=:all:` is on the command; they cannot see that pip applies it
+# only to requirements resolved BY NAME, which is how a fix that covered one
+# form out of five passed a green suite. Anything claiming "no code runs before
+# consent" has to be proved by code that would have run.
+
+
+def _marker_sdist(tmp_path, marker):
+    """An sdist whose setup.py writes *marker* when pip builds it."""
+    src = tmp_path / "src" / "evilpkg-1.0"
+    src.mkdir(parents=True)
+    (src / "setup.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+        "from setuptools import setup\n"
+        "setup(name='evilpkg', version='1.0', py_modules=['evilpkg'])\n",
+        encoding="utf-8",
+    )
+    (src / "evilpkg.py").write_text("", encoding="utf-8")
+    tarball = tmp_path / "evilpkg-1.0.tar.gz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        archive.add(src, arcname="evilpkg-1.0")
+    return src, tarball
+
+
+@pytest.mark.parametrize("form", ["direct-url", "path", "editable", "include"])
+def test_no_plugin_code_runs_before_the_listing(tmp_path, form):
+    """The behaviour, against real pip: nothing is built before consent.
+
+    `--only-binary=:all:` covers only the by-name case; pip exempts direct
+    references, VCS URLs, paths and editables, and each of those ran setup.py
+    during `--dry-run --report` before this refused them up front. The
+    `include` case is the same attack hidden one file down in `-r`.
+    """
+    marker = tmp_path / "EXECUTED"
+    src, tarball = _marker_sdist(tmp_path, marker)
+    requirements = tmp_path / "requirements.txt"
+    if form == "direct-url":
+        requirements.write_text(f"evilpkg @ file://{tarball}\n", encoding="utf-8")
+    elif form == "path":
+        requirements.write_text(f"{src}\n", encoding="utf-8")
+    elif form == "editable":
+        requirements.write_text(f"-e {src}\n", encoding="utf-8")
+    else:
+        deps = tmp_path / "deps"
+        deps.mkdir()
+        (deps / "base.txt").write_text(
+            f"evilpkg @ file://{tarball}\n", encoding="utf-8"
+        )
+        requirements.write_text("-r deps/base.txt\n", encoding="utf-8")
+
+    with pytest.raises(PluginError, match="--allow-sdist"):
+        plugin_install.resolve_requirements(requirements)
+    assert not marker.exists(), f"{form}: plugin code ran before anyone was asked"
+
+
+def test_a_plain_wheel_requirement_still_resolves(tmp_path):
+    """The over-blocking control, also against real pip.
+
+    Refusing everything would satisfy the test above and destroy the feature.
+    A wheel served from a local directory is the ordinary case and must pass
+    with no marker anywhere near it.
+    """
+    links = tmp_path / "wheels"
+    links.mkdir()
+    dist = "zzplain-1.0.dist-info"
+    with zipfile.ZipFile(links / "zzplain-1.0-py3-none-any.whl", "w") as wheel:
+        wheel.writestr(
+            f"{dist}/METADATA", "Metadata-Version: 2.1\nName: zzplain\nVersion: 1.0\n"
+        )
+        wheel.writestr(
+            f"{dist}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: x\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        wheel.writestr(f"{dist}/RECORD", "")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        f"--no-index\n--find-links {links}\nzzplain\n", encoding="utf-8"
+    )
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.name == "zzplain"
+    assert change.url is not None, "a non-PyPI source must still be named"
+
+
+def test_allow_sdist_lets_the_build_happen_and_says_so(tmp_path):
+    """The opt-in really does opt in - otherwise the escape hatch is a lie."""
+    marker = tmp_path / "EXECUTED"
+    _src, tarball = _marker_sdist(tmp_path, marker)
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"evilpkg @ file://{tarball}\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements, allow_sdist=True)
+    assert change.name == "evilpkg"
+    assert marker.exists(), "allow_sdist is documented as running build code"
+
+
+def test_a_legitimate_include_chain_is_not_refused(tmp_path):
+    """Over-blocking control for the include-following: `-r` is ordinary."""
+    (tmp_path / "deps").mkdir()
+    (tmp_path / "deps" / "base.txt").write_text("pillow==11.0.0\n", encoding="utf-8")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("-r deps/base.txt\nflask\n", encoding="utf-8")
+
+    assert plugin_install.source_requirements(requirements) == []
+
+
+def test_an_include_reaching_outside_the_plugin_is_refused(tmp_path):
+    """pip would read it; we cannot, so we do not vouch for the file."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("flask\n", encoding="utf-8")
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    requirements = plugin / "requirements.txt"
+    requirements.write_text(f"-r {outside}\n", encoding="utf-8")
+
+    assert plugin_install.source_requirements(requirements) == [f"-r {outside}"]
+
+
+def test_an_include_cycle_terminates(tmp_path):
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("-r b.txt\nflask\n", encoding="utf-8")
+    second.write_text("-r a.txt\npillow\n", encoding="utf-8")
+
+    assert plugin_install.source_requirements(first) == []
+
+
+def test_options_hidden_in_an_include_are_still_listed(tmp_path):
+    """`-r deps/base.txt` alone reads as housekeeping; the option is the point."""
+    (tmp_path / "deps").mkdir()
+    (tmp_path / "deps" / "base.txt").write_text(
+        "--index-url https://packages.example.invalid/simple\nflask\n", encoding="utf-8"
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("-r deps/base.txt\n", encoding="utf-8")
+
+    assert plugin_install.pip_options(requirements) == [
+        "-r deps/base.txt",
+        "--index-url https://packages.example.invalid/simple",
+    ]
 
 
 def test_resolving_refuses_to_build_a_source_distribution(pip_report, tmp_path):
@@ -1799,7 +1948,10 @@ def test_a_direct_url_requirement_is_installed_from_that_url(
     requirements = tmp_path / "requirements.txt"
     requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
 
-    (change,) = plugin_install.resolve_requirements(requirements)
+    # allow_sdist: a direct-URL requirement now needs the opt-in to resolve at
+    # all, because pip must fetch and build it to say what it is. This asserts
+    # the pin AFTER that consent, which is the only way the pin is reached.
+    (change,) = plugin_install.resolve_requirements(requirements, allow_sdist=True)
     assert change.url == _DIRECT_URL
 
     command = _installed_command(change, monkeypatch)
@@ -1856,7 +2008,7 @@ def test_a_vcs_requirement_is_pinned_to_the_resolved_commit(pip_report, tmp_path
         encoding="utf-8",
     )
 
-    (change,) = plugin_install.resolve_requirements(requirements)
+    (change,) = plugin_install.resolve_requirements(requirements, allow_sdist=True)
     assert change.pin == f"git+{vcs['url']}@{'b' * 40}"
 
 
@@ -1867,7 +2019,7 @@ def test_a_subdirectory_survives_the_round_trip(pip_report, tmp_path):
     requirements = tmp_path / "requirements.txt"
     requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
 
-    (change,) = plugin_install.resolve_requirements(requirements)
+    (change,) = plugin_install.resolve_requirements(requirements, allow_sdist=True)
     assert change.pin.endswith(f"#sha256={_SHA}&subdirectory=packages/moondream")
 
 
@@ -1896,6 +2048,74 @@ def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
 
     (change,) = plugin_install.resolve_requirements(requirements)
     assert change.pin == "flask==3.1.3"
+
+
+def test_the_cli_prints_the_option_warning_before_resolving(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """The consent text is only a control if something asserts it reaches screen.
+
+    `plugin_install.pip_options` had its own test while the CLI wiring had
+    none, so replacing the call with `options = []` left the whole suite green.
+    """
+    pip_report(("flask", "3.1.3"), installed={})
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", "--find-links /srv/plugin-wheels\nflask\n")
+
+    assert _install(folder, "--with-deps") == cli.EXIT_OK
+    err = capsys.readouterr().err
+    assert "passes options to pip" in err
+    assert "--find-links /srv/plugin-wheels" in err
+    assert "--index-url" in err, "the reason to care must be named"
+
+
+def test_the_cli_stays_quiet_for_an_ordinary_requirements_file(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """Over-warning is its own failure: a warning on every install is noise."""
+    pip_report(("flask", "3.1.3"), installed={})
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", "flask\n")
+
+    assert _install(folder, "--with-deps") == cli.EXIT_OK
+    assert "passes options to pip" not in capsys.readouterr().err
+
+
+def test_the_cli_warns_that_allow_sdist_runs_build_code(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """The flag's whole cost is that code runs; saying so is the point of it."""
+    pip_report(("flask", "3.1.3"), installed={})
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", "flask\n")
+
+    assert _install(folder, "--with-deps", "--allow-sdist") == cli.EXIT_OK
+    err = capsys.readouterr().err
+    assert "--allow-sdist" in err
+    assert "runs build code" in err
+
+
+def test_a_dry_run_never_reaches_pip_for_a_building_requirement(
+    tmp_path, plugin_root, capsys
+):
+    """`--dry-run` promises nothing happened, so nothing may have happened.
+
+    The resolve runs before the dry-run check, so before the refusal existed
+    `plugins install <hostile> --with-deps --dry-run` executed the author's
+    build code and then printed "nothing was written".
+    """
+    marker = tmp_path / "EXECUTED"
+    _src, tarball = _marker_sdist(tmp_path, marker)
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", f"evilpkg @ file://{tarball}\n")
+
+    assert _install(folder, "--with-deps", "--dry-run") == cli.EXIT_REFUSED
+    assert not marker.exists(), "a dry run must not run the plugin author's code"
+    assert "--allow-sdist" in capsys.readouterr().err
 
 
 def test_the_listing_names_a_find_links_source_the_user_never_asked_for(
@@ -1965,7 +2185,7 @@ def test_the_listing_names_the_url_a_direct_requirement_comes_from(
     requirements = tmp_path / "requirements.txt"
     requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
 
-    changes = plugin_install.resolve_requirements(requirements)
+    changes = plugin_install.resolve_requirements(requirements, allow_sdist=True)
     assert cli._report_dependencies(changes, force=False)
     out = capsys.readouterr().out
     assert _DIRECT_URL in out
