@@ -30,6 +30,44 @@ export function redactUrl(target: string): string {
 }
 
 /**
+ * True only when `target` is exactly the bundled renderer file `page`.
+ *
+ * SECURITY: the first-run wizard and the app share one window and one preload,
+ * so `setup.html` and the library page reach the same `ipcMain` handlers and a
+ * `webContents` binding cannot tell them apart - the only thing that differs is
+ * the document currently loaded in the sender. This answers that question for
+ * the `setup:*` channels, which are the wizard's alone: `setup:commit` rewrites
+ * the server config (dropping `external_server_enabled` and `port`, setting
+ * `require_ssl: false`), repoints the library and restarts the backend.
+ *
+ * Deliberately stricter than {@link isAllowedNavigation}, which allows the whole
+ * renderer directory because every file in it is ours to load. Here one named
+ * file is the answer, so `index.html` and `permissions.html` are refused too.
+ * The path is resolved and compared whole: a prefix test would accept a sibling
+ * directory sharing the prefix, and `fileURLToPath` is what stops a percent-
+ * encoded traversal reaching the comparison as text.
+ */
+export function isBundledRendererPage(
+  target: string,
+  rendererDir: string,
+  page: string,
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'file:') return false;
+  try {
+    const dir = rendererDir.endsWith(sep) ? rendererDir : rendererDir + sep;
+    return resolve(fileURLToPath(url)) === resolve(dir, page);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Decide whether the window may load `target` - used by BOTH the top-level
  * navigation guard and `setWindowOpenHandler`, so the origin policy lives in one
  * place the way the scheme policy already does. The privileged

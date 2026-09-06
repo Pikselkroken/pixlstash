@@ -23,7 +23,7 @@ import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetecto
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
-import { isAllowedNavigation, redactUrl } from './urlPolicy';
+import { isAllowedNavigation, isBundledRendererPage, redactUrl } from './urlPolicy';
 import { ServerProcess, StartupRecovery, devInterpreter } from './backend/ServerProcess';
 import {
   isPermissionRepairRequired,
@@ -1217,6 +1217,33 @@ function registerDownloadHandling(): void {
   });
 }
 
+/**
+ * Refuse a `setup:*` call that did not come from the first-run wizard page.
+ *
+ * SECURITY: the wizard and the library app are the same window behind the same
+ * preload (`mainWindow.loadFile(setup.html)` then `loadURL(<backend>)`), so
+ * every `setup:*` handler stayed reachable from library-served JavaScript once
+ * setup had finished. `setup:commit` alone rewrites the server config through
+ * `writeConfig` - which omits `external_server_enabled` and `port` and sets
+ * `require_ssl: false` - repoints the library, and restarts the backend
+ * (#1177 item 62). Binding to a `webContents` cannot separate them; the
+ * document loaded in the sending frame can.
+ *
+ * `startup:*` is deliberately NOT gated: `takePendingTelemetry`,
+ * `takePendingMapping` and `askQuestion` are the running app's own channels
+ * (`useAppConfig.js`, `SideBar.vue`), and gating them would break the upgrade
+ * privacy question and the folder-mapping handoff.
+ */
+function requireSetupRenderer(event: Electron.IpcMainInvokeEvent, channel: string): void {
+  // The frame, not the webContents: a frame the library page created has its
+  // own URL, while `getURL()` would report the top document's. Fall back only
+  // when the frame is already gone (it is detached mid-call).
+  const sender = event.senderFrame?.url ?? event.sender.getURL();
+  if (isBundledRendererPage(sender, RENDERER_DIR, 'setup.html')) return;
+  console.warn(`[ipc] refusing ${channel} from ${redactUrl(sender)}: not the setup screen`);
+  throw new Error(`${channel} is only available during first-run setup.`);
+}
+
 function registerIpc(): void {
   ipcMain.handle('app:bootstrap', async () => ({
     version: app.getVersion(),
@@ -1239,7 +1266,8 @@ function registerIpc(): void {
   // only that. Anything else that has to be settled before the app loads gets
   // a step id here rather than a dialog over a half-loaded library.
 
-  ipcMain.handle('setup:probe', async () => {
+  ipcMain.handle('setup:probe', async (event) => {
+    requireSetupRenderer(event, 'setup:probe');
     // A question the running app asked us to put in front of it: exactly that
     // question, no library or compute step, and no config is rewritten when it
     // is answered.
@@ -1304,11 +1332,13 @@ function registerIpc(): void {
   // What is in the folder someone picked, for the verdict under the field: a
   // library PixlStash made before, a folder of pictures, or nothing yet. Read
   // only, and bounded - see InspectFolder.
-  ipcMain.handle('setup:inspect', async (_e, path?: string) =>
-    inspectFolder(path || '', bundledInterpreter()),
-  );
+  ipcMain.handle('setup:inspect', async (event, path?: string) => {
+    requireSetupRenderer(event, 'setup:inspect');
+    return inspectFolder(path || '', bundledInterpreter());
+  });
 
-  ipcMain.handle('setup:pickFolder', async (_e, current?: string) => {
+  ipcMain.handle('setup:pickFolder', async (event, current?: string) => {
+    requireSetupRenderer(event, 'setup:pickFolder');
     const res = await dialog.showOpenDialog({
       title: 'Choose your PixlStash library folder',
       defaultPath: current || defaultLibraryDir(),
@@ -1322,7 +1352,7 @@ function registerIpc(): void {
   ipcMain.handle(
     'setup:commit',
     async (
-      _e,
+      event,
       // `unknown` for the two path fields: their TypeScript types are erased at
       // run time and both become destinations - `imageRoot` is written into the
       // server config as the library, `installLocation` becomes backendsRoot()
@@ -1335,6 +1365,7 @@ function registerIpc(): void {
         telemetry?: Record<string, boolean> | null;
       },
     ) => {
+      requireSetupRenderer(event, 'setup:commit');
       // Answering a question the app asked for changes nothing about the
       // install: park the answer and hand the window back. No path is read on
       // this branch, so the paths are validated below it rather than above.
