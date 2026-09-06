@@ -2801,6 +2801,12 @@ def _floating_action_refs(paths: list[Path]) -> list[str]:
     skipped. Everything else naming a third-party action must pin ``@<ref>``
     to a full 40-character commit SHA - a moving tag like ``@v4`` or
     ``@main`` can be repointed by whoever controls that repository.
+
+    Ceiling: this proves the ref has the *shape* of a commit SHA, not that it
+    is genuinely the commit the trailing comment claims - confirming that
+    needs a live call to the action's own repository, which a unit test
+    should not make. Spot-check the claim by hand (or in review) whenever a
+    pin changes.
     """
     offenders: list[str] = []
     for path in paths:
