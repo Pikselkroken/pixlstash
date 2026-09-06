@@ -142,7 +142,21 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
     error.value = "";
     triggerElement.value = null;
     await nextTick();
-    returnTarget?.focus?.();
+    // `.focus()` on a node that has left the document throws nothing and does
+    // nothing: focus stays on <body> and a keyboard user loses their place
+    // with no sign anything failed. Callers are responsible for handing over a
+    // control that outlives the switch (LibrariesSection passes the row's ⋯
+    // button rather than the menu item inside it, which its own click
+    // destroys); this only refuses to pretend when they have not.
+    if (returnTarget?.isConnected) {
+      returnTarget.focus?.();
+      if (document.activeElement === returnTarget) return true;
+    }
+    console.warn("Could not return focus after a cancelled library switch", {
+      hadTrigger: Boolean(returnTarget),
+      stillInDocument: Boolean(returnTarget?.isConnected),
+    });
+    return false;
   }
 
   return {
