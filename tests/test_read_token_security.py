@@ -325,11 +325,23 @@ def _stop_planner_and_settle(server, timeout_s: float = 120.0) -> None:
     Same shape as ``tests/test_picture_mutation_scope.py``'s pipeline settle:
     drain what is queued, then wait for what is running. Looped, because a
     finishing task's completion callback can submit its own follow-up.
+
+    **The planner thread has to be dead before the queues mean anything.**
+    ``stop()`` joins it for ``STOP_JOIN_TIMEOUT_S`` and then returns whether or
+    not it exited; a pass slow enough on a loaded runner outlives that, and the
+    loop then submits the ``TagTask`` its pass had found *after* this helper
+    saw empty queues and returned. Exactly the failure described above, seen
+    again with a pass that took eleven seconds. So the queues are only read
+    once ``is_running()`` is false.
     """
-    server.vault._work_planner.stop()
+    planner = server.vault._work_planner
+    planner.stop()
     runner = server.vault._task_runner
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
+        if planner.is_running():
+            time.sleep(0.05)
+            continue
         runner.cancel_pending_tasks()
         with runner._active_task_lock:
             active = list(runner._active_tasks.values())

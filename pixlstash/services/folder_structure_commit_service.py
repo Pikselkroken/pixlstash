@@ -676,6 +676,24 @@ def local_import_pictures(
         build_s += time.monotonic() - chunk_started
 
         def insert(session: Session, built=built) -> list[int]:
+            # Re-check inside the write transaction: the library-root scan
+            # walks the same tree and `load_existing` above ran before it
+            # inserted. A row that landed meanwhile is reused, not duplicated,
+            # and its id still gets this commit's assignments.
+            taken = dict(
+                session.exec(
+                    select(Picture.file_path, Picture.id).where(
+                        Picture.file_path.in_([p.file_path for p in built])
+                    )
+                ).all()
+            )
+            if taken:
+                logger.info(
+                    "Local import: %d file(s) were indexed by the root scan "
+                    "while this commit built them; reusing those rows.",
+                    len(taken),
+                )
+                built = [p for p in built if p.file_path not in taken]
             session.add_all(built)
             session.commit()
             for pic in built:
@@ -684,7 +702,7 @@ def local_import_pictures(
                 Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL) for pic in built
             )
             session.commit()
-            return [pic.id for pic in built]
+            return [pic.id for pic in built] + list(taken.values())
 
         insert_started = time.monotonic()
         picture_ids.extend(

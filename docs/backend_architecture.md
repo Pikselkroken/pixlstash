@@ -4060,6 +4060,43 @@ and updates `file_path` on the existing row instead.
   `maintenance.py` looks for every one, and `remove_thumbnail` deletes at every
   location a picture's bitmap could be. `is_pixlstash_thumbnail` keeps excluding
   the old siblings from every walk until they have all moved.
+- **The library's own root is scanned by the same task, under `folder_id=None`.**
+  A laid-out root is a folder tree the owner reorganises in their file manager,
+  and until this scan existed a rename there was a row `MissingFilePurgeFinder`
+  deleted within the hour. `ReferenceFolderScanFinder` keeps the root's schedule
+  itself (no `ReferenceFolder` row to stamp): due at boot, then every
+  `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
+  watches `image_root` under the id `None` — reports a change. Root mode differs
+  from a reference folder exactly where `layout_move_service.LayoutRoot` says it
+  does: pictures are the `reference_folder_id IS NULL` rows, `file_path` is
+  written root-relative (`_stored`), the layout comes from `LibrarySettings`,
+  and there is no status, sidecar sync or suffix detection. The walk prunes
+  dot-directories and `_ROOT_INTERNAL_DIRS` (`snapshots`, `tmp`), the same set
+  `folder_structure_commit_service.LIBRARY_OWN_FOLDERS` refuses to import. A file
+  younger than `_ROOT_SETTLE_S` is on disk but neither new nor removed: PixlStash's
+  own imports write the file before the row, so a young file belongs to whoever
+  is writing it, and a removal seen alongside young files is deferred a scan so
+  a copy-then-delete can still be paired. A rename keeps the mtime and is
+  followed at once. Both the scan and the local-import commit also re-check the
+  path inside their insert transaction, the one place their check-then-insert
+  cannot interleave, so whichever lands first owns the row.
+  Removals are only ever believed for a subtree the walk actually read: a
+  directory it could not list, a directory symlink it would not follow, a pruned
+  folder and another reference folder's root all go into `unscanned_roots`, and
+  rows beneath any of them are kept. A pass that finds no files at all while rows
+  exist deletes nothing — an unmounted drive is an empty directory, and
+  `Vault.__init__` will have recreated the mount point. `delete_removed` then
+  consults the `PictureMove` journal through
+  `MissingFilePurgeTask._separate_our_own_moves` before it deletes anything, so a
+  scan overlapping the move engine's rename-then-repoint window repoints the row
+  instead of destroying it.
+  `MissingFilePurgeFinder` leaves the root's rows to the scan entirely: it takes
+  `is_ready=ReferenceFolderScanFinder.root_scan_complete` so it queues nothing
+  before the first root scan, and its sweep then skips `reference_folder_id IS
+  NULL` rows for good. The gate used to lift once that first scan finished, which
+  put two deleters on the same rows — the hourly sweep pairs renames from the
+  journal alone, so a rename the scan had deliberately deferred was purged before
+  the next scan could follow it. Exactly one of the two may delete a root row.
 - **A followed move carries its thumbnail bitmap.** Thumbnails are keyed
   `sha256(file_path)` (`ImageUtils.get_thumbnail_path`), so the file is renamed
   alongside the picture rather than abandoned: nothing sweeps
@@ -4075,11 +4112,14 @@ and updates `file_path` on the existing row instead.
   was deleted would otherwise swallow an unrelated new file of the same content,
   and the user would get a picture they cannot see instead of a new one. They do
   still count as unchanged files *blocking* a match, since their file is on disk.
-- **A present file with a NULL `pixel_sha` blocks matching for the whole pass.**
-  The column is nullable and `MissingPixelShaFinder` backfills it, so an
-  un-hashed unchanged file is invisible to the ambiguity count — and it is
-  exactly the file whose existence would have refused the match. NULL there
-  means "unknown", not "no collision".
+- **A present file with a NULL `pixel_sha` blocks matching at its own size only.**
+  The column is nullable, so an un-hashed unchanged file is invisible to the
+  ambiguity count — and it is exactly the file whose existence would have refused
+  the match. NULL there means "unknown", not "no collision", so it still refuses,
+  but only for candidates whose size it could collide with. It used to veto the
+  whole pass, and since `MissingPixelShaFinder` never backfills `deleted` rows
+  (`tasks/pixel_sha_task.py`), one un-hashed scrapheap row made that veto
+  permanent: every rename in the library became a delete plus a re-import.
 - **A followed move emits `CHANGED_PICTURES`** (`moved_picture_ids` in the task
   result, `Vault._on_task_completed`), and deliberately not `PICTURE_IMPORTED`:
   `file_path` changed on a row an open grid may already be showing, but nothing
@@ -4090,7 +4130,8 @@ and updates `file_path` on the existing row instead.
   are marked at the helper: `os.walk` is not atomic, and `MissingFilePurgeTask`
   can delete the row in the up-to-`_RESCAN_INTERVAL_S` window before the
   rescuing scan runs. Both degrade to the old delete-and-re-add; the second logs
-  a warning when it is observed.
+  a warning when it is observed, and is closed for the library's own root, whose
+  rows the sweep no longer touches.
 
 ---
 
@@ -6672,10 +6713,14 @@ the Moves artboard in `design/1.11-existing-library/`.
 new_path, detected_at)` — the raw fact a move happened, nothing derived.
 `ReferenceFolderScanTask.apply_moves` writes one row per picture in its
 `external` list, in the same transaction that updates `Picture.file_path`, and
-only when the reference folder's own `layout` column is set
-(`record_pending_reviews`): a root with no layout has no vocabulary a folder
-name could contradict, so queuing for the rest would grow the table for
-nothing ever readable off it. The task's result carries
+only when the root has a layout — the reference folder's own `layout` column,
+or `LibrarySettings.layout` for the library's own root, which the same task
+scans under `folder_id=None` (`record_pending_reviews`): a root with no layout
+has no vocabulary a folder name could contradict, so queuing for the rest would
+grow the table for nothing ever readable off it. Review paths are in
+`Picture.file_path`'s stored form, so `_classify` joins them onto the root
+before reading folders, and `layout_roots` is handed `image_root` so the
+library root is found under `None`. The task's result carries
 `external_moves_queued_for_review`, a subset of `external_moved_picture_ids`
 for exactly this reason — the two differ whenever the move happened in a root
 with no layout.

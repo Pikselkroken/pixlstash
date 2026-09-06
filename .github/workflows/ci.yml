@@ -518,6 +518,7 @@ jobs:
           tests/test_library_insights.py
           tests/test_library_layout.py
           tests/test_library_restore_cli.py
+          tests/test_library_root_scan.py
           tests/test_library_settings.py
           tests/test_library_switch.py
           tests/test_likeness_and_face_search.py
