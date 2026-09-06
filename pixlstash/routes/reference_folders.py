@@ -36,6 +36,7 @@ from pixlstash.utils.library_layout import (
     parse_layout,
 )
 from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_conflicts,
     validate_reference_folder_path,
     validate_reference_folder_accessible,
 )
@@ -358,37 +359,18 @@ def create_router(server) -> APIRouter:
         *,
         exclude_id: int | None = None,
     ) -> None:
-        image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
-        if image_root:
-            if (
-                folder == image_root
-                or folder.startswith(image_root + os.sep)
-                or image_root.startswith(folder + os.sep)
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Path conflicts with the PixlStash data folder.",
-                )
-        all_folders = list(session.exec(select(ReferenceFolder)).all())
-        for other in all_folders:
-            if exclude_id is not None and other.id == exclude_id:
-                continue
-            other_norm = os.path.normpath(other.folder)
-            if folder == other_norm:
-                raise HTTPException(
-                    status_code=409,
-                    detail="A reference folder with this path already exists.",
-                )
-            if folder.startswith(other_norm + os.sep):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Path is inside an existing reference folder: {other.folder}",
-                )
-            if other_norm.startswith(folder + os.sep):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"An existing reference folder is inside this path: {other.folder}",
-                )
+        # The rule itself lives in `reference_folder_validator`, shared with the
+        # folder-structure commit's own `register_reference_folder`: this route
+        # is not the only thing that registers a root, and the two answering
+        # differently is what let a commit accept a root containing image_root.
+        error = validate_reference_folder_conflicts(
+            session,
+            folder,
+            os.path.normpath(getattr(server.vault, "image_root", "") or ""),
+            exclude_id=exclude_id,
+        )
+        if error:
+            raise HTTPException(status_code=409, detail=error)
 
     def _sidecar_suffix_for_move(image_path: str, sidecar_path: str) -> str | None:
         if not sidecar_path:
