@@ -310,6 +310,44 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 
+  it("resumes it when the parked path only differs by a trailing separator", async () => {
+    // The parked path comes from the Electron shell's folder dialog and the
+    // library path from the registry, so the two agree about the folder and
+    // not always about how it is spelled. `===` threw the completed read away
+    // and started a second one over an empty grid; `_samePath` - the helper
+    // the pending-entry match beside it already uses - does not.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const readResult = { levels: [{ depth: 1, folders: [] }] };
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({ path: `${path}/`, result: readResult }),
+    };
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond(url));
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      result: readResult,
+      mode: "local_import",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
   it("ignores a parked read of some other folder", async () => {
     const path = "/home/me/Pictures";
     activeLibraryAt(path);

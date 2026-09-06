@@ -649,7 +649,7 @@ async function _offerLoosePictures() {
   // doing it there: the wizard opens on its questions instead of on a second
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
-  if (parked?.result && parked.path === path) {
+  if (parked?.result && _samePath(parked.path, path)) {
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
