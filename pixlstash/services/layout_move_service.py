@@ -1184,7 +1184,7 @@ def rename_entity_folders(
     old_name: str,
     new_name: str,
     *,
-    entity_id: Optional[int],
+    entity_id: int,
     image_root: Optional[str],
 ) -> int:
     """Rename the folders named after an entity. **Moves no files.**
@@ -1222,6 +1222,15 @@ def rename_entity_folders(
             can be told apart from a genuine second entity of the same name.
             Two people really can be called Mira.
 
+    Raises:
+        ValueError: If ``entity_id`` is ``None``. Without it there is no way to
+            tell this entity's own row from a second entity of the same name,
+            and the function would silently fall back to the name comparison
+            this replaced - which either renames the other entity's folder or
+            refuses a rename that was fine, depending on flush state. A caller
+            that cannot name the row it is renaming has a bug, and a loud one is
+            worth more than a rename that quietly goes to the wrong folder.
+
     **The caller must not commit before this returns**, and this commits for
     them: the directory renames and the ``file_path`` rewrites that describe
     them have to land together, or a failed commit leaves every picture under a
@@ -1232,6 +1241,13 @@ def rename_entity_folders(
     Returns:
         How many directories were renamed.
     """
+    if entity_id is None:
+        raise ValueError(
+            "rename_entity_folders needs the entity_id of the entity being "
+            f"renamed ({facet}, {old_name!r} -> {new_name!r}); without it its "
+            "own row cannot be told apart from a second entity of the same name"
+        )
+
     old_folder = folder_name(old_name)
     new_folder = folder_name(new_name)
     if old_folder == new_folder:
@@ -1373,22 +1389,33 @@ def _entry_matching(parent: str, folder: str) -> Optional[str]:
     ``MissingFilePurgeFinder`` purges within the hour along with its metadata.
 
     So resolve the entry the way the truth check compares, and hand back the
-    name as it is actually written. The exact spelling wins where it exists, so
-    a case-sensitive filesystem holding both ``Summer`` and ``summer`` renames
-    the one that was asked for.
+    name as it is actually written. Directories rank above files and the exact
+    spelling breaks the tie; see the loop.
     """
     key = _match_key(folder)
-    match = None
+    best = None
+    best_rank = -1
     try:
         with os.scandir(parent) as entries:
             for entry in entries:
-                if entry.name == folder:
-                    return entry.path
-                if match is None and _match_key(entry.name) == key:
-                    match = entry.path
+                if _match_key(entry.name) != key:
+                    continue
+                # A directory outranks a file, and the exact spelling breaks the
+                # tie. Directory first because a stray file sharing an entity's
+                # match key must not stand in for the entity's real folder and
+                # make the rename silently not happen; exact second so a
+                # case-sensitive filesystem holding both ``Summer`` and
+                # ``summer`` renames the one that was asked for. A file still
+                # comes back when nothing better does, because for the
+                # destination it is a collision like any other.
+                rank = (2 if entry.is_dir() else 0) + (entry.name == folder)
+                if rank > best_rank:
+                    best, best_rank = entry.path, rank
+                if best_rank == 3:
+                    break
     except OSError as exc:
         logger.warning("Layout rename: cannot list %s (%s)", parent, exc)
-    return match
+    return best
 
 
 def _directories_at_depth(root: str, depth: int) -> list:

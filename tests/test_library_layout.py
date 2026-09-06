@@ -1015,6 +1015,98 @@ def test_a_sibling_spelled_differently_still_blocks_the_rename(library):
     )
 
 
+def test_a_rename_that_cannot_name_its_own_entity_is_refused_loudly(library):
+    """No id, no rename. The exclusion is by primary key or it is nothing.
+
+    Without an id the only thing left to tell this entity's row from a second
+    entity of the same name is the name itself - which is the comparison that
+    renamed the wrong person's folder. A caller that cannot say which row it is
+    renaming has a bug, and it must not degrade quietly back into that.
+    """
+    session, root = library["session"], library["root"]
+    with pytest.raises(ValueError, match="entity_id"):
+        engine.rename_entity_folders(
+            session,
+            Facet.PROJECT,
+            "2024 Shoots",
+            "2025 Shoots",
+            entity_id=None,
+            image_root=root,
+        )
+    assert os.path.isdir(os.path.join(root, "2024 Shoots"))
+
+
+def test_a_file_sharing_the_folders_name_does_not_hide_the_folder(library):
+    """A directory outranks a file, whichever of them is spelled exactly right.
+
+    Taking the first entry that matches lets an unrelated file stand in for the
+    entity's real folder: the rename then finds a non-directory, skips it, and
+    silently does not happen - the folder stays under a name the library no
+    longer knows and its pictures drop out of the layout.
+    """
+    session, root = library["session"], library["root"]
+    _spell_the_project_folder(library, "2024 shoots")
+    # Spelled exactly as the layout writes it, so the old "exact name wins"
+    # short-circuit returned THIS deterministically, whatever order the
+    # directory happens to be listed in.
+    with open(os.path.join(root, "2024 Shoots"), "wb") as handle:
+        handle.write(b"not a folder")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2025 Shoots"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2025 Shoots",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 1
+    assert os.path.isfile(
+        os.path.join(root, "2025 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    assert (
+        session.get(Picture, library["picture_id"]).file_path
+        == "2025 Shoots/Mira/2026-08/0412.png"
+    )
+    # The owner's file is not ours to touch.
+    assert os.path.isfile(os.path.join(root, "2024 Shoots"))
+
+
+def test_a_file_at_the_destination_still_blocks_the_rename(library):
+    """The control on the ranking above: preferring directories must not stop a
+    FILE from being a collision.
+
+    ``os.rename`` onto an existing file is not a rename this may make, and the
+    destination question is "is anything already called that", not "is a folder".
+    """
+    session, root = library["session"], library["root"]
+    with open(os.path.join(root, "2025 shoots"), "wb") as handle:
+        handle.write(b"the owner's own file")
+
+    project = session.get(Project, library["project_id"])
+    project.name = "2025 Shoots"
+    session.add(project)
+    renamed = engine.rename_entity_folders(
+        session,
+        Facet.PROJECT,
+        "2024 Shoots",
+        "2025 Shoots",
+        entity_id=library["project_id"],
+        image_root=root,
+    )
+
+    assert renamed == 0
+    assert os.path.isfile(
+        os.path.join(root, "2024 Shoots", "Mira", "2026-08", "0412.png")
+    )
+    with open(os.path.join(root, "2025 shoots"), "rb") as handle:
+        assert handle.read() == b"the owner's own file"
+
+
 def test_renaming_one_of_two_people_of_the_same_name_touches_no_folder(library):
     """Two people really can be called Mira, and only one of them was renamed.
 
