@@ -336,6 +336,19 @@ const treeRows = computed(() => {
   const rows = preview.value?.tree || [];
   const present = new Set(rows.map((row) => row.path));
   return rows.map((row) => {
+    // The library root is `path: ""` and has no name of its own. It is in the
+    // response (#1161) because with the unfiled sweep off it is where the
+    // pictures the layout cannot place stay, and a tree that drew every folder
+    // except that one read as "nothing was left behind".
+    if (!row.path) {
+      return {
+        ...row,
+        name: "Library root",
+        title: "The library folder itself",
+        crumbs: "",
+        indent: 0,
+      };
+    }
     const parts = (row.path || row.name || "").split("/");
     // How many leading components are covered by an ancestor that is a row.
     let anchored = parts.length - 1;
@@ -344,6 +357,7 @@ const treeRows = computed(() => {
     }
     return {
       ...row,
+      title: row.path,
       // Muted, and only what no row above already says. Empty when the parent
       // is present, which is when the indent alone is enough.
       crumbs: parts.slice(anchored, -1).join(" / "),
@@ -351,6 +365,36 @@ const treeRows = computed(() => {
     };
   });
 });
+/**
+ * What actually files a picture, said out loud (#1161).
+ *
+ * The builder shows which facets are *in* the layout and nothing said which
+ * were not, so an owner whose pictures are all tagged and none of them in a
+ * project read the empty tree as a bug. Derived from `segments` rather than
+ * written down, so it cannot drift from the layout above it.
+ */
+const filingHint = computed(() => {
+  if (!isOn.value) return "";
+  const used = new Set(segments.value.flat());
+  const list = (words) =>
+    words.length < 2
+      ? words[0]
+      : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+  const inside = LAYOUT_FACETS.filter((f) => used.has(f.value)).map(
+    (f) => f.label,
+  );
+  const outside = LAYOUT_FACETS.filter((f) => !used.has(f.value)).map(
+    (f) => f.label,
+  );
+  const first = describeSegment(segments.value[0]);
+  return [
+    `Only a ${list(inside)} files a picture under this layout` +
+      (outside.length ? `; a ${list(outside)} does not.` : "."),
+    `A level nothing fills becomes “Global”, so a picture with no ${first} is filed under Global.`,
+    `A picture nothing files at all has no folder of its own: it stays in the library root unless the box above is ticked.`,
+  ].join(" ");
+});
+
 /** Refusals worth naming, whichever half of the flow produced them. */
 const refusals = computed(() => {
   const counts = { ...(preview.value?.skipped_counts || {}) };
@@ -659,6 +703,7 @@ function netDelta(row) {
       </div>
 
       <template v-if="isOn">
+        <p class="layout-filing">{{ filingHint }}</p>
         <div class="layout-tree__head">
           <span>{{
             migrating ? "Filling in" : "Your folders, as this layout draws them"
@@ -672,7 +717,7 @@ function netDelta(row) {
         >
           <div
             v-for="row in treeRows"
-            :key="row.path"
+            :key="row.path || '/'"
             class="layout-tree__row"
             :class="{ 'layout-tree__row--new': row.is_new }"
             role="row"
@@ -681,7 +726,7 @@ function netDelta(row) {
               class="layout-tree__name"
               role="cell"
               :style="treeIndent(row.indent)"
-              :title="row.path"
+              :title="row.title"
             >
               <v-icon size="14">mdi-folder-outline</v-icon>
               <span class="layout-tree__path">
@@ -974,6 +1019,14 @@ function netDelta(row) {
   padding-inline: var(--space-3);
   min-height: 34px;
   font-size: var(--text-sm);
+}
+
+/* ---- what files a picture ------------------------------------------------ */
+.layout-filing {
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  margin: 0 0 var(--space-3);
 }
 
 /* ---- the tree ------------------------------------------------------------ */

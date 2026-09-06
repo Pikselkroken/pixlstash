@@ -126,10 +126,67 @@ def test_render_fills_both_segments():
     assert render(picture, DEFAULT_LAYOUT) == "2024 Shoots/Mira"
 
 
-def test_a_segment_with_nothing_to_fill_it_is_skipped_not_left_empty():
-    """No empty folder level: the set picture sits one deep, not two."""
-    assert render(facets(sets=["mira-lora-v3"]), DEFAULT_LAYOUT) == "mira-lora-v3"
+def test_an_unfilled_segment_becomes_global_only_when_a_later_one_is_filled():
+    """The set picture gets a Global project level; the project picture does not.
+
+    Both directions matter. Writing the placeholder is what puts every person
+    and set folder at one depth and gives an unprojected picture a folder to
+    move out of; dropping the trailing one is what keeps a project with no
+    person as ``2024 Shoots`` rather than ``2024 Shoots/Global``.
+    """
+    assert (
+        render(facets(sets=["mira-lora-v3"]), DEFAULT_LAYOUT) == "Global/mira-lora-v3"
+    )
     assert render(facets(projects=["2024 Shoots"]), DEFAULT_LAYOUT) == "2024 Shoots"
+
+
+def test_a_picture_nothing_files_is_unfiled_rather_than_global():
+    """The unfiled sweep stays an opt-in: Global must not swallow its case."""
+    assert render(facets(), DEFAULT_LAYOUT) == DEFAULT_LAYOUT.unfiled
+    assert migrate_destination("2024", facets(), DEFAULT_LAYOUT) is None
+
+
+def test_global_stops_being_true_when_a_project_arrives():
+    """The whole reason Global is in the layout's language rather than decoration."""
+    vocab = {Facet.PROJECT: ["Client · Nordvik"], Facet.PERSON: ["Mira"]}
+    mira = {Facet.PERSON: ["Mira"]}
+    assert is_true("Global/Mira", mira, LAYOUT, vocab)
+    assert relocate("Global/Mira", mira, LAYOUT, vocab) is None
+
+    projected = {Facet.PROJECT: ["Client · Nordvik"], Facet.PERSON: ["Mira"]}
+    assert not is_true("Global/Mira", projected, LAYOUT, vocab)
+    assert relocate("Global/Mira", projected, LAYOUT, vocab) == "Client · Nordvik/Mira"
+    # The owner's own tail below the layout travels, as it does for any move.
+    assert (
+        relocate("Global/Mira/2026-08", projected, LAYOUT, vocab)
+        == "Client · Nordvik/Mira/2026-08"
+    )
+
+
+def test_an_existing_person_folder_at_the_old_depth_still_reads_true():
+    """No churn for a library laid out before Global existed."""
+    mira = {Facet.PERSON: ["Mira"]}
+    vocab = {Facet.PROJECT: ["Client · Nordvik"], Facet.PERSON: ["Mira"]}
+    assert is_true("Mira", mira, LAYOUT, vocab)
+    assert relocate("Mira", mira, LAYOUT, vocab) is None
+
+
+def test_moving_a_picture_into_global_takes_its_project_off():
+    """The mirror of render: Global reads as "no project", not as off-layout."""
+    vocab = {Facet.PROJECT: ["Client · Nordvik"], Facet.PERSON: ["Mira"]}
+    held = {Facet.PROJECT: ["Client · Nordvik"], Facet.PERSON: ["Mira"]}
+    moved = reconcile_move("Client · Nordvik/Mira", "Global/Mira", held, LAYOUT, vocab)
+    assert moved.outcome is MoveOutcome.UNAMBIGUOUS
+    assert moved.removals == ((Facet.PROJECT, "Client · Nordvik"),)
+    assert moved.additions == ()
+
+    # And back out of it, which is an addition and nothing else.
+    back = reconcile_move(
+        "Global/Mira", "Client · Nordvik/Mira", {Facet.PERSON: ["Mira"]}, LAYOUT, vocab
+    )
+    assert back.outcome is MoveOutcome.UNAMBIGUOUS
+    assert back.additions == ((Facet.PROJECT, "Client · Nordvik"),)
+    assert back.removals == ()
 
 
 def test_the_first_facet_that_applies_wins_within_a_segment():
@@ -360,7 +417,9 @@ def test_an_off_layout_folder_is_a_permanent_override():
 
 def test_the_unfiled_folder_empties_itself_when_something_files_the_picture():
     assert relocate("Unassigned", {}, LAYOUT, VOCAB) is None
-    assert relocate("Unassigned", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Mira"
+    assert (
+        relocate("Unassigned", {Facet.PERSON: ["Mira"]}, LAYOUT, VOCAB) == "Global/Mira"
+    )
 
 
 def test_losing_every_assignment_files_the_picture_as_unfiled():
@@ -2114,6 +2173,17 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
 
     assert tree == [
         {
+            # The library root itself. Three pictures sit here and two leave;
+            # without this row that was invisible (#1161).
+            "path": "",
+            "name": "",
+            "depth": 0,
+            "have": 3,
+            "arriving": 0,
+            "leaving": 2,
+            "is_new": False,
+        },
+        {
             "path": "00 Loose",
             "name": "00 Loose",
             "depth": 0,
@@ -2161,15 +2231,24 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
     ]
 
 
-def test_the_tree_has_no_row_for_the_library_root(library):
-    """Three pictures sit at the root and two of them leave it, and none of that
-    is a row: the root is what every path is relative to, so a row for it would
-    draw a level the owner does not have."""
+def test_the_tree_draws_the_library_root_when_pictures_are_in_it(library):
+    """Three pictures sit at the root and two of them leave it, and that is a row.
+
+    It was left out until #1161 on the grounds that the root is what every path
+    is relative to. But with the unfiled sweep off the root is exactly where the
+    pictures the layout cannot place stay, and a tree drawing every folder
+    except that one read as "nothing was left behind". It is still not
+    synthetic: it is a row only while pictures are actually in it, which is the
+    same rule every other row is in the list under.
+    """
     session, root = library["session"], library["root"]
     _drawable_library(library)
 
     tree = migration.preview_in_session(session, root)["tree"]
-    assert all(entry["path"] for entry in tree)
+    (root_row,) = [entry for entry in tree if entry["path"] == ""]
+    assert root_row["have"] == 3
+    assert root_row["leaving"] == 2
+    assert root_row["is_new"] is False
     assert [entry["path"] for entry in tree] == sorted(
         entry["path"] for entry in tree
     ), "path order is what lets the screen indent on depth without re-sorting"

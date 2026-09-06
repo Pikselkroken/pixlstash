@@ -781,7 +781,20 @@ is spent on the one thing that needs it. One pane, no steps:
   only part that shrinks (`flex: 0 1 auto` + ellipsis); the leaf identifies the
   row and always shows in full, and `title` carries the whole stored path.
   `have` renders a dash off `is_new`, not off `have == 0`, because a real folder
-  can legitimately hold nothing.
+  can legitimately hold nothing. **The library root is one of the rows** since
+  #1161 — `path: ""`, drawn as *Library root* at indent 0 with no breadcrumb.
+  It is in the list under the same non-zero rule as every other row, so it
+  appears only while pictures are actually in it, which with the unfiled sweep
+  off is exactly where the pictures the layout cannot place stay. Drawing every
+  folder except that one read as "nothing was left behind".
+- **The pane says what files a picture.** `filingHint` is derived from
+  `segments`, never written down, so it cannot drift from the builder above it:
+  it names the facets that are in the layout, the ones that are not ("a Tag does
+  not"), that an unfilled level becomes `Global`, and that a picture nothing
+  files at all has no folder and stays in the library root unless the sweep box
+  is ticked. The builder showed which facets were *in* the layout and nothing
+  said which were not, so an owner whose pictures were all tagged and none of
+  them in a project read the empty tree as a bug (#1161).
 - **The layout is frozen for the duration of a move**, in `scheduleSave`, every
   edit routes through it, so one guard covers the model, the debounce and the
   write. Editing mid-run makes later passes re-plan against a new layout, so
