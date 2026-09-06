@@ -376,6 +376,26 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
+  it("does not read a slash-spelled URL as inside a POSIX folder named a\\b", async () => {
+    // The other direction of the same rule. Folding `\` to `/` on a POSIX root
+    // makes `/home/me/refs/a/b/2024` and `/home/me/refs/a\b/2024` the same
+    // string, so a URL naming a DIFFERENT folder was accepted as a subfolder
+    // and then rewritten into this one - the grid would show the wrong folder
+    // or nothing. Folding is for Windows roots, where both characters really
+    // do separate; here it must fall back to the folder root.
+    const wrapper = await mountSidebar();
+    routeToFolder("/home/me/refs/a/b/2024", "rf-7");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 7,
+      pathPrefix: ODD_ROOT,
+      label: "Odd refs",
+    });
+
+    wrapper.unmount();
+  });
+
   it("keeps a backslash that is part of a POSIX folder's name", async () => {
     // The mirror of the Windows case. There `/` in the URL means "separator";
     // here it does not, and a `\` is a legal character in a POSIX folder name.

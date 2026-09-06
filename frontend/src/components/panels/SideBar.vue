@@ -627,18 +627,22 @@ function routeSubfolderUnder(root) {
   if (!filter?.pathPrefix || !root) return null;
   const raw = _normPath(filter.pathPrefix);
   const rootPath = _normPath(root);
-  // `_urlPath` only swaps `\` for `/` one-for-one, so these keep `raw`'s
-  // offsets and the tail can be sliced back out of the ORIGINAL spelling.
-  const here = _urlPath(raw);
-  const base = _urlPath(rootPath);
-  if (!base || here === base || !here.startsWith(`${base}/`)) return null;
   const sep = _pathSeparator(rootPath);
+  // Folding `\` into `/` is for a WINDOWS root only, where both characters
+  // separate and a URL may legitimately spell either. A POSIX root is compared
+  // raw, because there `\` is an ordinary character in a folder's name and
+  // folding would make `?path=/x/a/b/2024` - a different folder, or none -
+  // read as a subfolder of `/x/a\b` and then be rewritten into it.
+  const windows = sep === "\\";
+  // `_urlPath` swaps one character for one character, so both stay aligned
+  // with `raw` and the tail can be sliced back out of the ORIGINAL spelling.
+  const here = windows ? _urlPath(raw) : raw;
+  const base = windows ? _urlPath(rootPath) : rootPath;
+  if (!base || here === base || !here.startsWith(`${base}/`)) return null;
   const rawTail = raw.slice(base.length + 1);
-  // On Windows both characters separate, so the tail is re-spelled. On POSIX
-  // only `/` does and a `\` is part of a folder's NAME - re-spelling there
-  // would corrupt the very name `_urlPath` exists to protect, so the tail is
-  // taken verbatim and the whole function is genuinely a no-op.
-  const tail = sep === "/" ? rawTail : rawTail.split(/[\\/]/).join(sep);
+  // Re-spelt only on Windows, for the same reason: on POSIX the tail's own
+  // backslashes are part of a name, so this is genuinely a no-op there.
+  const tail = windows ? rawTail.split(/[\\/]/).join(sep) : rawTail;
   return {
     pathPrefix: `${rootPath}${sep}${tail}`,
     label: tail.split(sep).pop() || filter.label,
@@ -4104,6 +4108,13 @@ watch(
     // `_urlPath`, NOT `_samePath`: this compares the sidebar's path, which
     // `routeSubfolderUnder` has re-spelled into the folder's separators,
     // against `?path=`, which `parseFolderPath` keeps verbatim from the URL.
+    //
+    // This one folds unconditionally, where `routeSubfolderUnder` folds only
+    // for a Windows root, and the asymmetry is deliberate. That function
+    // decides whether a URL belongs to a folder AT ALL, so a false match
+    // selects the wrong folder. This one only asks "did I just do this?", so a
+    // false match can at worst skip re-restoring something already restored -
+    // while a false MISS is the loop. Cheap direction, expensive direction.
     // With `_samePath` the two could never match once the re-spelling changed
     // anything, so the sidebar could not recognise its own work: it re-emitted,
     // the emit pushed the re-spelled path as a NEW url, and Back returned to
