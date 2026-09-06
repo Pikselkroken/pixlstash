@@ -2793,9 +2793,12 @@ instead of an offer deletes the file by hand to get the app started. A
 is to put the right one back.
 
 **A failure about the machine is never turned into that offer**
-(release-review item 27). `_ENVIRONMENTAL_SQLITE_FAILURES` — locked, disk I/O,
-cannot open, full, read-only, permission denied, malformed image, out of memory
-— names the findings that say nothing about what the file contains, and
+(release-review item 27). `_ENVIRONMENTAL_SQLITE_FAILURES` — `database is
+locked`, `disk I/O error`, `unable to open database file`, `database or disk is
+full`, `readonly database`, `permission denied`, `database disk image is
+malformed`, `out of memory`, all in SQLite's own wording (the "image" in the
+last one is the database file, nothing to do with a picture) — names the
+findings that say nothing about what the file contains, and
 `_is_environmental_failure` is the one classifier all three paths to the offer
 now ask: `unusable_vault_from_open_failure` (a migration that raised),
 `_vault_is_loadable` (the recovery in `_offer_a_usable_library`, reached on

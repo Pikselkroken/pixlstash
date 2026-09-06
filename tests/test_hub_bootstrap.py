@@ -1997,15 +1997,21 @@ class TestAVaultThisMachineCannotRead:
         vault = os.path.join(folder, "vault.db")
         os.chmod(vault, 0o000)
 
-        with pytest.raises(HubBootstrapError) as raised:
-            bootstrap_hub(folder, str(tmp_path / "hub.db"))
+        try:
+            with pytest.raises(HubBootstrapError) as raised:
+                bootstrap_hub(folder, str(tmp_path / "hub.db"))
 
-        assert not isinstance(raised.value, UnusableVaultError), (
-            "a locked or unreadable vault must never be offered 'start over'"
-        )
-        assert "could not be read" in str(raised.value)
-        assert os.listdir(folder) == ["vault.db"], "nothing may be moved aside"
-        os.chmod(vault, 0o600)
+            assert not isinstance(raised.value, UnusableVaultError), (
+                "a locked or unreadable vault must never be offered 'start over'"
+            )
+            assert "could not be read" in str(raised.value)
+            assert sorted(os.listdir(folder)) == ["vault.db"], (
+                "nothing may be moved aside"
+            )
+        finally:
+            # In the `finally` because a failing assertion above would otherwise
+            # leave a 0000 file behind for whatever runs next in this shard.
+            os.chmod(vault, 0o600)
 
     @unreadable_files_work
     def test_a_later_run_does_not_rename_it_even_once_authorised(
@@ -2026,12 +2032,14 @@ class TestAVaultThisMachineCannotRead:
         os.chmod(vault, 0o000)
         monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
 
-        with pytest.raises(HubBootstrapError) as raised:
-            bootstrap_hub(folder, hub_path)
+        try:
+            with pytest.raises(HubBootstrapError) as raised:
+                bootstrap_hub(folder, hub_path)
 
-        assert not isinstance(raised.value, UnusableVaultError)
-        assert sorted(os.listdir(folder)) == ["vault.db"]
-        os.chmod(vault, 0o600)
+            assert not isinstance(raised.value, UnusableVaultError)
+            assert sorted(os.listdir(folder)) == ["vault.db"]
+        finally:
+            os.chmod(vault, 0o600)
 
 
 def sqlalchemy_operational_error(message):
