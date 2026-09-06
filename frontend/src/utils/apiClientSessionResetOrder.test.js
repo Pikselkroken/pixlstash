@@ -20,7 +20,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-const post = vi.fn();
+// Hoisted with the `vi.mock` factory that closes over it: `vi.mock` is lifted
+// above the module body, so a plain `const post` here would still be in its
+// temporal dead zone if the factory ran first. Same shape as
+// `useUpdatesSocket.test.js`, and the reason that file does it too.
+const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+
 vi.mock("axios", () => {
   const instance = {
     post: (...args) => post(...args),
