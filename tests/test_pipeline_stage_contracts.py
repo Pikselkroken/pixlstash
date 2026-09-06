@@ -566,22 +566,22 @@ def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
         assert task.params["picture_ids"] == [good]
 
 
-def test_an_unreachable_picture_does_not_hold_the_tag_window_for_ever(tmp_path):
-    """The second door into the same starvation, and the one still open.
+def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
+    """The second door into the same starvation - closed WITHOUT deleting.
 
     Suppression only covers pictures TagTask classes as *undecodable*. A file
-    that is merely unreachable - drive unplugged, share down, deleted outside
-    the app - raises ``FileNotFoundError``, which carries ``errno`` 2 and is
-    therefore classed *transient*: `_load_pic` returns without marking, the
-    full pass drops the path it could not open, no update payload is built,
-    and the pending sentinel survives. Nothing suppresses the picture, so
-    `_filter_and_claim` claims it again on the very next sweep - a task IS
-    returned every time, so unlike the suppressed case the planner does not
-    even back off.
+    that is merely unreachable - drive unplugged, share down - raises
+    ``FileNotFoundError``, which carries ``errno`` 2 and is therefore classed
+    *transient*: nothing marks it, the full pass drops the path, no update
+    payload is built and the pending sentinel survives, so the finder claims
+    it again on every sweep.
 
-    `FaceExtractionTask` never had this: it writes a terminal row for every
-    picture it is handed, including one whose file it could not open. This is
-    that contract, on the tag stage.
+    The fix must hold it out of the finders, never retire it. Deleting the
+    sentinel would be permanent - only import and an explicit retag ever write
+    one - and nothing would put it back: ``MissingFilePurgeTask`` deliberately
+    skips a picture whose location is unreachable, and the library scan
+    re-adds a sentinel only for a newly inserted row. Suppression is
+    reversible, and this state ends by itself when the volume returns.
     """
     with Vault(image_root=str(tmp_path)) as vault:
         names = [f"u{index}.png" for index in range(6)]
@@ -594,35 +594,111 @@ def test_an_unreachable_picture_does_not_hold_the_tag_window_for_ever(tmp_path):
 
         vault.db.run_task(add_face_rows)
 
-        # The first five files go away - unreachable, never suppressed. The
-        # window is suggested_task_size * (TAGGER_MAX_INFLIGHT + 1) = 4 rows,
-        # so they fill it completely and the sixth is never reached.
+        # A whole directory goes away, taking the first five pictures with it.
+        # The window is suggested_task_size * (TAGGER_MAX_INFLIGHT + 1) = 4
+        # rows, so they fill it completely and the sixth is never reached.
+        gone = tmp_path / "unplugged"
+        gone.mkdir()
         for name in names[:-1]:
-            (tmp_path / name).unlink()
+            (tmp_path / name).rename(gone / name)
+
+        def repoint(session: Session):
+            for pid, name in zip(ids[:-1], names[:-1]):
+                session.get(Picture, pid).file_path = f"unplugged/{name}"
+            session.commit()
+
+        vault.db.run_task(repoint)
+        for name in names[:-1]:
+            (gone / name).unlink()
+        gone.rmdir()
         good = ids[-1]
 
         finder = MissingTagFinder(vault.db, lambda: _TagEngine())
-        task = finder.find_task()
-        assert task is not None, "the unreachable pictures are still claimable"
-        assert good not in task.params["picture_ids"], (
-            "precondition: the taggable picture is behind the unreachable ones"
-        )
-
-        # Run the batch the way the runner does. Nothing can be tagged, so the
-        # task must still retire what it was given rather than leave it pending.
-        task._tag_pictures_batch()
-        finder.on_task_complete(task, None)
-
         offered = set()
         for _sweep in range(6):
-            nxt = finder.find_task()
-            if nxt is None:
+            task = finder.find_task()
+            if task is None:
                 break
-            offered.update(nxt.params["picture_ids"])
-            nxt._tag_pictures_batch()
-            finder.on_task_complete(nxt, None)
+            offered.update(task.params["picture_ids"])
+            task._tag_pictures_batch()
+            finder.on_task_complete(task, None)
 
         assert good in offered, (
             "the taggable picture was never offered: unreachable files still "
             "own the candidate window"
         )
+
+        # Nothing was deleted. Every unreachable picture keeps its pending
+        # sentinel, so remounting the volume returns it to the tag stage.
+        def sentinels(session: Session) -> set:
+            rows = session.exec(
+                select(Tag.picture_id).where(Tag.tag == make_tag_sentinel())
+            ).all()
+            return set(rows)
+
+        held = vault.db.run_immediate_read_task(sentinels)
+        assert set(ids[:-1]) <= held, (
+            "an unreachable picture lost its pending sentinel; nothing would "
+            "ever put it back and its tags are gone for good"
+        )
+
+        # And the hold lifts by itself once the location is back.
+        gone.mkdir()
+        for name in names[:-1]:
+            Image.fromarray(np.zeros((30, 40, 3), dtype=np.uint8), "RGB").save(
+                gone / name
+            )
+        assert set(ids[:-1]).isdisjoint(
+            vault.db.unprocessable_images.active_suppressed_ids()
+        ), "the hold did not lift when the directory came back"
+
+
+def test_a_whole_batch_transient_failure_deletes_nothing(tmp_path):
+    """The trigger that makes retiring an unresolved picture unsafe.
+
+    `wd14.tag_images` returns ``{}`` for the WHOLE batch when its DataLoader
+    fails, and `_run_batch` swallows any ONNX exception - an arena OOM
+    included - and returns ``None``. Every picture in the batch is then
+    unresolved through no fault of its own. Retiring them would delete their
+    pending sentinels permanently, because only import and an explicit retag
+    ever write one; the batch must simply be retried instead.
+    """
+    with Vault(image_root=str(tmp_path)) as vault:
+        ids = _seed_pending(vault, tmp_path, ["t0.png", "t1.png"])
+
+        def add_face_rows(session: Session):
+            for pid in ids:
+                session.add(Face(picture_id=pid, face_index=-1))
+            session.commit()
+
+        vault.db.run_task(add_face_rows)
+
+        engine = _TagEngine()
+        stalled = _StubWorkflow()
+        stalled.tag_images = lambda image_paths, out_raw_scores=None, **_k: {}
+        engine.tagging_workflow = stalled
+
+        finder = MissingTagFinder(vault.db, lambda: engine)
+        for _sweep in range(3):
+            task = finder.find_task()
+            assert task is not None, "a transient stall must not retire the batch"
+            task._tag_pictures_batch()
+            finder.on_task_complete(task, None)
+
+        def sentinels(session: Session) -> set:
+            return set(
+                session.exec(
+                    select(Tag.picture_id).where(Tag.tag == make_tag_sentinel())
+                ).all()
+            )
+
+        assert vault.db.run_immediate_read_task(sentinels) == set(ids), (
+            "a stalled DataLoader deleted the batch's pending sentinels; "
+            "nothing would ever put them back"
+        )
+
+        # And the work is still there once the stall clears.
+        engine.tagging_workflow = _StubWorkflow()
+        recovered = finder.find_task()
+        assert recovered is not None
+        assert set(recovered.params["picture_ids"]) & set(ids)

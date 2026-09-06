@@ -319,6 +319,12 @@ class TagTask(BaseTask):
                 if img is None:
                     if undecodable:
                         self._mark_unprocessable(pic, file_path)
+                    else:
+                        # Not undecodable, so either the machine failed
+                        # (retry it, mark nothing) or the file's whole
+                        # location is gone - the one case neither the
+                        # registry nor the missing-file purge would take.
+                        self._hold_unreachable(pic, file_path)
                     return None
                 preloaded_images[file_path] = img
             w, h = img.size
@@ -355,76 +361,38 @@ class TagTask(BaseTask):
             )
             return None
 
-    @staticmethod
-    def _clear_sentinels(session: Session, picture_ids: list) -> list:
-        """Delete only the pending-tag sentinel rows of *picture_ids*.
+    def _hold_unreachable(self, pic, file_path) -> None:
+        """Hold *pic* out of the finders while its file's location is gone.
 
-        Only the sentinel: a retag request carries the picture's existing tags
-        alongside it, and writing an empty tag set through ``_add_tags_bulk``
-        would delete those too. A picture the tagger never reached must lose
-        its place in the queue, not its labels.
+        The counterpart to :meth:`_mark_unprocessable`, and deliberately NOT a
+        sentinel deletion. Everything `_is_transient_load_error` classes as
+        "the machine failed, not the file" is un-suppressed, so retiring an
+        unresolved picture would also retire the whole batch behind one
+        stalled DataLoader (`wd14.tag_images` returns ``{}`` for all of them)
+        or one swallowed ONNX error - and a deleted sentinel never comes back,
+        because only import and an explicit retag write one.
+
+        Suppression is reversible where deletion is not: the registry entry
+        lifts by itself when the directory returns, so a remounted drive hands
+        the picture back to every stage with its pending tag work intact.
+        `MissingFilePurgeTask` will not clean up after us either - it
+        explicitly skips a picture whose location is unreachable, because
+        purging would write ``file_removed=True`` and block a later restore.
         """
-        if not picture_ids:
-            return []
-        frozen = locked_picture_ids(session, picture_ids)
-        cleared = [pid for pid in picture_ids if pid not in frozen]
-        if not cleared:
-            return []
-        session.exec(
-            delete(Tag).where(
-                Tag.picture_id.in_(cleared),
-                Tag.tag.like(
-                    TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
-                ),
-            )
-        )
-        session.commit()
-        return cleared
-
-    def _retire_unresolved(self, batch: list, resolved_ids: set) -> None:
-        """Give every picture in the batch a terminal outcome, as faces do.
-
-        ``FaceExtractionTask`` writes a row for every picture it is handed - a
-        ``face_index=-1`` sentinel when it found nothing, including for a file
-        it could not open - so ``~Picture.faces.any()`` always drains.
-        ``TagTask`` wrote *nothing* for a picture that produced no result, and
-        there are four ways to produce none: the full pass drops a path it
-        cannot load (``tagging.py``'s ``continue``), the configured plugin is
-        missing or lacks tag support, the plugin raises, or the batch is
-        cancelled. The pending sentinel then survives, and - unlike a corrupt
-        file, which the unprocessable registry suppresses - an *unreachable*
-        one is classed transient (``FileNotFoundError`` carries ``errno`` 2)
-        and is never suppressed, so the finder claims it again on every sweep.
-        A handful of them at low ids starve tagging library-wide, and worse
-        than the case this task's finder already guards: a task IS returned
-        each sweep, so the planner never even backs off.
-
-        Suppressed pictures are deliberately left pending: the registry is
-        keyed to the file's ``(mtime, size)`` and lifts by itself when the file
-        is repaired, and ``MissingTagFinder`` keeps them out of its candidate
-        window meanwhile, so they are already both terminal and recoverable.
-        """
-        unresolved = [
-            pic.id
-            for pic in batch
-            if getattr(pic, "id", None) is not None and pic.id not in resolved_ids
-        ]
-        if not unresolved:
-            return
         registry = getattr(self._db, "unprocessable_images", None)
-        if registry is not None:
-            unresolved = [pid for pid in unresolved if not registry.is_suppressed(pid)]
-        if not unresolved:
+        if registry is None:
+            logger.warning(
+                "TagTask: picture %s (%s) is unreachable and there is no "
+                "registry to hold it; it will be re-selected every sweep.",
+                getattr(pic, "id", None),
+                str(file_path),
+            )
             return
-        logger.warning(
-            "TagTask %s: %d picture(s) produced no tag result and are not "
-            "suppressed (ids %s); clearing their pending-tag sentinel so they "
-            "stop being re-queued. Their existing tags are kept.",
-            self.id,
-            len(unresolved),
-            unresolved[:20],
+        registry.mark_unreachable(
+            getattr(pic, "id", None),
+            str(file_path),
+            reason="tag source location is not mounted",
         )
-        self._db.run_task(self._clear_sentinels, unresolved, priority=DBPriority.LOW)
 
     def _mark_unprocessable(self, pic, file_path) -> None:
         """Record *pic* as undecodable so the finders stop re-selecting it (#585).
@@ -836,10 +804,15 @@ class TagTask(BaseTask):
                 # provenance that never existed. Only merge when the two
                 # passes are the same model; the crop's *tags* are unversioned
                 # and still apply either way.
-                use_pixlstash_tagger = (
-                    active_workflow.is_pixlstash_tagger_enabled
-                    and full_pass == "pixlstash_tagger"
-                )
+                #
+                # `full_pass` alone, NOT `is_pixlstash_tagger_enabled`: that
+                # property reads the *configured* plugin and ignores the
+                # override, so a retag stamped `__tag:pixlstash_tagger` while
+                # WD14 is configured would be treated as cross-model and lose
+                # its crop confidences even though both passes are the same
+                # model. The crop pass is always the built-in tagger, so the
+                # full pass's identity is the whole question.
+                crop_is_full_pass_model = full_pass == "pixlstash_tagger"
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
@@ -907,7 +880,7 @@ class TagTask(BaseTask):
                         quality_results = active_workflow.tag_quality_crops(
                             quality_items,
                             out_raw_scores=crop_raw_scores
-                            if use_pixlstash_tagger
+                            if crop_is_full_pass_model
                             else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
@@ -938,20 +911,25 @@ class TagTask(BaseTask):
                         # the largest face when one was found, otherwise the centre-crop
                         # fallback (which leaves face tags from the full-image pass alone).
                         #
-                        # "Ground truth" is an argument about RESOLUTION, and it
-                        # holds between two passes of the same model. When the
-                        # full pass is a different model the crop may still add
-                        # what it found, but must not delete another model's
-                        # output: stripping it leaves the plugin's own
-                        # prediction row with no matching applied tag, and
-                        # `_resolve_pending_predictions` then flips the
-                        # plugin's call to REJECTED under the plugin's own
-                        # version.
+                        # "Ground truth" is an argument about RESOLUTION and it
+                        # stands on its own - a 448 px crop really does judge
+                        # "blocky" better than a downscaled full image, whatever
+                        # model ran the full pass. What it must not do is orphan
+                        # another model's prediction row: strip a tag the full
+                        # pass emitted a CONFIDENCE for, and
+                        # `_resolve_pending_predictions` reads the applied set
+                        # back and flips that model's own call to REJECTED.
+                        #
+                        # So the precondition is "there are no rows to orphan",
+                        # not "same model". WD14 reports no confidences at all,
+                        # so its full pass writes no prediction rows and the
+                        # strip stays exactly as shipped; a plugin that does
+                        # report them keeps its output.
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
                             allowed = whitelist_by_path[path]
-                            if use_pixlstash_tagger:
+                            if crop_is_full_pass_model or not full_scores_by_path:
                                 kept = [
                                     t for t in tag_results[path] if t not in allowed
                                 ]
@@ -997,8 +975,6 @@ class TagTask(BaseTask):
                             "tags": tags or [],
                         }
                     )
-
-                self._retire_unresolved(batch, {u["pic_id"] for u in update_payloads})
 
                 if update_payloads:
                     db_tags_start = time.perf_counter()
