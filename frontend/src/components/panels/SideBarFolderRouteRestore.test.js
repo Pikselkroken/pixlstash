@@ -95,7 +95,12 @@ const FOLDER = {
 
 const WIN_FOLDER = { id: 6, folder: WIN_ROOT, label: "Win refs", active: true };
 
+const IMPORT_FOLDER = { id: 9, folder: "/home/me/inbox", label: "Inbox" };
+
 function respond(url) {
+  if (String(url).includes("/import-folders")) {
+    return { data: { folders: [IMPORT_FOLDER] } };
+  }
   if (String(url).includes("/reference-folders")) {
     return { data: { folders: [FOLDER, WIN_FOLDER], in_docker: true } };
   }
@@ -294,6 +299,38 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
+  // `selectedFolderRouteKey` is the one crossing from the sidebar's row-key
+  // space into the route's. It reads `selectedFolderReferenceId`, which is
+  // `null` when no reference folder is selected - and `Number(null)` is `0`,
+  // which `Number.isFinite` accepts. So it used to answer `rf-0` for "nothing
+  // selected", which made the teardown believe a phantom folder was showing,
+  // and made the `if-` branch unreachable in exactly the case it exists for.
+  it("clears an import-folder selection when the route leaves it", async () => {
+    // An import folder is selected with `selectedFolderReferenceId` left null,
+    // and `Number(null)` is `0`, which `Number.isFinite` accepts - so the
+    // crossing into the route's key space answered `rf-0` for a selection that
+    // is really `if-9`. The teardown then compared `rf-0` against the `if-9`
+    // it was leaving, found no match, and left the import folder highlighted
+    // (and its scanning light on) after the app had navigated away.
+    const wrapper = await mountSidebar();
+    const sidebarStore = useSidebarStore();
+    useViewStore().view = { folderKey: "if-9", folderFilter: null };
+    await flushPromises();
+    expect(lastFolderPayload(wrapper)).toEqual({
+      importSourceFolder: IMPORT_FOLDER.folder,
+      importFolderId: 9,
+      label: "Inbox",
+    });
+    expect(sidebarStore.folderScanning).toBe(true);
+
+    useViewStore().view = null;
+    await flushPromises();
+
+    expect(sidebarStore.folderScanning).toBe(false);
+
+    wrapper.unmount();
+  });
+
   it("matches a subfolder whose separators disagree with the folder's", async () => {
     // The folder listing and the `?path=` come from the same server and
     // normally agree, but the query half is a URL: it gets shared, edited and
@@ -304,11 +341,15 @@ describe("restoring /ref-folder/:id", () => {
     routeToFolder(slashed, "rf-6");
     await flushPromises();
 
-    // The payload keeps the URL's own spelling - only the comparison that got
-    // it here was normalised.
+    // And the payload comes back in the FOLDER's spelling, not the URL's.
+    // `file_path_prefix` is a literal LIKE against the stored `file_path`
+    // (`utils/query/predicate_filter.py`), so a slash-spelled prefix against a
+    // Windows library matches nothing and the grid comes back empty - and the
+    // tree row's own key, built from the browse listing, would not match the
+    // highlight either.
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 6,
-      pathPrefix: slashed,
+      pathPrefix: `${WIN_ROOT}\\2024\\summer`,
       label: "summer",
     });
 

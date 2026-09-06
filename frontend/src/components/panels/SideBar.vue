@@ -509,9 +509,57 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 
+// ── Folder keys: five spellings, and which comparisons may cross them ────────
+//
+// Three separate rounds of review found bugs here, all of the same shape: two
+// of these compared with `===` as though they were one thing. They are not, and
+// none of them is redundant - they carry different information. The map:
+//
+//   1. Row key      `selectedFolderKey`: `rf-<id>` | `if-<id>` | `path-<path>`.
+//      Identifies a ROW, which is why a subfolder needs its own path in it.
+//      Written only by `handleFolderNodeSelect`.
+//   2. Route key    `viewStore.activeFolderKey`: `rf-<id>` | `if-<id>`.
+//      Identifies a FOLDER. Never `path-`: a route has no row.
+//   3. Route path   `?path=`. A URL - any separator spelling, and editable.
+//   4. Grid filter  `selectedFolderFilter.pathPrefix`, which reaches the
+//      listing as `file_path_prefix`: a literal LIKE against the stored
+//      `file_path`, so it MUST be in the server's spelling.
+//   5. Tree path    `entry.path` from the browse listing. Server spelling.
+//
+// Exactly three crossings are legitimate, and each has one owner:
+//   1 -> 2         `selectedFolderRouteKey`
+//   2 + 3 -> 1,4   `routeSubfolderUnder`  (the only place a URL path is
+//                  allowed to become a server path)
+//   5 -> 1,4       direct; both are already the server's spelling.
+//
+// Anything else that compares two of these with `===`, or coerces an id
+// without `_folderId`, is the next bug. Add the crossing to the list above or
+// route it through an owner; do not inline a fourth one.
+
+/**
+ * A reference-folder id, or null. The ONE rule for reading one.
+ *
+ * `Number(null)` is `0` and `Number.isFinite(0)` is true, so coercing before
+ * testing turns "no folder selected" into "folder zero" - which then reads as
+ * a real selection everywhere downstream. `Number("")` is `0` too, so a
+ * malformed `rf-` key would do the same. Both are rejected before coercion.
+ */
+function _folderId(value) {
+  if (value == null || value === "") return null;
+  const id = Number(value);
+  return Number.isFinite(id) ? id : null;
+}
+
 /** A path made comparable: trailing separators dropped. */
 function _normPath(p) {
   return String(p || "").replace(/[\\/]+$/, "");
+}
+
+/** Which separator a path is spelled with. A POSIX path always contains `/`,
+ *  including one whose folder is legally NAMED `a\b`; a Windows path never
+ *  does. Testing for `/` rather than for `\` is what keeps that name working. */
+function _pathSeparator(p) {
+  return String(p || "").includes("/") ? "/" : "\\";
 }
 
 function _samePath(a, b) {
@@ -542,12 +590,21 @@ function _urlPath(p) {
  * names instead of the folder root. `null` means "the route names the folder
  * itself", which is the ordinary case and the pre-existing behaviour.
  *
- * Compared through `_normPath`, so the two sides may disagree about separators
+ * Matched through `_urlPath`, so the two sides may disagree about separators
  * and still match. They come from the same server and normally agree, but the
  * `?path=` half is a URL: it survives being shared, edited and pasted, and a
- * `/` where the folder listing said `\` would otherwise silently drop the
- * reader back to the folder root. The value handed back keeps its original
- * spelling - only the comparison is normalised.
+ * `/` where the folder listing said `\` would otherwise drop the reader back
+ * to the folder root.
+ *
+ * **The path handed back is re-spelled in `root`'s own separator, not the
+ * URL's.** It becomes `selectedFolderFilter.pathPrefix` and travels to the
+ * listing API as `file_path_prefix`, which is a literal `LIKE` against the
+ * stored `file_path` (`utils/query/predicate_filter.py`) - it does not
+ * normalise anything. So on a Windows library a slash-spelled link would
+ * select the right row and return an EMPTY grid, and the tree row's own key
+ * (built from the browse listing's spelling) would not match the highlight
+ * either. Rebuilding the tail off the root fixes both, and is a no-op on a
+ * POSIX library, where the two spellings already agree.
  *
  * @param {string} root the reference folder's own path
  * @returns {{pathPrefix: string, label: string}|null}
@@ -557,8 +614,13 @@ function routeSubfolderUnder(root) {
   if (!filter?.pathPrefix || !root) return null;
   const here = _urlPath(filter.pathPrefix);
   const base = _urlPath(root);
-  if (!base || here === base) return null;
-  return here.startsWith(`${base}/`) ? filter : null;
+  if (!base || here === base || !here.startsWith(`${base}/`)) return null;
+  const sep = _pathSeparator(_normPath(root));
+  const tail = here.slice(base.length + 1).split("/").join(sep);
+  return {
+    pathPrefix: `${_normPath(root)}${sep}${tail}`,
+    label: tail.split(sep).pop() || filter.label,
+  };
 }
 
 // The pending mapping this library can act on. A `local_import` entry names
@@ -928,8 +990,8 @@ const registeredImportFolderPaths = computed(() =>
 );
 
 const selectedReferenceFolderForHeader = computed(() => {
-  const id = Number(selectedFolderReferenceId.value);
-  if (!Number.isFinite(id)) return null;
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id == null) return null;
   return (
     referenceFolders.value.find((folder) => Number(folder.id) === id) || null
   );
@@ -953,8 +1015,8 @@ const selectedFolderScanning = computed(() => {
     );
     return Boolean(importFolder && importFolder.last_checked == null);
   }
-  const id = Number(selectedFolderReferenceId.value);
-  if (!Number.isFinite(id)) return false;
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id == null) return false;
   const rf = referenceFolders.value.find((f) => f.id === id);
   return Boolean(rf && rf.status === "active" && rf.last_scanned == null);
 });
@@ -1133,8 +1195,8 @@ function referenceFolderCanDisclose(rf) {
  * sibling", nor recognise its own selection on the way out.
  */
 const selectedFolderRouteKey = computed(() => {
-  const id = Number(selectedFolderReferenceId.value);
-  if (Number.isFinite(id)) return `rf-${id}`;
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id != null) return `rf-${id}`;
   return selectedFolderKey.value?.startsWith("if-")
     ? selectedFolderKey.value
     : null;
@@ -1142,12 +1204,11 @@ const selectedFolderRouteKey = computed(() => {
 
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
-  const payloadId = Number(payload?.referenceFolderId);
-  if (Number.isFinite(payloadId)) {
+  const payloadId = _folderId(payload?.referenceFolderId);
+  if (payloadId != null) {
     selectedFolderReferenceId.value = payloadId;
   } else if (key?.startsWith("rf-")) {
-    const parsed = parseInt(key.slice(3), 10);
-    selectedFolderReferenceId.value = Number.isFinite(parsed) ? parsed : null;
+    selectedFolderReferenceId.value = _folderId(key.slice(3));
   } else {
     selectedFolderReferenceId.value = null;
   }
