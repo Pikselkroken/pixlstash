@@ -3000,6 +3000,48 @@ module docstring is the design record: which actor each check is for, why the
 earlier DACL refusal was removed (it stopped the server starting on Windows,
 W6/W7/W18), and what a `private=True` open verifies instead.
 
+**Accepted risk W20 — mode bits warn, they no longer refuse.** Until #1152
+(commit `a26f765`, 2026-09-04) a group- or world-writable directory on the path
+to the hub, the vault or the library, and a credential file wider than `0600`,
+refused the open and exited the server 1. They now log a WARNING carrying the
+`chmod` that fixes them and the open proceeds. Ownership, symlink/junction and
+file-type checks still refuse, and so does an unresolvable group.
+
+*Risk and who is affected:* a POSIX user whose library or config path is
+group- or world-writable and who shares that group or machine with another
+account. That account can substitute `vault.db`, `hub.db` or pre-position a
+`-wal`/`-shm` sidecar between boots. The vault is authorization-bearing
+(`authz/membership.py` answers scope questions out of it), so the blast radius
+is the whole library plus the scope decisions taken from it — the same radius
+W17 states for Windows, now reachable on POSIX too when the owner has loosened
+the path.
+
+*Why it is accepted rather than reverted:* refusing on mode alone took the
+product down twice for nobody's benefit — a `0775` directory under a stock
+Ubuntu umask 002, then a `0755` library made by the Docker entrypoint — and in
+both cases the actor the bit implied did not exist. The precondition is that
+the *owner's own* path is already loose, which on the single-owner product this
+ships as means the machine has no second principal at all. A control that stops
+the application starting on the common case, on evidence that is a proxy rather
+than an observation, is a control that gets removed by the user (`chmod`) or by
+the maintainer; a warning that names the fix survives.
+
+*Compensating controls:* the WARNING states the exact `chmod`;
+`startup_permissions.py` finds the same paths and offers a bounded, explicit
+repair (inline on a terminal, as copy/pasteable commands otherwise, or
+unattended with `PIXLSTASH_REPAIR_PERMISSIONS=1`); new directories are created
+`0700` and new credential files `0600` by `mkdir_private`, so nothing PixlStash
+creates today needs the repair; and the `(st_dev, st_ino)` identity match across
+the open still catches a swap that happens mid-open.
+
+*What would reopen it:* multi-user, a shared or multi-tenant host, or any
+deployment where a second local principal is expected. In any of those the mode
+test stops being a proxy and becomes an observation, and this reverts to a
+refusal.
+
+Owner: lindkvis. Revisit with W17 (2026-11-08), and **immediately** if
+multi-user work starts. CSO sign-off: accepted 2026-09-06 (#1177 item 16).
+
 **Group-write is not automatically an exposure.** `mode & 0o022` is a *proxy*
 for "another principal can write here", and for the group bit that proxy is
 wrong wherever the group is the owner's own. Debian, Ubuntu and every other
