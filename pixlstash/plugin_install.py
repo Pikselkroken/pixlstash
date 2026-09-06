@@ -770,6 +770,27 @@ class DependencyChange:
     version: str
     #: The version already installed, or None when the package is new here.
     installed: str | None = None
+    #: The direct URL the requirement pinned, or None when it came from an
+    #: index.  Set only for pip's ``is_direct`` entries; see
+    #: :func:`install_requirements` for why it has to survive the round trip.
+    url: str | None = None
+
+    @property
+    def pin(self) -> str:
+        """The requirement to hand pip so it installs *this* distribution again.
+
+        SECURITY: a direct-URL requirement (``name @ https://.../x.whl``, a VCS
+        or a local path) names one artefact and deliberately does not name the
+        public index.  Reinstalling it as ``name==version`` would let whoever
+        owns that name on PyPI supply the code instead - the resolution the
+        user agreed to and the code that lands would be different packages
+        (CWE-494, dependency confusion / substitution).  The URL is therefore
+        replayed verbatim as a PEP 508 direct reference, which pins the
+        artefact rather than the name.  Indexed packages keep ``==``.
+        """
+        return (
+            f"{self.name} @ {self.url}" if self.url else f"{self.name}=={self.version}"
+        )
 
     @property
     def moves(self) -> bool:
@@ -836,7 +857,14 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
             installed = metadata_version(name)
         except PackageNotFoundError:
             installed = None
-        changes.append(DependencyChange(name, entry["metadata"]["version"], installed))
+        # `is_direct` is pip's own answer to "did the requirement name a URL
+        # rather than a name?", and `download_info.url` is the URL it actually
+        # resolved. Both have to be carried to the install step or the pin
+        # there silently becomes a PyPI lookup - see DependencyChange.pin.
+        url = entry["download_info"]["url"] if entry.get("is_direct") else None
+        changes.append(
+            DependencyChange(name, entry["metadata"]["version"], installed, url)
+        )
     return sorted(changes, key=lambda change: change.name.lower())
 
 
@@ -861,10 +889,14 @@ def install_requirements(changes: list[DependencyChange]) -> None:
     ``--no-deps`` for the same reason. The resolved list already holds every
     transitive dependency pip found, so letting it resolve again could only add
     something nobody was shown.
+
+    Each change contributes :attr:`DependencyChange.pin`, which keeps a
+    direct-URL requirement pinned to its URL instead of re-resolving the name
+    against PyPI.
     """
     if not changes:
         return
-    pins = [f"{change.name}=={change.version}" for change in changes]
+    pins = [change.pin for change in changes]
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--no-deps", *pins],
         check=False,

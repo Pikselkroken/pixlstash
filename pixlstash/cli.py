@@ -1504,6 +1504,11 @@ def _report_dependencies(
     for change in changes:
         note = f"replaces {change.installed}" if change.moves else "new"
         print(f"  {change.name:<{width}}  {change.version:<12}  {note}")
+        # Named, because it is the one line that changes what agreeing means:
+        # this package does not come from PyPI, so the name above says nothing
+        # about who wrote it. The URL is what actually gets installed.
+        if change.url:
+            print(f"  {'':<{width}}  from {change.url}")
 
     moved = [change for change in changes if change.moves]
     if not moved:
