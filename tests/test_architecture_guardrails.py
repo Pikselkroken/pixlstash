@@ -2789,8 +2789,34 @@ def test_the_changelog_opens_on_a_released_version_heading():
 # Guardrail: every third-party Action reference is pinned to a full commit SHA
 # ---------------------------------------------------------------------------
 
-_ACTION_REF_RE = re.compile(r'uses:\s*["\']?([^"\'\s#]+)')
-_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+# Anchored to the start of the line (leading whitespace and an optional list
+# dash only): PR #1203 review noted an unanchored ``search`` would also match
+# "uses:" appearing inside a string or comment elsewhere on the line, and flag
+# or silently pass whatever floating ref happened to follow it. Hex is
+# case-insensitive - Git SHAs are usually printed lowercase but are valid
+# either way, and a genuinely pinned uppercase SHA is not a floating tag.
+_ACTION_REF_RE = re.compile(r'\s*(?:-\s*)?uses:\s*["\']?([^"\'\s#]+)')
+_FULL_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def _action_scan_targets(root: Path) -> tuple[list[Path], list[Path]]:
+    """Every workflow and composite-action file GitHub will read ``uses:`` from.
+
+    Returns ``(workflow_files, action_files)``. A workflow may be named
+    ``*.yml`` or ``*.yaml`` - GitHub accepts both - and a composite action can
+    live at any depth under ``.github/actions/``, not only the one level down
+    the original ``*/action.yml`` glob assumed (PR #1203 review, thread 2).
+    """
+    workflows = root / ".github" / "workflows"
+    actions = root / ".github" / "actions"
+    workflow_files = sorted(
+        p for pattern in ("*.yml", "*.yaml") for p in workflows.glob(pattern)
+    )
+    action_files = sorted(
+        p for pattern in ("action.yml", "action.yaml") for p in actions.rglob(pattern)
+    )
+    return workflow_files, action_files
 
 
 def _floating_action_refs(paths: list[Path]) -> list[str]:
@@ -2812,7 +2838,7 @@ def _floating_action_refs(paths: list[Path]) -> list[str]:
     for path in paths:
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
-            match = _ACTION_REF_RE.search(line)
+            match = _ACTION_REF_RE.match(line)
             if not match:
                 continue
             ref = match.group(1)
@@ -2834,8 +2860,7 @@ def test_every_action_reference_is_pinned_to_a_sha():
     over every remaining workflow and composite action so a *new* floating
     tag fails the build instead of quietly shipping.
     """
-    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-    action_files = sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml"))
+    workflow_files, action_files = _action_scan_targets(REPO_ROOT)
     assert workflow_files, "no workflow files found - the scan target moved"
 
     offenders = _floating_action_refs([*workflow_files, *action_files])
@@ -2849,33 +2874,53 @@ def test_every_action_reference_is_pinned_to_a_sha():
 
 
 def test_action_pin_guardrail_has_teeth(tmp_path):
-    """Both directions, or the guardrail can pass by being broken."""
+    """Both directions, or the guardrail can pass by being broken.
+
+    Also covers PR #1203's review of this guardrail: a ``.yaml`` workflow and
+    a composite action nested two directories deep (thread 2's discovery
+    gap), an uppercase-hex SHA and a ``uses:`` mention that is not the step
+    key itself (thread 1's false positive and false negative). Routed through
+    ``_action_scan_targets`` rather than a hand-built file list, so a future
+    change that narrows the glob back to ``*.yml`` / one-level actions is
+    caught here too.
+    """
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
-    actions = tmp_path / ".github" / "actions" / "example"
-    actions.mkdir(parents=True)
+    shallow_action_dir = tmp_path / ".github" / "actions" / "example"
+    shallow_action_dir.mkdir(parents=True)
+    nested_action_dir = tmp_path / ".github" / "actions" / "group" / "nested"
+    nested_action_dir.mkdir(parents=True)
 
     bad = workflows / "bad.yml"
     bad.write_text(
         "steps:\n  - uses: actions/checkout@v4\n  - uses: actions/checkout@main\n"
     )
+    bad_yaml = workflows / "bad.yaml"
+    bad_yaml.write_text("steps:\n  - uses: actions/setup-node@v4\n")
     good = workflows / "good.yml"
     good.write_text(
         "steps:\n"
         "  - uses: ./.github/actions/setup-backend\n"
         "  - uses: docker://alpine:3\n"
         "  - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\n"
+        # Uppercase hex is still a genuine pin.
+        "  - uses: actions/setup-python@ECE7CB06CAEFA5FFF74198D8649806C4678C61A1 # v6.3.0\n"
+        # "uses:" here names a step, not a mapping key - must not be read as one.
+        '  - name: "mentions uses: actions/checkout@v4 in prose"\n'
     )
-    action = actions / "action.yml"
+    action = shallow_action_dir / "action.yml"
     action.write_text("runs:\n  steps:\n    - uses: actions/cache@v5\n")
+    nested_action = nested_action_dir / "action.yaml"
+    nested_action.write_text("runs:\n  steps:\n    - uses: actions/cache@v4\n")
 
-    offenders = _floating_action_refs([bad, good, action])
+    workflow_files, action_files = _action_scan_targets(tmp_path)
+    offenders = _floating_action_refs([*workflow_files, *action_files])
     # Not a plain split(":", 1): a Windows path starts "C:\...", so the first
     # colon in the string belongs to the drive letter, not the path/line
     # separator. Anchor on the "<path>:<lineno>: " shape instead - greedy
     # ``.*`` eats the drive-letter colon too before backtracking to the real
     # split point.
     caught = {re.match(r"^(.*):\d+: ", o).group(1) for o in offenders}
-    assert caught == {str(bad), str(action)}, (
+    assert caught == {str(bad), str(bad_yaml), str(action), str(nested_action)}, (
         f"the guardrail reported the wrong set of files: {offenders}"
     )
