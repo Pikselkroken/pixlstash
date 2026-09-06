@@ -10,6 +10,12 @@
   no PixlStash record and asks whether to include them. Enter keeps them, so a
   restore puts back exactly what was there; `--skip-orphans` leaves them out
   without asking, and `--yes` includes them.
+- Clicking a subfolder in the sidebar now puts it in the address bar, so
+  reloading or sharing that link comes back to the subfolder rather than the
+  whole folder.
+- Keyboard fixes: the folder-mapping wizard's folder list is one Tab stop with
+  the arrow keys moving inside it, instead of one stop per folder, and a
+  library switch that fails puts focus back on a control that is still there.
 
 # [1.11.0] [Security:High]
 

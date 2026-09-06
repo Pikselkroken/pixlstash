@@ -684,7 +684,7 @@ watch(
           </div>
           <div class="wf-host-pair">
             <span class="wf-host-key">Port</span>
-            <span class="wf-host-value">{{ comfyuiPort || " - " }}</span>
+            <span class="wf-host-value">{{ comfyuiPort || "—" }}</span>
           </div>
         </div>
         <AppButton
