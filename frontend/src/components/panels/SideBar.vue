@@ -1090,6 +1090,28 @@ function referenceFolderCanDisclose(rf) {
   return (cached.entries?.length ?? 0) > 0;
 }
 
+/**
+ * Whether the sidebar's current folder selection sits under the folder the
+ * route key `key` names.
+ *
+ * The two are NOT always the same string. A subfolder row's key is
+ * `path-<absolute path>` (`FolderTreeNode.vue`) while the route only ever says
+ * `rf-<id>` / `if-<id>`, so an equality test read "not mine" for every
+ * subfolder and left the highlight - and `selectedFolderReferenceId`, which
+ * the scanning light reads - stuck on a folder the app had navigated away
+ * from. `selectedFolderReferenceId` is the folder a `path-` selection belongs
+ * to, which is what makes the two comparable.
+ *
+ * @param {string} key an `activeFolderKey` value
+ * @returns {boolean}
+ */
+function _selectionBelongsToFolderKey(key) {
+  if (!key || !selectedFolderKey.value) return false;
+  if (selectedFolderKey.value === key) return true;
+  if (!selectedFolderKey.value.startsWith("path-")) return false;
+  return key === `rf-${selectedFolderReferenceId.value}`;
+}
+
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
   const payloadId = Number(payload?.referenceFolderId);
@@ -3939,7 +3961,7 @@ watch(
   async (newKey, oldKey) => {
     if (!newKey) {
       // Route left a folder view - clear the sidebar's folder highlight.
-      if (oldKey && selectedFolderKey.value === oldKey) {
+      if (oldKey && _selectionBelongsToFolderKey(oldKey)) {
         selectedFolderKey.value = null;
         selectedFolderReferenceId.value = null;
       }

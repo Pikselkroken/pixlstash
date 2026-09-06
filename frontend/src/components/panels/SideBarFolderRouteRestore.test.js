@@ -72,11 +72,24 @@ vi.mock("vue-router", async () => {
 
 import SideBar from "./SideBar.vue";
 import { useViewStore } from "../../stores/useViewStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const ROOT = "/home/me/library/refs";
 const SUB = "/home/me/library/refs/2024/summer";
 
-const FOLDER = { id: 5, folder: ROOT, label: "Refs", active: true };
+// `status: active` with no `last_scanned` is what makes `selectedFolderScanning`
+// true while this folder is selected, which is how a test sees the sidebar's
+// selection without reaching into the component: it reaches
+// `sidebarStore.folderScanning`, and it is driven by `selectedFolderReferenceId`
+// - the half of the selection the teardown below has to clear.
+const FOLDER = {
+  id: 5,
+  folder: ROOT,
+  label: "Refs",
+  active: true,
+  status: "active",
+  last_scanned: null,
+};
 
 function respond(url) {
   if (String(url).includes("/reference-folders")) {
@@ -167,6 +180,45 @@ describe("restoring /ref-folder/:id", () => {
       pathPrefix: ROOT,
       label: "Refs",
     });
+
+    wrapper.unmount();
+  });
+
+  // The teardown at the top of the same watcher compares the sidebar's own
+  // selection key against the route key it is leaving. Those two stopped being
+  // the same string once a subfolder could be selected: the sidebar holds
+  // `path-<abs path>` and the route only ever said `rf-5`, so the equality test
+  // read "not mine" and left the highlight - and the scanning light behind
+  // `selectedFolderReferenceId` - stuck on a folder the app had navigated away
+  // from. Found by review on this branch; it applies to a hand-clicked
+  // subfolder as much as to a restored one, which is why the guard compares on
+  // the folder the selection belongs to rather than on the key.
+  it("clears the selection when the route leaves a restored subfolder", async () => {
+    const wrapper = await mountSidebar();
+    const sidebarStore = useSidebarStore();
+    routeToFolder(SUB);
+    await flushPromises();
+    expect(sidebarStore.folderScanning).toBe(true);
+
+    useViewStore().view = null; // the route left every folder view
+    await flushPromises();
+
+    expect(sidebarStore.folderScanning).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("still clears the selection when the route leaves a folder root", async () => {
+    const wrapper = await mountSidebar();
+    const sidebarStore = useSidebarStore();
+    routeToFolder(null);
+    await flushPromises();
+    expect(sidebarStore.folderScanning).toBe(true);
+
+    useViewStore().view = null;
+    await flushPromises();
+
+    expect(sidebarStore.folderScanning).toBe(false);
 
     wrapper.unmount();
   });
