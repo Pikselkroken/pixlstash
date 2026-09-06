@@ -2678,13 +2678,19 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
 
 
 def _assemble_changelog_module():
-    """The release's changelog assembler, imported from ``scripts/``."""
-    import sys
+    """The release's changelog assembler, loaded from ``scripts/`` by path.
 
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    import assemble_changelog
+    By path rather than by ``sys.path`` insertion: this file shares a process
+    with the rest of a gate shard, and a leftover entry pointing at ``scripts/``
+    would silently change what every later test imports.
+    """
+    import importlib.util
 
-    return assemble_changelog
+    path = REPO_ROOT / "scripts" / "assemble_changelog.py"
+    spec = importlib.util.spec_from_file_location("assemble_changelog", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_every_changelog_fragment_is_a_markdown_list():
@@ -2702,13 +2708,27 @@ def test_every_changelog_fragment_is_a_markdown_list():
         pytest.fail(str(exc))
 
 
-def test_a_fragment_that_is_not_a_list_is_refused(tmp_path):
-    """The check above can still fail - the mutation that proves it is alive."""
+@pytest.mark.parametrize(
+    "body",
+    [
+        "# [1.2.3]\n\n- something\n",
+        "- something\n\n# [1.2.3]\n",
+        "not a list item at all\n",
+    ],
+    ids=["leading heading", "trailing heading", "bare prose"],
+)
+def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
+    """The check above can still fail - the mutation that proves it is alive.
+
+    The trailing case is the one a first-line-only check misses: pasted under
+    the release's heading, that stray `# [1.2.3]` becomes a version section of
+    its own and every entry below it moves into the wrong release.
+    """
     assemble_changelog = _assemble_changelog_module()
 
     bad = tmp_path / "bad.md"
-    bad.write_text("# [1.2.3]\n\n- something\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="markdown list item"):
+    bad.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError):
         assemble_changelog.read_entries([bad])
 
 

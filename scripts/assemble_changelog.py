@@ -38,19 +38,31 @@ def fragments() -> list[Path]:
 def read_entries(paths: list[Path]) -> list[str]:
     """The list items from *paths*, one string per fragment file.
 
+    Every line is checked, not just the first: the file is pasted verbatim under
+    a version heading, so a stray ``# heading`` on line three lands in the
+    release notes as a version of its own and pushes everything below it into the
+    wrong release.
+
     Raises:
-        ValueError: If a fragment does not start with a markdown list item. The
-            file is pasted verbatim under a version heading, so anything else
-            would land in the release notes as it stands.
+        ValueError: If any line is neither a markdown list item, an indented
+            continuation of one, nor blank.
     """
     entries = []
     for path in paths:
         body = path.read_text(encoding="utf-8").strip()
+        for number, line in enumerate(body.splitlines(), start=1):
+            if not line.strip() or line.startswith(("- ", "  ")):
+                continue
+            raise ValueError(
+                f"{path.name} line {number} is neither a list item nor an "
+                f"indented continuation of one: {line!r}. A fragment is the "
+                "changelog lines themselves, with no heading and no version."
+            )
         if not body.startswith("- "):
             raise ValueError(
-                f"{path.name} does not start with a markdown "
-                "list item ('- '); a fragment is the changelog lines themselves, "
-                "with no heading and no version."
+                f"{path.name} does not start with a markdown list item ('- '); "
+                "a fragment is the changelog lines themselves, with no heading "
+                "and no version."
             )
         entries.append(body)
     return entries
@@ -75,19 +87,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     paths = fragments()
-    if not paths:
-        print(f"No fragments in {FRAGMENT_DIR.relative_to(REPO_ROOT)}; nothing to do.")
-        return 1
-
     entries = read_entries(paths)
     heading = f"# [{args.version}]"
     if args.security:
         heading += f" [Security: {args.security}]"
 
+    # The heading is written even with nothing under it. `release-version.yml`
+    # reads `[Security: LEVEL]` off whatever heading is at the top of the
+    # released tag's CHANGELOG.md, so a release that skipped this step would
+    # publish the PREVIOUS release's security level as its own. A release with
+    # no user-visible change is a real thing - an rc bump, a cycle of internal
+    # fixes - and it still needs its own heading.
     existing = CHANGELOG.read_text(encoding="utf-8")
-    CHANGELOG.write_text(
-        f"{heading}\n\n" + "\n".join(entries) + "\n\n" + existing, encoding="utf-8"
-    )
+    section = f"{heading}\n\n" + ("\n".join(entries) + "\n\n" if entries else "")
+    CHANGELOG.write_text(section + existing, encoding="utf-8")
 
     if not args.keep:
         for path in paths:
@@ -96,6 +109,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{heading}\n")
     for path in paths:
         print(f"  folded in {path.relative_to(REPO_ROOT)}")
+    if not paths:
+        print(
+            f"  no fragments in {FRAGMENT_DIR.relative_to(REPO_ROOT)} - the "
+            "section is empty, which says no user-visible change shipped in it.\n"
+            "  If that is wrong, the fragments were never written; add them and "
+            "run this again."
+        )
+        return 0
     print(
         "\nRead the new section in CHANGELOG.md before committing: the order is "
         "by filename, not by what matters."
