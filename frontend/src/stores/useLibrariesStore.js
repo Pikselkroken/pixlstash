@@ -152,10 +152,15 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
       returnTarget.focus?.();
       if (document.activeElement === returnTarget) return true;
     }
-    console.warn("Could not return focus after a cancelled library switch", {
-      hadTrigger: Boolean(returnTarget),
-      stillInDocument: Boolean(returnTarget?.isConnected),
-    });
+    // Only a trigger that was offered and could not be honoured is worth
+    // saying anything about. `begin` is also called with no trigger at all
+    // (the folder-mapping wizard's own switch), and warning on those would
+    // put a line in the console on an ordinary dismissal.
+    if (returnTarget) {
+      console.warn("Could not return focus after a cancelled library switch", {
+        stillInDocument: returnTarget.isConnected,
+      });
+    }
     return false;
   }
 
