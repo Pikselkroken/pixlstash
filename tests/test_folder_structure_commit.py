@@ -1298,3 +1298,285 @@ def test_a_switch_refused_by_a_running_commit_says_why(owner_env):
     # With nothing running there is nothing to name, and the caller falls back
     # to the coordinator's own words rather than inventing a reason.
     assert server.library_switch._what_is_holding_the_library() is None
+
+
+def _insert_reference_folder(server, folder: str, *, last_scanned):
+    """A registered reference folder row, without running a scan for it.
+
+    Direct, because every case below is about what `register_reference_folder`
+    decides when a row is *already* there, and a real scan would make the state
+    under test arrive whenever the planner got to it.
+    """
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    def write(session):
+        row = ReferenceFolder(
+            folder=folder,
+            label=os.path.basename(folder),
+            status=ReferenceFolderStatus.ACTIVE,
+            last_scanned=last_scanned,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row.id
+
+    return server.vault.db.run_task(write)
+
+
+def _forget_reference_folder(server, folder_id: int) -> None:
+    from pixlstash.db_models.reference_folder import ReferenceFolder
+
+    def write(session):
+        row = session.get(ReferenceFolder, folder_id)
+        if row is not None:
+            session.delete(row)
+            session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def test_a_commit_interrupted_after_its_scan_finished_is_still_resumable(owner_env):
+    """#1177 item 17. A reference-mode commit killed between "the scan is done"
+    and "the mapping is applied" used to wedge for ever: the resume called
+    `register_reference_folder` again, found its own row with `last_scanned`
+    set, and refused it as if it belonged to somebody else - so the record
+    stayed `pending` and every start-up failed the same way.
+
+    The rule that separates the two: only a record that got past
+    ``registering`` owns the row at its root. Both directions asserted, because
+    a resume that adopts anything it finds would silently apply the mapping to
+    whatever is indexed under a folder the owner already had.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "resumable-after-scan")
+    _make_tree(root, {"Anna": ["a.jpg"]})
+    folder_id = _insert_reference_folder(server, root, last_scanned=time.time())
+    svc.record_pending_commit(
+        server,
+        task_id="resume-after-scan",
+        root_path=root,
+        mode="reference",
+        label=None,
+        expected_pictures=1,
+        assignments=svc.parse_assignments(
+            [{"relative_path": "Anna", "kind": "person"}]
+        ),
+    )
+    try:
+        # Still at `registering`: nothing here registered that folder, so it is
+        # someone else's and the refusal stands.
+        with pytest.raises(svc.CommitError, match="already a reference folder"):
+            svc.register_reference_folder(server, root, task_id="resume-after-scan")
+
+        # Past it: this commit registered the row itself and only the assigning
+        # step is left, which is the whole reason the record exists.
+        svc.record_commit_stage(server, "resume-after-scan", "indexing")
+        adopted = svc.register_reference_folder(
+            server, root, task_id="resume-after-scan"
+        )
+        assert adopted.id == folder_id
+
+        # And it is the record that decides, not the path: another commit's id
+        # over the same root is refused exactly as an unknown one is.
+        with pytest.raises(svc.CommitError, match="already a reference folder"):
+            svc.register_reference_folder(server, root, task_id="some-other-commit")
+    finally:
+        svc.settle_pending_commit(server, "resume-after-scan", "abandoned")
+        _forget_reference_folder(server, folder_id)
+
+
+def test_a_newer_accepted_mapping_supersedes_the_older_pending_one(owner_env):
+    """#1177 item 18. A failed commit leaves its record pending on purpose and
+    clears the in-memory slot, so the owner can accept a second mapping over
+    the same library. Both rows were then pending: the newest was resumed
+    first, and the start-up after that resumed the older one and re-applied a
+    mapping the owner had already replaced.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "superseded-record")
+    _make_tree(root, {"Anna": ["a.jpg"]})
+    common = dict(
+        root_path=root,
+        mode="local_import",
+        label=None,
+        expected_pictures=1,
+    )
+    svc.record_pending_commit(
+        server,
+        task_id="older-mapping",
+        assignments=svc.parse_assignments(
+            [{"relative_path": "Anna", "kind": "person"}]
+        ),
+        **common,
+    )
+    svc.record_pending_commit(
+        server,
+        task_id="newer-mapping",
+        assignments=svc.parse_assignments([{"relative_path": "Anna", "kind": "tag"}]),
+        **common,
+    )
+    try:
+        assert _record_for(server, "older-mapping")["state"] == "superseded"
+        pending = svc.pending_commit(server)
+        assert pending is not None and pending["task_id"] == "newer-mapping"
+    finally:
+        svc.settle_pending_commit(server, "newer-mapping", "abandoned")
+
+    # The point of the whole item: with the newer one settled, the older must
+    # not become resumable again.
+    resumable = svc.pending_commit(server)
+    assert resumable is None or resumable["task_id"] != "older-mapping", resumable
+
+
+def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
+    """#1177 item 19. `register_reference_folder` ran no conflict check at all,
+    so a reference-mode commit accepted a root that CONTAINS `image_root` (the
+    route only refuses one equal to or inside it) or that contains, or sits
+    inside, another registered folder - two scan tasks each believing they own
+    the same files. Both entry points share
+    `validate_reference_folder_conflicts` now.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    outer = os.path.join(owner_env["tmp"], "swallowing-root")
+    inner = os.path.join(outer, "already-registered")
+    _make_tree(inner, {"": ["a.jpg"]})
+    folder_id = _insert_reference_folder(server, inner, last_scanned=time.time())
+    try:
+        with pytest.raises(svc.CommitError, match="inside this path"):
+            svc.register_reference_folder(server, outer)
+        with pytest.raises(svc.CommitError, match="inside an existing reference"):
+            svc.register_reference_folder(server, os.path.join(inner, "deeper-still"))
+    finally:
+        _forget_reference_folder(server, folder_id)
+
+    # The direction the commit route's own guard misses: a root ABOVE the
+    # library's own storage, which would index every managed picture a second
+    # time under an absolute path.
+    with pytest.raises(svc.CommitError, match="PixlStash data folder"):
+        svc.register_reference_folder(
+            server, os.path.dirname(os.path.normpath(server.vault.image_root))
+        )
+
+
+def test_the_read_and_the_reference_scan_agree_about_dot_folders(owner_env):
+    """#1177 item 20. The Phase 2 read prunes dot-folders; the reference scan
+    that indexes the very same root did not, so the two passes over one tree
+    disagreed about what was in it - the read's count excluded a vault's own
+    cache and the scan indexed every file in it as a picture, which the
+    mapping then filed.
+    """
+    from sqlmodel import select
+
+    from pixlstash.db_models.picture import Picture
+
+    owner, server = owner_env["owner"], owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "dot-folder-parity")
+    _make_tree(root, {"visible": ["a.jpg"]})
+    hidden = os.path.join(root, ".pixlstash-thumbnails")
+    os.makedirs(hidden, exist_ok=True)
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), (9, 9, 9)).save(os.path.join(hidden, "cached.webp"))
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    read_task_id = started.json()["task_id"]
+    read = _drain_read(owner, read_task_id)
+    assert read["status"] == "completed", read
+    assert read["result"]["picture_count"] == 1, "the read counts only the visible one"
+
+    commit_started = owner.post(
+        _COMMIT, json={"task_id": read_task_id, "assignments": []}
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "completed", body
+
+    indexed = server.vault.db.run_immediate_read_task(
+        lambda s: [
+            p
+            for p in s.exec(select(Picture.file_path)).all()
+            if p and p.startswith(root)
+        ]
+    )
+    assert indexed == [os.path.join(root, "visible", "a.jpg")], indexed
+
+
+def test_linking_a_large_import_costs_a_bounded_number_of_statements(owner_env):
+    """#1177 items 21 and 55. Nothing pinned this step's cost, and it was one
+    indexed SELECT per (picture, tag) plus unchunked IN lists over the whole
+    import. Counted rather than timed: a statement count is the thing that
+    actually changed, and it does not depend on the machine.
+
+    The two sizes are the assertion. An absolute bound would pass a
+    per-picture implementation on a small enough tree; twenty times the
+    pictures costing the same handful of statements is what "batched" means.
+    """
+    from sqlalchemy import event
+    from sqlmodel import select
+
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag
+    from pixlstash.services.folder_structure_commit_service import (
+        Assignment,
+        CommitResult,
+        _link_pictures,
+    )
+
+    server = owner_env["server"]
+    image_root = server.vault.image_root
+
+    def measure(session, count: int) -> tuple[int, int]:
+        prefix = f"bounded-{count}"
+        pictures = [
+            Picture(file_path=f"{prefix}/gallery/{index}.jpg") for index in range(count)
+        ]
+        session.add_all(pictures)
+        session.flush()
+
+        statements: list[str] = []
+        connection = session.connection()
+
+        def before(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(connection, "before_cursor_execute", before)
+        try:
+            _link_pictures(
+                session,
+                pictures,
+                [Assignment(relative_path="gallery", kind="tag")],
+                os.path.join(image_root, prefix),
+                image_root,
+                CommitResult(),
+            )
+        finally:
+            event.remove(connection, "before_cursor_execute", before)
+        session.commit()
+        tagged = len(
+            session.exec(
+                select(Tag).where(
+                    Tag.picture_id.in_([p.id for p in pictures]), Tag.tag == "gallery"
+                )
+            ).all()
+        )
+        return len(statements), tagged
+
+    small, small_tagged = server.vault.db.run_task(lambda s: measure(s, 20))
+    large, large_tagged = server.vault.db.run_task(lambda s: measure(s, 400))
+    assert (small_tagged, large_tagged) == (20, 400), "every picture must be tagged"
+    assert large <= small + 2, (
+        f"the link step still scales with the import: {small} statements for 20 "
+        f"pictures, {large} for 400"
+    )
+    assert large < 20, f"{large} statements to link 400 pictures"
