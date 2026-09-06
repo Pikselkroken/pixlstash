@@ -2714,8 +2714,16 @@ def test_every_changelog_fragment_is_a_markdown_list():
         "# [1.2.3]\n\n- something\n",
         "- something\n\n# [1.2.3]\n",
         "not a list item at all\n",
+        "  - something\n",
+        "\n\n- something\n",
     ],
-    ids=["leading heading", "trailing heading", "bare prose"],
+    ids=[
+        "leading heading",
+        "trailing heading",
+        "bare prose",
+        "opens indented",
+        "opens blank",
+    ],
 )
 def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
     """The check above can still fail - the mutation that proves it is alive.
@@ -2723,6 +2731,10 @@ def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
     The trailing case is the one a first-line-only check misses: pasted under
     the release's heading, that stray `# [1.2.3]` becomes a version section of
     its own and every entry below it moves into the wrong release.
+
+    The last two are the ones a leading `strip()` masks: both open on something
+    that is not a top-level list item, and stripping the front turns each into a
+    fragment that passes and is then pasted in edited form.
     """
     assemble_changelog = _assemble_changelog_module()
 

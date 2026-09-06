@@ -43,13 +43,20 @@ def read_entries(paths: list[Path]) -> list[str]:
     release notes as a version of its own and pushes everything below it into the
     wrong release.
 
+    Only trailing whitespace is removed, never leading. Stripping both would
+    both hide a malformed fragment and quietly rewrite it: ``"  - thing"`` is
+    not a list item at the top level, but leading-stripped it passes the check
+    below and is then pasted as ``"- thing"`` - a fragment silently edited on
+    its way into the release notes, which is exactly what "verbatim" rules out.
+
     Raises:
         ValueError: If any line is neither a markdown list item, an indented
-            continuation of one, nor blank.
+            continuation of one, nor blank, or if the fragment does not open on
+            a list item.
     """
     entries = []
     for path in paths:
-        body = path.read_text(encoding="utf-8").strip()
+        body = path.read_text(encoding="utf-8").rstrip()
         for number, line in enumerate(body.splitlines(), start=1):
             if not line.strip() or line.startswith(("- ", "  ")):
                 continue
