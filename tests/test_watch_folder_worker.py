@@ -562,3 +562,48 @@ def test_claim_if_settled_requires_a_wall_clock_quiet_window():
 
     # Claimed once. Later scans of the same bytes must not offer it again.
     assert finder._claim_if_settled(path, complete, 2 * settle + 60.0) is False
+
+
+def test_watch_folder_listing_refuses_rather_than_reporting_none():
+    """#1177 item 59's import-folder sibling, from the review of #1201.
+
+    `get_import_folder_paths` used to answer a failed read with `[]`, which is
+    exactly what "no watch folders are configured" looks like. In the export
+    route that turned a destination check off silently; here it is a plainer
+    lie - the owner is told they watch nothing, which is how someone re-adds a
+    folder they already have or concludes their folders were lost. It now
+    raises, and this route turns that into a 503 rather than an unhandled 500.
+    """
+    from unittest import mock
+
+    from pixlstash.utils.path_utils import LibraryRootsUnavailable
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with Server(f"{temp_dir}/server-config.json") as server:
+            with TestClient(server.api) as client:
+                response = client.post(
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                )
+                assert response.status_code == 200, response.text
+
+                # The positive control first, so a 503 below cannot be the
+                # route being broken outright: a readable table still lists.
+                ok = client.get(f"{API_PREFIX}/server-config/watch-folders")
+                assert ok.status_code == 200, ok.text
+                assert isinstance(ok.json()["watch_folders"], list)
+
+                def _explode(_vault):
+                    raise LibraryRootsUnavailable("test-induced read failure")
+
+                with mock.patch(
+                    "pixlstash.routes.config.config_service.get_import_folder_paths",
+                    _explode,
+                ):
+                    refused = client.get(f"{API_PREFIX}/server-config/watch-folders")
+                assert refused.status_code == 503, refused.text
+                assert "watched folders" in refused.json()["detail"]
+
+                # And it recovers: the refusal is about this read, not a latch.
+                again = client.get(f"{API_PREFIX}/server-config/watch-folders")
+                assert again.status_code == 200, again.text

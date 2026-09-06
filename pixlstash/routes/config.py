@@ -18,6 +18,7 @@ from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.services import (
     config_service,
     library_settings_service,
@@ -928,7 +929,22 @@ def create_router(server) -> APIRouter:
                 status_code=403,
                 detail="Not available for token-authenticated requests.",
             )
-        folders = config_service.get_import_folder_paths(server.vault)
+        # A listing, not a safety check, so the refusal is about honesty rather
+        # than containment: reporting `[]` when the read failed tells the owner
+        # they have no watch folders, which is how someone adds a duplicate of
+        # one they already have or concludes their folders were lost. Say so
+        # instead, and say it as a refusal rather than as an unhandled 500.
+        try:
+            folders = config_service.get_import_folder_paths(server.vault)
+        except LibraryRootsUnavailable as exc:
+            logger.warning("Could not list the watch folders: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not read your watched folders just now. "
+                    "Try again in a moment."
+                ),
+            ) from exc
         return {
             "status": "success",
             "watch_folders": folders,
