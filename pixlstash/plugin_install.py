@@ -990,20 +990,23 @@ def read_requirements(requirements: Path) -> list[str]:
     ]
 
 
-def index_options(requirements: Path) -> list[str]:
-    """Return the option lines in *requirements*, which redirect where pip looks.
+def pip_options(requirements: Path) -> list[str]:
+    """Return every option line in *requirements* -- each line starting ``-``.
 
     SECURITY: a plugin's ``requirements.txt`` is written by the plugin author,
-    and pip honours option lines in it -- ``--index-url``,
-    ``--extra-index-url``, ``--find-links``, ``--no-index``, ``--trusted-host``
-    and their short forms.  Any of those makes an ordinary *named* requirement
-    resolve from somewhere other than PyPI, which is the cause of the
-    substitution :attr:`DependencyChange.url` reports the effect of.  The user
-    should see the cause before agreeing, so these are surfaced verbatim.
+    and pip honours option lines in it.  Some of them decide where packages
+    come from -- ``--index-url``, ``--extra-index-url``, ``--find-links``,
+    ``--no-index``, ``--trusted-host`` and their short forms -- and any of those
+    makes an ordinary *named* requirement resolve from somewhere other than
+    PyPI, which is the cause of the substitution
+    :attr:`DependencyChange.url` reports the effect of.
 
-    Every option line is returned rather than a curated subset: a plugin has no
-    ordinary reason to carry one at all, and an allowlist of "harmless" options
-    is a thing to get wrong in the direction of silence.
+    **Every option line is returned, not just those.**  The name says so
+    deliberately: a curated subset would be an allowlist of "harmless" options,
+    which is a thing to get wrong in the direction of silence, and a plugin has
+    no ordinary reason to carry any option line at all.  The caller shows them
+    verbatim and lets the reader judge, rather than claiming per line what each
+    one does.
     """
     return [line for line in read_requirements(requirements) if line.startswith("-")]
 

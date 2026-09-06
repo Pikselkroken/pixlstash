@@ -1571,18 +1571,23 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # anything surprising in the listing below: pip honours them, so a
             # plainly-named requirement can resolve from the plugin author's
             # own server rather than from PyPI.
-            options = plugin_install.index_options(plan.requirements)
+            options = plugin_install.pip_options(plan.requirements)
             if options:
+                # The lines are shown verbatim and described as what they are.
+                # Saying they "change where pip downloads from" would be a
+                # claim about each one, and the list is deliberately every
+                # option line rather than a curated download-source subset.
                 print(
-                    f"\nwarning: {plan.requirements.name} changes where pip "
-                    "downloads from:",
+                    f"\nwarning: {plan.requirements.name} passes options to pip:",
                     file=sys.stderr,
                 )
                 for option in options:
                     print(f"  {option}", file=sys.stderr)
                 print(
-                    "  Packages below may not come from PyPI; check the "
-                    "source shown against each one.",
+                    "  Options like --index-url and --find-links change where "
+                    "packages come from, so the ones below may not be the PyPI "
+                    "projects their names suggest; check the source shown "
+                    "against each.",
                     file=sys.stderr,
                 )
             if args.allow_sdist:

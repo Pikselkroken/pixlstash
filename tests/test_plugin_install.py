@@ -1593,14 +1593,15 @@ def _report(*packages) -> str:
     Each entry is `(name, version)`, or `(name, version, download_info,
     is_direct)` to model a URL, a `--find-links` hit or a VCS checkout.
     """
-    return json.dumps(
-        {
-            "install": [
-                _entry(*package) if len(package) > 2 else _entry(package[0], package[1])
-                for package in packages
-            ]
-        }
-    )
+    entries = []
+    for package in packages:
+        # (name, version) uses _entry's default indexed download_info;
+        # (name, version, download_info, is_direct) states it explicitly.
+        if len(package) > 2:
+            entries.append(_entry(*package))
+        else:
+            entries.append(_entry(package[0], package[1]))
+    return json.dumps({"install": entries})
 
 
 @pytest.fixture
@@ -1927,7 +1928,7 @@ def test_the_listing_names_a_find_links_source_the_user_never_asked_for(
     assert hostile["url"] in out, "a non-PyPI source must be named before consent"
 
 
-def test_the_listing_surfaces_index_options_from_the_plugins_requirements(tmp_path):
+def test_the_listing_surfaces_every_pip_option_from_the_requirements(tmp_path):
     """The cause, not just the effect: the option lines are the attack."""
     requirements = tmp_path / "requirements.txt"
     requirements.write_text(
@@ -1937,14 +1938,21 @@ def test_the_listing_surfaces_index_options_from_the_plugins_requirements(tmp_pa
         "requests\n",
         encoding="utf-8",
     )
-    assert plugin_install.index_options(requirements) == [
+    assert plugin_install.pip_options(requirements) == [
         "--extra-index-url https://packages.example.invalid/simple",
         "--find-links /srv/plugin-wheels",
     ]
     # An ordinary requirements.txt has none, so the warning stays off screen.
     plain = tmp_path / "plain.txt"
     plain.write_text("flask\npillow==11.0.0\n", encoding="utf-8")
-    assert plugin_install.index_options(plain) == []
+    assert plugin_install.pip_options(plain) == []
+
+    # Deliberately NOT narrowed to download-source flags: an option a curated
+    # allowlist judged harmless would be shown to nobody, and the reader is
+    # better served seeing every line a plugin asks pip to honour.
+    broad = tmp_path / "broad.txt"
+    broad.write_text("--only-binary=:all:\n--pre\nflask\n", encoding="utf-8")
+    assert plugin_install.pip_options(broad) == ["--only-binary=:all:", "--pre"]
 
 
 def test_the_listing_names_the_url_a_direct_requirement_comes_from(
