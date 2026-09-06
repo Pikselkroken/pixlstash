@@ -1283,7 +1283,10 @@ def rename_entity_folders(
                     # ``os.path.exists``: an entry that IS the source (a rename
                     # that only changes case) is not a collision, and a sibling
                     # spelled differently is one even where ``exists`` says no.
-                    taken = _entry_matching(parent, new_folder)
+                    # Asked exact-first, because here the exactly-spelled entry
+                    # is the collision even when the source also matches the key
+                    # - see :func:`_entry_matching`.
+                    taken = _entry_matching(parent, new_folder, prefer_exact=True)
                     if taken is not None and taken != source:
                         logger.warning(
                             "Layout rename: %s already exists, so %s keeps its "
@@ -1376,7 +1379,9 @@ def _entity_names(session: Session, facet: Facet) -> list:
     ]
 
 
-def _entry_matching(parent: str, folder: str) -> Optional[str]:
+def _entry_matching(
+    parent: str, folder: str, *, prefer_exact: bool = False
+) -> Optional[str]:
     """The real on-disk path in *parent* that the layout reads as *folder*.
 
     ``os.path.isdir(os.path.join(parent, folder))`` is not enough, and the
@@ -1389,29 +1394,44 @@ def _entry_matching(parent: str, folder: str) -> Optional[str]:
     ``MissingFilePurgeFinder`` purges within the hour along with its metadata.
 
     So resolve the entry the way the truth check compares, and hand back the
-    name as it is actually written. Directories rank above files and the exact
-    spelling breaks the tie; see the loop.
+    name as it is actually written.
+
+    **The two questions this answers rank the candidates the opposite way, and
+    that is the whole reason for the flag.** Looking for the entity's own folder
+    (``prefer_exact=False``) a *directory* wins, because a stray file sharing an
+    entity's match key must not stand in for the folder and make the rename
+    silently not happen. Asking whether the destination is taken
+    (``prefer_exact=True``) the *exact spelling* wins, because the question is
+    "is something already sitting where I am about to write" - and a file named
+    exactly like the destination is a collision even when the source directory
+    also matches the key. Ranking that one directory-first hands back the source
+    itself, which reads as "not taken" and sends a case-only rename into an
+    ``os.rename`` that cannot succeed. Within each question the other property
+    breaks the tie, so a case-sensitive filesystem holding both ``Summer`` and
+    ``summer`` still renames the one that was asked for.
+
+    Args:
+        parent: The directory to look in.
+        folder: The folder name as the layout writes it.
+        prefer_exact: Rank an exactly-spelled entry above a directory. Use it
+            for the destination, not for the source.
+
+    Returns:
+        The path of the best-matching entry, or ``None`` if nothing matches.
     """
     key = _match_key(folder)
     best = None
-    best_rank = -1
+    best_rank = None
     try:
         with os.scandir(parent) as entries:
             for entry in entries:
                 if _match_key(entry.name) != key:
                     continue
-                # A directory outranks a file, and the exact spelling breaks the
-                # tie. Directory first because a stray file sharing an entity's
-                # match key must not stand in for the entity's real folder and
-                # make the rename silently not happen; exact second so a
-                # case-sensitive filesystem holding both ``Summer`` and
-                # ``summer`` renames the one that was asked for. A file still
-                # comes back when nothing better does, because for the
-                # destination it is a collision like any other.
-                rank = (2 if entry.is_dir() else 0) + (entry.name == folder)
-                if rank > best_rank:
+                exact, is_dir = entry.name == folder, entry.is_dir()
+                rank = (exact, is_dir) if prefer_exact else (is_dir, exact)
+                if best_rank is None or rank > best_rank:
                     best, best_rank = entry.path, rank
-                if best_rank == 3:
+                if best_rank == (True, True):
                     break
     except OSError as exc:
         logger.warning("Layout rename: cannot list %s (%s)", parent, exc)

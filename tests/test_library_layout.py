@@ -1124,6 +1124,58 @@ def test_a_file_at_the_destination_still_blocks_the_rename(library):
         assert handle.read() == b"the owner's own file"
 
 
+def test_a_file_spelled_exactly_like_the_destination_is_a_collision(caplog, library):
+    """The destination question ranks the opposite way round from the source one.
+
+    Looking for the entity's folder a directory must win. Asking whether the
+    destination is taken the exact spelling must win: otherwise the source
+    directory itself comes back as the best key match, reads as "not taken", and
+    the rename goes ahead into an ``os.rename`` that cannot succeed - the folder
+    keeps its old name and its pictures go off-layout, reported as a failed
+    syscall rather than as the collision it is.
+
+    Built from the ligature for the same reason as the test above: on the
+    Windows runners a directory and a file whose names differ only in case
+    cannot both exist.
+    """
+    session, root = library["session"], library["root"]
+    real = "ﬁeld Notes"
+    destination = "Field Notes"
+    assert engine._match_key(real) == engine._match_key(destination)
+
+    _spell_the_project_folder(library, real)
+    try:
+        with open(os.path.join(root, destination), "wb") as handle:
+            handle.write(b"the owner's own file")
+    except OSError as exc:  # pragma: no cover - not seen on Linux or Windows
+        pytest.skip(f"this filesystem stores the two names as one entry: {exc}")
+
+    project = session.get(Project, library["project_id"])
+    project.name = destination
+    session.add(project)
+    with caplog.at_level("WARNING", logger=engine.logger.name):
+        renamed = engine.rename_entity_folders(
+            session,
+            Facet.PROJECT,
+            real,
+            destination,
+            entity_id=library["project_id"],
+            image_root=root,
+        )
+
+    assert renamed == 0
+    # The refusal has to be the DELIBERATE one. Reaching os.rename and having it
+    # fail leaves the same folder on disk, so the count alone cannot tell a
+    # handled collision from a syscall we should never have attempted.
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("already exists" in message for message in messages), messages
+    assert not any("could not rename" in message for message in messages), messages
+
+    assert os.path.isdir(os.path.join(root, real))
+    with open(os.path.join(root, destination), "rb") as handle:
+        assert handle.read() == b"the owner's own file"
+
+
 def test_renaming_one_of_two_people_of_the_same_name_touches_no_folder(library):
     """Two people really can be called Mira, and only one of them was renamed.
 
