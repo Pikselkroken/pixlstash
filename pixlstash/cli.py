@@ -417,15 +417,6 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "PixlStash is using. This can stop PixlStash starting."
         ),
     )
-    install_parser.add_argument(
-        "--allow-sdist",
-        action="store_true",
-        help=(
-            "Allow dependencies published only as source. Working out what "
-            "they would install runs their build code first, before you are "
-            "shown anything."
-        ),
-    )
     install_parser.set_defaults(handler=_cmd_plugins_install)
 
     create_parser = commands.add_parser(
@@ -1590,17 +1581,8 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
                     "against each.",
                     file=sys.stderr,
                 )
-            if args.allow_sdist:
-                print(
-                    "\nwarning: --allow-sdist. Working out what these need "
-                    "runs build code from any source-only package among them, "
-                    "as you, before the list below exists.",
-                    file=sys.stderr,
-                )
             print(f"\nResolving {plan.requirements.name}...")
-            changes = plugin_install.resolve_requirements(
-                plan.requirements, allow_sdist=args.allow_sdist
-            )
+            changes = plugin_install.resolve_requirements(plan.requirements)
             if not _report_dependencies(changes, force=args.force_deps):
                 return EXIT_REFUSED
         elif plan.requirements:
@@ -1610,7 +1592,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             )
 
         if args.dry_run:
-            print("Dry run: nothing was written.")
+            print("Dry run: nothing was installed.")
             return EXIT_OK
         # Default yes only when the packages have just been listed one by one.
         question, default = ("Is this OK", True) if changes else ("Install it?", False)
@@ -1623,7 +1605,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # The resolution that was shown and agreed to, not the file it came
             # from: re-reading the file would resolve it a second time and
             # could install something nobody was asked about.
-            plugin_install.install_requirements(changes, allow_sdist=args.allow_sdist)
+            plugin_install.install_requirements(changes)
 
     print(f"Installed {plan.name} to {plan.destination}")
     if plan.kind == plugin_install.CAPTIONING:
