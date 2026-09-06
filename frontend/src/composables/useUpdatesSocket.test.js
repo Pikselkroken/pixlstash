@@ -490,4 +490,37 @@ describe("the view-changed pill while the tagger runs", () => {
     await host.vm.$nextTick();
     expect(wsStore.sortChangedExternalIds).toEqual([]);
   });
+
+  // The hold is a plain Set inside the composable, so it dies with the
+  // composable. A pass over a large library runs for minutes; anything that
+  // takes App.vue down inside that window - a re-login, a full-restore
+  // transition - used to take the whole batch with it, and the view that came
+  // back was never told it had changed. The store outlives the composable, so
+  // teardown hands them over instead of dropping them.
+  //
+  // `taggingActive` is deliberately still true at unmount: that is the whole
+  // scenario, and a flush that re-tested it would put the ids straight back
+  // into a Set nothing will ever read again.
+  it("hands held ids to the store when the app unmounts mid-pass", async () => {
+    const { api, wsStore, tasksStore } = mountApi();
+    tasksStore.workerSnapshots = { TagTask: { active: true, total: 800 } };
+    await host.vm.$nextTick();
+    expect(tasksStore.taggingActive).toBe(true);
+
+    api.onFlagSortChanged([11, 12]);
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
+
+    host.unmount();
+    host = null;
+
+    expect(tasksStore.taggingActive).toBe(true);
+    expect([...wsStore.sortChangedExternalIds].sort()).toEqual([11, 12]);
+  });
+
+  it("does not raise a pill on unmount when nothing was held", () => {
+    const { wsStore } = mountApi();
+    host.unmount();
+    host = null;
+    expect(wsStore.sortChangedExternalIds).toEqual([]);
+  });
 });
