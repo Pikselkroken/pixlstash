@@ -382,49 +382,55 @@ class TagTask(BaseTask):
         return cleared
 
     def _retire_unresolved(self, batch: list, resolved_ids: set) -> None:
-        """Give every picture in the batch a terminal outcome, as faces do.
+        """Retire only unresolved pictures that are currently unreachable.
 
-        ``FaceExtractionTask`` writes a row for every picture it is handed - a
-        ``face_index=-1`` sentinel when it found nothing, including for a file
-        it could not open - so ``~Picture.faces.any()`` always drains.
-        ``TagTask`` wrote *nothing* for a picture that produced no result, and
-        there are four ways to produce none: the full pass drops a path it
-        cannot load (``tagging.py``'s ``continue``), the configured plugin is
-        missing or lacks tag support, the plugin raises, or the batch is
-        cancelled. The pending sentinel then survives, and - unlike a corrupt
-        file, which the unprocessable registry suppresses - an *unreachable*
-        one is classed transient (``FileNotFoundError`` carries ``errno`` 2)
-        and is never suppressed, so the finder claims it again on every sweep.
-        A handful of them at low ids starve tagging library-wide, and worse
-        than the case this task's finder already guards: a task IS returned
-        each sweep, so the planner never even backs off.
+        Keep pending sentinels for unresolved pictures whose source file still
+        exists: those misses can be transient (e.g., plugin/inference failure)
+        and should retry. For paths that do not resolve or no longer exist,
+        clear only the pending sentinel row to prevent repeated re-queueing.
 
-        Suppressed pictures are deliberately left pending: the registry is
-        keyed to the file's ``(mtime, size)`` and lifts by itself when the file
-        is repaired, and ``MissingTagFinder`` keeps them out of its candidate
-        window meanwhile, so they are already both terminal and recoverable.
+        Suppressed pictures are always left pending: suppression is keyed to
+        file signature and auto-lifts when a file is repaired.
         """
-        unresolved = [
-            pic.id
-            for pic in batch
-            if getattr(pic, "id", None) is not None and pic.id not in resolved_ids
-        ]
-        if not unresolved:
-            return
+        unresolved_missing: list[int] = []
+        unresolved_retryable: list[int] = []
         registry = getattr(self._db, "unprocessable_images", None)
-        if registry is not None:
-            unresolved = [pid for pid in unresolved if not registry.is_suppressed(pid)]
-        if not unresolved:
+
+        for pic in batch:
+            pid = getattr(pic, "id", None)
+            if pid is None or pid in resolved_ids:
+                continue
+            if registry is not None and registry.is_suppressed(pid):
+                continue
+            file_path = ImageUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
+            if not file_path or not os.path.exists(file_path):
+                unresolved_missing.append(pid)
+            else:
+                unresolved_retryable.append(pid)
+
+        if unresolved_retryable:
+            logger.warning(
+                "TagTask %s: %d picture(s) produced no tag result but source files "
+                "exist (ids %s); keeping pending-tag sentinels for retry.",
+                self.id,
+                len(unresolved_retryable),
+                unresolved_retryable[:20],
+            )
+
+        if not unresolved_missing:
             return
         logger.warning(
-            "TagTask %s: %d picture(s) produced no tag result and are not "
-            "suppressed (ids %s); clearing their pending-tag sentinel so they "
-            "stop being re-queued. Their existing tags are kept.",
+            "TagTask %s: %d unresolved picture(s) are unreachable "
+            "(ids %s); clearing only pending-tag sentinels to prevent re-queue loops.",
             self.id,
-            len(unresolved),
-            unresolved[:20],
+            len(unresolved_missing),
+            unresolved_missing[:20],
         )
-        self._db.run_task(self._clear_sentinels, unresolved, priority=DBPriority.LOW)
+        self._db.run_task(
+            self._clear_sentinels, unresolved_missing, priority=DBPriority.LOW
+        )
 
     def _mark_unprocessable(self, pic, file_path) -> None:
         """Record *pic* as undecodable so the finders stop re-selecting it (#585).
