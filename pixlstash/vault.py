@@ -68,6 +68,17 @@ from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 logger = get_logger(__name__)
 
 
+class ReferenceFolderRootsUnavailable(RuntimeError):
+    """The configured reference folders could not be read.
+
+    Raised by :meth:`Vault.reference_folder_roots` instead of returning an
+    empty tuple, because "no reference folders" and "we do not know" are the
+    same value with opposite safety: an allowlist caller may treat the unknown
+    as empty and refuse, a blocklist caller must not, and only the caller knows
+    which it is.
+    """
+
+
 class Vault:
     AGGRESSIVE_UNLOAD_INTERVAL = 180
 
@@ -511,10 +522,25 @@ class Vault:
         under the mapped form in Docker deployments, while the
         ``reference_folder`` row keeps the host form.
 
+        **A read failure raises; it is never an empty answer.** The two things
+        this list is used for want opposite behaviour from the same value:
+        :func:`~pixlstash.services.scrapheap_service.remove_picture_files`
+        treats it as an *allowlist* of places a purge may delete from, where
+        empty is safe, while the folder-export destination check and
+        ``views_service`` treat it as a *blocklist* of places nothing may be
+        written to, where empty silently permits what it exists to refuse
+        (#1177 item 59). Returning ``()`` on error therefore fails closed for
+        one caller and open for the other. Only the caller knows which
+        direction is safe, so the error is made distinguishable from "no
+        reference folders are configured" and the allowlist caller is the one
+        that catches it.
+
         Returns:
-            The root directories, empty when the folder list cannot be read
-            (logged) so a caller containing a destructive operation refuses
-            rather than guesses.
+            The root directories; an empty tuple only when no reference folder
+            is configured.
+
+        Raises:
+            ReferenceFolderRootsUnavailable: The folder list could not be read.
         """
         from pixlstash.db_models.reference_folder import ReferenceFolder
 
@@ -529,12 +555,15 @@ class Vault:
             folders = self.db.run_immediate_read_task(fetch)
         except Exception as exc:
             logger.warning(
-                "Could not read the reference folders of %s; treating the set "
-                "as empty, so paths outside the image root will be refused: %s",
+                "Could not read the reference folders of %s; refusing to "
+                "answer rather than reporting none, because an empty answer "
+                "reads as 'nothing to protect' to some callers: %s",
                 self.image_root,
                 exc,
             )
-            return ()
+            raise ReferenceFolderRootsUnavailable(
+                f"Could not read the reference folders of {self.image_root}: {exc}"
+            ) from exc
 
         roots: list[str] = []
         for folder in folders:

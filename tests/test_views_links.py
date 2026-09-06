@@ -669,6 +669,40 @@ def test_a_views_root_containing_a_reference_folder_is_refused(tmp_path, library
         views_service.check_views_root(str(tmp_path / "outer"), vault)
 
 
+def test_a_views_root_is_refused_when_the_reference_folders_cannot_be_read(
+    tmp_path, library
+):
+    """#1177 item 59: "we do not know" must not be read as "there are none".
+
+    The roots are a blocklist here. Before the fix the vault answered a failed
+    read with ``()``, which is indistinguishable from "no reference folders are
+    configured", so every check below this line silently passed.
+    """
+    from pixlstash.vault import ReferenceFolderRootsUnavailable
+
+    image_root, _paths = library
+
+    class _UnreadableVault(_FakeVault):
+        def reference_folder_roots(self):
+            raise ReferenceFolderRootsUnavailable("test-induced read failure")
+
+    vault = _UnreadableVault(image_root)
+    with pytest.raises(views_service.ViewsError, match="could not read"):
+        views_service.check_views_root(str(tmp_path / "views"), vault)
+
+
+def test_a_views_root_outside_every_reference_folder_is_still_accepted(
+    tmp_path, library
+):
+    """Over-blocking control for the test above: a readable, empty set allows."""
+    image_root, _paths = library
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    vault = _FakeVault(image_root, reference_roots=(str(reference),))
+
+    views_service.check_views_root(str(tmp_path / "beside" / "views"), vault)
+
+
 @pytest.mark.parametrize("marker", [".dropbox.cache", ".tmp.driveupload"])
 def test_a_cloud_sync_folder_is_refused_by_its_marker(tmp_path, library, marker):
     """A sync client uploads the file a link points at, duplicating the library."""

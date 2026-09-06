@@ -200,9 +200,33 @@ def register_routes(router, server):
         # so it is not deduplicated, and a folder carrying
         # `delete_after_import` then os.remove()s the file it has just
         # imported - so the export destroys its own output.
+        # Local import: pixlstash.vault pulls in every task and the inference
+        # stack, and this module only needs the exception's name.
+        from pixlstash.vault import ReferenceFolderRootsUnavailable
+
         vault = request.state.library_lease.vault
         library_roots = [getattr(vault, "image_root", None)]
-        library_roots.extend(vault.reference_folder_roots())
+        try:
+            library_roots.extend(vault.reference_folder_roots())
+        except ReferenceFolderRootsUnavailable as exc:
+            # The roots are a *blocklist* here, so an unknown set must refuse.
+            # Treating it as empty would let the destination land inside a
+            # reference folder, which is precisely what this check exists to
+            # stop (#1177 item 59).
+            logger.warning(
+                "Refusing the folder export: the reference folders could not "
+                "be read, so the destination cannot be shown to be outside "
+                "them: %s",
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not check your reference folders just "
+                    "now, so it cannot confirm this destination is outside "
+                    "your library. Try again in a moment."
+                ),
+            ) from exc
         library_roots.extend(get_import_folder_paths(vault))
         for root in library_roots:
             if root and path_is_within(resolved_destination, root):

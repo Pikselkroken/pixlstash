@@ -31,7 +31,11 @@ from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolde
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 from pixlstash.services.operation_log_service import apply_orientation
-from pixlstash.services.scrapheap_service import remove_picture_files
+from pixlstash.services.scrapheap_service import (
+    remove_picture_files,
+    remove_picture_files_and_reconcile_ledger,
+)
+from pixlstash.vault import ReferenceFolderRootsUnavailable
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
 from pixlstash.utils.path_utils import path_is_within
@@ -355,6 +359,54 @@ def test_vault_supplies_the_reference_roots_the_purge_needs(server, tmp_path):
     os.makedirs(ref_root)
     _add_reference_folder(server, ref_root)
     assert ref_root in server.vault.reference_folder_roots()
+
+
+def test_an_unreadable_reference_folder_table_raises_rather_than_reporting_none(
+    server, monkeypatch
+):
+    """#1177 item 59. ``()`` means "none are configured" and nothing else.
+
+    The same list is an allowlist for the purge (empty is safe) and a blocklist
+    for the export destination and views roots (empty permits). One value
+    cannot be safe in both directions, so a read failure is made distinguishable
+    and each caller decides.
+    """
+
+    def _explode(_task, *args, **kwargs):
+        raise RuntimeError("test-induced reference folder read failure")
+
+    monkeypatch.setattr(server.vault.db, "run_immediate_read_task", _explode)
+    with pytest.raises(ReferenceFolderRootsUnavailable):
+        server.vault.reference_folder_roots()
+
+
+def test_a_purge_whose_reference_roots_are_unreadable_deletes_only_in_root(
+    server, tmp_path, monkeypatch
+):
+    """The allowlist direction, both ways at once.
+
+    Not knowing the roots must not widen what the unattended ``os.remove`` may
+    follow a stored path to (the negative), and must not stop it clearing the
+    image root either, or a failed read strands every file (the over-blocking
+    regression).
+    """
+    image_root = server.vault.image_root
+    doomed = os.path.join(image_root, "purge-in-root.png")
+    _write_png(doomed)
+    spared = str(tmp_path / "unreadable-refs" / "ref.png")
+    _write_png(spared)
+
+    def _explode():
+        raise ReferenceFolderRootsUnavailable("test-induced read failure")
+
+    monkeypatch.setattr(server.vault, "reference_folder_roots", _explode)
+    remove_picture_files_and_reconcile_ledger(
+        server.vault,
+        [(1, "purge-in-root.png", False), (2, spared, True)],
+        set(),
+    )
+    assert not os.path.exists(doomed), "an in-root file must still be deleted"
+    assert os.path.exists(spared), "an unprovable root must not be deleted from"
 
 
 # ---------------------------------------------------------------------------

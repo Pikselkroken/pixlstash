@@ -1515,9 +1515,30 @@ def remove_picture_files_and_reconcile_ledger(
     ``owned_path_shas`` comes from the :func:`purge_rows_in_session` call that
     wrote those rows, and bounds the correction to them.
     """
-    unconfirmed = remove_picture_files(
-        vault.image_root, targets, vault.reference_folder_roots()
-    )
+    # Local import: pixlstash.vault imports this module, so the exception can
+    # only be named from inside a function.
+    from pixlstash.vault import ReferenceFolderRootsUnavailable
+
+    try:
+        reference_roots = vault.reference_folder_roots()
+    except ReferenceFolderRootsUnavailable as exc:
+        # Empty is the safe answer *here*, and only here: the roots are an
+        # allowlist of places this unattended os.remove may follow a stored
+        # path to, so not knowing them means only image_root is honoured and
+        # every other target is reported unconfirmed and kept. Letting the
+        # error propagate would be worse than useless - the rows are already
+        # purged by the time this runs, so an escape leaves the ledger
+        # asserting deletions that never happened (see the docstring above).
+        logger.warning(
+            "Purge could not read the reference folders of %s; only %s will be "
+            "deleted from and files elsewhere are kept and reported "
+            "unconfirmed: %s",
+            vault.image_root,
+            vault.image_root,
+            exc,
+        )
+        reference_roots = ()
+    unconfirmed = remove_picture_files(vault.image_root, targets, reference_roots)
     if unconfirmed:
         vault.db.run_task(
             mark_files_kept_in_session,

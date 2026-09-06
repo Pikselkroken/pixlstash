@@ -334,7 +334,21 @@ def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) 
                 "rather than above it."
             )
 
-    for reference_root in getattr(vault, "reference_folder_roots", lambda: ())():
+    # Local import: pixlstash.vault pulls in every task and the inference
+    # stack, and this module only needs the exception's name.
+    from pixlstash.vault import ReferenceFolderRootsUnavailable
+
+    try:
+        reference_roots = getattr(vault, "reference_folder_roots", lambda: ())()
+    except ReferenceFolderRootsUnavailable as exc:
+        # A blocklist that cannot be read refuses; treating it as empty would
+        # publish links into a reference folder (#1177 item 59).
+        raise ViewsError(
+            "PixlStash could not read your reference folders just now, so it "
+            "cannot confirm this folder is outside them. Try again in a moment."
+        ) from exc
+
+    for reference_root in reference_roots:
         if path_is_within(root, reference_root):
             raise ViewsError(
                 "That folder is inside a reference folder, so the next scan "
