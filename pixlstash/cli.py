@@ -417,6 +417,15 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "PixlStash is using. This can stop PixlStash starting."
         ),
     )
+    install_parser.add_argument(
+        "--allow-sdist",
+        action="store_true",
+        help=(
+            "Allow dependencies published only as source. Working out what "
+            "they would install runs their build code first, before you are "
+            "shown anything."
+        ),
+    )
     install_parser.set_defaults(handler=_cmd_plugins_install)
 
     create_parser = commands.add_parser(
@@ -1576,8 +1585,17 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
                     "source shown against each one.",
                     file=sys.stderr,
                 )
+            if args.allow_sdist:
+                print(
+                    "\nwarning: --allow-sdist. Working out what these need "
+                    "runs build code from any source-only package among them, "
+                    "as you, before the list below exists.",
+                    file=sys.stderr,
+                )
             print(f"\nResolving {plan.requirements.name}...")
-            changes = plugin_install.resolve_requirements(plan.requirements)
+            changes = plugin_install.resolve_requirements(
+                plan.requirements, allow_sdist=args.allow_sdist
+            )
             if not _report_dependencies(changes, force=args.force_deps):
                 return EXIT_REFUSED
         elif plan.requirements:
@@ -1600,7 +1618,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # The resolution that was shown and agreed to, not the file it came
             # from: re-reading the file would resolve it a second time and
             # could install something nobody was asked about.
-            plugin_install.install_requirements(changes)
+            plugin_install.install_requirements(changes, allow_sdist=args.allow_sdist)
 
     print(f"Installed {plan.name} to {plan.destination}")
     if plan.kind == plugin_install.CAPTIONING:

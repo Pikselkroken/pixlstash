@@ -879,14 +879,33 @@ class DependencyChange:
         return self.installed is not None and self.installed != self.version
 
 
-def resolve_requirements(requirements: Path) -> list[DependencyChange]:
+def resolve_requirements(
+    requirements: Path, *, allow_sdist: bool = False
+) -> list[DependencyChange]:
     """Return every package installing *requirements* would add or replace.
 
     Resolved by pip rather than by us: ``--dry-run --report`` runs the real
-    resolver, writes what it would do as JSON, and touches nothing.  The report
-    lists only what is not already satisfied, so an entry is by definition a
-    change, and the entries include transitive dependencies -- which is the
-    point, since a plugin asking for one package can pull in forty.
+    resolver and writes what it would do as JSON.  The report lists only what
+    is not already satisfied, so an entry is by definition a change, and the
+    entries include transitive dependencies -- which is the point, since a
+    plugin asking for one package can pull in forty.
+
+    **A dry run is not a safe run, which is why this asks for wheels only.**
+    Resolving a source distribution makes pip BUILD its metadata, and building
+    executes the package's own ``setup.py`` -- as this user, before
+    :func:`~pixlstash.cli._report_dependencies` has printed anything and before
+    anyone has agreed to anything.  The consent this module exists to obtain
+    would be collected after the code it is about had already run, which also
+    guts :attr:`DependencyChange.url`: naming where an artefact came from is
+    worth little once that artefact has run.  ``--only-binary=:all:`` is
+    therefore passed by default, so nothing is built and nothing executes
+    before the listing.
+
+    The trade is real and deliberate: a dependency published only as an sdist,
+    and any VCS or source-tree requirement, cannot be resolved this way at all.
+    *allow_sdist* is the way through, and the refusal below names it -- but it
+    is opt-in precisely because taking it means running the plugin author's
+    build code to find out what installing would do.
 
     Nothing here decides whether the answer is acceptable; it says what would
     happen, and the caller shows it to the person who has to agree to it.
@@ -903,6 +922,7 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
                 "--quiet",
                 "--report",
                 str(report),
+                *([] if allow_sdist else ["--only-binary=:all:"]),
                 "-r",
                 str(requirements),
             ],
@@ -912,11 +932,23 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip().splitlines()
+            # Name the way through, or a plugin whose dependency is published
+            # only as an sdist is a dead end with no message saying why.
+            hint = (
+                ""
+                if allow_sdist
+                else (
+                    " If one of these is published only as a source "
+                    "distribution, --allow-sdist resolves it, at the cost of "
+                    "running that package's build code before you are asked."
+                )
+            )
             raise PluginError(
                 f"pip could not work out what {requirements.name} needs "
                 f"(exit {result.returncode})"
                 + (f": {detail[-1]}" if detail else "")
                 + ". Nothing was installed."
+                + hint
             )
         try:
             entries = json.loads(report.read_text(encoding="utf-8"))["install"]
@@ -976,7 +1008,9 @@ def index_options(requirements: Path) -> list[str]:
     return [line for line in read_requirements(requirements) if line.startswith("-")]
 
 
-def install_requirements(changes: list[DependencyChange]) -> None:
+def install_requirements(
+    changes: list[DependencyChange], *, allow_sdist: bool = False
+) -> None:
     """Install exactly the resolution *changes* describes, and nothing else.
 
     *changes* is what :func:`resolve_requirements` worked out and what the
@@ -1000,7 +1034,17 @@ def install_requirements(changes: list[DependencyChange]) -> None:
         return
     pins = [change.pin for change in changes]
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-deps", *pins],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            # Matched to the resolve: without it a pin could still build from
+            # source here, which is the execution the resolve just refused.
+            *([] if allow_sdist else ["--only-binary=:all:"]),
+            *pins,
+        ],
         check=False,
     )
     if result.returncode != 0:

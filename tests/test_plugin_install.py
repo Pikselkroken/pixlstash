@@ -785,7 +785,11 @@ def test_requirements_are_never_installed_implicitly(
     tmp_path, plugin_root, monkeypatch, capsys
 ):
     calls = []
-    monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    monkeypatch.setattr(
+        plugin_install,
+        "install_requirements",
+        lambda changes, **_kwargs: calls.append(changes),
+    )
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
     _write(folder / "requirements.txt", "definitely-not-a-real-package==1.0\n")
@@ -804,7 +808,11 @@ def test_with_deps_says_what_it_will_install(
     the time, and it is the resolved set that lands in the environment.
     """
     calls = []
-    monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    monkeypatch.setattr(
+        plugin_install,
+        "install_requirements",
+        lambda changes, **_kwargs: calls.append(changes),
+    )
     pip_report(("something", "1.0"), ("a-dependency-of-it", "2.4"), installed={})
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
@@ -1659,6 +1667,71 @@ def test_transitive_packages_are_reported_too(pip_report, tmp_path):
     assert [c.name for c in changes] == ["blinker", "Flask", "Werkzeug"]
 
 
+def test_resolving_refuses_to_build_a_source_distribution(pip_report, tmp_path):
+    """#1201 F3: a dry run is not a safe run.
+
+    Resolving an sdist makes pip build its metadata, which executes the
+    package's own `setup.py` as this user - before anything is printed and
+    before anyone agrees to anything. Reproduced against real pip: a marker
+    file written by `setup.py` existed after a plain `--dry-run --report`.
+    `--only-binary=:all:` is what stops the build, so it must be on the command
+    by default, and off only when the caller opted in.
+    """
+    calls = pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    plugin_install.resolve_requirements(requirements)
+    assert "--only-binary=:all:" in calls[0]
+
+
+def test_allow_sdist_is_the_only_way_to_build_at_resolve_time(pip_report, tmp_path):
+    """The opt-in, and the over-blocking escape hatch it exists to be."""
+    calls = pip_report(("flask", "3.1.3"), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    plugin_install.resolve_requirements(requirements, allow_sdist=True)
+    assert "--only-binary=:all:" not in calls[0]
+
+
+def test_a_refusal_names_the_flag_that_gets_past_it(monkeypatch, tmp_path):
+    """A sdist-only dependency must not be a dead end with no way forward."""
+    monkeypatch.setattr(
+        plugin_install.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="ERROR: No matching distribution found\n"
+        ),
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("sdist-only-package\n", encoding="utf-8")
+
+    with pytest.raises(PluginError, match="--allow-sdist"):
+        plugin_install.resolve_requirements(requirements)
+    # ...and it does not nag about the flag when the flag is already on.
+    with pytest.raises(PluginError) as caught:
+        plugin_install.resolve_requirements(requirements, allow_sdist=True)
+    assert "--allow-sdist" not in str(caught.value)
+
+
+def test_installing_matches_the_resolve_on_building_from_source(monkeypatch):
+    """A pin must not build what the resolve refused to build."""
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+    change = plugin_install.DependencyChange("something", "1.0")
+    plugin_install.install_requirements([change])
+    plugin_install.install_requirements([change], allow_sdist=True)
+
+    assert "--only-binary=:all:" in commands[0]
+    assert "--only-binary=:all:" not in commands[1]
+
+
 def test_resolving_asks_pip_not_to_install_anything(pip_report, tmp_path):
     """It runs before the plugin is copied, so it must change nothing."""
     calls = pip_report(("flask", "3.1.3"), installed={})
@@ -1926,7 +1999,9 @@ def test_force_deps_installs_anyway_and_says_so(
     pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
     installed: list[Path] = []
     monkeypatch.setattr(
-        plugin_install, "install_requirements", lambda path: installed.append(path)
+        plugin_install,
+        "install_requirements",
+        lambda path, **_kwargs: installed.append(path),
     )
 
     exit_code = cli.main(
@@ -1945,7 +2020,9 @@ def test_a_plugin_whose_dependencies_are_all_present_says_so(
     (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
     (source / "requirements.txt").write_text("pillow\n", encoding="utf-8")
     pip_report(installed={"pillow": "12.3.0"})
-    monkeypatch.setattr(plugin_install, "install_requirements", lambda path: None)
+    monkeypatch.setattr(
+        plugin_install, "install_requirements", lambda path, **_kwargs: None
+    )
 
     assert cli.main(["plugins", "install", str(source), "--with-deps", "--yes"]) == 0
     assert "Everything it needs is already installed." in capsys.readouterr().out
