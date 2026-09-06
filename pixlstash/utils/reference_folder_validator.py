@@ -2,6 +2,14 @@
 
 import os
 import sys
+from typing import TYPE_CHECKING
+
+from sqlmodel import select
+
+from pixlstash.db_models.reference_folder import ReferenceFolder
+
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 # Paths that must never be used as reference folder roots.
 # Applied on both Linux and macOS; extended lists handle platform differences.
@@ -113,6 +121,54 @@ def validate_reference_folder_path(path: str) -> str | None:
         if norm == blocked_norm or norm.startswith(blocked_norm + os.sep):
             return f"Path is in a restricted system directory: {blocked}"
 
+    return None
+
+
+def validate_reference_folder_conflicts(
+    session: "Session",
+    folder: str,
+    image_root: str,
+    *,
+    exclude_id: int | None = None,
+) -> str | None:
+    """Check a candidate root against the library's storage and every other root.
+
+    One definition, because the two entry points that register a root have to
+    answer this identically: ``routes.reference_folders`` (the "add a reference
+    folder" routes) and
+    ``services.folder_structure_commit_service.register_reference_folder`` (a
+    reference-mode folder-structure commit). The commit path used to check
+    nothing at all, so a root that *contains* ``image_root``, or that contains
+    - or sits inside - another reference folder, was accepted and then indexed
+    by two scans that each believe they own the files.
+
+    Args:
+        session: Open session, used to read the registered folders.
+        folder: Candidate root, already ``normpath``-ed.
+        image_root: The active library's own storage; ``""`` when unset.
+        exclude_id: A reference folder row to ignore - the one being edited, or
+            the row a resumed commit registered for itself.
+
+    Returns:
+        An error message, or ``None`` when the path is free to use.
+    """
+    if image_root:
+        if (
+            folder == image_root
+            or folder.startswith(image_root + os.sep)
+            or image_root.startswith(folder + os.sep)
+        ):
+            return "Path conflicts with the PixlStash data folder."
+    for other in session.exec(select(ReferenceFolder)).all():
+        if exclude_id is not None and other.id == exclude_id:
+            continue
+        other_norm = os.path.normpath(other.folder)
+        if folder == other_norm:
+            return "A reference folder with this path already exists."
+        if folder.startswith(other_norm + os.sep):
+            return f"Path is inside an existing reference folder: {other.folder}"
+        if other_norm.startswith(folder + os.sep):
+            return f"An existing reference folder is inside this path: {other.folder}"
     return None
 
 
