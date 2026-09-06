@@ -66,6 +66,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import (
     SUPPORTED_IMAGE_EXTS,
+    is_hidden_entry,
     is_pixlstash_thumbnail,
     is_supported_media_file,
 )
@@ -453,7 +454,7 @@ class FolderStructureRead:
             self._checkpoint()
             kept = []
             for name in sorted(dirnames):
-                if name.startswith("."):
+                if is_hidden_entry(name):
                     # `.pixlstash` sidecars and a vault's own thumbnail cache.
                     # Counted, because §24's whole argument against `os.walk`'s
                     # default is that a silently omitted subtree reads as a
@@ -510,13 +511,13 @@ class FolderStructureRead:
             folder.direct_media = sum(
                 1
                 for f in filenames
-                if not f.startswith(".") and is_supported_media_file(f)
+                if not is_hidden_entry(f) and is_supported_media_file(f)
             )
             folder.direct_pictures = sorted(
                 f
                 for f in filenames
                 if os.path.splitext(f)[1].lower() in _IMAGE_EXTS
-                and not f.startswith(".")
+                and not is_hidden_entry(f)
                 and not is_pixlstash_thumbnail(f)
             )
             for picture in folder.direct_pictures:

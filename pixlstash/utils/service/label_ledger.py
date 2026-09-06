@@ -16,7 +16,7 @@ clobber a human label.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from sqlalchemy import or_
 from sqlmodel import select
@@ -26,6 +26,7 @@ from pixlstash.db_models.tag import (
     DEFAULT_TAG_MERGES,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK, chunked
 
 if TYPE_CHECKING:
     from sqlmodel import Session
@@ -107,28 +108,97 @@ def record_human_label(
 
     now = datetime.utcnow()
     if pred is None:
-        # No prediction on file: a pure-manual decision with nothing to snapshot.
-        pred = TagPrediction(
-            picture_id=picture_id,
-            tag=tag,
-            confidence=1.0 if state == POS else 0.0,
-            model_version=MANUAL_MODEL_VERSION,
-            status="CONFIRMED" if state == POS else "REJECTED",
-            predicted_at=now,
-        )
+        pred = _manual_prediction(picture_id, tag, state, now)
         session.add(pred)
-    else:
-        # Snapshot what the human adjudicated, but only when it was a real tagger
-        # prediction (not our own synthetic 'manual' row) so re-recording is stable.
-        if pred.model_version and pred.model_version != MANUAL_MODEL_VERSION:
-            pred.label_model_version = pred.model_version
-            pred.label_confidence = pred.confidence
-        pred.status = "CONFIRMED" if state == POS else "REJECTED"
+    _mark_human(pred, state, now)
+    return pred
 
+
+def _manual_prediction(
+    picture_id: int, tag: str, state: str, now: datetime
+) -> TagPrediction:
+    """A synthetic prediction row for a tag the tagger never predicted.
+
+    No prediction on file means a pure-manual decision with nothing to
+    snapshot, so ``model_version`` records that this row is our own rather than
+    a tagger's - which is what stops :func:`_mark_human` snapshotting it as if
+    it were something a human adjudicated.
+    """
+    return TagPrediction(
+        picture_id=picture_id,
+        tag=tag,
+        confidence=1.0 if state == POS else 0.0,
+        model_version=MANUAL_MODEL_VERSION,
+        predicted_at=now,
+    )
+
+
+def _mark_human(pred: TagPrediction, state: str, now: datetime) -> None:
+    """Stamp the human decision on *pred*, in place and uncommitted."""
+    # Snapshot what the human adjudicated, but only when it was a real tagger
+    # prediction (not our own synthetic 'manual' row) so re-recording is stable.
+    if pred.model_version and pred.model_version != MANUAL_MODEL_VERSION:
+        pred.label_model_version = pred.model_version
+        pred.label_confidence = pred.confidence
+    pred.status = "CONFIRMED" if state == POS else "REJECTED"
     pred.label_state = state
     pred.label_source = HUMAN
     pred.labeled_at = now
-    return pred
+
+
+def record_human_labels(
+    session: "Session", pairs: Iterable[tuple[int, str]], state: str
+) -> None:
+    """:func:`record_human_label` over many pairs, in bounded statements. No commit.
+
+    Identical ledger semantics per pair; only the probe differs. One indexed
+    ``SELECT`` per ``(picture, tag)`` is one round trip per pair, and the caller
+    this exists for - the folder-structure commit's tag assignment - has one
+    pair per picture per tag-mapped folder, so on a fresh import that is a
+    statement per picture. Here it is one ``SELECT`` per chunk of pictures
+    instead, whatever the size of the import.
+
+    Args:
+        session: Active DB session (caller commits).
+        pairs: ``(picture_id, tag)`` pairs; repeats collapse.
+        state: :data:`POS` or :data:`NEG`, for every pair.
+    """
+    if state not in (POS, NEG):
+        raise ValueError(f"label state must be POS or NEG, got {state!r}")
+    wanted = {(int(picture_id), tag) for picture_id, tag in pairs}
+    if not wanted:
+        return
+    tags = sorted({tag for _, tag in wanted})
+    picture_ids = sorted({picture_id for picture_id, _ in wanted})
+
+    # Both lists are bound parameters of the SAME statement, so neither can be
+    # left whole: shrinking only the id chunk still overran the cap once there
+    # were more distinct tags than the cap itself, however small that chunk got,
+    # and a folder-structure commit's tags are one per tag-mapped folder - the
+    # library decides how many there are, not this code. Tags take at most half
+    # the budget so the ids always keep the other half; the two lists together
+    # can never exceed SQLITE_ID_CHUNK.
+    existing: dict[tuple[int, str], TagPrediction] = {}
+    for tag_group in chunked(tags, max(1, SQLITE_ID_CHUNK // 2)):
+        id_chunk = max(1, SQLITE_ID_CHUNK - len(tag_group))
+        for picture_group in chunked(picture_ids, id_chunk):
+            existing.update(
+                ((pred.picture_id, pred.tag), pred)
+                for pred in session.exec(
+                    select(TagPrediction).where(
+                        TagPrediction.picture_id.in_(list(picture_group)),
+                        TagPrediction.tag.in_(list(tag_group)),
+                    )
+                ).all()
+            )
+
+    now = datetime.utcnow()
+    for picture_id, tag in wanted:
+        pred = existing.get((picture_id, tag))
+        if pred is None:
+            pred = _manual_prediction(picture_id, tag, state, now)
+            session.add(pred)
+        _mark_human(pred, state, now)
 
 
 def record_human_label_if_relevant(

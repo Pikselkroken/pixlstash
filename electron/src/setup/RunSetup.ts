@@ -114,8 +114,12 @@ export async function runFirstRunSetup<Accel>(
     // launch there is nothing to ask, so leaving one behind for a setup that
     // never finished takes away the folder picker - and the folder it names is
     // the one the person was being asked to change.
-    deps.clearConfig();
-    deps.parkTelemetry(null);
+    try {
+      deps.clearConfig();
+    } catch {}
+    try {
+      deps.parkTelemetry(null);
+    } catch {}
     throw error;
   }
 }

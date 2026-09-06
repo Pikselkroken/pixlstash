@@ -14,8 +14,16 @@ settled inside the assigning transaction itself, so the two cannot disagree:
 either the assignments landed and this row says ``done`` in the same commit, or
 neither happened and it still says ``pending`` for the next start-up to pick up.
 
-**At most one row is ``pending``**, which is the same single-slot rule the
-commit endpoint already enforces in memory (``server.folder_structure_commit``).
+**At most one row is ``pending``, and it is always the newest.** That is the
+same single-slot rule the commit endpoint enforces in memory
+(``server.folder_structure_commit``), but memory is not enough on its own: a
+commit that FAILS leaves its record pending on purpose and clears the in-memory
+slot, so the owner can accept a second mapping while the first is still on
+file. `record_pending_commit` therefore marks every older pending row
+:data:`STATE_SUPERSEDED` as it writes the new one. Without that the newest is
+resumed first and the older one is resumed at the start-up after it, filing
+pictures under the folders the owner has already re-mapped.
+
 Settled rows are kept: they are the answer to "what happened to that import",
 and there are only ever a handful.
 """
@@ -35,8 +43,12 @@ STATE_ABANDONED = "abandoned"
 #: deliberately not applied. Distinct from ``done`` because the library is
 #: usable but unorganised, and from ``abandoned`` because nothing was refused.
 STATE_DEFERRED = "deferred"
+#: A newer mapping was accepted while this one was still unfinished, so this
+#: one is not what the owner wants any more. Never resumed - see the
+#: newest-wins rule below.
+STATE_SUPERSEDED = "superseded"
 
-SETTLED_STATES = (STATE_DONE, STATE_ABANDONED, STATE_DEFERRED)
+SETTLED_STATES = (STATE_DONE, STATE_ABANDONED, STATE_DEFERRED, STATE_SUPERSEDED)
 
 
 def _now() -> datetime:
@@ -67,7 +79,8 @@ class FolderMappingCommit(SQLModel, table=True):
             its phase, since indexing is idempotent by ``file_path`` and
             assigning is one transaction.
         state: :data:`STATE_PENDING`, :data:`STATE_DONE`,
-            :data:`STATE_ABANDONED` or :data:`STATE_DEFERRED`.
+            :data:`STATE_ABANDONED`, :data:`STATE_DEFERRED` or
+            :data:`STATE_SUPERSEDED`.
         started_at: When the commit was first accepted.
         updated_at: When this row last changed.
     """
