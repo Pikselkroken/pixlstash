@@ -118,11 +118,13 @@ describe("a Settings readout with no value", () => {
   });
 });
 
-// The sweep flattened eight of these, not the three found first. Rather than
-// mount five more components for one glyph each, this reads the sources: the
-// point is that no value placeholder is spelled `" - "` anywhere, and a source
-// read says that about files no test happens to mount. Verified against
-// c760dd05, which is where each of these lost its em dash.
+// The sweep flattened TEN of these, across seven files. Each count in this
+// file has been wrong once already: it was three, then eight, and the eight
+// missed `FolderMappingPreviewStep.vue` because that one is markup (`> - <`)
+// rather than a string literal, and the first version of this regex only
+// looked between double quotes. Rather than mount seven components for one
+// glyph each, this reads the sources. Verified against c760dd05, which is
+// where every one of them lost its em dash.
 describe("no value placeholder was left flattened by the em-dash sweep", () => {
   const SWEPT = [
     "components/settings/AccountSection.vue",
@@ -131,13 +133,15 @@ describe("no value placeholder was left flattened by the em-dash sweep", () => {
     "components/widgets/RestoreConfirmDialog.vue",
     "components/panels/StatsSidebar.vue",
     "components/reviews/ReviewArchivedReceipt.vue",
+    "components/folders/FolderMappingPreviewStep.vue",
   ];
 
   it.each(SWEPT)("%s spells its empty value as an em dash", (relative) => {
     const source = readFileSync(join(process.cwd(), "src", relative), "utf8");
-    // `" - "` as a whole string literal is only ever a placeholder; prose
-    // hyphens live inside longer sentences and are not matched by this.
-    expect(source).not.toMatch(/"\s-\s"/);
+    // A lone hyphen standing on its own between quotes or tags is only ever a
+    // placeholder; a prose hyphen has words either side of it and is not
+    // matched. Both delimiters, or the markup form walks straight past.
+    expect(source).not.toMatch(/["'>]\s-\s["'<]/);
     expect(source).toContain(EM_DASH);
   });
 });
