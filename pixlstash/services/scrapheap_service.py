@@ -106,7 +106,7 @@ from pixlstash.db_models import Character, DeletedFileLog, Picture, ReferenceFol
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.path_utils import LibraryRootsUnavailable, path_is_within
 from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
@@ -1515,13 +1515,9 @@ def remove_picture_files_and_reconcile_ledger(
     ``owned_path_shas`` comes from the :func:`purge_rows_in_session` call that
     wrote those rows, and bounds the correction to them.
     """
-    # Local import: pixlstash.vault imports this module, so the exception can
-    # only be named from inside a function.
-    from pixlstash.vault import ReferenceFolderRootsUnavailable
-
     try:
         reference_roots = vault.reference_folder_roots()
-    except ReferenceFolderRootsUnavailable as exc:
+    except LibraryRootsUnavailable as exc:
         # Empty is the safe answer *here*, and only here: the roots are an
         # allowlist of places this unattended os.remove may follow a stored
         # path to, so not knowing them means only image_root is honoured and

@@ -35,7 +35,7 @@ from pixlstash.services.scrapheap_service import (
     remove_picture_files,
     remove_picture_files_and_reconcile_ledger,
 )
-from pixlstash.vault import ReferenceFolderRootsUnavailable
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
 from pixlstash.utils.path_utils import path_is_within
@@ -376,7 +376,7 @@ def test_an_unreadable_reference_folder_table_raises_rather_than_reporting_none(
         raise RuntimeError("test-induced reference folder read failure")
 
     monkeypatch.setattr(server.vault.db, "run_immediate_read_task", _explode)
-    with pytest.raises(ReferenceFolderRootsUnavailable):
+    with pytest.raises(LibraryRootsUnavailable):
         server.vault.reference_folder_roots()
 
 
@@ -397,7 +397,7 @@ def test_a_purge_whose_reference_roots_are_unreadable_deletes_only_in_root(
     _write_png(spared)
 
     def _explode():
-        raise ReferenceFolderRootsUnavailable("test-induced read failure")
+        raise LibraryRootsUnavailable("test-induced read failure")
 
     monkeypatch.setattr(server.vault, "reference_folder_roots", _explode)
     remove_picture_files_and_reconcile_ledger(

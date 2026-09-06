@@ -63,20 +63,10 @@ from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
 
 logger = get_logger(__name__)
-
-
-class ReferenceFolderRootsUnavailable(RuntimeError):
-    """The configured reference folders could not be read.
-
-    Raised by :meth:`Vault.reference_folder_roots` instead of returning an
-    empty tuple, because "no reference folders" and "we do not know" are the
-    same value with opposite safety: an allowlist caller may treat the unknown
-    as empty and refuse, a blocklist caller must not, and only the caller knows
-    which it is.
-    """
 
 
 class Vault:
@@ -540,7 +530,7 @@ class Vault:
             is configured.
 
         Raises:
-            ReferenceFolderRootsUnavailable: The folder list could not be read.
+            LibraryRootsUnavailable: The folder list could not be read.
         """
         from pixlstash.db_models.reference_folder import ReferenceFolder
 
@@ -561,7 +551,7 @@ class Vault:
                 self.image_root,
                 exc,
             )
-            raise ReferenceFolderRootsUnavailable(
+            raise LibraryRootsUnavailable(
                 f"Could not read the reference folders of {self.image_root}: {exc}"
             ) from exc
 

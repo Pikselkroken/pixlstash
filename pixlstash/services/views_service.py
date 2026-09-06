@@ -51,7 +51,11 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.path_utils import path_is_within, resolve_path_within
+from pixlstash.utils.path_utils import (
+    LibraryRootsUnavailable,
+    path_is_within,
+    resolve_path_within,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
 )
@@ -334,13 +338,9 @@ def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) 
                 "rather than above it."
             )
 
-    # Local import: pixlstash.vault pulls in every task and the inference
-    # stack, and this module only needs the exception's name.
-    from pixlstash.vault import ReferenceFolderRootsUnavailable
-
     try:
         reference_roots = getattr(vault, "reference_folder_roots", lambda: ())()
-    except ReferenceFolderRootsUnavailable as exc:
+    except LibraryRootsUnavailable as exc:
         # A blocklist that cannot be read refuses; treating it as empty would
         # publish links into a reference folder (#1177 item 59).
         raise ViewsError(

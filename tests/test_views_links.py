@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project
 from pixlstash.server import Server
 from pixlstash.services import views_service
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.tasks.reference_folder_scan_task import VIEWS_MARKER_NAME
 from tests.utils import upload_pictures_and_wait
 
@@ -678,13 +679,11 @@ def test_a_views_root_is_refused_when_the_reference_folders_cannot_be_read(
     read with ``()``, which is indistinguishable from "no reference folders are
     configured", so every check below this line silently passed.
     """
-    from pixlstash.vault import ReferenceFolderRootsUnavailable
-
     image_root, _paths = library
 
     class _UnreadableVault(_FakeVault):
         def reference_folder_roots(self):
-            raise ReferenceFolderRootsUnavailable("test-induced read failure")
+            raise LibraryRootsUnavailable("test-induced read failure")
 
     vault = _UnreadableVault(image_root)
     with pytest.raises(views_service.ViewsError, match="could not read"):

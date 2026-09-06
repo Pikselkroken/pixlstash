@@ -442,6 +442,54 @@ def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadabl
         gc.collect()
 
 
+def test_pictures_export_folder_refuses_when_the_watch_folders_are_unreadable():
+    """The import-folder half of item 59, found in its adversarial review.
+
+    `get_import_folder_paths` logged at DEBUG and returned `[]`, which is what
+    "no watch folders are configured" looks like - so a read failure turned off
+    the worst refusal in this route. A watch folder imports whatever appears in
+    it, and one carrying `delete_after_import` then removes the file it has
+    just imported, so an export into one destroys its own output.
+    """
+    from unittest import mock
+
+    from pixlstash.utils.path_utils import LibraryRootsUnavailable
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "unreadable-watch-destination")
+        os.makedirs(destination, exist_ok=True)
+
+        # Only the import-folder read fails, so this cannot pass on the
+        # reference-folder refusal that lands one line above it.
+        def _explode(_vault):
+            raise LibraryRootsUnavailable("test-induced import folder read failure")
+
+        with mock.patch(
+            "pixlstash.routes.pictures._export.get_import_folder_paths", _explode
+        ):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+        assert resp.status_code == 503, resp.text
+        assert not os.listdir(destination), "nothing may be written on a refusal"
+
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_pictures_export_folder_rejects_a_destination_in_a_watched_folder():
     """An import folder is the same refusal as a reference folder, and worse.
 
