@@ -455,6 +455,51 @@ def test_pictures_export_folder_rejects_a_destination_inside_the_library():
         gc.collect()
 
 
+def test_pictures_export_folder_rejects_a_destination_inside_another_library():
+    """#1206 item 1: the blocklist knew only the library holding the lease.
+
+    A library's folder *is* its image_root, so an export written into a second
+    registered library comes back as a fresh set of pictures the moment that
+    library is opened - and this route never opens it, so nothing downstream
+    notices either.
+    """
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        other = server.library_registry.create(
+            os.path.join(temp_dir.name, "second-library"), "Second"
+        )
+        inside_other = os.path.join(other.path, "exported")
+        os.makedirs(inside_other, exist_ok=True)
+
+        resp = client.post(
+            "/pictures/export/folder", params={"destination": inside_other}
+        )
+        assert resp.status_code == 400, resp.text
+        assert "part of your library" in resp.json().get("detail", "")
+
+        # The positive control, in the same environment: a folder that is in no
+        # registered library is still accepted. Refusing every empty folder
+        # would satisfy the assertion above and break the feature.
+        outside = os.path.join(temp_dir.name, "outside-every-library")
+        os.makedirs(outside, exist_ok=True)
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": outside}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadable():
     """#1177 item 59: an unknown blocklist must refuse, not permit.
 

@@ -140,8 +140,8 @@ def register_routes(router, server):
             "Queues an asynchronous export task that writes pictures straight "
             "into a folder on the machine running PixlStash, then opens that "
             "folder in the host file manager. The destination must be an "
-            "empty, writable, existing directory outside the library, its "
-            "reference folders and its import folders. "
+            "empty, writable, existing directory outside every registered "
+            "library, this library's reference folders and its import folders. "
             "Local owner, on that machine, only - see POST /pictures/export "
             "for a ZIP you can download from anywhere instead."
         ),
@@ -209,6 +209,20 @@ def register_routes(router, server):
         try:
             library_roots.extend(vault.reference_folder_roots())
             library_roots.extend(get_import_folder_paths(vault))
+            # Every OTHER registered library is the same hazard as this one.
+            # A library's folder IS its image_root (it is where `vault.db`
+            # lives), so an export written into one comes back as new pictures
+            # the moment that library is opened - and this route only ever sees
+            # the active lease's vault, so nothing above notices. Registered
+            # paths are all that is read: another library's reference and watch
+            # folders live in ITS vault, which is not open here, and opening
+            # someone else's vault to answer an export question is a worse
+            # trade than the narrower check. Attached libraries only - a
+            # detached one is not being read by anything, and the refusal below
+            # speaks of "your library".
+            library_roots.extend(
+                library.path for library in server.library_registry.list_libraries()
+            )
         except LibraryRootsUnavailable as exc:
             logger.warning(
                 "Refusing the folder export to %s: a library root list could "
@@ -226,6 +240,25 @@ def register_routes(router, server):
                     "moment."
                 ),
             ) from exc
+        except Exception as exc:
+            # The registry read is the same blocklist discipline: a list that
+            # cannot be read must refuse, because an empty answer reads as
+            # "there are no other libraries to protect".
+            logger.warning(
+                "Refusing the folder export to %s: the library registry could "
+                "not be read, so the destination cannot be shown to be outside "
+                "every library: %s",
+                resolved_destination,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not check your libraries just now, so it "
+                    "cannot confirm this destination is outside them. Try "
+                    "again in a moment."
+                ),
+            ) from exc
         for root in library_roots:
             if root and path_is_within(resolved_destination, root):
                 raise HTTPException(
@@ -234,7 +267,8 @@ def register_routes(router, server):
                         "That folder is part of your library - PixlStash "
                         "reads it - so everything exported into it would be "
                         "imported straight back in. Choose a folder outside "
-                        "your library, reference folders and import folders."
+                        "your libraries, their reference folders and their "
+                        "import folders."
                     ),
                 )
         # A folder export writes plain files, unlike a ZIP: a name that
