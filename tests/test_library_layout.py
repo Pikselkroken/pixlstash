@@ -2877,6 +2877,10 @@ def test_a_move_that_crashed_before_the_row_was_written_is_repaired_not_purged(
     assert picture is not None, "the picture must survive a crashed move"
     assert picture.file_path == "2024 Shoots/Mira/0001.png"
     assert session.exec(select(DeletedFileLog)).all() == []
+    # Our own move landing. The scan would have claimed this pair as ours and
+    # queued nothing, and a review here is what would have Phase 5 undo Phase
+    # 4b's own write - the flip-flop the journal exists to prevent.
+    assert session.exec(select(ExternalMoveReview)).all() == []
 
 
 def test_an_undo_that_crashed_before_the_row_was_written_is_repaired_not_purged(
@@ -2907,6 +2911,53 @@ def test_an_undo_that_crashed_before_the_row_was_written_is_repaired_not_purged(
     assert result["purged"] == 0
     assert result["repaired"] == 1
     assert session.get(Picture, picture_id).file_path == "0002.png"
+
+
+def test_a_file_the_owner_moved_back_is_queued_for_review_not_only_repointed(library):
+    """The same backwards read, with the other cause: the owner dragged the file
+    out of the folder PixlStash filed it in, and this sweep noticed before the
+    scan did.
+
+    The two subsystems used to disagree about whose move it was. The scan matches
+    a journal pair in one direction only, so it would find the reversed pair
+    unclaimed, call it the owner's and queue an ``ExternalMoveReview``; this
+    sweep read the same row backwards, called it ours, and repointed
+    ``file_path`` and nothing else. Whichever ran first decided - and once the
+    row is repointed the file is where the row says it is, so the next scan sees
+    no move to follow and the reconciliation is lost for good: the Moves screen
+    never offers it, and the picture keeps memberships whose folder has stopped
+    being true.
+    """
+    session, root = library["session"], library["root"]
+    picture_id = library["picture_id"]
+    filed_at = "2024 Shoots/Mira/2026-08/0412.png"
+
+    # PixlStash filed the picture there itself; the scan has not run since, so
+    # the row is still unclaimed.
+    session.add(
+        PictureMove(picture_id=picture_id, old_path="0412.png", new_path=filed_at)
+    )
+    session.commit()
+    # The owner drags it back out to the library root in their file manager.
+    os.replace(os.path.join(root, filed_at), os.path.join(root, "0412.png"))
+
+    # The scan's own attribution, on this exact state: not ours.
+    assert engine.claim_own_moves(session, [(filed_at, "0412.png")]) == set()
+
+    result = _purge(library, [picture_id])
+
+    assert result["purged"] == 0
+    assert result["repaired"] == 1
+    assert session.get(Picture, picture_id).file_path == "0412.png"
+
+    queued = session.exec(select(ExternalMoveReview)).all()
+    assert [(row.picture_id, row.old_path, row.new_path) for row in queued] == [
+        (picture_id, filed_at, "0412.png")
+    ]
+    # And it reaches the review screen rather than being classified away.
+    buckets = reconciliation.pending_summary_in_session(session, root)
+    offered = [item for bucket in buckets.values() for item in bucket]
+    assert [item["picture_id"] for item in offered] == [picture_id]
 
 
 def test_a_file_the_owner_really_deleted_is_still_purged(library):

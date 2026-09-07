@@ -89,6 +89,37 @@ def record_pending_reviews(
     return picture_ids
 
 
+def record_pending_reviews_in_laid_out_roots(
+    session: Session,
+    moves: Iterable[tuple[int, str, str]],
+    image_root: Optional[str] = None,
+) -> list[int]:
+    """:func:`record_pending_reviews` for a caller that has not read the layout.
+
+    The scan knows its root's layout already and applies the gate itself. The
+    reference-folder scan is not the only thing that discovers an owner move,
+    though: ``MissingFilePurgeTask`` reaches the same conclusion from the move
+    journal when a file has come back to the path PixlStash took it from, and it
+    has a picture id and two paths but no root. This looks the root up for it,
+    so both discoverers queue the same fact and neither has to grow a layout
+    query of its own.
+    """
+    pending = [(int(pid), old, new) for pid, old, new in moves]
+    if not pending:
+        return []
+    roots = layout_move_service.layout_roots(session, image_root)
+    if not roots:
+        return []
+    laid_out: set[int] = set()
+    for chunk in chunked(sorted({pid for pid, _, _ in pending})):
+        for picture in session.exec(select(Picture).where(Picture.id.in_(chunk))).all():
+            if picture.id is not None and picture.reference_folder_id in roots:
+                laid_out.add(int(picture.id))
+    return record_pending_reviews(
+        session, [move for move in pending if move[0] in laid_out]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Classification - live, every read
 # ---------------------------------------------------------------------------
