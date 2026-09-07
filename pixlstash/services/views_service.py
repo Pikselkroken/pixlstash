@@ -39,7 +39,7 @@ import re
 import stat
 import threading
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 from sqlmodel import Session, select
 
@@ -425,10 +425,27 @@ def probe_link_support(directory: str, target_file: str) -> tuple[Optional[str],
 # ---------------------------------------------------------------------------
 
 
+class Member(NamedTuple):
+    """The whole of what publishing a view needs to know about one picture.
+
+    Publishing reads exactly two things per member - the id, to name a link that
+    would otherwise collide, and the file path, to point it somewhere - so the
+    queries below select those two columns rather than the entity. A ``Picture``
+    has some seventy columns including the embedding and caption blobs, and
+    loading it as an ORM object also registers it in the session's identity map,
+    which keeps every row alive until the read task ends. On a library where the
+    memberships run to six figures that was the difference between a publish
+    that fits in a few megabytes and one that does not.
+    """
+
+    id: int
+    file_path: str
+
+
 def collect_in_session(
     session: Session, kinds: Iterable[str]
 ) -> dict[str, list[tuple]]:
-    """Return ``{kind: [(entity_id, name, [picture rows])]}`` for *kinds*.
+    """Return ``{kind: [(entity_id, name, [Member, ...])]}`` for *kinds*.
 
     Takes a session rather than a vault (§10.1): the caller owns the queued read,
     so :func:`publish` is pure filesystem work over data it is handed.
@@ -438,7 +455,7 @@ def collect_in_session(
 
     if "people" in wanted:
         rows = session.exec(
-            select(Character.id, Character.name, Picture)
+            select(Character.id, Character.name, Picture.id, Picture.file_path)
             .join(Face, Face.character_id == Character.id)
             .join(Picture, Picture.id == Face.picture_id)
             .where(Picture.deleted == False)  # noqa: E712 - SQL, not Python truthiness
@@ -447,7 +464,7 @@ def collect_in_session(
 
     if "sets" in wanted:
         rows = session.exec(
-            select(PictureSet.id, PictureSet.name, Picture)
+            select(PictureSet.id, PictureSet.name, Picture.id, Picture.file_path)
             .join(PictureSetMember, PictureSetMember.set_id == PictureSet.id)
             .join(Picture, Picture.id == PictureSetMember.picture_id)
             .where(Picture.deleted == False)  # noqa: E712
@@ -456,7 +473,7 @@ def collect_in_session(
 
     if "projects" in wanted:
         rows = session.exec(
-            select(Project.id, Project.name, Picture)
+            select(Project.id, Project.name, Picture.id, Picture.file_path)
             .join(PictureProjectMember, PictureProjectMember.project_id == Project.id)
             .join(Picture, Picture.id == PictureProjectMember.picture_id)
             .where(Picture.deleted == False)  # noqa: E712
@@ -467,16 +484,16 @@ def collect_in_session(
 
 
 def _group(rows) -> list[tuple]:
-    """Fold ``(id, name, picture)`` rows into one entry per entity.
+    """Fold ``(entity_id, name, picture_id, file_path)`` rows into one entry each.
 
     A picture with two faces of the same character appears twice in the join, so
     membership is deduplicated by picture id here rather than in SQL - the query
     stays one readable join and the set is small.
     """
-    grouped: dict[int, tuple[str, dict[int, Picture]]] = {}
-    for entity_id, name, picture in rows:
+    grouped: dict[int, tuple[str, dict[int, Member]]] = {}
+    for entity_id, name, picture_id, file_path in rows:
         entry = grouped.setdefault(entity_id, (name, {}))
-        entry[1][picture.id] = picture
+        entry[1][picture_id] = Member(picture_id, file_path)
     return [
         (entity_id, name, list(pictures.values()))
         for entity_id, (name, pictures) in grouped.items()

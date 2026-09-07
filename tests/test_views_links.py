@@ -24,11 +24,13 @@ import gc
 import io
 import json
 import os
+import re
 import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 from pixlstash.db_models.character import Character
@@ -894,6 +896,65 @@ def _seeded(_env):
         return ids
 
     return server.vault.db.run_task(_seed)
+
+
+def test_collecting_membership_reads_two_columns_and_no_orm_rows(_env, _seeded):
+    """What publish needs is an id and a path; loading the entity costs the rest.
+
+    A ``Picture`` is some seventy columns wide and an ORM load also pins every
+    row in the session's identity map for the life of the read. Measured on
+    50,000 members of one set: 1.102 s and a 165.3 MB peak selecting the entity,
+    0.168 s and 18.4 MB selecting the two columns - and the shape is what makes
+    the difference, so the shape is what this pins. Asserting only that publish
+    still works would pass again the day someone selects the entity back.
+    """
+    _client, server, _tmp = _env
+    emitted: list[str] = []
+
+    def _collect(session: Session):
+        bind = session.get_bind()
+
+        def _record(_conn, _cursor, statement, *_args):
+            emitted.append(statement)
+
+        event.listen(bind, "before_cursor_execute", _record)
+        try:
+            return views_service.collect_in_session(
+                session, ["people", "sets", "projects"]
+            )
+        finally:
+            event.remove(bind, "before_cursor_execute", _record)
+
+    collected = server.vault.db.run_immediate_read_task(_collect)
+
+    members = [
+        member
+        for entries in collected.values()
+        for _id, _name, pictures in entries
+        for member in pictures
+    ]
+    assert members, "the seed produced no membership to check"
+    for member in members:
+        assert isinstance(member, views_service.Member)
+        assert not isinstance(member, Picture)
+    # Exactly the two fields publish reads, so a third one cannot arrive unnoticed.
+    assert views_service.Member._fields == ("id", "file_path")
+
+    selects = [
+        statement.split("\nFROM")[0]
+        for statement in emitted
+        if statement.lstrip().upper().startswith("SELECT")
+        and "picture." in statement.split("\nFROM")[0]
+    ]
+    assert len(selects) == 3, f"expected one query per kind, got {len(selects)}"
+    for clause in selects:
+        picture_columns = sorted(
+            re.findall(r"\bpicture\.([A-Za-z_]+)", clause.replace("\n", " "))
+        )
+        assert picture_columns == ["file_path", "id"], (
+            "the membership query is loading the whole Picture again: "
+            f"{picture_columns}"
+        )
 
 
 def test_views_are_off_until_a_folder_is_named(_env):
