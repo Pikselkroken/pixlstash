@@ -496,6 +496,11 @@ const selectedFolderReferenceId = ref(null); // numeric reference-folder id or n
 /** The absolute folder path the selection is filtering on, or null. The row key
     above cannot carry it: a folder ROOT row's key is `rf-{id}`. */
 const selectedFolderPath = ref(null);
+/** The same folder said RELATIVE to its reference folder's root - the sidebar's
+    copy of what it last handed `?path=`, and `null` for the root itself. The
+    URL carries this rather than the absolute path so the owner's folder tree is
+    not in the address bar or the browser history (#1206 item 9). */
+const selectedFolderSubPath = ref(null);
 const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
@@ -521,13 +526,22 @@ const librariesStore = useLibrariesStore();
 //   2. Route key    `viewStore.activeFolderKey`: `rf-<id>` | `if-<id>`.
 //      Identifies a FOLDER. Never `path-`: a route has no row.
 //   3. Route path   `?path=`. A URL - any separator spelling, and editable.
+//      On an `rf-`/`if-` route it is now RELATIVE to the folder the id names
+//      (#1206 item 9: the id already says where the folder is, so repeating the
+//      owner's absolute path only put their folder tree in the address bar and
+//      the browser history). An ABSOLUTE one is still read, because links and
+//      history entries written before that carry one. On `/` - the only route
+//      with no folder id - it stays absolute, since nothing else names it.
+//      `selectedFolderSubPath` is the sidebar's copy of what it last wrote.
 //   4. Grid filter  `selectedFolderFilter.pathPrefix`, which reaches the
 //      listing as `file_path_prefix`: a literal LIKE against the stored
 //      `file_path`, so it MUST be in the server's spelling.
 //   5. Tree path    `entry.path` from the browse listing. Server spelling.
 //
-// Four crossings are legitimate, and each has one owner:
+// Five crossings are legitimate, and each has one owner:
 //   1 -> 2         `selectedFolderRouteKey`
+//   4 -> 3         `_subPathUnder`, via `handleFolderNodeSelect` (the only
+//                  place a server path is allowed to become a URL path)
 //   2 + 3 -> 1,4   `routeSubfolderUnder`  (the only place a URL path is
 //                  allowed to become a server path)
 //   4 vs 3         the watcher's "already in sync" test, through `_urlPath`.
@@ -595,13 +609,51 @@ function _urlPath(p) {
 }
 
 /**
+ * `path` said relative to `root`, or `null` when it is not inside it (the root
+ * ITSELF included - that is "no subfolder", not "an empty one").
+ *
+ * The one crossing from the server's spelling into the URL's. The tail keeps
+ * the path's OWN separators: `routeSubfolderUnder` re-spells on the way back,
+ * and re-spelling here as well would only make the two disagree.
+ *
+ * Folding `\` into `/` is for a WINDOWS root only, on the same rule and for the
+ * same reason as `routeSubfolderUnder`: on POSIX a `\` is an ordinary character
+ * in a folder's NAME, and folding would slice the tail at a character that does
+ * not separate anything.
+ */
+function _subPathUnder(root, path) {
+  const rootPath = _normPath(root);
+  const here = _normPath(path);
+  if (!rootPath || !here) return null;
+  const windows = _pathSeparator(rootPath) === "\\";
+  const base = windows ? _urlPath(rootPath) : rootPath;
+  const under = windows ? _urlPath(here) : here;
+  // One character for one character, so the tail can be sliced out of the
+  // ORIGINAL spelling at the offset the folded comparison found.
+  return under.startsWith(`${base}/`) ? here.slice(rootPath.length + 1) : null;
+}
+
+/** Whether a `?path=` names a folder outright rather than one inside another.
+    A tail sliced by `_subPathUnder` never starts with a separator and never
+    carries a drive letter, so those are what tell the two apart. */
+function _isAbsolutePath(p) {
+  return /^([a-zA-Z]:)?[\\/]/.test(String(p || ""));
+}
+
+/**
  * The `?path=` on the current folder route, when it names a folder INSIDE
  * `root` rather than `root` itself.
  *
- * A subfolder click pushes `/ref-folder/:id?path=<abs path>`, and this is what
- * reads it back so a reload or a shared link lands on the subfolder the URL
- * names instead of the folder root. `null` means "the route names the folder
- * itself", which is the ordinary case and the pre-existing behaviour.
+ * A subfolder click pushes `/ref-folder/:id?path=<tail under the folder>`, and
+ * this is what reads it back so a reload or a shared link lands on the
+ * subfolder the URL names instead of the folder root. `null` means "the route
+ * names the folder itself", which is the ordinary case.
+ *
+ * **Both shapes of `?path=` are read.** A tail is what the sidebar writes now
+ * (#1206 item 9); an ABSOLUTE path is what it wrote before, so links already
+ * shared and history entries already made keep working - and a `/` route,
+ * which has no id to be relative to, has no other shape available. An absolute
+ * one that is not inside this folder is still `null`, the same refusal as ever.
  *
  * Matched through `_urlPath`, so the two sides may disagree about separators
  * and still match. They come from the same server and normally agree, but the
@@ -628,20 +680,31 @@ function routeSubfolderUnder(root) {
   const raw = _normPath(filter.pathPrefix);
   const rootPath = _normPath(root);
   const sep = _pathSeparator(rootPath);
-  // Folding `\` into `/` is for a WINDOWS root only, where both characters
-  // separate and a URL may legitimately spell either. A POSIX root is compared
-  // raw, because there `\` is an ordinary character in a folder's name and
-  // folding would make `?path=/x/a/b/2024` - a different folder, or none -
-  // read as a subfolder of `/x/a\b` and then be rewritten into it.
+  // Containment first, and for BOTH shapes. `?path=` is URL text - it survives
+  // being shared, edited and pasted - and a `..` segment in it builds a
+  // pathPrefix pointing outside the folder. The relative branch below took its
+  // tail verbatim, so `?path=../../..` went straight through; the absolute
+  // branch sliced against the root but `_subPathUnder` compares prefixes and
+  // does not collapse `..` either, so `/root/../etc` passed it as the tail
+  // `../etc`. Nothing sliced out of a real path carries a `.` or `..` segment,
+  // so refusing one costs no legitimate link and restores the containment this
+  // function exists to enforce. Split on what actually separates under this
+  // root: on POSIX a `\` is an ordinary character in a folder's NAME, the same
+  // rule `_subPathUnder` and the re-spelling below already follow.
+  if (raw.split(sep === "\\" ? /[\\/]/ : /\//).some((s) => s === "." || s === ".."))
+    return null;
+  // An absolute `?path=` is sliced against the root (and refused when it names
+  // somewhere else); a relative one already IS the tail. `_subPathUnder` folds
+  // `\` into `/` for a WINDOWS root only, where both characters separate and a
+  // URL may legitimately spell either. A POSIX root is compared raw, because
+  // there `\` is an ordinary character in a folder's name and folding would
+  // make `?path=/x/a/b/2024` - a different folder, or none - read as a
+  // subfolder of `/x/a\b` and then be rewritten into it.
+  const rawTail = _isAbsolutePath(raw) ? _subPathUnder(rootPath, raw) : raw;
+  if (!rawTail) return null;
   const windows = sep === "\\";
-  // `_urlPath` swaps one character for one character, so both stay aligned
-  // with `raw` and the tail can be sliced back out of the ORIGINAL spelling.
-  const here = windows ? _urlPath(raw) : raw;
-  const base = windows ? _urlPath(rootPath) : rootPath;
-  if (!base || here === base || !here.startsWith(`${base}/`)) return null;
-  const rawTail = raw.slice(base.length + 1);
-  // Re-spelt only on Windows, for the same reason: on POSIX the tail's own
-  // backslashes are part of a name, so this is genuinely a no-op there.
+  // Re-spelt only on Windows: on POSIX the tail's own backslashes are part of
+  // a name, so this is genuinely a no-op there.
   const tail = windows ? rawTail.split(/[\\/]/).join(sep) : rawTail;
   return {
     pathPrefix: `${rootPath}${sep}${tail}`,
@@ -944,9 +1007,9 @@ async function referenceFolderSaved(savedFolder = null) {
 
 async function referenceFolderDeleted() {
   closeReferenceFolderEditor();
-  // If we were browsing this folder, clear the selection
-  selectedFolderKey.value = null;
-  selectedFolderReferenceId.value = null;
+  // If we were browsing this folder, clear the selection. The editor's delete
+  // button is the other way into #1206 item 12 - same leak, different entry.
+  clearFolderSelection();
   emit("select-folder", null);
   sidebarStore.folderScanning = false;
   await fetchReferenceFolders();
@@ -986,8 +1049,7 @@ async function importFolderSaved() {
     (entry) => Number(entry.id) === selectedId,
   );
   if (!selectedImportFolder) {
-    selectedFolderKey.value = null;
-    selectedFolderReferenceId.value = null;
+    clearFolderSelection();
     emit("select-folder", null);
     sidebarStore.folderScanning = false;
     return;
@@ -1006,8 +1068,7 @@ async function importFolderDeleted() {
     Number.isFinite(deletedId) &&
     selectedFolderKey.value === `if-${deletedId}`
   ) {
-    selectedFolderKey.value = null;
-    selectedFolderReferenceId.value = null;
+    clearFolderSelection();
     emit("select-folder", null);
     sidebarStore.folderScanning = false;
   }
@@ -1246,7 +1307,18 @@ function handleFolderNodeSelect(key, payload) {
     selectedFolderReferenceId.value = null;
   }
   selectedFolderPath.value = payload?.pathPrefix ?? null;
-  emit("select-folder", payload);
+  // What the URL will say. The id already names the folder, so `?path=` only
+  // has to say which folder INSIDE it - and saying it absolutely put the
+  // owner's whole folder tree in the address bar and the browser history
+  // (#1206 item 9). `null` for the folder root, which needs no query at all.
+  const root =
+    referenceFolders.value.find((rf) => rf.id === selectedFolderReferenceId.value)
+      ?.folder ?? null;
+  const subPath = _subPathUnder(root, payload?.pathPrefix);
+  selectedFolderSubPath.value = subPath;
+  // Added only when there IS one, so a folder root's and an import folder's
+  // payload stay exactly the object they were.
+  emit("select-folder", subPath ? { ...payload, subPath } : payload);
   // Emit immediately on selection so ImageGrid updates before next poll tick.
   sidebarStore.folderScanning = selectedFolderScanning.value;
 }
@@ -2500,6 +2572,22 @@ async function deleteSetsByIds(ids) {
   }
 }
 
+/** Forget the sidebar's folder selection - all four pieces of it.
+ *
+ * They are written together by `handleFolderNodeSelect` and must be cleared
+ * together. Clearing a subset leaves state the UI cannot show but the route
+ * watcher still reads: after a delete, `selectedFolderRouteKey` has already
+ * changed, so the watcher's `=== oldKey` guard never matches and a leftover
+ * `selectedFolderPath` / `selectedFolderSubPath` is never collected. Both
+ * delete branches used to clear two of the four (#1206 item 12).
+ */
+function clearFolderSelection() {
+  selectedFolderKey.value = null;
+  selectedFolderReferenceId.value = null;
+  selectedFolderPath.value = null;
+  selectedFolderSubPath.value = null;
+}
+
 async function deleteReferenceFolderById(id) {
   const folder = referenceFolders.value.find((rf) => rf.id === id);
   if (!folder) return;
@@ -2507,9 +2595,17 @@ async function deleteReferenceFolderById(id) {
   if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
   try {
     await deleteFolder("reference", id);
-    if (selectedFolderKey.value === `rf-${id}`) {
-      selectedFolderKey.value = null;
+    // On the FOLDER, not on the row key. A selected SUBfolder's key is
+    // `path-<abs path>` (crossing 1 in the map above), so matching `rf-<id>`
+    // saw only the root row: deleting the folder from under a selected
+    // subfolder left the highlight, `selectedFolderReferenceId` and the
+    // scanning light on a folder that no longer exists (#1206 item 12). The
+    // import-folder branch below is the shape this now copies - all four
+    // pieces of the selection, not just the key.
+    if (_folderId(selectedFolderReferenceId.value) === id) {
+      clearFolderSelection();
       emit("select-folder", null);
+      sidebarStore.folderScanning = false;
     }
     await fetchReferenceFolders();
   } catch (e) {
@@ -2529,8 +2625,7 @@ async function deleteImportFolderById(id) {
   try {
     await deleteFolder("import", id);
     if (selectedFolderKey.value === `if-${id}`) {
-      selectedFolderKey.value = null;
-      selectedFolderReferenceId.value = null;
+      clearFolderSelection();
       emit("select-folder", null);
       sidebarStore.folderScanning = false;
     }
@@ -4095,9 +4190,7 @@ watch(
     if (!newKey) {
       // Route left a folder view - clear the sidebar's folder highlight.
       if (oldKey && selectedFolderRouteKey.value === oldKey) {
-        selectedFolderKey.value = null;
-        selectedFolderReferenceId.value = null;
-        selectedFolderPath.value = null;
+        clearFolderSelection();
       }
       return;
     }
@@ -4120,12 +4213,20 @@ watch(
     // the emit pushed the re-spelled path as a NEW url, and Back returned to
     // the original spelling and started the round again. A shared Windows link
     // could not be navigated away from.
+    //
+    // Both spellings of the sidebar's own path are offered, because both
+    // spellings of `?path=` arrive (see `routeSubfolderUnder`):
+    // `selectedFolderSubPath` is what the sidebar wrote into the URL itself,
+    // `selectedFolderPath` is what an absolute link from before that carries.
+    // Comparing only the absolute one would leave the sidebar unable to
+    // recognise the very URL it had just pushed - the loop above, again.
     const showingSubfolder = selectedFolderKey.value?.startsWith("path-");
     const routePath = _urlPath(newPath);
+    const mine = [selectedFolderSubPath.value, selectedFolderPath.value];
     if (
       selectedFolderRouteKey.value === newKey &&
       (newPath
-        ? routePath !== "" && _urlPath(selectedFolderPath.value) === routePath
+        ? routePath !== "" && mine.some((p) => p && _urlPath(p) === routePath)
         : !showingSubfolder)
     ) {
       return;

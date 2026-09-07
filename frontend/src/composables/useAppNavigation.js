@@ -265,7 +265,15 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       // screen. The id still owns the payload - `useViewStore.applyView`
       // refuses to overwrite it from `?path=` on a folder route, and the
       // sidebar restores the subfolder from the query instead.
-      const folderQuery = f.pathPrefix ? { path: f.pathPrefix } : {};
+      //
+      // `subPath`, NOT `pathPrefix`: the id already says where the folder is,
+      // so repeating the absolute path only put the owner's folder tree in the
+      // address bar and in browser history (#1206 item 9). The sidebar builds
+      // it (`SideBar._subPathUnder`) and reads it back
+      // (`SideBar.routeSubfolderUnder`, which still accepts the absolute form a
+      // link shared before this carries). A folder ROOT has no subPath and
+      // therefore no query at all, which is where it started.
+      const folderQuery = f.subPath ? { path: f.subPath } : {};
       if (f.referenceFolderId != null) {
         pushAppRoute({
           name: "ref-folder",
@@ -284,8 +292,13 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       }
       // A folder payload with no id of any kind - what an "About your
       // library" finding points at. It travels as `?path=` rather than being
-      // dropped, and `useViewStore.parseFolderPath` reads it back.
-      pushAppRoute({ name: "all-pictures", query: folderQuery });
+      // dropped, and `useViewStore.parseFolderPath` reads it back. ABSOLUTE
+      // here, unlike the two branches above: there is no id for it to be
+      // relative to, so the path is the only thing that names this folder.
+      pushAppRoute({
+        name: "all-pictures",
+        query: f.pathPrefix ? { path: f.pathPrefix } : {},
+      });
       return;
     }
 

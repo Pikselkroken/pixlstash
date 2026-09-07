@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from 'node:path';
+import { pathKey } from './urlPolicy';
 
 /** Compute accelerators a PixlStash runtime can target. */
 export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
@@ -84,11 +85,19 @@ export type PathPurpose = 'library' | 'backends';
  * and `~/pictures` are two different directories, so folding there would let a
  * path that was never offered match one that was. Same rule, and the same
  * `process.platform` switch, as {@link normalizeBackendsRoot}.
+ *
+ * Defined in `urlPolicy.ts` and re-exported here: this file imports `electron`
+ * at module load and that one does not, so the renderer-page guards can share
+ * the definition rather than keep a second one that disagrees (#1206 item 2).
+ *
+ * It does NOT trim, and the two callers below trim their own input instead. The
+ * readonly wizard field arrives trimmed by the renderer, so this file wants
+ * padding forgiven; `urlPolicy.ts` compares paths parsed out of a `file://` URL,
+ * where forgiving it would let `setup.html%20` answer for the bundled wizard
+ * page on POSIX. Trimming a path someone typed and normalising a URL are two
+ * different jobs, so the one that only this file needs stays in this file.
  */
-export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
-  const resolved = resolve(path.trim());
-  return platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
+export { pathKey };
 
 // Key -> the path as PixlStash actually offered it. A Map rather than a Set so
 // the value that flows on is the one the main process vouched for, never the
@@ -105,7 +114,8 @@ export function offerPath<T extends string | null | undefined>(
   platform: NodeJS.Platform = process.platform,
 ): T {
   if (typeof path === 'string' && path.trim()) {
-    offeredPaths[purpose].set(pathKey(path, platform), resolve(path.trim()));
+    // Trimmed HERE, not inside pathKey: see the note on the re-export above.
+    offeredPaths[purpose].set(pathKey(path.trim(), platform), resolve(path.trim()));
   }
   return path;
 }
@@ -132,7 +142,8 @@ export function requireOfferedPath(
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${what} must be a folder path, not ${shown}.`);
   }
-  const offered = offeredPaths[purpose].get(pathKey(value, platform));
+  // Trimmed HERE, not inside pathKey: see the note on the re-export above.
+  const offered = offeredPaths[purpose].get(pathKey(value.trim(), platform));
   if (offered === undefined) {
     throw new Error(
       `${what} ${shown} was not offered by PixlStash for this choice. Choose ` +

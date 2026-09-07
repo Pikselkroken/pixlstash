@@ -111,11 +111,16 @@ function respond(url) {
   return { data: [] };
 }
 
-async function mountSidebar() {
+/**
+ * `teleport: true` renders the teleported layer (the sidebar's context menu
+ * lives there) instead of leaving it stubbed, which `shallow` does by default.
+ */
+async function mountSidebar({ teleport = false } = {}) {
   const wrapper = mount(SideBar, {
     shallow: true,
     props: { backendUrl: "/api/v1" },
     global: {
+      stubs: teleport ? { teleport: false } : {},
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
@@ -162,6 +167,47 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 5,
       pathPrefix: SUB,
+      // What the URL will say next time: relative to the folder its id names,
+      // so the owner's folder tree stays out of the address bar (#1206 item 9).
+      subPath: "2024/summer",
+      label: "summer",
+    });
+
+    wrapper.unmount();
+  });
+
+  // #1206 item 9. The URL now says the subfolder relative to the folder its id
+  // already names, so a reference-folder click stops putting the owner's whole
+  // folder tree in the address bar and in browser history. The absolute form
+  // every other test in this file uses is still read - that is what links
+  // shared, and history entries made, before this carry.
+  it("selects the subfolder a relative query names", async () => {
+    const wrapper = await mountSidebar();
+    routeToFolder("2024/summer");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: SUB,
+      subPath: "2024/summer",
+      label: "summer",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("re-spells a relative query into a Windows folder's separators", async () => {
+    // Same rule as the absolute case: `file_path_prefix` is a literal LIKE
+    // against the stored `file_path`, so a slash-spelled prefix on a Windows
+    // library matches nothing.
+    const wrapper = await mountSidebar();
+    routeToFolder("2024/summer", "rf-6");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 6,
+      pathPrefix: `${WIN_ROOT}\\2024\\summer`,
+      subPath: "2024\\summer",
       label: "summer",
     });
 
@@ -194,6 +240,54 @@ describe("restoring /ref-folder/:id", () => {
       referenceFolderId: 5,
       pathPrefix: ROOT,
       label: "Refs",
+    });
+
+    wrapper.unmount();
+  });
+
+  // A `?path=` that climbs out of the folder falls back to the folder root -
+  // the same refusal an absolute path naming somewhere else has always got.
+  // Reading the relative shape (#1206 item 9) made that refusal conditional on
+  // the string LOOKING absolute: `?path=../../..` was taken as the tail
+  // verbatim and built a pathPrefix outside the folder. Harmless today -
+  // `file_path_prefix` is a literal escaped LIKE and `reference_folder_id`
+  // still scopes the query, so it returns an empty grid - but it is the
+  // containment rule, and a rule that holds by accident downstream is one
+  // change away from not holding.
+  it.each([
+    ["a relative climb", "../../.."],
+    ["a climb inside a tail", "2024/../../etc"],
+    ["an absolute climb through the root", `${ROOT}/../../etc`],
+    ["a bare parent", ".."],
+    ["a same-directory segment", "2024/./summer"],
+  ])("refuses %s and falls back to the folder root", async (_name, path) => {
+    const wrapper = await mountSidebar();
+    routeToFolder(path);
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: ROOT,
+      label: "Refs",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("still reads a POSIX folder whose NAME contains a backslash", async () => {
+    // The containment check splits on `\` for a Windows root only. On POSIX a
+    // `\` is an ordinary character in a name, so `a\..\b` is one segment and
+    // must not be mistaken for a climb - the same rule `_subPathUnder` and the
+    // re-spelling already follow.
+    const wrapper = await mountSidebar();
+    routeToFolder(`${ODD_ROOT}/2024`, "rf-7");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 7,
+      pathPrefix: `${ODD_ROOT}/2024`,
+      subPath: "2024",
+      label: "2024",
     });
 
     wrapper.unmount();
@@ -258,6 +352,7 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 5,
       pathPrefix: other,
+      subPath: "2023/winter",
       label: "winter",
     });
 
@@ -322,6 +417,17 @@ describe("restoring /ref-folder/:id", () => {
         "a POSIX SUBfolder whose name contains a backslash",
         "rf-7",
         `${ODD_ROOT}/c\\d`,
+      ],
+      // The shape the sidebar writes now (#1206 item 9). Every absolute case
+      // above is a link or a history entry from BEFORE it, which is why both
+      // shapes are here rather than one replacing the other.
+      ["a POSIX subfolder, said relative to its folder", "rf-5", "2024/summer"],
+      ["a Windows subfolder, said relative to its folder", "rf-6", "2024\\summer"],
+      ["the same Windows subfolder, slash-spelled", "rf-6", "2024/summer"],
+      [
+        "a relative tail whose own name contains a backslash",
+        "rf-7",
+        "c\\d",
       ],
     ];
 
@@ -410,6 +516,9 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 7,
       pathPrefix: `${ODD_ROOT}/c\\d`,
+      // And the tail written into the URL keeps that backslash too: on POSIX
+      // it is a character in a name, not a separator, at both ends of the trip.
+      subPath: "c\\d",
       label: "c\\d",
     });
 
@@ -435,8 +544,37 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 6,
       pathPrefix: `${WIN_ROOT}\\2024\\summer`,
+      subPath: "2024\\summer",
       label: "summer",
     });
+
+    wrapper.unmount();
+  });
+
+  // #1206 item 12. The cleanup matched `rf-<id>`, which is the ROOT row's key;
+  // a selected subfolder's key is `path-<abs path>`, so removing the folder
+  // under it left the highlight and the scanning light on a folder that no
+  // longer existed. Matching on the folder the selection belongs to is what the
+  // import-folder branch already did.
+  it("clears a selected subfolder when its reference folder is removed", async () => {
+    const wrapper = await mountSidebar({ teleport: true });
+    const sidebarStore = useSidebarStore();
+    routeToFolder(SUB);
+    await flushPromises();
+    expect(sidebarStore.folderScanning).toBe(true);
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const rows = wrapper.findAll(".sidebar-folder-root-row");
+    await rows[0].trigger("contextmenu");
+    await flushPromises();
+    // The context menu is teleported to <body>, so it is not under `wrapper`.
+    const remove = document.querySelector(".sidebar-ctx-item--danger");
+    expect(remove).not.toBe(null);
+    remove.click();
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toBe(null);
+    expect(sidebarStore.folderScanning).toBe(false);
 
     wrapper.unmount();
   });

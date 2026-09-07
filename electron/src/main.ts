@@ -1249,10 +1249,13 @@ function registerDownloadHandling(): void {
  * (#1177 item 62). Binding to a `webContents` cannot separate them; the
  * document loaded in the sending frame can.
  *
- * `startup:*` is deliberately NOT gated: `takePendingTelemetry`,
- * `takePendingMapping` and `askQuestion` are the running app's own channels
- * (`useAppConfig.js`, `SideBar.vue`), and gating them would break the upgrade
- * privacy question and the folder-mapping handoff.
+ * `startup:*` is the running app's own family (`useAppConfig.js`,
+ * `SideBar.vue`), so gating it HERE would break the upgrade privacy question
+ * and the folder-mapping handoff. `startup:askQuestion` is gated on the app
+ * window instead (requireAppRenderer, #1206 item 4) because it replaces the
+ * document with the wizard; `takePendingTelemetry` and `takePendingMapping`
+ * only hand back an answer this process parked for the page that is about to
+ * ask, and stay open.
  */
 function requireSetupRenderer(event: Electron.IpcMainInvokeEvent, channel: string): void {
   // The frame, not the webContents: a frame the library page created has its
@@ -1511,7 +1514,14 @@ function registerIpc(): void {
   // The app asking for a question it cannot answer itself. It hands the window
   // back to the startup framework rather than opening a dialog over a library
   // that is already on screen; `setup:commit` brings the window back.
-  ipcMain.handle('startup:askQuestion', async (_e, step?: string) => {
+  //
+  // Gated on the app window (#1206 item 4). It writes no config and repoints no
+  // library, but it replaces the document with the full-screen wizard, so any
+  // page that could reach it could throw the owner out of the library and lose
+  // whatever was unsaved. `useAppConfig.js` - which runs in the backend-served
+  // app - is the only caller, and `requireAppRenderer` is exactly that audience.
+  ipcMain.handle('startup:askQuestion', async (event, step?: string) => {
+    requireAppRenderer(event, 'startup:askQuestion');
     if (step !== 'privacy') {
       console.warn(`[startup] refusing an unknown startup step: ${step}`);
       return false;
