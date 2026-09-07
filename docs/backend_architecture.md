@@ -6907,6 +6907,26 @@ library root is found under `None`. The task's result carries
 for exactly this reason — the two differ whenever the move happened in a root
 with no layout.
 
+**The scan is not the only thing that discovers an owner move.**
+`MissingFilePurgeTask` reads the same journal to tell a deletion from a move it
+must not purge (§26), and it reads it in both directions — so a file found back
+at a row's `old_path` is repaired there too. That direction has two causes the
+journal cannot tell apart: an undo whose rename landed and whose transaction did
+not, and the owner dragging the file out of the folder PixlStash filed it in.
+The scan *can* tell, because `claim_own_moves` matches a pair in one direction
+only and would find the reversed pair unclaimed — so it would queue a review
+where the sweep repointed `file_path` and stopped. Whichever noticed first
+decided, and once `file_path` is repointed the file is where the row says it is,
+so the next scan sees no move to follow and the reconciliation is lost for good.
+The sweep therefore queues it as well, through
+`record_pending_reviews_in_laid_out_roots` — the same recorder with the layout
+gate the scan applies inline, since the sweep has a picture id and two paths but
+has read no root. Only the backwards direction: a file at the row's `new_path`
+is our own move landing, the scan would have claimed that pair, and a review
+there is Phase 5 undoing Phase 4b's write. A crashed undo queues one too, which
+is the safe side of a distinction that cannot be made: the row is a question for
+the owner and never an applied change.
+
 **Classification never touches the row it reads until it deletes it.**
 `pending_summary_in_session` reclassifies every row against the picture's
 *current* facets and the root's *current* layout on every call — there is no
