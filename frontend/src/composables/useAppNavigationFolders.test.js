@@ -56,6 +56,8 @@ function mountNav() {
 
 const ROOT = "/home/me/library/refs";
 const SUB = "/home/me/library/refs/2024/summer";
+/** SUB said the way the URL now says it: relative to the folder the id names. */
+const SUBTAIL = "2024/summer";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -67,25 +69,34 @@ beforeEach(() => {
 });
 
 describe("a reference-folder click", () => {
-  it("keeps the subfolder in the URL", () => {
+  it("keeps the subfolder in the URL, relative to the folder", () => {
+    // `subPath`, not `pathPrefix`: the id already names the folder, so the
+    // query only has to say which folder inside it. Repeating the absolute
+    // path put the owner's folder tree in the address bar and in their browser
+    // history for no navigational gain (#1206 item 9).
     const { wrapper, api } = mountNav();
 
     api.handleSelectFolder({
       referenceFolderId: 5,
       pathPrefix: SUB,
+      subPath: SUBTAIL,
       label: "summer",
     });
 
     expect(nav.push).toHaveBeenCalledWith({
       name: "ref-folder",
       params: { id: "5" },
-      query: { path: SUB },
+      query: { path: SUBTAIL },
     });
+    expect(JSON.stringify(nav.push.mock.calls)).not.toContain(ROOT);
 
     wrapper.unmount();
   });
 
-  it("names the folder root when that is what was clicked", () => {
+  it("names the folder root with no query at all", () => {
+    // The root row's click carries `pathPrefix: folder.folder` and no
+    // `subPath`, because the root is not inside itself. `/ref-folder/5` says
+    // everything there is to say.
     const { wrapper, api } = mountNav();
 
     api.handleSelectFolder({
@@ -97,7 +108,7 @@ describe("a reference-folder click", () => {
     expect(nav.push).toHaveBeenCalledWith({
       name: "ref-folder",
       params: { id: "5" },
-      query: { path: ROOT },
+      query: {},
     });
 
     wrapper.unmount();

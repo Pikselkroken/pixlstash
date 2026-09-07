@@ -295,10 +295,18 @@ apply `?path=` on them (it guards on `folderKey`). The folder an "About your
 library" finding points at (§9.3) has no id of any kind, which is what this
 param is for. **It also carries the sidebar's subfolder selection.**
 `FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
-`pushRouteForCurrentSelection`'s ref-folder branch; the branch now pushes the
-`pathPrefix` as `?path=` alongside the id, and `SideBar.routeSubfolderUnder`
-reads it back once the folder listing is in, selecting the subfolder rather
-than the folder root. The id still owns `referenceFolderId`, so
+`pushRouteForCurrentSelection`'s ref-folder branch; the branch pushes `?path=`
+alongside the id, and `SideBar.routeSubfolderUnder` reads it back once the
+folder listing is in, selecting the subfolder rather than the folder root.
+**On an id-carrying route that query is RELATIVE to the folder the id names**
+(`SideBar._subPathUnder` builds it, and it reaches the branch as the payload's
+`subPath`). The id already says where the folder is, so repeating the absolute
+path only put the owner's folder tree in the address bar and in browser history
+(#1206 item 9); a folder ROOT is therefore `/ref-folder/:id` with no query at
+all. `routeSubfolderUnder` still accepts an ABSOLUTE `?path=`, because links
+shared and history entries made before that carry one — and because `/`, the
+only folder-facet route with no id, has nothing to be relative to. The id still
+owns `referenceFolderId`, so
 `reference_folder_id` stays in the grid query — the query only says which
 folder *inside* it is open. **The sidebar watcher watches `?path=` alongside
 `activeFolderKey`, and has to.** Two sibling subfolders of one folder push

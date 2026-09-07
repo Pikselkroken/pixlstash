@@ -167,6 +167,47 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 5,
       pathPrefix: SUB,
+      // What the URL will say next time: relative to the folder its id names,
+      // so the owner's folder tree stays out of the address bar (#1206 item 9).
+      subPath: "2024/summer",
+      label: "summer",
+    });
+
+    wrapper.unmount();
+  });
+
+  // #1206 item 9. The URL now says the subfolder relative to the folder its id
+  // already names, so a reference-folder click stops putting the owner's whole
+  // folder tree in the address bar and in browser history. The absolute form
+  // every other test in this file uses is still read - that is what links
+  // shared, and history entries made, before this carry.
+  it("selects the subfolder a relative query names", async () => {
+    const wrapper = await mountSidebar();
+    routeToFolder("2024/summer");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: SUB,
+      subPath: "2024/summer",
+      label: "summer",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("re-spells a relative query into a Windows folder's separators", async () => {
+    // Same rule as the absolute case: `file_path_prefix` is a literal LIKE
+    // against the stored `file_path`, so a slash-spelled prefix on a Windows
+    // library matches nothing.
+    const wrapper = await mountSidebar();
+    routeToFolder("2024/summer", "rf-6");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 6,
+      pathPrefix: `${WIN_ROOT}\\2024\\summer`,
+      subPath: "2024\\summer",
       label: "summer",
     });
 
@@ -263,6 +304,7 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 5,
       pathPrefix: other,
+      subPath: "2023/winter",
       label: "winter",
     });
 
@@ -327,6 +369,17 @@ describe("restoring /ref-folder/:id", () => {
         "a POSIX SUBfolder whose name contains a backslash",
         "rf-7",
         `${ODD_ROOT}/c\\d`,
+      ],
+      // The shape the sidebar writes now (#1206 item 9). Every absolute case
+      // above is a link or a history entry from BEFORE it, which is why both
+      // shapes are here rather than one replacing the other.
+      ["a POSIX subfolder, said relative to its folder", "rf-5", "2024/summer"],
+      ["a Windows subfolder, said relative to its folder", "rf-6", "2024\\summer"],
+      ["the same Windows subfolder, slash-spelled", "rf-6", "2024/summer"],
+      [
+        "a relative tail whose own name contains a backslash",
+        "rf-7",
+        "c\\d",
       ],
     ];
 
@@ -415,6 +468,9 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 7,
       pathPrefix: `${ODD_ROOT}/c\\d`,
+      // And the tail written into the URL keeps that backslash too: on POSIX
+      // it is a character in a name, not a separator, at both ends of the trip.
+      subPath: "c\\d",
       label: "c\\d",
     });
 
@@ -440,6 +496,7 @@ describe("restoring /ref-folder/:id", () => {
     expect(lastFolderPayload(wrapper)).toEqual({
       referenceFolderId: 6,
       pathPrefix: `${WIN_ROOT}\\2024\\summer`,
+      subPath: "2024\\summer",
       label: "summer",
     });
 

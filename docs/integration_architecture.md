@@ -1868,8 +1868,13 @@ payload the sidebar emits and therefore to the listing API's existing
 so the route never applies it directly — but it does ride along there, because
 it is also how the sidebar's own subfolder selection stays in the URL: a
 subfolder click carries an `rfId` and so takes the ref-folder branch, which
-pushes `/ref-folder/:id?path=<abs folder>`, and the sidebar restores the
-subfolder from the query once the folder listing is in.
+pushes `/ref-folder/:id?path=<folder under it>`, and the sidebar restores the
+subfolder from the query once the folder listing is in. **There the path is
+relative to the folder the id names**, since the id already says where that
+folder is and spelling it out only put the owner's folder tree in the address
+bar (#1206 item 9); a folder root pushes no query. An absolute `?path=` is
+still read, which is what a link shared before that carries and the only shape
+available on `/`.
 
 **`?face=with_face|without_face`** is the face facet, additive like
 `?stack_state=` — an absent or unrecognised value leaves
