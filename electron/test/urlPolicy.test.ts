@@ -362,13 +362,23 @@ describe('IPC gating is complete, not opt-in', () => {
     assert.match(main, /isBackendOrigin\(sender, currentUrl\)/);
   });
 
-  it('leaves the app-renderer startup:* channels open', () => {
+  it('never gates a startup:* channel on the WIZARD page', () => {
     // takePendingTelemetry / takePendingMapping / askQuestion are called BY the
-    // library app (useAppConfig.js, SideBar.vue). Gating them would break the
-    // upgrade privacy question and the folder-mapping handoff.
+    // library app (useAppConfig.js, SideBar.vue). Gating them on setup.html
+    // would break the upgrade privacy question and the folder-mapping handoff.
     for (const [channel, body] of handlers.filter(([c]) => c.startsWith('startup:'))) {
       assert.doesNotMatch(body, /requireSetupRenderer/, `${channel} must stay open`);
     }
+  });
+
+  it('gates startup:askQuestion on the app window (#1206 item 4)', () => {
+    // It writes nothing, but it replaces the document with the full-screen
+    // wizard - so an ungated one let any page throw the owner out of the
+    // library and lose unsaved work. The two `takePending*` channels stay open:
+    // they only hand back an answer this process parked for the page asking.
+    const [, askQuestion] = handlers.find(([c]) => c === 'startup:askQuestion') ?? [];
+    assert.ok(askQuestion, 'startup:askQuestion not found');
+    assert.match(askQuestion, /requireAppRenderer\(event, 'startup:askQuestion'\)/);
   });
 });
 
