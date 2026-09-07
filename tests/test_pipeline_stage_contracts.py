@@ -145,6 +145,45 @@ def test_every_cuda_ort_session_site_is_built_from_the_budget():
     assert "engine.vram_budget.ort_cuda_provider_options(" in face_source
 
 
+def test_the_wd14_session_says_so_when_it_did_not_get_the_accelerator(monkeypatch):
+    """#1206 item 3b: only the session knows which provider actually loaded.
+
+    ``ort.get_available_providers()`` reports what the onnxruntime build
+    supports. A provider whose shared libraries are missing - the CUDA one
+    needs ``libcublasLt`` - is listed there, is requested, and is then dropped
+    without an error, so the old check passed while every tag ran on the CPU.
+    """
+    from pixlstash.tagger_plugins import wd14 as wd14_module
+
+    service = wd14_module.WD14Service(
+        device="cuda", model_dir="/nonexistent", batch_size_fn=lambda: 1
+    )
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        wd14_module.logger, "warning", lambda *args, **_kw: warnings.append(args)
+    )
+
+    # The session asked for CUDA and got CPU: that must be said out loud.
+    service._ort_sess = SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    service._warn_if_the_session_fell_back_to_cpu()
+    assert len(warnings) == 1, warnings
+    assert "CPUExecutionProvider" in warnings[0]
+
+    # The positive control: a session that did get CUDA stays quiet, or the
+    # warning is noise every GPU box learns to ignore.
+    service._ort_sess = SimpleNamespace(
+        get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+    service._warn_if_the_session_fell_back_to_cpu()
+    assert len(warnings) == 1, warnings
+
+    # And a service that asked for the CPU has nothing to complain about.
+    service._device = "cpu"
+    service._ort_sess = SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    service._warn_if_the_session_fell_back_to_cpu()
+    assert len(warnings) == 1, warnings
+
+
 # ── §8: the maintenance finders keep their global gate ──────────────────────
 
 

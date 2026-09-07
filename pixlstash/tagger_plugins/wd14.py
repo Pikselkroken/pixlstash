@@ -120,14 +120,6 @@ class WD14Service:
         with self._load_lock:
             if self.is_loaded():
                 return
-            if self._device == "cuda":
-                providers = ort.get_available_providers()
-                if "CUDAExecutionProvider" not in providers:
-                    logger.warning(
-                        "CUDAExecutionProvider unavailable for onnxruntime "
-                        "(WD14 tagger will use CPU; all PyTorch models still use CUDA). "
-                        "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
-                    )
             self._init_onnx_session()
             if self._rating_tags is None or self._general_tags is None:
                 self._load_tags()
@@ -304,8 +296,37 @@ class WD14Service:
                         else ["CPUExecutionProvider"]
                     ),
                 )
+        self._warn_if_the_session_fell_back_to_cpu()
         self._input_name = self._ort_sess.get_inputs()[0].name
         self._onnx_batch_capacity = self._resolve_batch_capacity()
+
+    def _warn_if_the_session_fell_back_to_cpu(self) -> None:
+        """Say so when the session did not get the accelerator it asked for.
+
+        ``ort.get_available_providers()`` says what the onnxruntime build
+        SUPPORTS, not what can load. A provider whose shared libraries are
+        missing - the CUDA one needs ``libcublasLt`` - is still listed, still
+        requested, and then silently dropped, so the old check passed while
+        every tag ran on the CPU at a fraction of the speed with nothing said
+        (#1206 item 3b, live on a development box). ``get_providers()`` is the
+        session's own answer, so it is the only one worth asking.
+        """
+        if self._device == "cpu" or self._ort_sess is None:
+            return
+        active = self._ort_sess.get_providers() or ["CPUExecutionProvider"]
+        if active[0] != "CPUExecutionProvider":
+            logger.debug("WD14 tagger session is running on %s", active[0])
+            return
+        logger.warning(
+            "WD14 tagger asked onnxruntime for device %s, but the session "
+            "loaded with %s: tagging will run on the CPU at a fraction of the "
+            "speed. The usual cause is an execution provider this build "
+            "advertises whose libraries are not installed (the CUDA provider "
+            "needs libcublasLt). Fix with: pip uninstall -y onnxruntime && "
+            "pip install onnxruntime-gpu",
+            self._device,
+            active[0],
+        )
 
     def _resolve_batch_capacity(self) -> int:
         if self._ort_sess is None:
