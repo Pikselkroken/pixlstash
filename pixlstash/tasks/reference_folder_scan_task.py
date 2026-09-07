@@ -647,11 +647,12 @@ class ReferenceFolderScanTask(BaseTask):
                 self._db.run_task(
                     MissingFilePurgeTask._repair_moved_pictures,
                     repairs,
+                    self._db.image_root,
                     priority=DBPriority.LOW,
                 )
                 # The file is at the repointed path, so it is that row's file
                 # and not a new import.
-                new_paths -= {self._on_disk(path) for _, path in repairs}
+                new_paths -= {self._on_disk(path) for _, path, _ in repairs}
                 logger.info(
                     "Reference folder %s: repointed %d picture(s) PixlStash "
                     "itself had moved rather than deleting them.",
