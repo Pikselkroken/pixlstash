@@ -284,7 +284,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "and is the control surface of the PATCH beside it - the tier that "
             "alone may decide where the owner's files get written is the tier "
             "that may see the decision. Same reasoning as GET "
-            "/server-config/views; owner + loopback/LAN/Tailscale, or remote "
+            "/model-moves; owner + loopback/LAN/Tailscale, or remote "
             "owner iff allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
@@ -296,9 +296,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "renames the owner's files to. It writes no file itself and moves "
             "nothing - a layout is true of every path already there - but the "
             "authority it hands out is host-filesystem authority, so it sits "
-            "on the tier that grants it. Sibling of PATCH "
-            "/server-config/views; owner + loopback/LAN/Tailscale, or remote "
-            "owner iff allow_remote_host_ops=true (§16.3.1)."
+            "on the tier that grants it. Sibling of POST "
+            "/server-config/layout/migration, which acts on what it sets; owner "
+            "+ loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
     ("GET", "/api/v1/server-config/layout/migration"): RoutePolicy(
@@ -330,36 +331,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "and the scope is the whole library. Sibling of PATCH "
             "/server-config/layout, which grants this authority in the first "
             "place; owner + loopback/LAN/Tailscale, or remote owner iff "
-            "allow_remote_host_ops=true (§16.3.1)."
-        ),
-    ),
-    ("GET", "/api/v1/server-config/views"): RoutePolicy(
-        _LOCAL,
-        justification=(
-            "§16.3 reads back a host path this library publishes its Views tree "
-            "to, and is the control surface of the PATCH beside it - the tier "
-            "that alone may publish the tree is the tier that may see where it "
-            "went. Sibling of GET /model-moves for that reason; owner + "
-            "loopback/LAN/Tailscale, or remote owner iff "
-            "allow_remote_host_ops=true (§16.3.1)."
-        ),
-    ),
-    ("PATCH", "/api/v1/server-config/views"): RoutePolicy(
-        _LOCAL,
-        justification=(
-            "§16.3 takes a caller-supplied host path and writes a folder tree of "
-            "links into it, removing and rebuilding the subtrees it owns - the "
-            "POST /model-folders class for the path it accepts and the POST "
-            "/model-moves class for the filesystem it writes. It creates only "
-            "links; the ONLY thing it unlinks is a name that is not the last "
-            "one (a symlink, or a regular file with st_nlink > 1), so no file "
-            "whose sole copy is in the tree can be removed by it - anything "
-            "else is reported as kept_by_owner and left alone. Each destination "
-            "is resolved with resolve_path_within against its kind folder and "
-            "each kind folder against the root, and a symlink standing where a "
-            "kind folder goes is unlinked as a link rather than descended, so "
-            "the rebuild cannot be steered outside the views root. owner + "
-            "loopback/LAN/Tailscale, or remote owner iff "
             "allow_remote_host_ops=true (§16.3.1)."
         ),
     ),

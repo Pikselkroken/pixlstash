@@ -135,8 +135,8 @@ def canonical_path(path: str) -> str:
     compare unequal and every containment check below walks straight past a
     registered root - the overlap this function exists to catch, reached by
     spelling instead of by symlink. It is identity on POSIX, so the gate cannot
-    see the difference; ``views_service._resolved`` case-folds for the same
-    reason and says so.
+    see the difference, which is exactly why it is applied unconditionally
+    rather than per-platform.
 
     Comparison only. The value is never stored or shown: a row keeps the real
     case so the scan walks the directory the owner named, and every refusal

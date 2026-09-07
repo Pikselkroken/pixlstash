@@ -45,12 +45,17 @@ from pixlstash.services.layout_move_service import (
     prune_move_journal,
 )
 from pixlstash.services.move_reconciliation_service import record_pending_reviews
-from pixlstash.services.views_service import MARKER_NAME as VIEWS_MARKER_NAME
 from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
 from pixlstash.utils.reference_folder_watcher import ROOT_INTERNAL_DIRS
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
+
+#: Marker file the removed PixlStash Views feature wrote at the root of a
+#: published tree. The feature is gone, but its API was live in v1.11 and any
+#: tree it published is still on disk, so the scan still refuses to descend one.
+#: Removing this check would double-import every picture under such a folder.
+VIEWS_MARKER_NAME = ".pixlstash-views"
 
 _BUILD_CHUNK_SIZE = 128
 _MAX_BUILD_WORKERS = 8
@@ -303,9 +308,9 @@ class ReferenceFolderScanTask(BaseTask):
             # picture indexed somewhere else already, and os.walk lists a
             # symlinked *file* in ``files`` -- only symlinked directories are
             # skipped by default -- so without this each picture would be
-            # indexed a second time under its view path. views_service refuses
-            # to publish inside a reference folder, but a folder can be
-            # registered as one after a tree was published there.
+            # indexed a second time under its view path. The feature that wrote
+            # these trees has been removed, but its API shipped in v1.11 and any
+            # tree it published is still on disk.
             #
             # Remembered like every other unscanned subtree above: pruning
             # alone would turn a marker file appearing over an indexed folder
