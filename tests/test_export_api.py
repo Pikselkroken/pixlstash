@@ -394,6 +394,102 @@ def test_pictures_export_folder_rejects_a_destination_inside_the_library():
         gc.collect()
 
 
+def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadable():
+    """#1177 item 59: an unknown blocklist must refuse, not permit.
+
+    The roots the check above compares against were previously reported as an
+    empty tuple when the folder table could not be read, which is exactly what
+    "no reference folders are configured" looks like - so a read failure turned
+    the destination check off silently, and an export into a reference folder
+    was accepted.
+    """
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "unreadable-refs-destination")
+        os.makedirs(destination, exist_ok=True)
+
+        # Broken at the DB read, not at the vault method, so this exercises the
+        # whole chain: replacing the raise with `return ()` again turns this
+        # test green-to-red rather than leaving it passing on a stubbed vault.
+        def _explode(_task, *args, **kwargs):
+            raise RuntimeError("test-induced reference folder read failure")
+
+        with mock.patch.object(server.vault.db, "run_immediate_read_task", _explode):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+        assert resp.status_code == 503, resp.text
+        assert "reference folders" in resp.json().get("detail", "")
+        assert not os.listdir(destination), "nothing may be written on a refusal"
+
+        # The positive control: the same destination is accepted once the
+        # folder table reads normally again.
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_refuses_when_the_watch_folders_are_unreadable():
+    """The import-folder half of item 59, found in its adversarial review.
+
+    `get_import_folder_paths` logged at DEBUG and returned `[]`, which is what
+    "no watch folders are configured" looks like - so a read failure turned off
+    the worst refusal in this route. A watch folder imports whatever appears in
+    it, and one carrying `delete_after_import` then removes the file it has
+    just imported, so an export into one destroys its own output.
+    """
+    from unittest import mock
+
+    from pixlstash.utils.path_utils import LibraryRootsUnavailable
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "unreadable-watch-destination")
+        os.makedirs(destination, exist_ok=True)
+
+        # Only the import-folder read fails, so this cannot pass on the
+        # reference-folder refusal that lands one line above it.
+        def _explode(_vault):
+            raise LibraryRootsUnavailable("test-induced import folder read failure")
+
+        with mock.patch(
+            "pixlstash.routes.pictures._export.get_import_folder_paths", _explode
+        ):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+        assert resp.status_code == 503, resp.text
+        assert not os.listdir(destination), "nothing may be written on a refusal"
+
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_pictures_export_folder_rejects_a_destination_in_a_watched_folder():
     """An import folder is the same refusal as a reference folder, and worse.
 

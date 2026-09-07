@@ -44,6 +44,155 @@ export function requireAccel(value: unknown): Accel {
 }
 
 /**
+ * Every path this process has itself put in front of the user: a native file
+ * dialog's result, or a default it computed and sent to the setup wizard.
+ *
+ * SECURITY: `backend:setLocation` and `setup:commit` take a *destination* from
+ * the renderer, and the destination is meant to be a folder the user chose - so
+ * an allowlist of known-good directories is the wrong shape and would break the
+ * feature. What can be checked instead is provenance: only the main process can
+ * open a native dialog, so a path it never handed out did not come from one.
+ * Without that check `backend:setLocation` reaches `moveDir`, which
+ * `rm(..., { recursive: true, force: true })`s `<renderer-chosen root>/<accel>`
+ * (item 13 validated the last segment, not the root), and `setup:commit` writes
+ * a config naming an arbitrary `imageRoot` and downloads a 2.5 GB runtime into
+ * an arbitrary `installLocation`.
+ *
+ * Session-scoped and additive on purpose: it records what was offered in this
+ * run, not a persisted policy, and the wizard's own prefilled defaults have to
+ * be in it or accepting the folder on screen would be refused. It is not a
+ * containment check - the user may legitimately pick anywhere - so it says only
+ * "this exact folder was on offer for this question", never "this folder is
+ * safe".
+ *
+ * Kept per {@link PathPurpose} rather than as one pool, because the two
+ * questions have very different consequences and one pool lets an answer to the
+ * gentler one be replayed as an answer to the harsher one: a *library* folder
+ * accepted as the *GPU install location* makes `setBackendsRoot` point at the
+ * user's pictures, and `accel:install` then wipes `<library>/<accel>` and
+ * `backend:setLocation` recursively deletes it.
+ */
+export type PathPurpose = 'library' | 'backends';
+
+/**
+ * The lookup key for a path, matching the platform's own idea of path identity.
+ *
+ * Windows filesystems are case-insensitive, so `C:\\Users\\me\\Pictures` and
+ * `c:\\users\\me\\pictures` are one directory and a case-sensitive comparison
+ * would refuse a folder the user really did choose - the over-blocking failure
+ * this whole guard must not cause. POSIX is case-SENSITIVE, where `~/Pictures`
+ * and `~/pictures` are two different directories, so folding there would let a
+ * path that was never offered match one that was. Same rule, and the same
+ * `process.platform` switch, as {@link normalizeBackendsRoot}.
+ */
+export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+  const resolved = resolve(path.trim());
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+// Key -> the path as PixlStash actually offered it. A Map rather than a Set so
+// the value that flows on is the one the main process vouched for, never the
+// renderer's own spelling of it.
+const offeredPaths: Record<PathPurpose, Map<string, string>> = {
+  library: new Map(),
+  backends: new Map(),
+};
+
+/** Record a path as offered to the renderer for *purpose*, and return it. */
+export function offerPath<T extends string | null | undefined>(
+  path: T,
+  purpose: PathPurpose,
+  platform: NodeJS.Platform = process.platform,
+): T {
+  if (typeof path === 'string' && path.trim()) {
+    offeredPaths[purpose].set(pathKey(path, platform), resolve(path.trim()));
+  }
+  return path;
+}
+
+/**
+ * Narrow a folder the renderer sent back to one {@link offerPath} recorded for
+ * the same *purpose*, or throw. *what* names the field for the message shown.
+ *
+ * Compared by {@link pathKey} on both sides, so a trailing separator, an
+ * `a/../b` spelling, or (on Windows only) a different drive-letter or path
+ * casing is accepted while resolving to that same offered path - and nothing
+ * else is. Returns the path as it was OFFERED, not as the renderer spelled it.
+ */
+export function requireOfferedPath(
+  value: unknown,
+  purpose: PathPurpose,
+  what: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // Described the way requireAccel describes a value, and for its reasons: IPC
+  // carries a BigInt (JSON.stringify throws on one) and an object may supply
+  // its own `toString`.
+  const shown = typeof value === 'string' ? JSON.stringify(value) : typeof value;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${what} must be a folder path, not ${shown}.`);
+  }
+  const offered = offeredPaths[purpose].get(pathKey(value, platform));
+  if (offered === undefined) {
+    throw new Error(
+      `${what} ${shown} was not offered by PixlStash for this choice. Choose ` +
+        'the folder with the Change\u2026 button and try again.',
+    );
+  }
+  return offered;
+}
+
+/** The backend's external-listener settings, as stored in the server config. */
+export interface ServerSettings {
+  enabled: boolean;
+  port: number;
+  ssl: boolean;
+}
+
+/**
+ * Narrow the object `server:setSettings` was handed, or throw.
+ *
+ * SECURITY: `enabled` and `ssl` are written straight into the server config,
+ * which decides whether a second listener binds `0.0.0.0` and whether it
+ * demands TLS. A TypeScript parameter type is erased at run time, so before
+ * this the renderer could send `ssl: 0` or `ssl: []` - falsy to the Python that
+ * reads the config, truthy to the `Boolean(cfg.require_ssl)` this shell reads
+ * it back with, i.e. a plaintext LAN listener the desktop's own toggle reports
+ * as encrypted. Rejecting rather than coercing keeps the two readings in step
+ * (CWE-20).
+ *
+ * `port` is deliberately NOT rejected here. The port field hands over
+ * `Number('')` while it is being typed, and `writeServerSettings` already
+ * ignores anything outside 1-65535 and keeps the stored port; throwing on it
+ * would turn a half-typed field into an error dialog.
+ */
+export function requireServerSettings(value: unknown): ServerSettings {
+  const settings = value as Record<string, unknown> | null | undefined;
+  for (const field of ['enabled', 'ssl'] as const) {
+    if (typeof settings?.[field] !== 'boolean') {
+      throw new Error(
+        `Server setting "${field}" must be true or false, not ${typeof settings?.[field]}.`,
+      );
+    }
+  }
+  // The port is TYPE-checked here and RANGE-checked in writeServerSettings.
+  // Leniency about the range is what keeps a half-typed field from throwing;
+  // it was never a reason to accept a string or a missing value, which is not
+  // something the port field can produce. `typeof x === 'number'` is deliberate
+  // and Number.isFinite() would be wrong: NaN and 0 are exactly what
+  // `Number('')` and `Number('x')` hand over mid-keystroke, and both must
+  // still reach writeServerSettings to be ignored there.
+  if (typeof settings?.port !== 'number') {
+    throw new Error(`Server setting "port" must be a number, not ${typeof settings?.port}.`);
+  }
+  return {
+    enabled: settings.enabled as boolean,
+    ssl: settings.ssl as boolean,
+    port: settings.port,
+  };
+}
+
+/**
  * Parse the developer/CI hardware-detection override. The override fakes which
  * GPU the machine appears to have so the backend-download/overlay flow can be
  * exercised on hardware that lacks the matching GPU. It is read from, in order

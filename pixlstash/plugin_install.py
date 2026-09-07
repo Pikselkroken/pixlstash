@@ -34,6 +34,7 @@ from importlib.metadata import version as metadata_version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator
+from urllib.parse import urlparse
 
 import requests
 from platformdirs import user_data_dir
@@ -78,6 +79,11 @@ _REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 
 PLUGINS_REPO = "Pikselkroken/PixlStash-plugins"
 DEFAULT_REF = "main"
+
+#: Hosts that mean "this came from the ordinary Python package index".  An
+#: artefact resolved from anywhere else is named in the dependency listing; see
+#: :attr:`DependencyChange.url`.
+_INDEX_HOSTS = frozenset({"files.pythonhosted.org", "pypi.org"})
 
 
 class PluginError(Exception):
@@ -770,6 +776,97 @@ class DependencyChange:
     version: str
     #: The version already installed, or None when the package is new here.
     installed: str | None = None
+    #: pip's ``download_info`` for this entry -- the artefact it actually
+    #: resolved.  None only when the report did not carry one.
+    download_info: dict | None = None
+    #: pip's ``is_direct``: True when the *requirement* named a URL rather than
+    #: a name.  Display only; the pin uses ``download_info`` either way.
+    direct: bool = False
+
+    @property
+    def url(self) -> str | None:
+        """Where this artefact really comes from, when that is not the index.
+
+        SECURITY: keyed on the resolved URL's host, NOT on ``is_direct``.  A
+        plugin's own ``requirements.txt`` may carry ``--index-url``,
+        ``--extra-index-url`` or ``--find-links``, and an ordinary *named*
+        requirement resolved through one of those is reported by pip with
+        ``is_direct == False`` -- so keying on ``direct`` printed nothing and
+        the listing read as "the PyPI project called requests" while
+        :attr:`pin` faithfully installed a wheel from the plugin author's own
+        server.  Pinning the artefact without naming it made the substitution
+        *reliable* rather than preventing it: the user consents to a name and
+        receives something else.
+
+        An entry served from PyPI's own file host is not named, because a URL
+        on every line is noise that trains people to skip the one line that
+        matters.  Anything else is named, including ``file://``.
+        """
+        url = (self.download_info or {}).get("url")
+        if not url:
+            return None
+        return None if (urlparse(url).hostname or "") in _INDEX_HOSTS else url
+
+    @property
+    def pin(self) -> str:
+        """The requirement to hand pip so it installs *this* artefact again.
+
+        SECURITY: ``name==version`` names a *project on the default index*, and
+        that is not what was resolved.  The resolution the user agreed to can
+        come from a URL the plugin pinned, from a ``--find-links`` directory or
+        an ``--index-url`` line inside the plugin's own ``requirements.txt``, or
+        from a VCS at one commit.  Replaying it by name hands the install to
+        whoever owns that name on PyPI instead -- the code shown and the code
+        that lands are different packages (CWE-494, dependency confusion /
+        substitution).
+
+        So every entry is pinned to the artefact, not the name, reconstructed
+        from ``download_info`` the way pip's own
+        ``direct_url_as_pep440_direct_reference`` does it:
+
+        * a VCS entry becomes ``<vcs>+<url>@<commit_id>``, because ``url``
+          alone drops both the ``git+`` prefix and the commit -- replaying that
+          installs the repository's *working tree* rather than the revision
+          that was resolved;
+        * anything else becomes ``name @ url``, carrying the ``sha256`` pip
+          recorded as a link fragment so the artefact cannot change between the
+          dry run and the install.  A fragment hash makes pip verify the
+          download; it does not switch pip into hash-checking mode, so entries
+          that have no hash (VCS, a local directory) still install alongside.
+
+        Falls back to ``name==version`` whenever the entry carries no usable
+        ``download_info.url`` -- a missing ``download_info``, an empty one, or
+        one without a ``url``.  That fallback is the pre-#1177 behaviour and
+        therefore the vulnerable one, so it is deliberately the narrowest case:
+        pip records a ``url`` for every entry it resolves, and an entry without
+        one means the report did not say where the artefact came from, which
+        leaves the package name as the only thing left to install by.
+        """
+        info = self.download_info or {}
+        url = info.get("url")
+        if not url:
+            return f"{self.name}=={self.version}"
+
+        fragments = []
+        vcs = info.get("vcs_info")
+        if vcs:
+            # Not a PEP 508 `name @ git+...` reference: pip 24 rejects that
+            # spelling outright for a `git+file://` URL ("Invalid requirement
+            # ... It looks like a path"), while the plain VCS form is accepted
+            # for every scheme.
+            requirement = f"{vcs['vcs']}+{url}@{vcs['commit_id']}"
+        else:
+            archive = info.get("archive_info") or {}
+            sha256 = (archive.get("hashes") or {}).get("sha256")
+            if sha256:
+                fragments.append(f"sha256={sha256}")
+            elif archive.get("hash"):
+                # Older reports carry a single "<name>=<value>" string instead.
+                fragments.append(archive["hash"])
+            requirement = f"{self.name} @ {url}"
+        if info.get("subdirectory"):
+            fragments.append(f"subdirectory={info['subdirectory']}")
+        return requirement + ("#" + "&".join(fragments) if fragments else "")
 
     @property
     def moves(self) -> bool:
@@ -786,10 +883,20 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
     """Return every package installing *requirements* would add or replace.
 
     Resolved by pip rather than by us: ``--dry-run --report`` runs the real
-    resolver, writes what it would do as JSON, and touches nothing.  The report
-    lists only what is not already satisfied, so an entry is by definition a
-    change, and the entries include transitive dependencies -- which is the
-    point, since a plugin asking for one package can pull in forty.
+    resolver and writes what it would do as JSON.  The report lists only what
+    is not already satisfied, so an entry is by definition a change, and the
+    entries include transitive dependencies -- which is the point, since a
+    plugin asking for one package can pull in forty.
+
+    **Resolving is not free of side effects, and deliberately not guarded.**
+    Resolving a source distribution makes pip build its metadata, which runs
+    that package's ``setup.py`` as this user before anything is printed.  That
+    is not defended against here, because a plugin is arbitrary Python running
+    in this process the moment it loads: an author who wants to execute code
+    puts it in the plugin, not in a dependency's build hook.  Constraining the
+    dependencies of unsandboxed code buys nothing and costs the ability to
+    install an ordinary source-only package.  Only the owner can install a
+    plugin, and choosing one is theirs to do.
 
     Nothing here decides whether the answer is acceptable; it says what would
     happen, and the caller shows it to the person who has to agree to it.
@@ -836,7 +943,19 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
             installed = metadata_version(name)
         except PackageNotFoundError:
             installed = None
-        changes.append(DependencyChange(name, entry["metadata"]["version"], installed))
+        # `download_info` is what pip actually resolved, for every entry and
+        # not only the ones whose requirement named a URL. It has to reach the
+        # install step or the pin there silently becomes a lookup of the name
+        # on the default index - see DependencyChange.pin.
+        changes.append(
+            DependencyChange(
+                name,
+                entry["metadata"]["version"],
+                installed,
+                entry.get("download_info"),
+                bool(entry.get("is_direct")),
+            )
+        )
     return sorted(changes, key=lambda change: change.name.lower())
 
 
@@ -847,6 +966,34 @@ def read_requirements(requirements: Path) -> list[str]:
         for line in read_source(requirements).splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def pip_options(requirements: Path) -> list[str]:
+    """Return every option line in *requirements* -- each line starting ``-``.
+
+    SECURITY: a plugin's ``requirements.txt`` is written by the plugin author,
+    and pip honours option lines in it.  Some of them decide where packages
+    come from -- ``--index-url``, ``--extra-index-url``, ``--find-links``,
+    ``--no-index``, ``--trusted-host`` and their short forms -- and any of those
+    makes an ordinary *named* requirement resolve from somewhere other than
+    PyPI, which is the cause of the substitution
+    :attr:`DependencyChange.url` reports the effect of.
+
+    **Every option line is returned, not just those.**  The name says so
+    deliberately: a curated subset would be an allowlist of "harmless" options,
+    which is a thing to get wrong in the direction of silence, and a plugin has
+    no ordinary reason to carry any option line at all.  The caller shows them
+    verbatim and lets the reader judge, rather than claiming per line what each
+    one does.
+
+    Only **this file** is read.  ``-r``/``-c`` pull in further files that pip
+    also honours, and an option set in one of those is not listed here -- the
+    include line itself is, which is the visible trace of it.  This is
+    information for the reader rather than a gate, so it is described honestly
+    rather than made exhaustive: following includes is a containment problem of
+    its own and would not change what installs.
+    """
+    return [line for line in read_requirements(requirements) if line.startswith("-")]
 
 
 def install_requirements(changes: list[DependencyChange]) -> None:
@@ -861,12 +1008,26 @@ def install_requirements(changes: list[DependencyChange]) -> None:
     ``--no-deps`` for the same reason. The resolved list already holds every
     transitive dependency pip found, so letting it resolve again could only add
     something nobody was shown.
+
+    Each change contributes :attr:`DependencyChange.pin`, which pins the
+    artefact pip resolved rather than re-resolving the name against the default
+    index.  ``--no-index`` is deliberately NOT passed: an entry's pin already
+    names its own URL, so there is nothing left for an index to answer, and
+    passing it would break the fallback pin for a report without
+    ``download_info``.
     """
     if not changes:
         return
-    pins = [f"{change.name}=={change.version}" for change in changes]
+    pins = [change.pin for change in changes]
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-deps", *pins],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            *pins,
+        ],
         check=False,
     )
     if result.returncode != 0:

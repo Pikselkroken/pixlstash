@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project
 from pixlstash.server import Server
 from pixlstash.services import views_service
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.tasks.reference_folder_scan_task import VIEWS_MARKER_NAME
 from tests.utils import upload_pictures_and_wait
 
@@ -667,6 +668,38 @@ def test_a_views_root_containing_a_reference_folder_is_refused(tmp_path, library
 
     with pytest.raises(views_service.ViewsError, match="contains a reference folder"):
         views_service.check_views_root(str(tmp_path / "outer"), vault)
+
+
+def test_a_views_root_is_refused_when_the_reference_folders_cannot_be_read(
+    tmp_path, library
+):
+    """#1177 item 59: "we do not know" must not be read as "there are none".
+
+    The roots are a blocklist here. Before the fix the vault answered a failed
+    read with ``()``, which is indistinguishable from "no reference folders are
+    configured", so every check below this line silently passed.
+    """
+    image_root, _paths = library
+
+    class _UnreadableVault(_FakeVault):
+        def reference_folder_roots(self):
+            raise LibraryRootsUnavailable("test-induced read failure")
+
+    vault = _UnreadableVault(image_root)
+    with pytest.raises(views_service.ViewsError, match="could not read"):
+        views_service.check_views_root(str(tmp_path / "views"), vault)
+
+
+def test_a_views_root_outside_every_reference_folder_is_still_accepted(
+    tmp_path, library
+):
+    """Over-blocking control for the test above: a readable, empty set allows."""
+    image_root, _paths = library
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    vault = _FakeVault(image_root, reference_roots=(str(reference),))
+
+    views_service.check_views_root(str(tmp_path / "beside" / "views"), vault)
 
 
 @pytest.mark.parametrize("marker", [".dropbox.cache", ".tmp.driveupload"])

@@ -785,7 +785,11 @@ def test_requirements_are_never_installed_implicitly(
     tmp_path, plugin_root, monkeypatch, capsys
 ):
     calls = []
-    monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    monkeypatch.setattr(
+        plugin_install,
+        "install_requirements",
+        lambda changes, **_kwargs: calls.append(changes),
+    )
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
     _write(folder / "requirements.txt", "definitely-not-a-real-package==1.0\n")
@@ -804,7 +808,11 @@ def test_with_deps_says_what_it_will_install(
     the time, and it is the resolved set that lands in the environment.
     """
     calls = []
-    monkeypatch.setattr(plugin_install, "install_requirements", calls.append)
+    monkeypatch.setattr(
+        plugin_install,
+        "install_requirements",
+        lambda changes, **_kwargs: calls.append(changes),
+    )
     pip_report(("something", "1.0"), ("a-dependency-of-it", "2.4"), installed={})
     folder = tmp_path / "pkg"
     _write(folder / "__init__.py", CAPTIONER)
@@ -1560,29 +1568,59 @@ def test_the_hub_is_read_off_the_command_line_in_both_spellings(monkeypatch):
 # `install` list holds only what is *not* already satisfied.
 
 
-def _report(*packages: tuple[str, str]) -> str:
-    """Return a pip install report naming *packages* as (name, version)."""
-    return json.dumps(
-        {
-            "install": [
-                {"metadata": {"name": name, "version": version}}
-                for name, version in packages
-            ]
+#: A stand-in sha256, the length pip records.
+_SHA = "a" * 64
+
+
+def _entry(name: str, version: str, download_info=None, direct=False) -> dict:
+    """One `install` entry in the shape pip's --report writes."""
+    if download_info is None:
+        # What pip writes for a package resolved from the default index.
+        download_info = {
+            "url": f"https://files.pythonhosted.org/packages/{name}-{version}.whl",
+            "archive_info": {"hash": f"sha256={_SHA}", "hashes": {"sha256": _SHA}},
         }
-    )
+    return {
+        "metadata": {"name": name, "version": version},
+        "is_direct": direct,
+        "download_info": download_info,
+    }
+
+
+def _report(*packages) -> str:
+    """Return a pip install report naming *packages*.
+
+    Each entry is `(name, version)`, or `(name, version, download_info,
+    is_direct)` to model a URL, a `--find-links` hit or a VCS checkout.
+    """
+    entries = []
+    for package in packages:
+        # (name, version) uses _entry's default indexed download_info;
+        # (name, version, download_info, is_direct) states it explicitly.
+        if len(package) > 2:
+            entries.append(_entry(*package))
+        else:
+            entries.append(_entry(package[0], package[1]))
+    return json.dumps({"install": entries})
 
 
 @pytest.fixture
 def pip_report(monkeypatch, tmp_path):
     """Serve a canned pip `--report`, and record what pip was asked."""
 
-    def serve(*packages: tuple[str, str], installed: dict[str, str] | None = None):
+    def serve(*packages: tuple[str, ...], installed: dict[str, str] | None = None):
         calls: list[list[str]] = []
 
         def fake_run(command, **kwargs):
+            # Both pip calls land here, not only the resolve: a test that runs
+            # `plugins install --with-deps` all the way through reaches
+            # install_requirements too, and that command carries no --report.
             calls.append(command)
-            index = command.index("--report")
-            Path(command[index + 1]).write_text(_report(*packages), encoding="utf-8")
+            if "--report" in command:
+                index = command.index("--report")
+                Path(command[index + 1]).write_text(
+                    _report(*packages), encoding="utf-8"
+                )
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         def fake_version(name: str) -> str:
@@ -1662,6 +1700,254 @@ def test_a_pip_that_cannot_resolve_is_a_refusal_not_a_crash(monkeypatch, tmp_pat
         plugin_install.resolve_requirements(requirements)
 
 
+# ----------------------------------------------------------------------
+# Direct-URL requirements (item 14: substitution / dependency confusion)
+# ----------------------------------------------------------------------
+#
+# A requirement pinned to a URL names one artefact and deliberately does not
+# name the public index. Reinstalling it as `name==version` hands the install
+# to whoever owns that name on PyPI, so the resolution the user agreed to and
+# the code that lands are different packages (CWE-494).
+
+_DIRECT_URL = "https://example.invalid/wheels/moondream-1.0-py3-none-any.whl"
+_DIRECT_INFO = {
+    "url": _DIRECT_URL,
+    "archive_info": {"hash": f"sha256={_SHA}", "hashes": {"sha256": _SHA}},
+}
+
+
+def _installed_command(change, monkeypatch) -> list[str]:
+    """Run install_requirements against a stubbed pip and return the argv."""
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(plugin_install.subprocess, "run", fake_run)
+    plugin_install.install_requirements(
+        change if isinstance(change, list) else [change]
+    )
+    (command,) = commands
+    return command
+
+
+def test_a_direct_url_requirement_is_installed_from_that_url(
+    pip_report, tmp_path, monkeypatch
+):
+    """The negative: `name==version` must never be the pin for a URL pin."""
+    pip_report(("moondream", "1.0", _DIRECT_INFO, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.url == _DIRECT_URL
+
+    command = _installed_command(change, monkeypatch)
+    assert command[-1] == f"moondream @ {_DIRECT_URL}#sha256={_SHA}"
+    assert "moondream==1.0" not in command
+
+
+def test_an_indexed_requirement_is_pinned_to_the_artefact_pip_resolved(
+    pip_report, tmp_path, monkeypatch
+):
+    """An index entry is a substitution vector too, and used to be missed.
+
+    A `--index-url`, `--extra-index-url` or `--find-links` line inside the
+    plugin's own requirements.txt resolves against *that* source, and pip marks
+    the result `is_direct: false` because the requirement named a name. Pinning
+    it `name==version` then re-resolves against the DEFAULT index, i.e. against
+    whoever owns that name on PyPI. The URL pip reported is the only thing that
+    names what was actually shown to the user.
+    """
+    find_links = {
+        "url": "file:///srv/wheels/zzprivate-1.0-py3-none-any.whl",
+        "archive_info": {"hashes": {"sha256": _SHA}},
+    }
+    pip_report(("zzprivate", "1.0", find_links, False), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("--find-links /srv/wheels\nzzprivate\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin == f"zzprivate @ {find_links['url']}#sha256={_SHA}"
+    # And it is NAMED. Pinning the artefact without saying where it came from
+    # only made the substitution reliable: the listing would have read as "the
+    # PyPI project called zzprivate" while installing the plugin author's own
+    # wheel. `is_direct` is false here, which is why keying the display on it
+    # printed nothing.
+    assert change.url == find_links["url"]
+    assert "zzprivate==1.0" not in _installed_command(change, monkeypatch)
+
+
+def test_a_vcs_requirement_is_pinned_to_the_resolved_commit(pip_report, tmp_path):
+    """`download_info.url` drops both the `git+` prefix and the commit.
+
+    Replaying the bare URL succeeds and installs the repository's *working
+    tree* instead of the revision that was resolved and shown - so it fails
+    silently, which is worse than failing loudly.
+    """
+    vcs = {
+        "url": "https://example.invalid/someone/moondream",
+        "vcs_info": {"vcs": "git", "commit_id": "b" * 40, "requested_revision": "main"},
+    }
+    pip_report(("moondream", "1.0", vcs, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "git+https://example.invalid/someone/moondream#egg=moondream\n",
+        encoding="utf-8",
+    )
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin == f"git+{vcs['url']}@{'b' * 40}"
+
+
+def test_a_subdirectory_survives_the_round_trip(pip_report, tmp_path):
+    """A monorepo requirement installs the wrong package without it."""
+    info = dict(_DIRECT_INFO, subdirectory="packages/moondream")
+    pip_report(("moondream", "1.0", info, True), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin.endswith(f"#sha256={_SHA}&subdirectory=packages/moondream")
+
+
+def test_a_dependency_with_no_download_info_at_all_pins_name_and_version():
+    """The absent-key case, asserted directly: `_entry` cannot express it."""
+    assert plugin_install.DependencyChange("flask", "3.1.3").pin == "flask==3.1.3"
+
+
+@pytest.mark.parametrize(
+    "download_info", [{}, {"archive_info": {"hashes": {"sha256": _SHA}}}]
+)
+def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
+    pip_report, tmp_path, download_info
+):
+    """The one case that cannot be pinned to an artefact still installs.
+
+    Every spelling of "the report did not say where this came from" takes the
+    fallback, not only a missing `download_info`: an empty object, and one
+    carrying a hash but no url, reach it too. This branch is the pre-#1177
+    behaviour and therefore the vulnerable one, so this pins exactly how narrow
+    it is.
+    """
+    pip_report(("flask", "3.1.3", download_info, False), installed={})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask\n", encoding="utf-8")
+
+    (change,) = plugin_install.resolve_requirements(requirements)
+    assert change.pin == "flask==3.1.3"
+
+
+def test_the_cli_prints_the_option_warning_before_resolving(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """The consent text is only a control if something asserts it reaches screen.
+
+    `plugin_install.pip_options` had its own test while the CLI wiring had
+    none, so replacing the call with `options = []` left the whole suite green.
+    """
+    pip_report(("flask", "3.1.3"), installed={})
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", "--find-links /srv/plugin-wheels\nflask\n")
+
+    assert _install(folder, "--with-deps") == cli.EXIT_OK
+    err = capsys.readouterr().err
+    assert "passes options to pip" in err
+    assert "--find-links /srv/plugin-wheels" in err
+    assert "--index-url" in err, "the reason to care must be named"
+
+
+def test_the_cli_stays_quiet_for_an_ordinary_requirements_file(
+    tmp_path, plugin_root, pip_report, capsys
+):
+    """Over-warning is its own failure: a warning on every install is noise."""
+    pip_report(("flask", "3.1.3"), installed={})
+    folder = tmp_path / "pkg"
+    _write(folder / "__init__.py", CAPTIONER)
+    _write(folder / "requirements.txt", "flask\n")
+
+    assert _install(folder, "--with-deps") == cli.EXIT_OK
+    assert "passes options to pip" not in capsys.readouterr().err
+
+
+def test_the_listing_names_a_find_links_source_the_user_never_asked_for(
+    pip_report, tmp_path, capsys
+):
+    """The consent half of item 14, found by #1201's adversarial review.
+
+    A plugin's own requirements.txt can carry `--find-links` / `--index-url`,
+    and an ordinary NAMED requirement resolved through one is reported by pip
+    with `is_direct == False`. Keying the display on `is_direct` printed
+    nothing, so a package silently replacing an installed one read exactly like
+    the PyPI project of the same name - while the pin faithfully installed the
+    plugin author's artefact. Named on the resolved host instead.
+    """
+    hostile = {
+        "url": "file:///srv/plugin-wheels/requests-99.0.0-py3-none-any.whl",
+        "archive_info": {"hashes": {"sha256": _SHA}},
+    }
+    pip_report(("requests", "99.0.0", hostile, False), installed={"requests": "2.34.2"})
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "--find-links /srv/plugin-wheels\nrequests\n", encoding="utf-8"
+    )
+
+    changes = plugin_install.resolve_requirements(requirements)
+    # It replaces an installed package, so consent is refused without
+    # --force-deps; the listing is printed either way and is what matters here.
+    cli._report_dependencies(changes, force=False)
+    out = capsys.readouterr().out
+    assert hostile["url"] in out, "a non-PyPI source must be named before consent"
+
+
+def test_the_listing_surfaces_every_pip_option_from_the_requirements(tmp_path):
+    """The cause, not just the effect: the option lines are the attack."""
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "# a comment\n"
+        "--extra-index-url https://packages.example.invalid/simple\n"
+        "--find-links /srv/plugin-wheels\n"
+        "requests\n",
+        encoding="utf-8",
+    )
+    assert plugin_install.pip_options(requirements) == [
+        "--extra-index-url https://packages.example.invalid/simple",
+        "--find-links /srv/plugin-wheels",
+    ]
+    # An ordinary requirements.txt has none, so the warning stays off screen.
+    plain = tmp_path / "plain.txt"
+    plain.write_text("flask\npillow==11.0.0\n", encoding="utf-8")
+    assert plugin_install.pip_options(plain) == []
+
+    # Deliberately NOT narrowed to download-source flags: an option a curated
+    # allowlist judged harmless would be shown to nobody, and the reader is
+    # better served seeing every line a plugin asks pip to honour.
+    broad = tmp_path / "broad.txt"
+    broad.write_text("--only-binary=:all:\n--pre\nflask\n", encoding="utf-8")
+    assert plugin_install.pip_options(broad) == ["--only-binary=:all:", "--pre"]
+
+
+def test_the_listing_names_the_url_a_direct_requirement_comes_from(
+    pip_report, tmp_path, capsys
+):
+    """Consent has to describe the artefact, not just a name and a version."""
+    pip_report(
+        ("moondream", "1.0", _DIRECT_INFO, True), ("pillow", "11.0.0"), installed={}
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(f"moondream @ {_DIRECT_URL}\n", encoding="utf-8")
+
+    changes = plugin_install.resolve_requirements(requirements)
+    assert cli._report_dependencies(changes, force=False)
+    out = capsys.readouterr().out
+    assert _DIRECT_URL in out
+    # Over-reporting is its own regression: naming files.pythonhosted.org on
+    # every ordinary line trains people to skip the one line that matters.
+    assert "files.pythonhosted.org" not in out
+
+
 def test_install_refuses_dependencies_that_replace_a_package_in_use(
     tmp_path, plugin_root, pip_report, capsys
 ):
@@ -1695,7 +1981,9 @@ def test_force_deps_installs_anyway_and_says_so(
     pip_report(("pillow", "11.0.0"), installed={"pillow": "12.3.0"})
     installed: list[Path] = []
     monkeypatch.setattr(
-        plugin_install, "install_requirements", lambda path: installed.append(path)
+        plugin_install,
+        "install_requirements",
+        lambda path, **_kwargs: installed.append(path),
     )
 
     exit_code = cli.main(
@@ -1714,7 +2002,9 @@ def test_a_plugin_whose_dependencies_are_all_present_says_so(
     (source / "dep_filter.py").write_text(IMAGE_PLUGIN, encoding="utf-8")
     (source / "requirements.txt").write_text("pillow\n", encoding="utf-8")
     pip_report(installed={"pillow": "12.3.0"})
-    monkeypatch.setattr(plugin_install, "install_requirements", lambda path: None)
+    monkeypatch.setattr(
+        plugin_install, "install_requirements", lambda path, **_kwargs: None
+    )
 
     assert cli.main(["plugins", "install", str(source), "--with-deps", "--yes"]) == 0
     assert "Everything it needs is already installed." in capsys.readouterr().out

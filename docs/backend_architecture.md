@@ -3020,6 +3020,68 @@ module docstring is the design record: which actor each check is for, why the
 earlier DACL refusal was removed (it stopped the server starting on Windows,
 W6/W7/W18), and what a `private=True` open verifies instead.
 
+**Accepted risk W20 — mode bits warn, they no longer refuse.** Until #1152
+(commit `a26f765`, 2026-09-04) a group- or world-writable directory on the path
+to the hub, the vault or the library, and a credential file wider than `0600`,
+refused the open and exited the server 1. They now log a WARNING carrying the
+`chmod` that fixes them and the open proceeds. Ownership, symlink/junction and
+file-type checks still refuse. An unresolvable group does **not** refuse: it
+only stops the private-group tolerance applying, and the loose mode is then
+warned about like any other.
+
+*Risk and who is affected:* a POSIX user whose library or config path is
+group- or world-writable and who shares that group or machine with another
+account. That account can substitute `vault.db`, `hub.db` or pre-position a
+`-wal`/`-shm` sidecar between boots. The vault is authorization-bearing
+(`authz/membership.py` answers scope questions out of it), so the blast radius
+is the whole library plus the scope decisions taken from it — the same radius
+W17 states for Windows, now reachable on POSIX too when the owner has loosened
+the path.
+
+*Why it is accepted rather than reverted:* refusing on mode alone took the
+product down twice for nobody's benefit — a `0775` directory under a stock
+Ubuntu umask 002, then a `0755` library made by the Docker entrypoint — and in
+both cases the actor the bit implied did not exist. The precondition is that
+the *owner's own* path is already loose, which on the single-owner product this
+ships as means the machine has no second principal at all. A control that stops
+the application starting on the common case, on evidence that is a proxy rather
+than an observation, is a control that gets removed by the user (`chmod`) or by
+the maintainer; a warning that names the fix survives.
+
+*Compensating controls, and what they do not cover.* `startup_permissions.py`
+finds the same paths and offers a bounded, explicit repair, but **only a
+terminal is actually offered it**: `app.py` prompts inline on a TTY and
+otherwise prints `chmod` lines to stderr, which for the desktop app is the
+server log and for Docker is the container log. The Electron repair dialog is
+**dead code today** — it is armed only by a `PIXLSTASH_PERMISSION_REPAIR=`
+marker parsed out of a backend that *exited* (`ServerProcess.ts`,
+`StartupPermissions.ts`), and #1152 removed the Python side that emitted it, so
+a backend that now warns and continues never arms it. `permissions:request` /
+`permissions:resolve` and the `PIXLSTASH_REPAIR_PERMISSIONS=1` retry are
+unreachable from the shell until something re-emits that marker from the
+*running* server. The controls that do apply everywhere: new directories are
+created `0700` and new credential files `0600` by `mkdir_private`, so nothing
+PixlStash creates today needs the repair at all; the `(st_dev, st_ino)` identity
+match still catches a swap inside the open→verify window; and the ownership,
+symlink/junction and regular-file refusals are untouched.
+
+*Blast radius, in full.* Substitution of `vault.db` / `hub.db` or a
+pre-positioned `-wal`/`-shm`, as above. Also **deletion**: on a world-writable
+directory without the sticky bit another account can remove `vault.db-wal`
+(dropping committed transactions) or the database itself, which no ownership
+check catches because there is no file left to inspect. And the repair sweep is
+narrower than the risk — `find_startup_permission_issues` walks the config root
+and the active library, not reference-folder roots and not registered libraries
+that are not currently attached.
+
+*What would reopen it:* multi-user, a shared or multi-tenant host, or any
+deployment where a second local principal is expected. In any of those the mode
+test stops being a proxy and becomes an observation, and this reverts to a
+refusal.
+
+Owner: lindkvis. Revisit with W17 (2026-11-08), and **immediately** if
+multi-user work starts. CSO sign-off: accepted 2026-09-06 (#1177 item 16).
+
 **Group-write is not automatically an exposure.** `mode & 0o022` is a *proxy*
 for "another principal can write here", and for the group bit that proxy is
 wrong wherever the group is the owner's own. Debian, Ubuntu and every other
@@ -3031,16 +3093,18 @@ server 1 during startup on a stock Linux box with a library from an earlier
 release, with no recovery short of a manual `chmod`. `_is_private_group` names
 the actor instead of the bit: group-write is tolerated only when the group is the
 directory owner's own, same-named, and has no other member; any lookup failure
-is reported as shared, so the open is refused. World-write is refused exactly as
-before, and the file-level checks are unchanged — a `0664` database cannot come
-from a umask, since SQLite requests `0644`.
+is reported as shared, so the tolerance does not apply and the loose mode is
+warned about (W20: since #1152 that is a warning, not a refusal). The file-level
+checks are unchanged in *what* they inspect — a `0664` database cannot come from
+a umask, since SQLite requests `0644` — but they too now warn rather than
+refuse.
 
 A root-owned ancestor is **not** covered by this: the ownership check above
 admits `st_uid in (uid, 0)`, but the group tolerance additionally requires
 `st_uid == uid`, because for gid 0 the "owner's own group" is the administrators'
 group rather than one single owner's. `root:root 0775` directories exist in the
-wild (`/var/lib/AccountsService` on a stock Ubuntu box) and keep the blanket
-refusal.
+wild (`/var/lib/AccountsService` on a stock Ubuntu box) and are warned about
+without the tolerance ever being considered.
 
 **Accepted risk, group membership (same record as W17).** Two things the group
 answer cannot see, both stated rather than fixed:
@@ -3065,8 +3129,8 @@ process's name service.
 
 An NSS lookup on the startup path is the cost, and only for a directory that is
 already group-writable — a tightened install performs none. A lookup that fails
-is reported as shared, so the worst case is the refusal this whole section
-exists to remove, never a weaker check.
+is reported as shared, so the worst case is a warning the directory did not
+need, never a weaker check.
 
 **Accepted risk W17.** Python exposes neither owner SID nor directory DACL
 portably, so the POSIX `mode & 0o022` test — "another principal cannot write

@@ -51,7 +51,11 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.path_utils import path_is_within, resolve_path_within
+from pixlstash.utils.path_utils import (
+    LibraryRootsUnavailable,
+    path_is_within,
+    resolve_path_within,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_path,
 )
@@ -334,7 +338,17 @@ def check_views_root(root: str, vault, other_library_roots: Iterable[str] = ()) 
                 "rather than above it."
             )
 
-    for reference_root in getattr(vault, "reference_folder_roots", lambda: ())():
+    try:
+        reference_roots = getattr(vault, "reference_folder_roots", lambda: ())()
+    except LibraryRootsUnavailable as exc:
+        # A blocklist that cannot be read refuses; treating it as empty would
+        # publish links into a reference folder (#1177 item 59).
+        raise ViewsError(
+            "PixlStash could not read your reference folders just now, so it "
+            "cannot confirm this folder is outside them. Try again in a moment."
+        ) from exc
+
+    for reference_root in reference_roots:
         if path_is_within(root, reference_root):
             raise ViewsError(
                 "That folder is inside a reference folder, so the next scan "
