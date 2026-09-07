@@ -111,11 +111,16 @@ function respond(url) {
   return { data: [] };
 }
 
-async function mountSidebar() {
+/**
+ * `teleport: true` renders the teleported layer (the sidebar's context menu
+ * lives there) instead of leaving it stubbed, which `shallow` does by default.
+ */
+async function mountSidebar({ teleport = false } = {}) {
   const wrapper = mount(SideBar, {
     shallow: true,
     props: { backendUrl: "/api/v1" },
     global: {
+      stubs: teleport ? { teleport: false } : {},
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
@@ -437,6 +442,34 @@ describe("restoring /ref-folder/:id", () => {
       pathPrefix: `${WIN_ROOT}\\2024\\summer`,
       label: "summer",
     });
+
+    wrapper.unmount();
+  });
+
+  // #1206 item 12. The cleanup matched `rf-<id>`, which is the ROOT row's key;
+  // a selected subfolder's key is `path-<abs path>`, so removing the folder
+  // under it left the highlight and the scanning light on a folder that no
+  // longer existed. Matching on the folder the selection belongs to is what the
+  // import-folder branch already did.
+  it("clears a selected subfolder when its reference folder is removed", async () => {
+    const wrapper = await mountSidebar({ teleport: true });
+    const sidebarStore = useSidebarStore();
+    routeToFolder(SUB);
+    await flushPromises();
+    expect(sidebarStore.folderScanning).toBe(true);
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const rows = wrapper.findAll(".sidebar-folder-root-row");
+    await rows[0].trigger("contextmenu");
+    await flushPromises();
+    // The context menu is teleported to <body>, so it is not under `wrapper`.
+    const remove = document.querySelector(".sidebar-ctx-item--danger");
+    expect(remove).not.toBe(null);
+    remove.click();
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toBe(null);
+    expect(sidebarStore.folderScanning).toBe(false);
 
     wrapper.unmount();
   });

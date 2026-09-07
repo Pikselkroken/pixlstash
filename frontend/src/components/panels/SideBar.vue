@@ -2507,9 +2507,18 @@ async function deleteReferenceFolderById(id) {
   if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
   try {
     await deleteFolder("reference", id);
-    if (selectedFolderKey.value === `rf-${id}`) {
+    // On the FOLDER, not on the row key. A selected SUBfolder's key is
+    // `path-<abs path>` (crossing 1 in the map above), so matching `rf-<id>`
+    // saw only the root row: deleting the folder from under a selected
+    // subfolder left the highlight, `selectedFolderReferenceId` and the
+    // scanning light on a folder that no longer exists (#1206 item 12). The
+    // import-folder branch below is the shape this now copies - all four
+    // pieces of the selection, not just the key.
+    if (_folderId(selectedFolderReferenceId.value) === id) {
       selectedFolderKey.value = null;
+      selectedFolderReferenceId.value = null;
       emit("select-folder", null);
+      sidebarStore.folderScanning = false;
     }
     await fetchReferenceFolders();
   } catch (e) {
