@@ -72,8 +72,10 @@ export const useLibrariesStore = defineStore("libraries", () => {
     hasLoadedSuccessfully.value = false;
   }
 
-  // Logout / login / share-token entry / library switch all funnel through the
-  // one chokepoint in apiClient, so there is no second mechanism to keep in sync.
+  // Logout, login and share-token entry all funnel through the one chokepoint
+  // in apiClient, so there is no second mechanism to keep in sync. A library
+  // switch is NOT one of them - it ends in `reloadPage()`, which discards this
+  // store along with the whole document, so it needs no reset and gets none.
   const unsubscribe = onSessionReset(reset);
   onScopeDispose(() => unsubscribe());
 
@@ -142,7 +144,26 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
     error.value = "";
     triggerElement.value = null;
     await nextTick();
-    returnTarget?.focus?.();
+    // `.focus()` on a node that has left the document throws nothing and does
+    // nothing: focus stays on <body> and a keyboard user loses their place
+    // with no sign anything failed. Callers are responsible for handing over a
+    // control that outlives the switch (LibrariesSection passes the row's ⋯
+    // button rather than the menu item inside it, which its own click
+    // destroys); this only refuses to pretend when they have not.
+    if (returnTarget?.isConnected) {
+      returnTarget.focus?.();
+      if (document.activeElement === returnTarget) return true;
+    }
+    // Only a trigger that was offered and could not be honoured is worth
+    // saying anything about. `begin` is also called with no trigger at all
+    // (the folder-mapping wizard's own switch), and warning on those would
+    // put a line in the console on an ordinary dismissal.
+    if (returnTarget) {
+      console.warn("Could not return focus after a cancelled library switch", {
+        stillInDocument: returnTarget.isConnected,
+      });
+    }
+    return false;
   }
 
   return {

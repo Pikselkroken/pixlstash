@@ -201,3 +201,52 @@ describe("the scrollbar offset", () => {
     expect(wrapper.find(".map-tree").attributes("style")).toContain("--sb: 10px");
   });
 });
+
+// A level here is one `role="tree"`, and the WAI-ARIA tree pattern gives a tree
+// ONE tab stop: Tab reaches the tree, the arrow keys (already implemented in
+// `onRowKeydown`) move inside it. Every row carried `tabindex="0"` and every
+// row's kind button was tabbable on top of that, so a level of 400 folders put
+// 800 presses between the filter box and `Continue`.
+describe("the tab sequence", () => {
+  const tabbable = (w, depth) =>
+    rows(w, depth).filter((r) => r.attributes("tabindex") === "0");
+
+  it("gives each level exactly one tab stop, on its first row", () => {
+    wrapper = mountStep();
+    for (const depth of [1, 2, 3]) {
+      const stops = tabbable(wrapper, depth);
+      expect(stops).toHaveLength(1);
+      expect(stops[0].element).toBe(rows(wrapper, depth)[0].element);
+    }
+  });
+
+  it("keeps the per-row kind dropdowns out of the tab sequence", () => {
+    wrapper = mountStep();
+    const kdds = levelEl(wrapper, 2).findAll(
+      ".map-tree__kdd:not(.map-tree__kdd--band)",
+    );
+    expect(kdds.length).toBeGreaterThan(1);
+    for (const kdd of kdds) expect(kdd.attributes("tabindex")).toBe("-1");
+  });
+
+  it("moves the level's one stop to whichever row was last focused", async () => {
+    wrapper = mountStep();
+    await rows(wrapper, 2)[3].trigger("focusin");
+
+    const stops = tabbable(wrapper, 2);
+    expect(stops).toHaveLength(1);
+    expect(stops[0].element).toBe(rows(wrapper, 2)[3].element);
+    // Levels are independent trees, so the others keep their own one stop.
+    expect(tabbable(wrapper, 3)).toHaveLength(1);
+  });
+
+  it("puts the stop back on a drawn row when a filter hides the last one", async () => {
+    wrapper = mountStep();
+    await rows(wrapper, 2)[3].trigger("focusin");
+    await levelEl(wrapper, 2).find(".map-tree__filter").setValue("eta");
+
+    const stops = tabbable(wrapper, 2);
+    expect(stops).toHaveLength(1);
+    expect(stops[0].element).toBe(rows(wrapper, 2)[0].element);
+  });
+});

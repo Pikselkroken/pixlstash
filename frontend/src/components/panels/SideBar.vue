@@ -493,6 +493,9 @@ const referenceFoldersImageRoot = ref(null);
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
+/** The absolute folder path the selection is filtering on, or null. The row key
+    above cannot carry it: a folder ROOT row's key is `rf-{id}`. */
+const selectedFolderPath = ref(null);
 const dragOverReferenceTargetKey = ref(null);
 
 // Reference folder editor state
@@ -506,9 +509,144 @@ const referenceFolderEditorFolder = ref(null); // null = create, object = edit
 const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 
+// ── Folder keys: five spellings, and which comparisons may cross them ────────
+//
+// Three separate rounds of review found bugs here, all of the same shape: two
+// of these compared with `===` as though they were one thing. They are not, and
+// none of them is redundant - they carry different information. The map:
+//
+//   1. Row key      `selectedFolderKey`: `rf-<id>` | `if-<id>` | `path-<path>`.
+//      Identifies a ROW, which is why a subfolder needs its own path in it.
+//      Written only by `handleFolderNodeSelect`.
+//   2. Route key    `viewStore.activeFolderKey`: `rf-<id>` | `if-<id>`.
+//      Identifies a FOLDER. Never `path-`: a route has no row.
+//   3. Route path   `?path=`. A URL - any separator spelling, and editable.
+//   4. Grid filter  `selectedFolderFilter.pathPrefix`, which reaches the
+//      listing as `file_path_prefix`: a literal LIKE against the stored
+//      `file_path`, so it MUST be in the server's spelling.
+//   5. Tree path    `entry.path` from the browse listing. Server spelling.
+//
+// Four crossings are legitimate, and each has one owner:
+//   1 -> 2         `selectedFolderRouteKey`
+//   2 + 3 -> 1,4   `routeSubfolderUnder`  (the only place a URL path is
+//                  allowed to become a server path)
+//   4 vs 3         the watcher's "already in sync" test, through `_urlPath`.
+//                  This is the one an earlier pass missed: `routeSubfolderUnder`
+//                  RE-SPELLS the path, so the sidebar's copy and the `?path=`
+//                  that produced it are in different spaces and `_samePath`
+//                  could never match them.
+//   5 -> 1,4       direct; both are already the server's spelling.
+//
+// **The guardrail, not this comment, is the mechanism.** This list was written
+// with three crossings and a claim that anything else was a bug; a fourth was
+// found the same day, and the id rule it stated was already violated five
+// times in this file. So: `SideBarFolderRouteRestore.test.js` asserts a route
+// arriving twice is inert, parameterised over the separator-changing inputs -
+// that is what fails when a new crossing is compared in the wrong space. Treat
+// the list above as a map to read before editing, and add to it when you add a
+// crossing; it is documentation, and the test is the enforcement.
+//
+// Ids: read every one through `_folderId`. That IS enforced, in the sense that
+// there is now no other coercion in this file to copy from.
+
+/**
+ * A reference-folder id, or null. The ONE rule for reading one.
+ *
+ * `Number(null)` is `0` and `Number.isFinite(0)` is true, so coercing before
+ * testing turns "no folder selected" into "folder zero" - which then reads as
+ * a real selection everywhere downstream. `Number("")` is `0` too, so a
+ * malformed `rf-` key would do the same. Both are rejected before coercion.
+ */
+function _folderId(value) {
+  if (value == null || value === "") return null;
+  const id = Number(value);
+  return Number.isFinite(id) ? id : null;
+}
+
+/** A path made comparable: trailing separators dropped. */
+function _normPath(p) {
+  return String(p || "").replace(/[\\/]+$/, "");
+}
+
+/** Which separator a path is spelled with. A POSIX path always contains `/`,
+ *  including one whose folder is legally NAMED `a\b`; a Windows path never
+ *  does. Testing for `/` rather than for `\` is what keeps that name working. */
+function _pathSeparator(p) {
+  return String(p || "").includes("/") ? "/" : "\\";
+}
+
 function _samePath(a, b) {
-  const norm = (p) => String(p || "").replace(/[\\/]+$/, "");
-  return norm(a) !== "" && norm(a) === norm(b);
+  return _normPath(a) !== "" && _normPath(a) === _normPath(b);
+}
+
+/**
+ * The same, and `\` folded to `/` as well.
+ *
+ * ONLY for comparing a path against one that arrived in a URL, where the two
+ * halves can genuinely disagree about separators. Deliberately not folded into
+ * `_samePath`: a POSIX folder may legally be named `a\b`, and making every
+ * caller treat that as `a/b` would let the parked-read and pending-mapping
+ * matches fire on the wrong folder - a wrong action, which is worse than the
+ * missed one this guards against. Comparison only; the original spelling is
+ * what goes on to the server.
+ */
+function _urlPath(p) {
+  return _normPath(p).replace(/\\/g, "/");
+}
+
+/**
+ * The `?path=` on the current folder route, when it names a folder INSIDE
+ * `root` rather than `root` itself.
+ *
+ * A subfolder click pushes `/ref-folder/:id?path=<abs path>`, and this is what
+ * reads it back so a reload or a shared link lands on the subfolder the URL
+ * names instead of the folder root. `null` means "the route names the folder
+ * itself", which is the ordinary case and the pre-existing behaviour.
+ *
+ * Matched through `_urlPath`, so the two sides may disagree about separators
+ * and still match. They come from the same server and normally agree, but the
+ * `?path=` half is a URL: it survives being shared, edited and pasted, and a
+ * `/` where the folder listing said `\` would otherwise drop the reader back
+ * to the folder root.
+ *
+ * **The path handed back is re-spelled in `root`'s own separator, not the
+ * URL's.** It becomes `selectedFolderFilter.pathPrefix` and travels to the
+ * listing API as `file_path_prefix`, which is a literal `LIKE` against the
+ * stored `file_path` (`utils/query/predicate_filter.py`) - it does not
+ * normalise anything. So on a Windows library a slash-spelled link would
+ * select the right row and return an EMPTY grid, and the tree row's own key
+ * (built from the browse listing's spelling) would not match the highlight
+ * either. Rebuilding the tail off the root fixes both, and is a no-op on a
+ * POSIX library, where the two spellings already agree.
+ *
+ * @param {string} root the reference folder's own path
+ * @returns {{pathPrefix: string, label: string}|null}
+ */
+function routeSubfolderUnder(root) {
+  const filter = viewStore.view?.folderFilter;
+  if (!filter?.pathPrefix || !root) return null;
+  const raw = _normPath(filter.pathPrefix);
+  const rootPath = _normPath(root);
+  const sep = _pathSeparator(rootPath);
+  // Folding `\` into `/` is for a WINDOWS root only, where both characters
+  // separate and a URL may legitimately spell either. A POSIX root is compared
+  // raw, because there `\` is an ordinary character in a folder's name and
+  // folding would make `?path=/x/a/b/2024` - a different folder, or none -
+  // read as a subfolder of `/x/a\b` and then be rewritten into it.
+  const windows = sep === "\\";
+  // `_urlPath` swaps one character for one character, so both stay aligned
+  // with `raw` and the tail can be sliced back out of the ORIGINAL spelling.
+  const here = windows ? _urlPath(raw) : raw;
+  const base = windows ? _urlPath(rootPath) : rootPath;
+  if (!base || here === base || !here.startsWith(`${base}/`)) return null;
+  const rawTail = raw.slice(base.length + 1);
+  // Re-spelt only on Windows, for the same reason: on POSIX the tail's own
+  // backslashes are part of a name, so this is genuinely a no-op there.
+  const tail = windows ? rawTail.split(/[\\/]/).join(sep) : rawTail;
+  return {
+    pathPrefix: `${rootPath}${sep}${tail}`,
+    label: tail.split(sep).pop() || filter.label,
+  };
 }
 
 // The pending mapping this library can act on. A `local_import` entry names
@@ -616,7 +754,21 @@ watch(
 // through on a fresh desktop library.
 let loosePicturesOffer = null;
 function offerLoosePictures() {
-  if (isReadOnly.value || mappingStore.pending) return Promise.resolve();
+  // Suppressed only by an entry that will ACTUALLY bring a wizard up, which is
+  // the auto-open's own condition above: a `local_import` for this library.
+  // `mappingStore.pending` is localStorage-backed and unbounded, and
+  // `pendingForThisLibrary` is not the answer either - it returns a
+  // `reference` entry unchanged, and the auto-open refuses those. Gating on
+  // either meant an empty library whose owner held a stale entry got no wizard
+  // AND no offer, for the life of the install; there was no way into the
+  // library at all. This has to stay the same test as the auto-open, so state
+  // it the same way.
+  if (
+    isReadOnly.value ||
+    pendingForThisLibrary.value?.mode === "local_import"
+  ) {
+    return Promise.resolve();
+  }
   loosePicturesOffer ??= _offerLoosePictures();
   return loosePicturesOffer;
 }
@@ -649,7 +801,7 @@ async function _offerLoosePictures() {
   // doing it there: the wizard opens on its questions instead of on a second
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
-  if (parked?.result && parked.path === path) {
+  if (parked?.result && _samePath(parked.path, path)) {
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
@@ -828,8 +980,8 @@ async function importFolderSaved() {
   }
 
   if (!selectedFolderKey.value?.startsWith("if-")) return;
-  const selectedId = Number(selectedFolderKey.value.slice(3));
-  if (!Number.isFinite(selectedId)) return;
+  const selectedId = _folderId(selectedFolderKey.value.slice(3));
+  if (selectedId == null) return;
   const selectedImportFolder = importFolders.value.find(
     (entry) => Number(entry.id) === selectedId,
   );
@@ -871,8 +1023,8 @@ const registeredImportFolderPaths = computed(() =>
 );
 
 const selectedReferenceFolderForHeader = computed(() => {
-  const id = Number(selectedFolderReferenceId.value);
-  if (!Number.isFinite(id)) return null;
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id == null) return null;
   return (
     referenceFolders.value.find((folder) => Number(folder.id) === id) || null
   );
@@ -880,8 +1032,8 @@ const selectedReferenceFolderForHeader = computed(() => {
 
 const selectedImportFolderForHeader = computed(() => {
   if (!selectedFolderKey.value?.startsWith("if-")) return null;
-  const id = Number(selectedFolderKey.value.slice(3));
-  if (!Number.isFinite(id)) return null;
+  const id = _folderId(selectedFolderKey.value.slice(3));
+  if (id == null) return null;
   return importFolders.value.find((entry) => Number(entry.id) === id) || null;
 });
 
@@ -889,15 +1041,15 @@ const selectedImportFolderForHeader = computed(() => {
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
   if (selectedFolderKey.value?.startsWith("if-")) {
-    const id = Number(selectedFolderKey.value.slice(3));
-    if (!Number.isFinite(id)) return false;
+    const id = _folderId(selectedFolderKey.value.slice(3));
+    if (id == null) return false;
     const importFolder = importFolders.value.find(
       (entry) => Number(entry.id) === id,
     );
     return Boolean(importFolder && importFolder.last_checked == null);
   }
-  const id = Number(selectedFolderReferenceId.value);
-  if (!Number.isFinite(id)) return false;
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id == null) return false;
   const rf = referenceFolders.value.find((f) => f.id === id);
   return Boolean(rf && rf.status === "active" && rf.last_scanned == null);
 });
@@ -910,12 +1062,12 @@ const collapsedProjectBtnTitle = computed(() => {
   if (sidebarPrimaryTab.value === "folders") {
     if (!selectedFolderKey.value) return "Folders";
     if (selectedFolderKey.value.startsWith("rf-")) {
-      const id = Number(selectedFolderKey.value.slice(3));
+      const id = _folderId(selectedFolderKey.value.slice(3));
       const rf = referenceFolders.value.find((f) => f.id === id);
       return rf ? rf.label || rf.folder : "Folder";
     }
     if (selectedFolderKey.value.startsWith("if-")) {
-      const id = Number(selectedFolderKey.value.slice(3));
+      const id = _folderId(selectedFolderKey.value.slice(3));
       const imf = importFolders.value.find((f) => Number(f.id) === id);
       return imf ? imf.label || imf.folder : "Folder";
     }
@@ -1064,17 +1216,36 @@ function referenceFolderCanDisclose(rf) {
   return (cached.entries?.length ?? 0) > 0;
 }
 
+/**
+ * The sidebar's current selection, said the way a ROUTE says it.
+ *
+ * The sidebar's own key identifies a row, so a subfolder's is
+ * `path-<absolute path>` (`FolderTreeNode.vue`); the route only ever names the
+ * folder the row sits in. These two are what let the watcher below compare the
+ * two spellings without either of them having to change: this is the folder,
+ * `selectedFolderPath` is which folder inside it. An equality test on the row
+ * key alone could neither tell "already showing this" from "showing its
+ * sibling", nor recognise its own selection on the way out.
+ */
+const selectedFolderRouteKey = computed(() => {
+  const id = _folderId(selectedFolderReferenceId.value);
+  if (id != null) return `rf-${id}`;
+  return selectedFolderKey.value?.startsWith("if-")
+    ? selectedFolderKey.value
+    : null;
+});
+
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
-  const payloadId = Number(payload?.referenceFolderId);
-  if (Number.isFinite(payloadId)) {
+  const payloadId = _folderId(payload?.referenceFolderId);
+  if (payloadId != null) {
     selectedFolderReferenceId.value = payloadId;
   } else if (key?.startsWith("rf-")) {
-    const parsed = parseInt(key.slice(3), 10);
-    selectedFolderReferenceId.value = Number.isFinite(parsed) ? parsed : null;
+    selectedFolderReferenceId.value = _folderId(key.slice(3));
   } else {
     selectedFolderReferenceId.value = null;
   }
+  selectedFolderPath.value = payload?.pathPrefix ?? null;
   emit("select-folder", payload);
   // Emit immediately on selection so ImageGrid updates before next poll tick.
   sidebarStore.folderScanning = selectedFolderScanning.value;
@@ -3908,34 +4079,79 @@ watch(
 // When App.vue navigates to /ref-folder/:id or /import-folder/:id it passes
 // the matching key via the activeFolderKey prop so we can switch to the
 // folders tab and emit the correct filter payload.
+//
+// `?path=` is watched alongside the key, and it has to be: a subfolder click
+// pushes a route that differs from its sibling's ONLY in the query, so the key
+// alone cannot see the difference. Watching just the key made every one of
+// those a history entry whose Back went nowhere - the address bar moved and the
+// grid did not - which is worse than the previous behaviour, where the pushes
+// were identical and vue-router created no Back target at all.
 watch(
-  () => viewStore.activeFolderKey,
-  async (newKey, oldKey) => {
+  () => [
+    viewStore.activeFolderKey,
+    viewStore.view?.folderFilter?.pathPrefix ?? null,
+  ],
+  async ([newKey, newPath], [oldKey] = []) => {
     if (!newKey) {
       // Route left a folder view - clear the sidebar's folder highlight.
-      if (oldKey && selectedFolderKey.value === oldKey) {
+      if (oldKey && selectedFolderRouteKey.value === oldKey) {
         selectedFolderKey.value = null;
         selectedFolderReferenceId.value = null;
+        selectedFolderPath.value = null;
       }
       return;
     }
-    if (selectedFolderKey.value === newKey) return; // already in sync
+    // Already showing exactly what the route names, folder AND subfolder. A
+    // click gets here right after setting both, so without this every one of
+    // them would re-fetch the listings and re-emit the payload it just sent.
+    //
+    // `_urlPath`, NOT `_samePath`: this compares the sidebar's path, which
+    // `routeSubfolderUnder` has re-spelled into the folder's separators,
+    // against `?path=`, which `parseFolderPath` keeps verbatim from the URL.
+    //
+    // This one folds unconditionally, where `routeSubfolderUnder` folds only
+    // for a Windows root, and the asymmetry is deliberate. That function
+    // decides whether a URL belongs to a folder AT ALL, so a false match
+    // selects the wrong folder. This one only asks "did I just do this?", so a
+    // false match can at worst skip re-restoring something already restored -
+    // while a false MISS is the loop. Cheap direction, expensive direction.
+    // With `_samePath` the two could never match once the re-spelling changed
+    // anything, so the sidebar could not recognise its own work: it re-emitted,
+    // the emit pushed the re-spelled path as a NEW url, and Back returned to
+    // the original spelling and started the round again. A shared Windows link
+    // could not be navigated away from.
+    const showingSubfolder = selectedFolderKey.value?.startsWith("path-");
+    const routePath = _urlPath(newPath);
+    if (
+      selectedFolderRouteKey.value === newKey &&
+      (newPath
+        ? routePath !== "" && _urlPath(selectedFolderPath.value) === routePath
+        : !showingSubfolder)
+    ) {
+      return;
+    }
 
     sidebarPrimaryTab.value = "folders";
     await fetchReferenceFolders();
     await fetchImportFolders();
 
-    // Guard: user may have navigated away while fetches were in flight.
+    // Guard: user may have navigated away - or to a sibling subfolder, which
+    // moves only the query - while the fetches were in flight.
     if (viewStore.activeFolderKey !== newKey) return;
+    if ((viewStore.view?.folderFilter?.pathPrefix ?? null) !== newPath) return;
 
     if (newKey.startsWith("rf-")) {
       const id = parseInt(newKey.slice(3), 10);
       const folder = referenceFolders.value.find((f) => f.id === id);
       if (folder) {
-        handleFolderNodeSelect(newKey, {
+        // A subfolder in the URL wins over the folder root, on every way in:
+        // a reload, a deep link, Back out of another view, and Back between
+        // two subfolders of this same folder.
+        const sub = routeSubfolderUnder(folder.folder);
+        handleFolderNodeSelect(sub ? `path-${sub.pathPrefix}` : newKey, {
           referenceFolderId: folder.id,
-          pathPrefix: folder.folder,
-          label: folder.label || folder.folder,
+          pathPrefix: sub ? sub.pathPrefix : folder.folder,
+          label: sub ? sub.label : folder.label || folder.folder,
         });
       }
     } else if (newKey.startsWith("if-")) {

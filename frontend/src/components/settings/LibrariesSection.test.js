@@ -384,6 +384,101 @@ describe("switching", () => {
     wrapper.unmount();
   });
 
+  // The other door into the same switch. `Open this library` is a menu item,
+  // and clicking it closes the menu that owns it, so the element the click
+  // arrived on is gone by the time a failed switch tries to give focus back -
+  // `.focus()` on it is a silent no-op and the keyboard lands on <body>.
+  //
+  // Vuetify's menu is stubbed inline here, so the item is NOT removed by the
+  // stub: the test removes it by hand, which is what makes it fail against the
+  // unfixed code instead of passing on a node that never went anywhere.
+  it("restores focus to the ⋯ button when the switch came from the row menu", async () => {
+    setActiveLibrary.mockRejectedValue({
+      response: { data: { detail: "Could not open it." } },
+    });
+    const wrapper = mount(LibrariesSection, {
+      props: { open: true },
+      attachTo: document.body,
+      global: {
+        plugins: [pinia],
+        stubs: {
+          VIcon: true,
+          VProgressCircular: true,
+          LibraryLayoutDialog: true,
+          AppButton: {
+            props: ["disabled", "loading"],
+            template:
+              '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+          },
+        },
+      },
+    });
+    await settle(wrapper);
+    const row = rowFor(wrapper, "Client work");
+    const more = row.find(".library-row__more");
+    const item = menuItem(wrapper, "Client work", "Open this library");
+
+    await item.trigger("click");
+    await settle(wrapper);
+    // What the real menu does on close, and what the bug depended on.
+    item.element.remove();
+
+    const switchStore = useLibrarySwitchStore();
+    expect(switchStore.phase).toBe("failed");
+    await switchStore.stayOnCurrent();
+
+    expect(document.activeElement).toBe(more.element);
+    expect(document.activeElement).not.toBe(document.body);
+    wrapper.unmount();
+  });
+
+  it("says so rather than pretending when there is nothing left to focus", async () => {
+    // The belt behind the fix above: a trigger that has left the document
+    // cannot take focus, and a silent `.focus?.()` on it reads as a successful
+    // restore. Any future caller that hands over a doomed element gets a
+    // warning naming the loss instead of a keyboard user on <body>.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const switchStore = useLibrarySwitchStore();
+    const orphan = document.createElement("button");
+    document.body.appendChild(orphan);
+
+    await switchStore.begin(
+      { uuid: "uuid-b", name: "Client work" },
+      { uuid: "uuid-a", name: "Family Photos" },
+      orphan,
+    );
+    orphan.remove();
+
+    const restored = await switchStore.stayOnCurrent();
+
+    expect(restored).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not return focus"),
+      expect.objectContaining({ stillInDocument: false }),
+    );
+    warn.mockRestore();
+  });
+
+  it("says nothing when no focus target was offered in the first place", async () => {
+    // `begin` is also called with no trigger at all - the folder-mapping
+    // wizard's own switch does exactly that - and those are not failures to
+    // report. Without the guard this warns on an ordinary overlay dismissal,
+    // which is a console line on a working flow.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const switchStore = useLibrarySwitchStore();
+
+    await switchStore.begin(
+      { uuid: "uuid-b", name: "Client work" },
+      { uuid: "uuid-a", name: "Family Photos" },
+      null,
+    );
+    const restored = await switchStore.stayOnCurrent();
+
+    expect(restored).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("does not POST until the share-link warning has been accepted", async () => {
     let resolveConfirm;
     confirmMock.mockReturnValue(

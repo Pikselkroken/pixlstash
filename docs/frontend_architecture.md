@@ -290,15 +290,33 @@ It is split in two so the URL contract is testable on its own:
 **`?path=<absolute folder>` is the folder facet for folders that have no id.** A
 reference folder and an import folder each have a route (`/ref-folder/:id`,
 `/import-folder/:id`) and the sidebar owns their payload — which is why those
-two routes do not clear `selectedFolderFilter`, and why `?path=` is ignored on
-them (`applyView` guards on `folderKey`). The folder an "About your library"
-finding points at (§9.3) has no id of any kind, which is what this param is
-for. **The sidebar's subfolder selection is still not in the URL:**
+two routes do not clear `selectedFolderFilter`, and why `applyView` refuses to
+apply `?path=` on them (it guards on `folderKey`). The folder an "About your
+library" finding points at (§9.3) has no id of any kind, which is what this
+param is for. **It also carries the sidebar's subfolder selection.**
 `FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
-`pushRouteForCurrentSelection`'s ref-folder branch and the path is dropped as
-before — closing that means teaching the sidebar's `activeFolderKey` watcher to
-restore a subfolder rather than the folder root, which is a change to the
-folder tree. `parseFolderPath`
+`pushRouteForCurrentSelection`'s ref-folder branch; the branch now pushes the
+`pathPrefix` as `?path=` alongside the id, and `SideBar.routeSubfolderUnder`
+reads it back once the folder listing is in, selecting the subfolder rather
+than the folder root. The id still owns `referenceFolderId`, so
+`reference_folder_id` stays in the grid query — the query only says which
+folder *inside* it is open. **The sidebar watcher watches `?path=` alongside
+`activeFolderKey`, and has to.** Two sibling subfolders of one folder push
+routes that differ only in the query, so the key alone cannot tell them apart;
+watching only the key meant every subfolder click created a history entry
+(`/ref-folder/5` used to be pushed identically each time, which vue-router
+deduplicates, so there was none) whose Back moved the address bar and nothing
+else. The watcher's "already in sync" test therefore compares the folder *and*
+the path, or a click would re-fetch both listings and re-emit the payload it
+had just set — **through `_urlPath`, not `_samePath`**, because
+`routeSubfolderUnder` re-spells the path into the folder's own separators and
+`parseFolderPath` keeps the URL's, so the two are in different spaces. Compared
+in the wrong one they never match, the sidebar stops recognising its own work,
+and the re-emit pushes a URL that differs from the one that arrived — the
+inert-Back bug again, in a loop. `SideBarFolderRouteRestore.test.js` pins the
+whole class with one property, "a route arriving twice is inert",
+parameterised over the separator-changing inputs; the POSIX-only version of it
+was green while the Windows case looped. `parseFolderPath`
 resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
 to the listing API's existing `file_path_prefix` param — there is no new backend
 filter behind it. Read on every grid route rather than only on `/`, the same

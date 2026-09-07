@@ -44,6 +44,15 @@ const overrides = reactive(new Map());
 const filterText = reactive(new Map()); // depth -> string
 const collapsed = reactive(new Set()); // depth
 
+// Roving tabindex, depth -> folder.id: which row of each level's tree Tab
+// reaches. The WAI-ARIA tree pattern gives a tree ONE tab stop and moves inside
+// it with the arrow keys, which `onRowKeydown` already implements; without this
+// every row - and every row's kind button - sat in the tab sequence, so a level
+// of 400 folders was 800 presses between the filter box and `Continue`.
+// Unset means "the first row that is drawn", so a freshly rendered or filtered
+// level is always reachable.
+const focusedRowId = reactive(new Map());
+
 // Selection: one level at a time. `anchorId` is the Shift+click range start.
 const selectedIds = reactive(new Set());
 const selectedDepth = ref(null);
@@ -85,6 +94,13 @@ function selectionCount(level) {
 
 function isSelected(folder) {
   return selectedIds.has(folder.id);
+}
+
+/** Whether this row is its level's single tab stop. `index` comes from the
+ *  `v-for`, so the fallback costs nothing per row. */
+function isTabStop(level, folder, index) {
+  const remembered = focusedRowId.get(level.depth);
+  return remembered == null ? index === 0 : remembered === folder.id;
 }
 
 /** Distinct resolved kinds across a level's rows, in strip order. */
@@ -238,6 +254,9 @@ function onRowKeydown(level, folder, event) {
 
 function setFilter(level, value) {
   filterText.set(level.depth, value);
+  // The remembered tab stop may have just been filtered out of the level. Fall
+  // back to "the first row drawn" rather than leaving the tree unreachable.
+  focusedRowId.delete(level.depth);
 }
 
 function toggleCollapsed(level) {
@@ -393,17 +412,18 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
           :aria-label="`Level ${level.depth}`"
         >
           <div
-            v-for="folder in visibleFolders(level)"
+            v-for="(folder, rowIndex) in visibleFolders(level)"
             :key="folder.id"
             class="map-tree__row"
             :class="{ 'map-tree__row--sel': isSelected(folder) }"
             role="treeitem"
-            tabindex="0"
+            :tabindex="isTabStop(level, folder, rowIndex) ? 0 : -1"
             :aria-selected="isSelected(folder)"
             :aria-label="`${folder.name}, ${folder.picture_count.toLocaleString()} pictures`"
             aria-keyshortcuts="1 2 3 4 0"
             @click="onRowClick(level, folder, $event)"
             @keydown="onRowKeydown(level, folder, $event)"
+            @focusin="focusedRowId.set(level.depth, folder.id)"
           >
             <v-icon class="map-tree__lead" size="15">mdi-folder-outline</v-icon>
             <span class="map-tree__name">{{ folder.name }}</span>
@@ -413,6 +433,7 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                 <button
                   type="button"
                   class="map-tree__kdd"
+                  tabindex="-1"
                   :class="{
                     'map-tree__kdd--none': !resolvedKind(folder),
                     'map-tree__kdd--folder': resolvedKind(folder) === JUST_A_FOLDER_KIND.value,

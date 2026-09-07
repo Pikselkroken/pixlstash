@@ -119,12 +119,12 @@ function parseStackState(raw) {
  * `/character/UNASSIGNED?path=…` - the unassigned pictures in one folder - is
  * exactly what a finding opens.
  *
- * **It does NOT yet fix the sidebar's subfolder selection.** A subfolder click
+ * It carries the sidebar's subfolder selection too. A subfolder click also
  * carries `referenceFolderId` (`FolderTreeNode.vue` requires it), so
- * `pushRouteForCurrentSelection` takes its ref-folder branch and the subfolder
- * path is still dropped from the URL. Closing that means teaching the
- * sidebar's `activeFolderKey` watcher to restore a subfolder rather than the
- * folder root, which is a change to the folder tree and not to this param.
+ * `pushRouteForCurrentSelection` takes its ref-folder branch - the id owns the
+ * payload and this param says which folder *inside* it is showing. `applyView`
+ * therefore refuses to apply the bare `{pathPrefix, label}` on a folder route;
+ * `SideBar.routeSubfolderUnder` reads it once the folder has loaded.
  *
  * @param {string|string[]|undefined} raw `route.query.path`
  * @returns {{pathPrefix: string, label: string}|null}
@@ -358,8 +358,9 @@ function applyView(view, selectionStore, projectStore, filterStore) {
     // Without the `folderKey` guard, `/ref-folder/5?path=/sub` would overwrite
     // the sidebar's `{referenceFolderId, pathPrefix, label}` with a bare
     // `{pathPrefix, label}` and drop `reference_folder_id` from the grid
-    // query. Nothing pushes that combination today; the guard is here so
-    // nothing can start to.
+    // query. A sidebar subfolder click pushes exactly that combination, so
+    // this guard is load-bearing: `SideBar.routeSubfolderUnder` applies the
+    // path WITH the folder's id once the folder listing is in.
     const current = selectionStore.selectedFolderFilter;
     if (current?.pathPrefix !== view.folderFilter.pathPrefix) {
       selectionStore.selectedFolderFilter = view.folderFilter;

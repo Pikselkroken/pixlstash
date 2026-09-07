@@ -310,6 +310,151 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 
+  it("still offers when a pending entry belongs to some other library", async () => {
+    // The offer used to be gated on the raw `mappingStore.pending`, the same
+    // unbounded localStorage flag the telemetry question was gated on. The
+    // auto-open above deliberately refuses a `local_import` saved against a
+    // library that is no longer the active one, so on an empty library the
+    // owner got no wizard AND no offer - for the life of the install, since
+    // nothing clears the entry. The guard beside it already read
+    // `pendingForThisLibrary`; now this one does too.
+    const path = "/home/me/Pictures";
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        taskId: "task-3",
+        path: "/home/me/Pictures/detached",
+        label: "detached",
+        mode: "local_import",
+      }),
+    );
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 12 } })
+        : Promise.resolve(respond(url)),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardOpen).toBe(true);
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      mode: "local_import",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("still offers when the pending entry is a legacy reference read", async () => {
+    // The second of the two classes the auto-open refuses, and the one a
+    // previous fix here claimed to cover and did not: `pendingForThisLibrary`
+    // returns a `reference` entry UNCHANGED, so gating on its truthiness still
+    // refused the offer. An empty library plus a stale `reference` entry meant
+    // no wizard and no offer - no way into the library at all, permanently.
+    const path = "/home/me/Pictures";
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        taskId: "task-9",
+        path: "/home/me/Pictures/External",
+        label: "External",
+        mode: "reference",
+      }),
+    );
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 12 } })
+        : Promise.resolve(respond(url)),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardOpen).toBe(true);
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      mode: "local_import",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("stays quiet when the pending entry is this library's own", async () => {
+    // The control: an entry the auto-open WILL act on must still suppress the
+    // offer, or the owner gets the wizard twice.
+    const path = "/home/me/Pictures";
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ taskId: "task-4", path, label: "Pictures", mode: "local_import" }),
+    );
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond(url));
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(inspect).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
+  it("resumes it when the parked path only differs by a trailing separator", async () => {
+    // The parked path comes from the Electron shell's folder dialog and the
+    // library path from the registry, so the two agree about the folder and
+    // not always about how it is spelled. `===` threw the completed read away
+    // and started a second one over an empty grid; `_samePath` - the helper
+    // the pending-entry match beside it already uses - does not.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const readResult = { levels: [{ depth: 1, folders: [] }] };
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({ path: `${path}/`, result: readResult }),
+    };
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond(url));
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      result: readResult,
+      mode: "local_import",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
   it("ignores a parked read of some other folder", async () => {
     const path = "/home/me/Pictures";
     activeLibraryAt(path);

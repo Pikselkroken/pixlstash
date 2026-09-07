@@ -81,6 +81,9 @@ let copyResetTimer = 0;
 const commandsOpen = ref(false);
 const expandedPaths = ref(new Set());
 const openMenuUuid = ref("");
+/** uuid -> the row's ⋯ button. Plain object, not a ref: nothing renders off it,
+    it only supplies a focus target that outlives the menu it opens. */
+const moreButtons = {};
 /** The library being renamed, or null. Held rather than looked up by uuid so a
     refresh mid-edit cannot swap the dialog's subject under the typing. */
 const renaming = ref(null);
@@ -160,7 +163,15 @@ async function switchTo(library, event) {
   // DOM Event.currentTarget is cleared as soon as synchronous dispatch ends.
   // Save the invoking control before the confirmation awaits so failure can
   // restore focus to the exact Switch button.
-  const trigger = event?.currentTarget ?? null;
+  const invoker = event?.currentTarget ?? null;
+  // `Open this library` lives in the ⋯ menu, and the click closes that menu -
+  // so by the time a failed switch tries to give focus back, the item it came
+  // from is no longer in the document and `.focus()` is a silent no-op that
+  // drops the keyboard on <body>. The ⋯ button that opened the menu is where
+  // focus belongs anyway, and it outlives the menu.
+  const trigger = invoker?.classList?.contains("library-menu__item")
+    ? (moreButtons[library.uuid] ?? null)
+    : invoker;
   const shareCount = Number(activeLibrary.value?.active_share_links ?? 0);
   const ok = await confirm({
     title: `Switch to ${library.name}?`,
@@ -390,6 +401,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
               <template #activator="{ props: menuProps }">
                 <button
                   v-bind="menuProps"
+                  :ref="(el) => (moreButtons[library.uuid] = el)"
                   type="button"
                   class="library-row__more"
                   :disabled="busyUuid === library.uuid"

@@ -304,11 +304,11 @@ onUnmounted(() => {
           {{ entityCount === 1 ? "is" : "are" }} created or matched
         </div>
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark"> - </span>
+          <span class="preview-step__fact-mark">—</span>
           no file is copied, moved or renamed
         </div>
         <div class="preview-step__fact">
-          <span class="preview-step__fact-mark"> - </span>
+          <span class="preview-step__fact-mark">—</span>
           {{ lastFact }}
         </div>
       </div>
