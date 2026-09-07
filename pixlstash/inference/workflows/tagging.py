@@ -5,6 +5,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from pixlstash.inference.vram_budget import (
+    MAX_CONCURRENT_GPU_IMAGES,
+    WD14_BASE_MB,
+    WD14_PER_ITEM_MB,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import merge_video_frame_tags
@@ -15,7 +20,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
-_MAX_CONCURRENT_GPU = 64
 _MAX_CONCURRENT_CPU = 8
 
 
@@ -586,7 +590,7 @@ class TaggingWorkflow:
     def _max_concurrent_images(self) -> int:
         """Maximum image concurrency determined by device type."""
         if self._engine.device == "cuda":
-            return _MAX_CONCURRENT_GPU
+            return MAX_CONCURRENT_GPU_IMAGES
         return _MAX_CONCURRENT_CPU
 
     def _vram_limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
@@ -601,7 +605,9 @@ class TaggingWorkflow:
         if self._engine.device == "cuda":
             wd14_batch = min(
                 wd14_batch,
-                self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+                self._vram_limited_batch_cap(
+                    base_mb=WD14_BASE_MB, per_item_mb=WD14_PER_ITEM_MB
+                ),
             )
         return max(1, int(wd14_batch))
 
@@ -623,7 +629,9 @@ class TaggingWorkflow:
             if self._use_wd14:
                 max_concurrent = min(
                     max_concurrent,
-                    self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+                    self._vram_limited_batch_cap(
+                        base_mb=WD14_BASE_MB, per_item_mb=WD14_PER_ITEM_MB
+                    ),
                 )
             if self._use_pixlstash_tagger:
                 max_concurrent = min(
@@ -661,7 +669,7 @@ class TaggingWorkflow:
         candidates = [1200]
         if self._use_wd14:
             wd14_batch = min(self.effective_wd14_batch_size(), image_count)
-            candidates.append(900 + 220 * wd14_batch)
+            candidates.append(WD14_BASE_MB + WD14_PER_ITEM_MB * wd14_batch)
         if self._use_pixlstash_tagger:
             custom_batch = min(
                 self.effective_pixlstash_tagger_batch_size(), image_count
@@ -677,7 +685,7 @@ class TaggingWorkflow:
                 self.effective_wd14_batch_size(),
                 max(1, int(image_count or 1)),
             )
-            candidates.append(220 * wd14_batch)
+            candidates.append(WD14_PER_ITEM_MB * wd14_batch)
         if self._use_pixlstash_tagger:
             custom_batch = min(
                 self.effective_pixlstash_tagger_batch_size(),

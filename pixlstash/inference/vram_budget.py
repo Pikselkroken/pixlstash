@@ -29,6 +29,35 @@ ORT_ARENA_SHARE = {
     "insightface_session": None,
 }
 
+#: WD14's **process** VRAM in MiB: everything the tagger costs the card once
+#: loaded, including the ~400 MiB CUDA context, plus one 448 px image on top.
+#: This is the scheduler's admission model - what ``limited_batch_cap`` sizes a
+#: batch against and what ``estimated_vram_mb`` reports - and it is the figure
+#: measured after load (~904 MiB against 377 MiB of weights on disk).
+WD14_BASE_MB = 900
+WD14_PER_ITEM_MB = 220
+
+#: The same session's **ORT arena** in MiB, which is a different quantity: ORT's
+#: ``gpu_mem_limit`` governs only the CUDA EP's own allocator, not the context
+#: and not anything torch holds. Bisected on an RTX 5090 against the real
+#: ``wd-convnext-tagger-v3`` (ORT 1.28, CUDA EP) as ``385 + 111·n``, which
+#: predicts every observed outcome: loads at 409 MiB, batch 1 needs 496, batch
+#: 3 needs 718 and does run under the 819 MiB that a 2 GB budget's 40 % share
+#: gives it. Carries ~10 % over the fit, because one card's bisect is not every
+#: driver's allocator.
+#:
+#: Conflating the two is what made the first version of this wrong: the process
+#: figure is roughly twice the arena figure, so using it as the arena floor
+#: overshot every budget and left ``ORT_ARENA_SHARE["wd14"]`` applying nowhere.
+WD14_ARENA_BASE_MB = 425
+WD14_ARENA_PER_ITEM_MB = 122
+
+#: Most images WD14 is ever asked to do at once, whatever the budget allows -
+#: the tagging workflow's own concurrency ceiling. The arena floor is sized for
+#: the batch that will actually run, so a large budget does not float the floor
+#: past a share that already covers it.
+MAX_CONCURRENT_GPU_IMAGES = 64
+
 
 class VramBudget:
     """Stateful VRAM budget for GPU-memory-aware batch sizing.
@@ -114,7 +143,9 @@ class VramBudget:
             self._max_vram_usage_mb / 1024.0,
         )
 
-    def ort_cuda_provider_options(self, share: float | None) -> dict[str, object]:
+    def ort_cuda_provider_options(
+        self, share: float | None, min_limit_mb: int = 0
+    ) -> dict[str, object]:
         """CUDAExecutionProvider options for one ONNX Runtime session.
 
         ORT's default arena doubles on every growth (``kNextPowerOfTwo``) and
@@ -126,10 +157,23 @@ class VramBudget:
         and is left unset when there is none: a cap nobody configured is an
         OOM nobody asked for.
 
+        *share* is a split of the budget between sessions and knows nothing
+        about what the session will be asked to run, so on a small budget it
+        can land under what a single batch needs: WD14's 40 % of a 1 GB budget
+        is 409 MiB, which loads the model and cannot run batch 1 (496 MiB).
+        ``min_limit_mb`` - :meth:`wd14_arena_limit_mb` for that session - is
+        the other half of the question and raises the cap where the share
+        genuinely falls short. It is a floor, never a target: where the share
+        already covers the batch it wins and the configured split stands, and
+        the budget is the ceiling in either case.
+
         Args:
             share: Fraction of the configured budget, from
                 :data:`ORT_ARENA_SHARE`; ``None`` for a session that must never
                 be capped (only the cudnn search setting applies).
+            min_limit_mb: Floor for the cap, in MiB - what this session's own
+                arena needs for the batch it will be given. Ignored when there
+                is no budget (nothing is capped) or when the share is larger.
 
         Returns:
             Options dict for ``provider_options`` / a ``providers`` tuple.
@@ -141,8 +185,38 @@ class VramBudget:
             return options
         options["arena_extend_strategy"] = "kSameAsRequested"
         if self._max_vram_usage_mb is not None:
-            options["gpu_mem_limit"] = int(self._max_vram_usage_mb * share) * 1024**2
+            limit_mb = max(int(self._max_vram_usage_mb * share), int(min_limit_mb))
+            limit_mb = min(limit_mb, self._max_vram_usage_mb)
+            options["gpu_mem_limit"] = limit_mb * 1024**2
         return options
+
+    def wd14_arena_limit_mb(self) -> int:
+        """MiB WD14's ORT arena needs for the batch this budget will hand it.
+
+        Two models, deliberately: the batch is sized against the **process**
+        pair (:data:`WD14_BASE_MB` / :data:`WD14_PER_ITEM_MB`), because that is
+        what the scheduler admits work against and what
+        ``limited_batch_cap`` is calibrated for; the resulting batch is then
+        costed against the **arena** pair, because ``gpu_mem_limit`` governs
+        only the CUDA EP's allocator. Sizing with one and capping with the
+        other is the whole point - and using the process pair for both is what
+        made this overshoot.
+
+        The batch is clamped to :data:`MAX_CONCURRENT_GPU_IMAGES`, the most
+        the workflow ever runs at once, so a large budget does not inflate the
+        floor past a share that already covers the real batch.
+
+        Returns:
+            Floor in MiB, or ``0`` when no budget is set - nothing is capped,
+            so there is nothing to reconcile against.
+        """
+        if self._max_vram_usage_mb is None:
+            return 0
+        batch = min(
+            MAX_CONCURRENT_GPU_IMAGES,
+            self.limited_batch_cap(WD14_BASE_MB, WD14_PER_ITEM_MB),
+        )
+        return WD14_ARENA_BASE_MB + WD14_ARENA_PER_ITEM_MB * batch
 
     def limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
         """Return the maximum batch size that fits within the configured budget.

@@ -28,6 +28,26 @@ from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
+#: Stands in for the (mtime, size) of an entry that has no signature because
+#: its file could not be stat'd at all. Its own object, not ``None``: ``None``
+#: already means "stat failed just now" in :meth:`_stat_signature`, and the two
+#: must not be confused.
+_UNREACHABLE = object()
+
+
+def _location_is_unreachable(file_path: str) -> bool:
+    """``scrapheap_service.file_location_is_unreachable``, imported locally.
+
+    Local because the import is a cycle: ``database`` imports this registry and
+    ``scrapheap_service`` imports ``database``. One definition of "the parent
+    directory is missing, so say nothing about the file" is worth the indirect
+    import - the two must never drift, because between them they decide whether
+    a picture is held or purged.
+    """
+    from pixlstash.services.scrapheap_service import file_location_is_unreachable
+
+    return file_location_is_unreachable(file_path)
+
 
 class UnprocessableImageRegistry:
     """Thread-safe ``picture_id -> (file_path, mtime_ns, size)`` map of undecodable images.
@@ -126,6 +146,79 @@ class UnprocessableImageRegistry:
         )
         return True
 
+    def mark_unreachable(
+        self, picture_id: "int | None", file_path: "str | None", *, reason: str = ""
+    ) -> bool:
+        """Record *picture_id* as unreachable: its file's whole LOCATION is gone.
+
+        The other half of :meth:`mark_unprocessable`, which refuses a file it
+        cannot ``stat`` and defers to the missing-file purge - and the purge
+        deliberately refuses it too (``MissingFilePurgeTask`` skips a picture
+        whose parent directory is missing, because purging would write
+        ``file_removed=True`` and block a later restore). Between the two, a
+        picture on an unplugged drive had no owner at all: every batch finder
+        re-selected it on every sweep, produced nothing, and re-selected it
+        again.
+
+        Suppression is the right answer and deletion is not, because this
+        state ends by itself: the entry lifts the moment the parent directory
+        is back, so remounting the drive returns the picture to every stage
+        with its pending work intact.
+
+        Args:
+            picture_id: The picture whose file could not be reached.
+            file_path: Absolute path to the file, used to watch its parent.
+            reason: Short description, for the one-time log line.
+
+        Returns:
+            ``True`` if a new mark was recorded.
+        """
+        if picture_id is None or not file_path:
+            return False
+        if not _location_is_unreachable(str(file_path)):
+            # The directory is there, so the file is genuinely absent or
+            # unopenable for some other reason - not this registry's case.
+            return False
+        pid = int(picture_id)
+        with self._lock:
+            if pid in self._entries:
+                return False
+            if len(self._entries) >= self._max_entries:
+                logger.warning(
+                    "UnprocessableImageRegistry: cap (%d) reached; NOT holding "
+                    "picture id=%s path=%s as unreachable - it will keep being "
+                    "retried until an existing entry is released.",
+                    self._max_entries,
+                    pid,
+                    file_path,
+                )
+                return False
+            # No signature: an unreachable file cannot be stat'd, and the
+            # sentinel is what `_entry_is_live` reads to pick its predicate.
+            self._entries[pid] = (str(file_path), _UNREACHABLE, _UNREACHABLE)
+        logger.warning(
+            "Unreachable image: picture id=%s path=%s - its location is not "
+            "mounted (%s); holding it out of the work finders until the "
+            "directory is back. Nothing is deleted and no work is lost.",
+            pid,
+            file_path,
+            reason or "parent directory missing",
+        )
+        return True
+
+    def _entry_is_live(self, path: str, mtime_ns: int, size: int) -> bool:
+        """Whether a recorded entry still holds its picture out of the finders.
+
+        Two kinds share one map. An *unreachable* entry lives while its
+        location is still missing, and is dropped the moment the volume is
+        back. An *undecodable* entry lives while the file is byte-for-byte the
+        one that failed, and is dropped when it is rewritten or repaired.
+        """
+        if mtime_ns is _UNREACHABLE:
+            return _location_is_unreachable(path)
+        signature = self._stat_signature(path)
+        return signature is not None and signature == (mtime_ns, size)
+
     def is_suppressed(self, picture_id: "int | None") -> bool:
         """Return whether *picture_id* is currently suppressed.
 
@@ -147,10 +240,9 @@ class UnprocessableImageRegistry:
             if existing is None:
                 return False
             path, mtime_ns, size = existing
-            signature = self._stat_signature(path)
-            if signature is not None and signature == (mtime_ns, size):
+            if self._entry_is_live(path, mtime_ns, size):
                 return True
-            # File vanished or was rewritten since we marked it - retry it.
+            # Rewritten, repaired, or the volume is back - retry it.
             self._entries.pop(pid, None)
             return False
 
@@ -164,8 +256,7 @@ class UnprocessableImageRegistry:
         active: set[int] = set()
         with self._lock:
             for pid, (path, mtime_ns, size) in list(self._entries.items()):
-                signature = self._stat_signature(path)
-                if signature is not None and signature == (mtime_ns, size):
+                if self._entry_is_live(path, mtime_ns, size):
                     active.add(pid)
                 else:
                     self._entries.pop(pid, None)
