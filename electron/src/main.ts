@@ -618,6 +618,14 @@ function showServerLogs(): void {
 /** Port offered for the external listener when the config has none yet. */
 const DEFAULT_EXTERNAL_PORT = 9537;
 
+/**
+ * What `host` goes back to when remote access is turned off. This is the value
+ * `Server.init_server_config` writes into a server config that has no `host`
+ * (`pixlstash/server.py`), so the file ends up saying what a never-enabled one
+ * would have said rather than carrying a desktop-only invention.
+ */
+const LOOPBACK_HOST = 'localhost';
+
 /** This machine's non-loopback IPv4 addresses, for showing reachable URLs. */
 function lanAddresses(): string[] {
   const out: string[] = [];
@@ -691,8 +699,15 @@ async function writeServerSettings(settings: ServerSettings): Promise<void> {
     cfg.port = settings.port;
   }
   cfg.require_ssl = settings.ssl;
-  // Bind all interfaces when remote access is on so other devices can reach it.
-  if (settings.enabled) cfg.host = '0.0.0.0';
+  // Bind all interfaces when remote access is on so other devices can reach it,
+  // and put `host` back to the loopback default when it is off. The desktop
+  // backend ignores `host` unless `external_server_enabled` is set, so leaving a
+  // stale `0.0.0.0` behind was invisible here - but the standalone server binds
+  // `config["host"]` directly, and the two read the same file, so turning remote
+  // access off had to stop meaning "still listening on every interface if you
+  // ever start it the other way". LOOPBACK_HOST is the value server.py writes
+  // into a fresh server config, not a new one invented here.
+  cfg.host = settings.enabled ? '0.0.0.0' : LOOPBACK_HOST;
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   // Keep the tray's "Enable server" checkbox in sync with the new config.
@@ -1356,8 +1371,25 @@ function registerIpc(): void {
   });
 
   // What is in the folder someone picked, for the verdict under the field: a
-  // library PixlStash made before, a folder of pictures, or nothing yet. Read
-  // only, and bounded - see InspectFolder.
+  // library PixlStash made before, a folder of pictures, or nothing yet.
+  //
+  // What this channel promises: it never writes, it never follows a symlink out
+  // of the tree, it stops at InspectFolder's caps (20k files / 2.5 s) rather
+  // than crawling a disk, and it only answers the bundled setup page
+  // (requireSetupRenderer).
+  //
+  // What it does NOT promise, deliberately: the path is not restricted. Unlike
+  // `setup:commit`, which takes only a path PixlStash offered
+  // (requireOfferedPath), this one inspects whatever it is handed and reports
+  // whether it exists, a picture count and byte total, the drive's free space,
+  // and - when a `vault.db` is there - counts read from it with the bundled
+  // Python's sqlite3 in read-only mode. That is an existence-and-contents oracle
+  // over the whole filesystem, and it is fine here: the only caller is the
+  // wizard page, whose paths come from our own defaults or from the folder
+  // dialog the person at the keyboard drove. There is no remote content and no
+  // third party to feed it a path, and refusing arbitrary paths would only risk
+  // breaking first-run setup. Revisit if this channel is ever opened to a page
+  // that renders content PixlStash did not author.
   ipcMain.handle('setup:inspect', async (event, path?: string) => {
     requireSetupRenderer(event, 'setup:inspect');
     return inspectFolder(path || '', bundledInterpreter());
