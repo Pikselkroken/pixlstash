@@ -17,9 +17,21 @@ import { fileURLToPath } from 'node:url';
  * Windows filesystems are case-insensitive, so `C:\\x` and `c:\\x` are one
  * directory. POSIX is case-SENSITIVE, where folding would let `/opt/Renderer`
  * pass as `/opt/renderer` - a different directory, and one we did not bundle.
+ *
+ * It does NOT trim, on either platform, and `config.ts`'s two callers trim their
+ * own input instead. Trimming a path someone TYPED is that file's job - its
+ * readonly wizard field arrives trimmed by the renderer, so padding has to be
+ * forgiven there. Here the path was parsed out of a `file://` URL, where
+ * forgiving it only widens an equality boundary: on POSIX `setup.html%20`,
+ * `%0A` and `%09` are three different files that would each answer true for the
+ * bundled wizard page. Win32 does strip a component's trailing spaces, so
+ * trimming would be *defensible* there - but nothing we load is padded
+ * (`RENDERER_DIR` comes from `__dirname`, the sender URL from Chromium), so
+ * refusing a padded spelling costs nothing and one rule is easier to keep right
+ * than two. Two different jobs; the one only `config.ts` needs stays there.
  */
 export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
-  const resolved = resolve(path.trim());
+  const resolved = resolve(path);
   return platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 

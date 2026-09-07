@@ -48,14 +48,24 @@ describe('requireOfferedPath', () => {
     );
   });
 
-  it('pathKey folds case only on Windows', () => {
+  it('pathKey folds case only on Windows, and never trims', () => {
     const p = resolve(sep, 'Home', 'Me', 'Pictures');
     assert.equal(pathKey(p, 'win32'), resolve(p).toLowerCase());
     assert.equal(pathKey(p, 'linux'), resolve(p));
     assert.equal(pathKey(p, 'darwin'), resolve(p));
     // Trailing separator and `..` still normalise on every platform.
-    assert.equal(pathKey(`  ${p}${sep}  `, 'linux'), resolve(p));
+    assert.equal(pathKey(`${p}${sep}`, 'linux'), resolve(p));
     assert.equal(pathKey(join(p, 'x', '..'), 'linux'), resolve(p));
+    // Padding is NOT stripped, on either platform. This key also decides
+    // whether a `file://` URL is one of our own bundled pages, and on POSIX
+    // `x ` and `x` are two different files - so trimming would let
+    // `setup.html%20` answer for `setup.html`. The callers that want a typed
+    // path forgiven (offerPath / requireOfferedPath) trim before they get here.
+    for (const platform of ['linux', 'win32'] as const) {
+      for (const padded of [`${p} `, `${p}\t`, ` ${p}`, `${p}\n`]) {
+        assert.notEqual(pathKey(padded, platform), pathKey(p, platform), `${platform} ${padded}`);
+      }
+    }
   });
 
   it('refuses a path offered for the OTHER question', () => {
