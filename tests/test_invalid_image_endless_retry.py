@@ -33,6 +33,7 @@ from pixlstash.tasks.missing_image_embedding_finder import MissingImageEmbedding
 from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
 from pixlstash.tasks.quality_task import QualityTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 from pixlstash.vault import Vault
 
 # Bytes that exist on disk as a ``.jpg`` but are not a decodable image. cv2 and
@@ -291,3 +292,45 @@ def test_585_quality_metadata_backfill_marks_instead_of_raising(tmp_path):
         assert not vault.db.unprocessable_images.is_suppressed(valid_pic.id)
         assert (valid_pic.width, valid_pic.height) == (8, 8)
         assert valid_pic.format == "JPG"
+
+
+def test_the_suppressed_set_is_built_once_per_window_and_drops_on_a_mark(tmp_path):
+    """#1206 item 9b: four finders rebuilt this set on every planner sweep.
+
+    Each rebuild re-stats every entry, and an entry whose volume has gone away
+    costs a mount timeout per stat - on the planner thread. The answer is
+    therefore reused for ``ACTIVE_CACHE_TTL_S``, and any write to the map drops
+    the cache so a newly marked picture is never served from a set built before
+    it.
+    """
+    registry = UnprocessableImageRegistry()
+    first = str(tmp_path / "one.jpg")
+    second = str(tmp_path / "two.jpg")
+    _write_corrupt_jpeg(tmp_path / "one.jpg")
+    _write_corrupt_jpeg(tmp_path / "two.jpg")
+    assert registry.mark_unprocessable(1, first, reason="test fixture")
+
+    stats: list[str] = []
+    original = registry._stat_signature
+
+    def counting_stat(file_path: str):
+        stats.append(file_path)
+        return original(file_path)
+
+    registry._stat_signature = staticmethod(counting_stat)
+
+    assert registry.active_suppressed_ids() == {1}
+    assert stats == [first]
+    # Within the window, the second sweep re-stats nothing.
+    assert registry.active_suppressed_ids() == {1}
+    assert stats == [first]
+
+    # A new mark must be visible at once, cache or no cache.
+    assert registry.mark_unprocessable(2, second, reason="test fixture")
+    assert registry.active_suppressed_ids() == {1, 2}
+
+    # And closing the window re-validates.
+    stats.clear()
+    registry.ACTIVE_CACHE_TTL_S = 0.0
+    assert registry.active_suppressed_ids() == {1, 2}
+    assert sorted(stats) == sorted([first, second])

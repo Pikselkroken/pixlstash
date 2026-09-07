@@ -722,15 +722,21 @@ def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
             "ever put it back and its tags are gone for good"
         )
 
-        # And the hold lifts by itself once the location is back.
+        # And the hold lifts by itself once the location is back. The set is
+        # reused for `ACTIVE_CACHE_TTL_S` (#1206 item 9b: six callers a sweep,
+        # and each stat of an unreachable file waits on the dead mount), so the
+        # lift lands on the next full re-validation rather than on the next
+        # call. Closing the window here rather than sleeping through it.
+        registry = vault.db.unprocessable_images
         gone.mkdir()
         for name in names[:-1]:
             Image.fromarray(np.zeros((30, 40, 3), dtype=np.uint8), "RGB").save(
                 gone / name
             )
-        assert set(ids[:-1]).isdisjoint(
-            vault.db.unprocessable_images.active_suppressed_ids()
-        ), "the hold did not lift when the directory came back"
+        registry.ACTIVE_CACHE_TTL_S = 0.0
+        assert set(ids[:-1]).isdisjoint(registry.active_suppressed_ids()), (
+            "the hold did not lift when the directory came back"
+        )
 
 
 def test_a_whole_batch_transient_failure_deletes_nothing(tmp_path):
