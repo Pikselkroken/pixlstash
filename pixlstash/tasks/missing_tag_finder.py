@@ -13,7 +13,7 @@ from pixlstash.db_models import (
 from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
-from .tag_task import TagTask
+from .tag_task import TagTask, taggable_picture_clauses
 
 # Every sentinel value starts with TAG_PENDING_SENTINEL (``__tag`` or
 # ``__tag:<engine>``), so the half-open range [``__tag``, ``__tah``) is the
@@ -141,8 +141,15 @@ class MissingTagFinder(BaseTaskFinder):
         # selected again on the very next sweep - an unbounded inference loop.
         # One definition on both sides is what closes it.
         locked_member = ~Picture.id.in_(locked_picture_id_subquery())
+        # `taggable_picture_clauses` is the predicate `TagTask.count_missing_tags`
+        # applies, imported rather than repeated: the two disagreed (#1206 item
+        # 3), so the "awaiting tagging" number excluded scrapheaped pictures
+        # while this query kept selecting them and spending the GPU on them.
         stmt = select(Picture).where(
-            Picture.id.in_(pending), faces_known, locked_member
+            Picture.id.in_(pending),
+            faces_known,
+            locked_member,
+            *taggable_picture_clauses(),
         )
         if suppressed_ids:
             stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))

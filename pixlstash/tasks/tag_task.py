@@ -93,6 +93,22 @@ def _file_is_readable(file_path: str) -> bool:
         return False
 
 
+def taggable_picture_clauses() -> tuple:
+    """The picture rows tagging may touch: not soft-deleted, and with a file.
+
+    One definition, because two queries have to answer identically: the
+    "awaiting tagging" number (:meth:`TagTask.count_missing_tags`) and the
+    selection the work planner actually runs
+    (``MissingTagFinder._fetch_missing_tags``). They did not (#1206 item 3) -
+    the count applied both clauses and the selection applied neither, so the
+    number read zero while the GPU went on tagging pictures the owner had put
+    in the scrapheap. A picture restored from the scrapheap keeps its pending
+    sentinel and is picked up again on the next sweep, so nothing is lost by
+    holding it out while it is deleted.
+    """
+    return (Picture.deleted.is_(False), Picture.file_path.is_not(None))
+
+
 class TagTask(BaseTask):
     """Task that tags a batch of pictures and persists tag updates."""
 
@@ -1321,8 +1337,7 @@ class TagTask(BaseTask):
             select(func.count())
             .select_from(Picture)
             .where(Picture.tags.any(has_sentinel))
-            .where(Picture.deleted.is_(False))
-            .where(Picture.file_path.is_not(None))
+            .where(*taggable_picture_clauses())
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

@@ -23,6 +23,7 @@ needs no schema change and no migration.
 
 import os
 import threading
+import time
 
 from pixlstash.pixl_logging import get_logger
 
@@ -71,11 +72,25 @@ class UnprocessableImageRegistry:
     # realistic count.
     MAX_ENTRIES = 100_000
 
+    # How long an `active_suppressed_ids()` answer is reused before every entry
+    # is re-stat'd. The tag, face, thumbnail and embedding finders each rebuild
+    # the set on every planner sweep, and `Vault` counts with it twice more -
+    # six full walks of the map, back to back, on the planner thread. That is
+    # free while the files are local and it is not free at all for an
+    # *unreachable* entry, whose `_entry_is_live` waits on a dead mount for
+    # every stat (#1206 item 9b): exactly the case the map fills up with. The
+    # window is short enough that a repaired or remounted file is retried
+    # within seconds, and any change to the map clears the cache outright, so
+    # the staleness only ever delays a *retry* - never a suppression.
+    ACTIVE_CACHE_TTL_S = 5.0
+
     def __init__(self, max_entries: int = MAX_ENTRIES) -> None:
         self._max_entries = int(max_entries)
         self._lock = threading.Lock()
         # picture_id -> (file_path, mtime_ns, size)
         self._entries: dict[int, tuple[str, int, int]] = {}
+        # (monotonic time, ids) of the last full re-validation, or None.
+        self._active_cache: "tuple[float, frozenset[int]] | None" = None
 
     @staticmethod
     def _stat_signature(file_path: str) -> "tuple[int, int] | None":
@@ -136,6 +151,7 @@ class UnprocessableImageRegistry:
                 )
                 return False
             self._entries[pid] = (str(file_path), mtime_ns, size)
+            self._active_cache = None
         logger.warning(
             "Unprocessable image: picture id=%s path=%s could not be decoded (%s); "
             "skipping it for the rest of this server session (it will be retried "
@@ -196,6 +212,7 @@ class UnprocessableImageRegistry:
             # No signature: an unreachable file cannot be stat'd, and the
             # sentinel is what `_entry_is_live` reads to pick its predicate.
             self._entries[pid] = (str(file_path), _UNREACHABLE, _UNREACHABLE)
+            self._active_cache = None
         logger.warning(
             "Unreachable image: picture id=%s path=%s - its location is not "
             "mounted (%s); holding it out of the work finders until the "
@@ -244,22 +261,38 @@ class UnprocessableImageRegistry:
                 return True
             # Rewritten, repaired, or the volume is back - retry it.
             self._entries.pop(pid, None)
+            self._active_cache = None
             return False
 
     def active_suppressed_ids(self) -> set[int]:
         """Return the set of currently-suppressed picture ids, pruning stale entries.
 
         Re-validates every stored file signature; entries whose file changed or
-        disappeared are dropped. Cheap in practice - the map only holds genuinely
-        undecodable files, which are rare.
+        disappeared are dropped. The answer is then reused for
+        :attr:`ACTIVE_CACHE_TTL_S`, because six callers ask for it within one
+        planner sweep and an unreachable entry costs a mount timeout per stat.
+        Any write to the map drops the cache, so a newly marked picture is
+        never served from a set built before it.
         """
-        active: set[int] = set()
         with self._lock:
+            cached = self._active_cache
+            if (
+                cached is not None
+                and time.monotonic() - cached[0] < self.ACTIVE_CACHE_TTL_S
+            ):
+                return set(cached[1])
+            active: set[int] = set()
             for pid, (path, mtime_ns, size) in list(self._entries.items()):
                 if self._entry_is_live(path, mtime_ns, size):
                     active.add(pid)
                 else:
                     self._entries.pop(pid, None)
+            # Stamped after the walk, not before: `_entry_is_live` can take a
+            # while on a dead mount, and the window is meant to start when the
+            # answer is known. The age is compared against the TTL on every
+            # read rather than baked into a deadline, so lowering the TTL takes
+            # effect at once.
+            self._active_cache = (time.monotonic(), frozenset(active))
         return active
 
     def discard(self, picture_id: "int | None") -> None:
@@ -268,6 +301,7 @@ class UnprocessableImageRegistry:
             return
         with self._lock:
             self._entries.pop(int(picture_id), None)
+            self._active_cache = None
 
     def snapshot(self) -> dict[int, tuple[str, int, int]]:
         """Return a copy of the current ``{picture_id: (file_path, mtime_ns, size)}`` map."""

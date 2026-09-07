@@ -23,6 +23,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -959,17 +960,82 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
     return sorted(changes, key=lambda change: change.name.lower())
 
 
+#: A trailing backslash and the whitespace either side of it: one option to
+#: pip, so one line here.  The surrounding whitespace goes with it, or the
+#: joined line carries the indent of the continuation into the middle of it.
+_CONTINUATION_RE = re.compile(r"[^\S\n]*\\\n[^\S\n]*")
+
+
 def read_requirements(requirements: Path) -> list[str]:
-    """Return the requirement lines, so the CLI can show them before running pip."""
+    """Return the requirement lines, so the CLI can show them before running pip.
+
+    A line ending in a backslash is joined to the next one first, because pip
+    does the same: ``--index-url \\`` on its own line and the URL on the next is
+    ONE option to pip, and reading them as two showed the option without what
+    it points at (#1206 item 8).
+    """
+    source = _CONTINUATION_RE.sub(" ", read_source(requirements).replace("\r\n", "\n"))
     return [
         line.strip()
-        for line in read_source(requirements).splitlines()
+        for line in source.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
 
 
+#: ``-r``/``-c`` and their long forms, with the file they name.  pip accepts
+#: ``-r f``, ``-rf``, ``--requirement f`` and ``--requirement=f``; all four
+#: pull the second file in, so all four have to be recognised here.
+#: The ``-r``/``-c`` option itself. The TARGET is not matched here: pip parses
+#: these lines with :mod:`shlex`, and hand-rolled quoting disagrees with it in
+#: a way that matters -- ``-r "a"b.txt`` is one token ``ab.txt`` to pip, but a
+#: quoted-or-bare alternation reads ``a``. Listing the options of one file
+#: while pip reads another defeats the whole point of showing them, so the
+#: target is taken from ``shlex.split`` in :func:`_include_target`.
+_INCLUDE_RE = re.compile(r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)")
+
+
+def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
+    """The file an ``-r``/``-c`` option line points at, if it is safe to read.
+
+    pip resolves the path relative to the file the option is written in, so
+    that is what is resolved here.
+
+    SECURITY: the line is written by the plugin author and nothing has been
+    installed yet, so following it must not become a way to read the machine.
+    Anything that leaves the plugin's own folder -- an absolute path, a ``..``
+    escape, a URL, a symlink out -- is refused rather than followed, and so is
+    anything that is not a regular file.  The include line itself is still
+    listed either way, so a refusal hides nothing from the reader.
+    """
+    match = _INCLUDE_RE.match(line)
+    if match is None:
+        return None
+    try:
+        words = shlex.split(line[match.end() :])
+    except ValueError:
+        # An unbalanced quote. pip will not read this line either; refuse
+        # rather than guess, and the line is still listed by the caller.
+        return None
+    target = words[0] if words else ""
+    # `urlparse(...).scheme` was too eager: it reads `base:1.txt` as scheme
+    # "base", so a legal relative filename containing a colon was refused and
+    # its options went unlisted -- the same incompleteness this is fixing.
+    # Containment below is what actually enforces safety (a URL resolves to
+    # nothing inside the plugin folder and is refused there), so this test only
+    # has to catch the obvious case early.
+    if not target or "://" in target:
+        return None
+    try:
+        resolved = (parent.parent / target).resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        return None
+    return resolved
+
+
 def pip_options(requirements: Path) -> list[str]:
-    """Return every option line in *requirements* -- each line starting ``-``.
+    """Return every option line *requirements* reaches -- each starting ``-``.
 
     SECURITY: a plugin's ``requirements.txt`` is written by the plugin author,
     and pip honours option lines in it.  Some of them decide where packages
@@ -986,14 +1052,58 @@ def pip_options(requirements: Path) -> list[str]:
     verbatim and lets the reader judge, rather than claiming per line what each
     one does.
 
-    Only **this file** is read.  ``-r``/``-c`` pull in further files that pip
-    also honours, and an option set in one of those is not listed here -- the
-    include line itself is, which is the visible trace of it.  This is
-    information for the reader rather than a gate, so it is described honestly
-    rather than made exhaustive: following includes is a containment problem of
-    its own and would not change what installs.
+    ``-r``/``-c`` includes are followed, because pip honours the options in the
+    file they name exactly as if they had been written here, and showing only
+    the include line left the ``--index-url`` behind it unlisted (#1206 item
+    8).  A line from an included file is tagged with the file it came from.
+    Only files inside the plugin's own folder are followed
+    (:func:`_include_target`), each *file* is read once so a cycle terminates,
+    and a file that cannot be read contributes a line saying so rather than
+    being passed over in silence.
+
+    "Once" is per file, not per spelling: the read set is keyed on
+    ``(st_dev, st_ino)``.  ``resolve()`` does not case-canonicalise, so on a
+    case-insensitive filesystem ``-r base.txt`` and ``-r BASE.TXT`` are two
+    keys for one file, and a plugin listing the same file under many spellings
+    - or under a hardlink - had it read once per spelling (#1206 review).
     """
-    return [line for line in read_requirements(requirements) if line.startswith("-")]
+    root = requirements.parent.resolve()
+    options: list[str] = []
+    seen: set[object] = set()
+    pending: list[Path] = [requirements]
+    while pending:
+        current = pending.pop(0)
+        resolved = current.resolve()
+        try:
+            info = resolved.stat()
+            key: object = (info.st_dev, info.st_ino)
+        except OSError:
+            # Unreadable: `read_requirements` below reports it, and the path is
+            # the best identity available for not reporting it twice.
+            key = resolved
+        if key in seen:
+            continue
+        seen.add(key)
+        # Named relative to the plugin folder: two `base.txt` under different
+        # subfolders must not read as the same file.
+        where = (
+            ""
+            if resolved == requirements.resolve()
+            else f"   [in {resolved.relative_to(root).as_posix()}]"
+        )
+        try:
+            lines = read_requirements(current)
+        except PluginError as exc:
+            options.append(f"(could not read {current.name}: {exc})")
+            continue
+        for line in lines:
+            if not line.startswith("-"):
+                continue
+            options.append(f"{line}{where}")
+            included = _include_target(line, current, root)
+            if included is not None:
+                pending.append(included)
+    return options
 
 
 def install_requirements(changes: list[DependencyChange]) -> None:

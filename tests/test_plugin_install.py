@@ -1929,6 +1929,175 @@ def test_the_listing_surfaces_every_pip_option_from_the_requirements(tmp_path):
     assert plugin_install.pip_options(broad) == ["--only-binary=:all:", "--pre"]
 
 
+def test_the_listing_follows_includes_and_joins_continuations(tmp_path):
+    """#1206 item 8: pip honours both, and the warning read neither.
+
+    ``-r deps/base.txt`` pulls the second file's options in as if they had been
+    written in the first, and a line ending in a backslash is one option to
+    pip. Showing the include line and the bare ``--index-url`` was true and
+    incomplete: the URL that decides where packages come from was the part not
+    on screen.
+    """
+    plugin = tmp_path / "plugin"
+    (plugin / "deps").mkdir(parents=True)
+    (plugin / "deps" / "base.txt").write_text(
+        "--index-url \\\nhttps://packages.example.invalid/simple\nrequests\n",
+        encoding="utf-8",
+    )
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r deps/base.txt\nflask\n", encoding="utf-8")
+
+    assert plugin_install.pip_options(requirements) == [
+        "-r deps/base.txt",
+        "--index-url https://packages.example.invalid/simple   [in deps/base.txt]",
+    ]
+
+
+def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
+    """Two ways the target was read wrong, both ending in a silent short list.
+
+    pip parses these lines with shlex, so a quoted target containing spaces is
+    a legal include; the pattern captured ``\\S+`` and stopped at the first
+    space, so the file was never opened. And the URL guard used
+    ``urlparse(...).scheme``, which reads ``base:1.txt`` as scheme "base" - a
+    legal relative filename refused for looking like a URL.
+
+    In both cases the include LINE was still listed, so nothing was hidden;
+    what went missing is the option inside the file it names, which is the
+    whole point of following it.
+    """
+    plugin = tmp_path / "plugin"
+    (plugin / "with space").mkdir(parents=True)
+    # pip reads `-r "a"b.txt` as the single token `ab.txt`. A quoted-or-bare
+    # regex read it as `a`, so the listing showed one file's index URL while
+    # pip honoured another's - a defeat of the feature, not a gap in it. Both
+    # files exist here because the plugin author controls the folder.
+    (plugin / "a").write_text(
+        "--index-url https://wrong.example.invalid/simple\n", encoding="utf-8"
+    )
+    (plugin / "ab.txt").write_text(
+        "--index-url https://right.example.invalid/simple\n", encoding="utf-8"
+    )
+    (plugin / "with space" / "base.txt").write_text(
+        "--index-url https://spaced.example.invalid/simple\n", encoding="utf-8"
+    )
+    (plugin / "odd:name.txt").write_text(
+        "--extra-index-url https://colon.example.invalid/simple\n", encoding="utf-8"
+    )
+    requirements = plugin / "requirements.txt"
+    requirements.write_text(
+        '-r "with space/base.txt"\n-r odd:name.txt\n-r "a"b.txt\n', encoding="utf-8"
+    )
+
+    # Parent file's own lines first, then what each include brought in - the
+    # order `pip_options` already had, not something these cases change.
+    assert plugin_install.pip_options(requirements) == [
+        '-r "with space/base.txt"',
+        "-r odd:name.txt",
+        '-r "a"b.txt',
+        "--index-url https://spaced.example.invalid/simple   [in with space/base.txt]",
+        "--extra-index-url https://colon.example.invalid/simple   [in odd:name.txt]",
+        # `ab.txt`, the file pip reads - not `a`, the file a regex saw.
+        "--index-url https://right.example.invalid/simple   [in ab.txt]",
+    ]
+
+
+def test_the_listing_refuses_to_follow_an_include_out_of_the_plugin(tmp_path):
+    """The include is author-written, so following it must not read the machine.
+
+    A ``-r`` naming somewhere outside the plugin's own folder is listed and NOT
+    opened: opening it and printing back every line that starts with ``-``
+    would turn a warning into a way to read arbitrary files. Nothing is hidden
+    - the line itself is still shown.
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("--index-url https://elsewhere.example.invalid\n", "utf-8")
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    requirements = plugin / "requirements.txt"
+    requirements.write_text(
+        f"-r {outside}\n-r ../outside.txt\n-r https://x.example.invalid/r.txt\n",
+        encoding="utf-8",
+    )
+
+    options = plugin_install.pip_options(requirements)
+    assert options == [
+        f"-r {outside}",
+        "-r ../outside.txt",
+        "-r https://x.example.invalid/r.txt",
+    ]
+    assert not any("elsewhere.example.invalid" in line for line in options)
+
+
+def test_the_listing_refuses_to_follow_a_symlink_out_of_the_plugin(tmp_path):
+    """``_include_target``'s docstring names "a symlink out" as refused.
+
+    The absolute, ``..`` and URL spellings each had a case above; this one did
+    not, and it is the spelling that defeats a lexical containment check - the
+    include names a plain relative filename inside the plugin folder, and only
+    resolving it shows it landing elsewhere.
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("--index-url https://elsewhere.example.invalid\n", "utf-8")
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    try:
+        (plugin / "link.txt").symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - Windows
+        pytest.skip(f"symlinks unavailable here: {exc}")
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r link.txt\n", encoding="utf-8")
+
+    options = plugin_install.pip_options(requirements)
+    assert options == ["-r link.txt"]
+    assert not any("elsewhere.example.invalid" in line for line in options)
+
+
+def test_one_file_reached_by_two_names_is_read_once(tmp_path):
+    """ "Each file is read once" must mean the file, not the spelling.
+
+    The read set was keyed on ``resolve()``, which does not case-canonicalise,
+    so on a case-insensitive filesystem ``base.txt`` and ``BASE.TXT`` were two
+    keys for one file and its options were listed twice. A hardlink is the same
+    bug reachable on every platform: two paths, one inode, ``resolve()``
+    canonicalises neither into the other.
+    """
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "base.txt").write_text("--no-index\n", encoding="utf-8")
+    try:
+        os.link(plugin / "base.txt", plugin / "alias.txt")
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover
+        pytest.skip(f"hardlinks unavailable here: {exc}")
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r base.txt\n-r alias.txt\n", encoding="utf-8")
+
+    options = plugin_install.pip_options(requirements)
+    assert options == [
+        "-r base.txt",
+        "-r alias.txt",
+        "--no-index   [in base.txt]",
+    ], "the second name is one more file to read, not one more copy of its options"
+
+
+def test_the_listing_survives_an_include_cycle(tmp_path):
+    """Two files naming each other must terminate, and say each option once."""
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r other.txt\n--pre\n", encoding="utf-8")
+    (plugin / "other.txt").write_text(
+        "-r requirements.txt\n--no-index\n", encoding="utf-8"
+    )
+
+    assert plugin_install.pip_options(requirements) == [
+        "-r other.txt",
+        "--pre",
+        "-r requirements.txt   [in other.txt]",
+        "--no-index   [in other.txt]",
+    ]
+
+
 def test_the_listing_names_the_url_a_direct_requirement_comes_from(
     pip_report, tmp_path, capsys
 ):

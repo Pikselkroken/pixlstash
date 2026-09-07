@@ -167,6 +167,7 @@ pixlstash/
 │   ├── face_tags.py
 │   ├── path_mapper.py
 │   ├── path_utils.py                    # resolve_path_within (moved out of service/)
+│   ├── library_roots.py                 # The one blocklist of directories a library owns
 │   ├── serialization_utils.py           # safe_model_dict (moved out of service/)
 │   ├── system_utils.py                  # default_max_vram_gb (moved out of service/)
 │   ├── host_path_utils.py
@@ -1479,6 +1480,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
 | [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
+| [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The single list of directories this installation reads or writes as library content, and the refusal every route that writes or moves files into a caller-named folder shares (#1206 item 1) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
