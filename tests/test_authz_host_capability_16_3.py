@@ -314,9 +314,10 @@ def test_host_capability_tier_split_is_45_local_7_loopback():
     unchanged: none of the four spawns anything.
 
     43 = 37 + 6 with the two ``/server-config/views`` routes, PixlStash Views
-    (v1.11 Phase 7) - **withdrawn, and the pair went with it**, which is why the
-    running total below picks up again at 46 = 40 + 6 rather than at 43. Both
-    were ``LOCAL_OWNER_ONLY``: the PATCH took a caller-supplied host path and
+    (v1.11 Phase 7) - **withdrawn, and the pair went with it**, so this entry is
+    history: it is the tier as it stood in 2026-08, not as it stands now, and
+    the running total it names is two above the one the paragraphs below carry
+    forward. Both were ``LOCAL_OWNER_ONLY``: the PATCH took a host path and
     wrote a tree of links into it, the GET was its control surface and sat on
     ``READ_BLOCKED_GET_PATHS`` beside ``GET /server-config/layout``. Neither was
     the *subject* of any assertion in this file - the behavioural §16.3 tests
